@@ -1358,8 +1358,12 @@
     saveStored(SHARE_KEY, String(rollShareV));
   }
 
-  // 이벤트 줄 (템포·박자·마커를 롤 위에 표시, 변속 확인용)
-  let showEvents = $state(false);
+  // 이벤트 줄 (템포·박자·마커를 롤 위에 표시, 변속 확인용). 템포가 늘 보이게 처음엔 켜 두고, 끄고 켠 것은 기억한다
+  const EVENTS_KEY = "mmlce.showEvents";
+  let showEvents = $state(loadStored(EVENTS_KEY, (raw) => raw !== "0"));
+  $effect(() => {
+    saveStored(EVENTS_KEY, showEvents ? "1" : "0");
+  });
   /** 피아노롤 도구: 넣기 / 고르기(상자) / 지우개 (터치·펜에서 음 지우기) */
   let rollTool = $state<RollTool>("pen");
   // 고르기 도구 자물쇠: 풀면 고른 음을 끌어 한꺼번에 옮긴다 (기억, 기본 잠금)

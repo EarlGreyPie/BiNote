@@ -11,7 +11,7 @@
   import { drawVolumeLane } from "./laneDraw";
   import { LaneGesture } from "./laneGesture.svelte";
   import { laneItems, type LaneTrack } from "./volumeLaneEdit";
-  import { laneThickness, saveVolumeLane, volumeLane } from "./volumeLane.svelte";
+  import { LANE_MAX, LANE_MIN, laneThickness, saveVolumeLane, volumeLane } from "./volumeLane.svelte";
   import type { RollView } from "./roll";
 
   interface Props {
@@ -316,6 +316,27 @@
     }
   }
 
+  let resize: { id: number; y0: number; size: number } | undefined;
+  function onresizedown(e: PointerEvent) {
+    e.preventDefault();
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    resize = { id: e.pointerId, y0: e.clientY, size: laneThickness() };
+  }
+  function onresizemove(e: PointerEvent) {
+    if (!resize || resize.id !== e.pointerId) return;
+    const want = resize.size + resize.y0 - e.clientY;
+    if (volumeLane.state !== "expanded") {
+      if (want < LANE_MIN) return;
+      volumeLane.state = "expanded";
+    }
+    volumeLane.size = Math.round(Math.min(LANE_MAX, Math.max(LANE_MIN, want)));
+  }
+  function onresizeup(e: PointerEvent) {
+    if (resize?.id !== e.pointerId) return;
+    resize = undefined;
+    saveVolumeLane({ state: volumeLane.state, size: volumeLane.size });
+  }
+
   function onlaneup() {
     const edits = lane.finish(song.tracks);
     if (edits.length > 0) onedit?.(edits, "음량 레인");
@@ -332,10 +353,7 @@
     if (!g) return;
     g.setTransform(ratio, 0, 0, ratio, 0, 0);
     // 그 연주자 트랙만 옅은 선으로 같이 보인다 (타브에 나오는 트랙과 같게)
-    drawVolumeLane(g, { view: laneView, song: { ...song, tracks: song.tracks.filter((t) => t.playerId === player || laneTracks.some((l) => l.id === t.id)) }, activeId: activeTrackId, selected: new Set(), colors, range: volumeRange, css }, lane.draw(laneList));
-    g.fillStyle = css("--muted");
-    g.font = 'bold 11px "D2Coding", ui-monospace, monospace';
-    g.fillText("v", 10, Math.min(laneHeight - 4, 14));
+    drawVolumeLane(g, { view: laneView, song: { ...song, tracks: song.tracks.filter((t) => t.playerId === player || laneTracks.some((l) => l.id === t.id)) }, activeId: activeTrackId, selected: new Set(), colors, range: volumeRange, css }, { ...lane.draw(laneList), label: t("ui.laneName") });
     if (playhead !== undefined) {
       g.fillStyle = css("--accent");
       g.fillRect(LEFT + (playhead - start) * pxPerWhole, 0, 2, laneHeight);
@@ -529,6 +547,19 @@
     <canvas bind:this={canvas} style:width="{width}px" style:height="{height}px" {onpointerdown} {onpointermove} {onpointerup} onpointercancel={onpointerup}></canvas>
   </div>
   {#if laneHeight > 0}
+    <!-- 높이 손잡이: 위로 끌면 레인이 커진다 (얇은 띠에서 끌어도 크게 펼쳐진다) -->
+    <div
+      class="lane-resize"
+      role="separator"
+      aria-orientation="horizontal"
+      aria-label={t("ui.laneResize")}
+      title={t("ui.laneResize")}
+      onpointerdown={onresizedown}
+      onpointermove={onresizemove}
+      onpointerup={onresizeup}
+      onpointercancel={onresizeup}
+      ondblclick={() => saveVolumeLane({ state: volumeLane.state === "expanded" ? "compact" : "expanded" })}
+    ><span class="grip"></span></div>
     <canvas
       class="lane"
       bind:this={laneCanvas}
@@ -588,15 +619,15 @@
   />
     <span class="zoom lane-tools">
       {#if volumeLane.state === "collapsed"}
-        <button class="small" title={t("ui.laneOpen")} onclick={() => saveVolumeLane({ state: "compact" })}>v ▲</button>
+        <button class="small" title={t("ui.laneOpen")} onclick={() => saveVolumeLane({ state: "compact" })}>{t("ui.laneName")} ▲</button>
       {:else}
         {#if laneTracks.length > 1}<span class="muted" title={t("ui.laneMultiHelp")}>{t("ui.laneTracks", { n: laneTracks.length })}</span>{/if}
         {#if volumeLane.state === "expanded"}
           <button class="small" class:on={volumeLane.mode === "brush"} onclick={() => saveVolumeLane({ mode: "brush" })}>{t("ui.laneBrush")}</button>
           <button class="small" class:on={volumeLane.mode === "line"} onclick={() => saveVolumeLane({ mode: "line" })}>{t("ui.laneLine")}</button>
-          <button class="small" title={t("ui.laneShrink")} onclick={() => saveVolumeLane({ state: "compact" })}>v ▼</button>
+          <button class="small" title={t("ui.laneShrink")} onclick={() => saveVolumeLane({ state: "compact" })}>{t("ui.laneName")} ▼</button>
         {:else}
-          <button class="small" title={t("ui.laneExpand")} onclick={() => saveVolumeLane({ state: "expanded" })}>v ▲</button>
+          <button class="small" title={t("ui.laneExpand")} onclick={() => saveVolumeLane({ state: "expanded" })}>{t("ui.laneName")} ▲</button>
         {/if}
         <button class="small" title={t("ui.laneCollapse")} onclick={() => saveVolumeLane({ state: "collapsed" })}>×</button>
       {/if}
@@ -625,9 +656,29 @@
   .tab:focus-within {
     border-color: var(--accent);
   }
+  .lane-resize {
+    flex: none;
+    height: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-top: 1px solid var(--line);
+    cursor: ns-resize;
+    touch-action: none;
+  }
+  .lane-resize:hover {
+    background: color-mix(in srgb, var(--accent) 25%, transparent);
+  }
+  .lane-resize .grip {
+    width: 36px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--accent);
+    opacity: 0.7;
+    pointer-events: none;
+  }
   canvas.lane {
     flex: none;
-    border-top: 1px solid var(--line);
     /* 손가락·펜으로 그을 때 화면이 같이 움직이지 않게 */
     touch-action: none;
     cursor: crosshair;

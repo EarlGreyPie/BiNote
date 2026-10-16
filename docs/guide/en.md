@@ -242,7 +242,7 @@ Ctrl+Z / Ctrl+Y (or Ctrl+Shift+Z). Whole-song commands are undone in one step.
 
 ### Event rows
 
-Turn on View → **Events** to show two rows of tempo, meter and markers above the roll.
+Two rows above the roll show tempo, meter and markers. They are on from the start; turn them off or on with View → **Events** (your choice is remembered).
 
 - Double-click an empty spot (long-press on touch) or right-click a label to add or edit.
 - Drag a label to move it. Over a tempo label, the wheel changes it by ±1 (Shift ±10), and Del deletes it.
@@ -275,13 +275,13 @@ Song → Tap tempo. Play the original (or a video) and press the **T** key or [T
 
 ### Volume lane
 
-Open the volume lane with the **v ▲** button at the bottom of the piano roll, in the corner by the keyboard strip. Each bar is one group of notes tied with `&`.
+The **Volume (v)** strip at the bottom of the piano roll is the volume lane. If it is hidden, open it with the **Volume ▲** button in the corner by the keyboard strip. Each bar is one group of notes tied with `&`, and the numbers on the right are the v scale.
 
 - **Brush**: sets the v of each bar you drag over to that height.
 - **Line** (or Shift+drag): changes v along a straight line from where you press to where you release.
 - If notes are selected, only those notes change.
 - **On several tracks at once**: Ctrl+click tracks in the track list to add them. The melody track gets the drawn value as is, and the other tracks get the offsets set for the top, middle and bottom positions. Without a melody mark, the first track of the score is the melody.
-- Shrink, enlarge or hide the lane to change its height.
+- Make the lane thin, large or hidden. Drag the handle above the lane to any height (dragging from the thin strip works too), and double-click it to switch between thin and large. You can also pick the height in Settings → Display → **Volume lane**. A taller lane makes drawing with a pen easier.
 
 ---
 

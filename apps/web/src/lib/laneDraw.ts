@@ -12,6 +12,8 @@ export interface LaneDraw {
   readonly line?: { readonly t0: number; readonly v0: number; readonly t1: number; readonly v1: number } | undefined;
   /** 읽기 표시: 이 시간 자리에 글자 */
   readonly readout?: { readonly at: number; readonly text: string } | undefined;
+  /** 띠 이름 ("음량"). 칸 안 왼쪽 위에 옅게 적어 음 칸과 다른 곳이라는 걸 알린다 */
+  readonly label?: string | undefined;
 }
 
 export interface LaneDrawContext {
@@ -41,11 +43,18 @@ export function drawVolumeLane(g: CanvasRenderingContext2D, c: LaneDrawContext, 
   const vr = c.range;
   const [from, to] = visibleTime(v);
   const line = c.css("--line");
+  const accent = c.css("--accent");
   g.fillStyle = c.css("--panel");
   g.fillRect(box.x, box.y, box.w, box.h);
+  // 강조색을 옅게 깔고 경계선을 굵게: 음 칸과 다른 "음량 그리는 곳"으로 보이게
+  g.fillStyle = accent;
+  g.globalAlpha = 0.07;
+  g.fillRect(box.x, box.y, box.w, box.h);
+  g.globalAlpha = 0.8;
+  if (horizontal) g.fillRect(0, box.y, v.width, 2);
+  else g.fillRect(box.x, 0, 2, v.height);
+  g.globalAlpha = 1;
   g.fillStyle = line;
-  if (horizontal) g.fillRect(0, box.y, v.width, 1);
-  else g.fillRect(box.x, 0, 1, v.height);
   // 마디선과 v 가운데 안내선
   for (const gl of gridLines(c.song.timeSig, from, to)) {
     if (gl.kind !== "measure") continue;
@@ -58,6 +67,7 @@ export function drawVolumeLane(g: CanvasRenderingContext2D, c: LaneDrawContext, 
   if (horizontal) g.fillRect(box.x, mid, box.w, 1);
   else g.fillRect(mid, box.y, 1, box.h);
   g.globalAlpha = 1;
+  drawLaneLegend(g, c, l.label, box, horizontal);
   const base = laneValueToScreen(v, vr.min, vr);
   const span = (a: number, b: number) => {
     const p0 = timeToScreen(v, a);
@@ -141,4 +151,34 @@ export function drawVolumeLane(g: CanvasRenderingContext2D, c: LaneDrawContext, 
     else g.fillText(l.readout.text, box.x + 3, Math.max(12, p - 6));
     g.font = font;
   }
+}
+
+/** 띠 이름과 v 눈금 (막대 아래에 깔린다). 얇은 띠는 모서리 이름표로 충분해 그리지 않고, 넓으면 맨 위·가운데·맨 아래 v 숫자까지 */
+function drawLaneLegend(g: CanvasRenderingContext2D, c: LaneDrawContext, label: string | undefined, box: { x: number; y: number; w: number; h: number }, horizontal: boolean): void {
+  const thick = horizontal ? box.h : box.w;
+  if (thick < 30) return;
+  const vr = c.range;
+  g.save();
+  g.beginPath();
+  g.rect(box.x, box.y, box.w, box.h);
+  g.clip();
+  g.fillStyle = c.css("--muted");
+  g.globalAlpha = 0.85;
+  g.font = `bold 11px ${c.css("--ui-font") || "system-ui, sans-serif"}`;
+  g.fillText(label ? `${label} (v)` : "v", box.x + 4, box.y + 13);
+  if (thick >= 40) {
+    g.font = '10px "D2Coding", ui-monospace, monospace';
+    const mid = Math.round((vr.min + vr.max) / 2);
+    for (const value of [vr.max, mid, vr.min]) {
+      const at = laneValueToScreen(c.view, value, vr);
+      const text = String(value);
+      if (horizontal) {
+        const w = g.measureText(text).width;
+        g.fillText(text, box.x + box.w - w - 4, Math.min(box.y + box.h - 2, Math.max(box.y + 10, at + 4)));
+      } else {
+        g.fillText(text, Math.min(box.x + box.w - 14, Math.max(box.x + 2, at - 3)), box.y + box.h - 4);
+      }
+    }
+  }
+  g.restore();
 }

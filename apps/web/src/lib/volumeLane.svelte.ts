@@ -11,8 +11,9 @@ export type LaneMode = "brush" | "line";
 export const LANE_COMPACT = 24;
 /** 펼친 상태 두께 범위 */
 export const LANE_MIN = 48;
-export const LANE_MAX = 200;
-const LANE_DEFAULT = 96;
+/** 펜으로 긋기 편하게 크게 키울 수 있다 (롤에서는 음 칸이 너무 좁아지지 않게 더 줄인다) */
+export const LANE_MAX = 360;
+export const LANE_DEFAULT = 120;
 
 const KEY = "mmlce.volumeLane";
 

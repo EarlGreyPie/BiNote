@@ -5,6 +5,7 @@
   import { guideUrl, REPO_URL } from "./links";
   import { MASTER_MAX } from "./engine";
   import { pwa } from "./pwa.svelte";
+  import { LANE_MAX, LANE_MIN, saveVolumeLane, volumeLane, type LaneState } from "./volumeLane.svelte";
 
   import Icon from "./Icon.svelte";
   import PackBar from "./PackBar.svelte";
@@ -218,6 +219,27 @@
             </select>
           </span>
         </div>
+        <h3 class="sub">{t("ui.laneSettings")}</h3>
+        <label class="row" title={t("ui.laneHelp")}>
+          <span>{t("ui.laneShow")}</span>
+          <select value={volumeLane.state} onchange={(e) => saveVolumeLane({ state: e.currentTarget.value as LaneState })}>
+            <option value="collapsed">{t("ui.laneStateCollapsed")}</option>
+            <option value="compact">{t("ui.laneStateCompact")}</option>
+            <option value="expanded">{t("ui.laneStateExpanded")}</option>
+          </select>
+        </label>
+        <label class="row" title={t("ui.laneSizeHelp")}>
+          <span>{t("ui.laneSize")}</span>
+          <input
+            type="range"
+            min={LANE_MIN}
+            max={LANE_MAX}
+            step="4"
+            value={volumeLane.size}
+            oninput={(e) => saveVolumeLane({ size: Number(e.currentTarget.value), state: "expanded" })}
+          />
+          <output>{volumeLane.size}px</output>
+        </label>
       {:else if section === "language"}
         <div class="langs" role="radiogroup" aria-label={t("ui.language")}>
           {#each LOCALES as l (l)}

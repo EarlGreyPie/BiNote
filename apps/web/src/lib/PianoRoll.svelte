@@ -271,9 +271,16 @@
 
   /** 음량 레인이 차지하는 두께 (값 칸 + 시간 스크롤바 칸, 접으면 0) */
   const laneReserved = $derived.by(() => {
-    const size = laneThickness();
-    return size > 0 ? size + LANE_GUTTER : 0;
+    let size = laneThickness();
+    if (size <= 0) return 0;
+    // 크게 키워도 음 칸이 120px은 남게 (설정에서 고른 높이가 이 화면에 너무 크면 줄여 보인다)
+    if (volumeLane.state === "expanded") size = Math.max(LANE_MIN, Math.min(size, laneRoom()));
+    return size + LANE_GUTTER;
   });
+  /** 이 화면에서 레인이 가질 수 있는 가장 큰 두께 */
+  function laneRoom(): number {
+    return Math.min(LANE_MAX, (orientation === "horizontal" ? height : width) - LANE_GUTTER - 120);
+  }
   const view = $derived<RollView>({
     orientation,
     width,
@@ -423,7 +430,8 @@
     e.stopPropagation();
     e.preventDefault();
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    laneResize = { id: e.pointerId, x0: e.clientX, y0: e.clientY, size: volumeLane.size };
+    // 얇은 띠에서 끌기 시작해도 그대로 크게 펼쳐진다
+    laneResize = { id: e.pointerId, x0: e.clientX, y0: e.clientY, size: volumeLane.state === "expanded" ? laneReserved - LANE_GUTTER : laneThickness() };
   }
 
   function onLaneResizeMove(e: PointerEvent) {
@@ -431,14 +439,18 @@
     if (!r || r.id !== e.pointerId) return;
     // 음 칸 쪽으로 끌면 커진다 (가로 롤은 위, 세로 롤은 왼쪽)
     const grow = orientation === "horizontal" ? r.y0 - e.clientY : r.x0 - e.clientX;
-    const limit = Math.max(LANE_MIN, Math.min(LANE_MAX, axes({ ...view, lane: 0 }).pitch - 120));
-    volumeLane.size = Math.round(Math.min(limit, Math.max(LANE_MIN, r.size + grow)));
+    const want = r.size + grow;
+    if (volumeLane.state !== "expanded") {
+      if (want < LANE_MIN) return;
+      volumeLane.state = "expanded";
+    }
+    volumeLane.size = Math.round(Math.min(Math.max(LANE_MIN, laneRoom()), Math.max(LANE_MIN, want)));
   }
 
   function onLaneResizeUp(e: PointerEvent) {
     if (laneResize?.id !== e.pointerId) return;
     laneResize = undefined;
-    saveVolumeLane({ size: volumeLane.size });
+    saveVolumeLane({ state: volumeLane.state, size: volumeLane.size });
   }
 
   // 방향을 바꾸면 음 축의 기준을 그 방향에 맞는 자리로 옮긴다
@@ -508,7 +520,7 @@
       pickedEvent,
       eventDrag: eventPress?.live && eventPress.label && movable(eventPress.label) ? { label: eventPress.label, to: eventPress.to } : undefined,
       lightKeys,
-      lane: laneReserved > 0 ? lane.draw(laneList) : undefined,
+      lane: laneReserved > 0 ? { ...lane.draw(laneList), label: t("ui.laneName") } : undefined,
       css: cssVar,
     });
   });
@@ -1449,7 +1461,7 @@
   <!-- 음량 레인 단추 (건반 띠 쪽 모서리). 접으면 단추 하나만 -->
   {#if volumeLane.state === "collapsed"}
     <div class="lane-corner collapsed" title={t("ui.laneHelp")}>
-      <button onclick={() => saveVolumeLane({ state: "compact" })} title={t("ui.laneOpen")} aria-label={t("ui.laneOpen")}>v ▲</button>
+      <button onclick={() => saveVolumeLane({ state: "compact" })} title={t("ui.laneOpen")} aria-label={t("ui.laneOpen")}>{t("ui.laneName")} ▲</button>
     </div>
   {:else}
     <div
@@ -1458,6 +1470,7 @@
       style={orientation === "horizontal" ? `height:${laneReserved}px;width:${KEYBOARD}px` : `width:${laneReserved}px;height:${KEYBOARD}px`}
     >
       <div class="row">
+        {#if orientation === "horizontal" || volumeLane.state === "expanded"}<span class="name">{t("ui.laneName")}</span>{/if}
         {#if volumeLane.state === "expanded"}
           <button onclick={() => saveVolumeLane({ state: "compact" })} title={t("ui.laneShrink")} aria-label={t("ui.laneShrink")}>▼</button>
         {:else}
@@ -1472,22 +1485,22 @@
         </div>
       {/if}
     </div>
-    {#if volumeLane.state === "expanded"}
-      <div
-        class="lane-resize"
-        role="separator"
-        aria-orientation={orientation === "horizontal" ? "horizontal" : "vertical"}
-        aria-label={t("ui.laneResize")}
-        title={t("ui.laneResize")}
-        style={orientation === "horizontal"
-          ? `left:${KEYBOARD}px;right:0;top:${height - laneReserved - 5}px;height:6px`
-          : `top:0;bottom:${KEYBOARD}px;left:${width - laneReserved - 5}px;width:6px`}
-        onpointerdown={onLaneResizeDown}
-        onpointermove={onLaneResizeMove}
-        onpointerup={onLaneResizeUp}
-        onpointercancel={onLaneResizeUp}
-      ></div>
-    {/if}
+    <!-- 높이 손잡이: 얇은 띠에서도 끌면 크게 펼쳐진다. 펜·손가락으로 잡기 쉽게 12px -->
+    <div
+      class="lane-resize"
+      role="separator"
+      aria-orientation={orientation === "horizontal" ? "horizontal" : "vertical"}
+      aria-label={t("ui.laneResize")}
+      title={t("ui.laneResize")}
+      style={orientation === "horizontal"
+        ? `left:${KEYBOARD}px;right:18px;top:${height - laneReserved - 6}px;height:12px`
+        : `top:18px;bottom:${KEYBOARD}px;left:${width - laneReserved - 6}px;width:12px`}
+      onpointerdown={onLaneResizeDown}
+      onpointermove={onLaneResizeMove}
+      onpointerup={onLaneResizeUp}
+      onpointercancel={onLaneResizeUp}
+      ondblclick={() => saveVolumeLane({ state: volumeLane.state === "expanded" ? "compact" : "expanded" })}
+    ><span class="grip"></span></div>
   {/if}
   <!-- 음 높이 스크롤 (가로 롤은 오른쪽 세로, 세로 롤은 위쪽 가로) -->
   <input
@@ -1587,7 +1600,21 @@
   }
   .lane-corner .row {
     display: flex;
+    flex-wrap: wrap;
+    align-items: center;
     gap: 2px;
+  }
+  /* 이름표: 이 띠가 음량을 그리는 곳이라는 걸 보이게 */
+  .lane-corner .name {
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 12px;
+    color: var(--accent);
+    white-space: nowrap;
+  }
+  .horizontal .lane-corner .name {
+    flex-basis: 100%;
+    text-align: center;
   }
   .horizontal .lane-corner {
     left: 0;
@@ -1604,7 +1631,7 @@
   .lane-corner button {
     flex: 1 1 auto;
     min-width: 0;
-    height: 18px;
+    height: 20px;
     padding: 0 1px;
     font-size: 11px;
     line-height: 1;
@@ -1612,6 +1639,11 @@
   }
   .lane-corner.collapsed button {
     padding: 0 6px;
+  }
+  .lane-corner .mode {
+    flex: 1 1 0;
+    padding: 0;
+    letter-spacing: -0.5px;
   }
   .lane-corner .mode.on {
     background: var(--accent);
@@ -1652,8 +1684,28 @@
   .vertical .lane-resize {
     cursor: ew-resize;
   }
+  .lane-resize {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
   .lane-resize:hover {
-    background: color-mix(in srgb, var(--accent) 40%, transparent);
+    background: color-mix(in srgb, var(--accent) 25%, transparent);
+  }
+  /* 가운데 손잡이 눈금 */
+  .lane-resize .grip {
+    border-radius: 2px;
+    background: var(--accent);
+    opacity: 0.7;
+    pointer-events: none;
+  }
+  .horizontal .lane-resize .grip {
+    width: 36px;
+    height: 4px;
+  }
+  .vertical .lane-resize .grip {
+    width: 4px;
+    height: 36px;
   }
 
   canvas {
