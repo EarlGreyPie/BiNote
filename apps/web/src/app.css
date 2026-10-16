@@ -1,0 +1,634 @@
+:root {
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --text: #1f2430;
+  --muted: #6b7280;
+  --line: #d9dde3;
+  /* 강조색: 설정에서 고른 색 (밝은·어두운 테마용 두 가지) */
+  --accent: var(--accent-light, #3b6fd8);
+  --danger: #c0392b;
+  /* 악기 범위 밖이라 게임에서 옥타브째 접혀 나는 음 */
+  --note-folded: #a3a9b4;
+  /* 템포·박자·마커 표시: 어두운 테마는 밝은 연보라처럼 밝기는 높이고 채도는 낮춰 눈부심 없이 잘 보이게 */
+  --ev-tempo: #7b45d6;
+  --ev-meter: #2f8a5f;
+  --ev-marker: #a47c12;
+  color-scheme: light;
+  /* 셸 띠 높이와 컨트롤 높이 (터치 기기에서는 아래에서 키운다) */
+  --bar-h: 44px;
+  --tool-h: 40px;
+  --status-h: 26px;
+  --ctl-h: 28px;
+}
+@media (pointer: coarse) {
+  :root {
+    --bar-h: 48px;
+    --tool-h: 46px;
+    --ctl-h: 36px;
+  }
+}
+/* 어두운 테마: 설정이 "시스템 따라가기"면 시스템을 따르고, "어둡게"면 늘 쓴다 */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #171a21;
+    --panel: #1f2430;
+    --text: #e6e8ec;
+    --muted: #9aa3b2;
+    --line: #333a48;
+    --accent: var(--accent-dark, #7fb4ff);
+    --danger: #ff7b6b;
+    --note-folded: #5c6474;
+    --ev-tempo: #c5a8ff;
+    --ev-meter: #8fd1ad;
+    --ev-marker: #e2c374;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #171a21;
+  --panel: #1f2430;
+  --text: #e6e8ec;
+  --muted: #9aa3b2;
+  --line: #333a48;
+  --accent: var(--accent-dark, #7fb4ff);
+  --danger: #ff7b6b;
+  --note-folded: #5c6474;
+  --ev-tempo: #c5a8ff;
+  --ev-meter: #8fd1ad;
+  --ev-marker: #e2c374;
+  color-scheme: dark;
+}
+* {
+  box-sizing: border-box;
+}
+html,
+body,
+#app {
+  height: 100%;
+}
+body {
+  margin: 0;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 var(--ui-font);
+}
+/*
+ * 화면 글꼴. Pretendard GOV는 한글·영문만 담은 부분 글꼴이라 가나·한자는 다음 글꼴로 넘어간다.
+ * 언어마다 그 언어 자형의 기기 글꼴을 한국어 글꼴보다 앞에 두어, 한자가 한국식 자형으로 나오지 않게 한다.
+ */
+:root {
+  --ui-font: "Pretendard GOV", system-ui, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+}
+:root:lang(ja) {
+  --ui-font: "Pretendard GOV", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Meiryo", "Noto Sans JP", "Noto Sans CJK JP", sans-serif;
+}
+:root:lang(zh-Hant) {
+  --ui-font: "Pretendard GOV", "PingFang TC", "Microsoft JhengHei UI", "Microsoft JhengHei", "Noto Sans TC", "Noto Sans CJK TC", sans-serif;
+}
+:root:lang(zh-Hans) {
+  --ui-font: "Pretendard GOV", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans SC", "Noto Sans CJK SC", sans-serif;
+}
+header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+h1 {
+  margin: 0 4px 0 0;
+  font-size: 18px;
+}
+h2 {
+  margin: 16px 0 8px;
+  font-size: 15px;
+}
+button,
+.button,
+select {
+  font: inherit;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+button.icon,
+.button.icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-width: var(--ctl-h);
+  height: var(--ctl-h);
+  padding: 0 6px;
+}
+button.small {
+  display: inline-flex;
+  align-items: center;
+}
+button.on {
+  background: color-mix(in srgb, var(--accent) 22%, var(--bg));
+  border-color: var(--accent);
+}
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--panel);
+  font-weight: 600;
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+button.small {
+  padding: 0 6px;
+  font-size: 12px;
+}
+.clock {
+  font-variant-numeric: tabular-nums;
+  min-width: 3em;
+}
+.spacer {
+  flex: 1;
+}
+.muted {
+  color: var(--muted);
+}
+.error {
+  margin: 8px 16px;
+  color: var(--danger);
+}
+/* 편집기 검사 말풍선 (어두운 테마에 맞춤) */
+.cm-tooltip {
+  background: var(--panel) !important;
+  color: var(--text) !important;
+  border: 1px solid var(--line) !important;
+}
+.cm-tooltip-lint .cm-diagnostic {
+  color: var(--text);
+}
+.divider {
+  width: 1px;
+  height: 20px;
+  background: var(--line);
+}
+.over {
+  color: var(--danger);
+  font-weight: 600;
+}
+.notice {
+  margin: 8px 16px;
+}
+.notices {
+  margin: 8px 16px;
+  padding-left: 20px;
+}
+.notices .error {
+  margin: 0;
+}
+.notices .info {
+  color: var(--muted);
+}
+.cm-tooltip-lint {
+  font-size: 12px;
+}
+/* 검사 표시 줄(왼쪽)은 바탕 없이 */
+.mml-editor .cm-gutters {
+  background: transparent;
+  border-right: none;
+}
+.video-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+.video-bar input[type="number"] {
+  width: 5em;
+}
+/* ───────── 앱 셸: 위 띠 · 도구줄 · 작업 영역 · 상태줄 (페이지는 스크롤하지 않고 각 칸 안에서만) ───────── */
+.app {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  height: 100dvh;
+  overflow: hidden;
+}
+/* 곡이 없으면 도구줄 칸이 숨어서 자동 배치가 한 칸씩 당겨진다. 작업 칸과 상태줄 자리를 못 박는다 */
+.app > .work {
+  grid-row: 3;
+}
+.app > .statusbar {
+  grid-row: 4;
+}
+.num {
+  width: 3.4em;
+  font: inherit;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 3px 6px;
+}
+.num.wide {
+  width: 5em;
+}
+input,
+select,
+button {
+  min-height: var(--ctl-h);
+}
+input[type="checkbox"],
+input[type="range"] {
+  min-height: 0;
+}
+.sep {
+  width: 1px;
+  align-self: stretch;
+  margin: 6px 2px;
+  background: var(--line);
+  flex: none;
+}
+
+/* 상단바 */
+.topbar {
+  position: relative;
+  /* 위 띠는 쌓임 맥락을 만든다. 메뉴 판(fixed)이 상태줄 위 패널(30)·도움말보다 위에 오도록 그보다 높게 */
+  z-index: 40;
+  flex-wrap: nowrap;
+  gap: 6px;
+  height: var(--bar-h);
+  padding: 0 12px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+.topbar h1 {
+  margin: 0 6px 0 0;
+  font-size: 17px;
+}
+.topbar .menu-button {
+  border-color: transparent;
+  background: none;
+  /* 좁은 화면에서 "파/일"처럼 세로로 꺾이지 않게. 넘치면 위 띠가 옆으로 밀린다 */
+  white-space: nowrap;
+  flex: none;
+}
+.topbar .menu-button.on {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.topbar .volume {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.topbar .volume input {
+  width: 90px;
+}
+.playgroup {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 10px 2px 4px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  white-space: nowrap;
+}
+.playgroup button {
+  border-color: transparent;
+}
+.playgroup button.go {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--panel);
+}
+.playgroup button.go:disabled {
+  opacity: 0.4;
+}
+.clock {
+  font-variant-numeric: tabular-nums;
+  padding: 0 4px;
+}
+.clock.tempo {
+  color: var(--muted);
+}
+
+/* 도구줄 (보기마다 다르다) */
+.toolzone {
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+.toolzone:empty {
+  display: none;
+}
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: var(--tool-h);
+  padding: 0 12px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  white-space: nowrap;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+.toolbar.compact .field > .muted {
+  display: none;
+}
+.toolbar .group {
+  display: inline-flex;
+  gap: 2px;
+}
+.toolbar .field {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.seg {
+  display: inline-flex;
+}
+.seg button {
+  border-radius: 0;
+}
+.seg button:first-child {
+  border-radius: 6px 0 0 6px;
+}
+.seg button:last-child {
+  border-radius: 0 6px 6px 0;
+}
+.seg button + button {
+  border-left: none;
+}
+.seg button.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--panel);
+  font-weight: 600;
+}
+.toolzone .video-bar,
+.toolzone .reference-bar {
+  padding: 4px 12px;
+}
+
+/* 작업 영역: 롤(왼쪽) | 트랙 패널(오른쪽, 끌어서 폭 조절). 세로 화면은 위아래 */
+.work {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 10px minmax(320px, var(--pane-w, 440px));
+  min-height: 0;
+  padding: 6px 8px;
+}
+.work.no-pane {
+  grid-template-columns: minmax(0, 1fr);
+}
+.work.no-pane .pane-divider,
+.work.no-pane .list-pane {
+  display: none;
+}
+/* 패널 아래(3MLE식): 롤 전체 폭, 그 아래 트랙 띠 + 편집기가 전체 폭 */
+.work.dock-bottom {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) 10px var(--editor-h, 300px);
+}
+.work.empty {
+  grid-template-columns: minmax(0, 1fr);
+  place-items: center;
+}
+.empty-start {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  padding: 16px;
+  box-sizing: border-box;
+}
+.empty-note {
+  max-width: 36em;
+  padding: 0 16px;
+  text-align: center;
+}
+.update-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 13px;
+}
+.update-bar span {
+  flex: 1;
+}
+.start-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+.empty-note .link {
+  border: none;
+  background: none;
+  min-height: 0;
+  padding: 0 2px;
+  color: var(--accent);
+  text-decoration: underline;
+}
+.start-actions button {
+  min-width: 9em;
+  padding: 8px 14px;
+}
+.roll-pane,
+.list-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  /* 롤 위 펜·손가락으로 글자가 골라지지 않게 */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+.list-pane {
+  user-select: text;
+  -webkit-user-select: text;
+}
+.pane-divider {
+  align-self: stretch;
+  cursor: ew-resize;
+  touch-action: none;
+  background: linear-gradient(var(--muted), var(--muted)) center / 2px 48px no-repeat;
+}
+.pane-divider.h {
+  cursor: ns-resize;
+  background: linear-gradient(var(--muted), var(--muted)) center / 48px 2px no-repeat;
+}
+.pane-divider:hover {
+  background-color: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+/* 악보책 나누기 결과 (패널 위에 끼움, 길면 안에서 스크롤) */
+.split-wrap {
+  flex: none;
+  max-height: 40%;
+  overflow: auto;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+}
+/* 오래 걸리는 일의 진행 막대와 취소 (상태줄 위 오른쪽) */
+.job-toast {
+  position: fixed;
+  right: 16px;
+  bottom: 40px;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: min(360px, calc(100vw - 32px));
+  padding: 8px 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.18);
+}
+.job {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.job-bar {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--line);
+  overflow: hidden;
+}
+.job-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.15s;
+}
+
+/* 상태줄 */
+.statusbar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: var(--status-h);
+  padding: 0 12px;
+  font-size: 12px;
+  white-space: nowrap;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+}
+.statusbar .item {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.statusbar .pill {
+  padding: 0 8px;
+  border-radius: 9px;
+  background: var(--danger);
+  color: #fff;
+}
+.status-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 0;
+  height: 22px;
+  padding: 0 8px;
+  font-size: 12px;
+  border-color: transparent;
+  background: none;
+}
+.status-btn.over {
+  color: var(--danger);
+  font-weight: 600;
+}
+.status-panels {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 8px 4px;
+  pointer-events: none;
+}
+.status-panel {
+  pointer-events: auto;
+  max-height: 40vh;
+  overflow: auto;
+  padding: 8px 12px;
+  white-space: normal;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.status-panel.help-panel {
+  align-self: flex-end;
+  width: min(520px, 100%);
+}
+.status-panel .notices {
+  margin: 4px 0;
+}
+.status-panel p {
+  margin: 4px 0;
+}
+.msg-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.checks .notices {
+  padding-left: 20px;
+}
+.checks .place {
+  margin-left: 4px;
+  padding: 0 6px;
+  font-size: 11px;
+}
+
+/* 세로 화면 (아이패드 세로·폰): 롤 위, 트랙 패널 아래. 음량 슬라이더는 설정 창으로 */
+@media (max-aspect-ratio: 1/1) {
+  .work {
+    display: flex;
+    flex-direction: column;
+  }
+  .work .roll-pane {
+    flex: var(--roll-n, 46) 1 0;
+  }
+  .work .list-pane {
+    flex: calc(100 - var(--roll-n, 46)) 1 0;
+  }
+  .work .pane-divider {
+    flex: none;
+    height: 10px;
+  }
+  .work.empty {
+    display: grid;
+  }
+  .topbar .volume {
+    display: none;
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "@mmlce/midi",
+  "version": "0.0.0",
+  "private": true,
+  "license": "GPL-3.0-only",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "dependencies": {
+    "@mmlce/core": "workspace:*",
+    "@mmlce/mml": "workspace:*",
+    "@mmlce/fileio": "workspace:*"
+  }
+}

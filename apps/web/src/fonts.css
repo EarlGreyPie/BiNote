@@ -1,0 +1,31 @@
+/*
+ * 글꼴. 화면은 Pretendard GOV, MML 편집기는 고정폭 D2Coding.
+ * 둘 다 SIL Open Font License 1.1이며, 각 프로젝트가 배포하는 서브셋(KS X 1001 한글 + 라틴) woff2를 그대로 쓴다.
+ * 쓰는 굵기만 선언해 필요한 파일만 내려받는다. 앱에 함께 넣어 오프라인에서도 보이게 한다.
+ * Pretendard GOV: Copyright (c) 2021 Kil Hyung-jin, with Reserved Font Name Pretendard GOV.
+ * D2Coding: Copyright (c) 2015 NAVER Corp.
+ */
+@font-face {
+  font-family: "Pretendard GOV";
+  font-weight: 400;
+  font-display: swap;
+  src: local("Pretendard GOV Regular"), url("pretendard-gov/dist/web/static/woff2-subset/PretendardGOV-Regular.subset.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Pretendard GOV";
+  font-weight: 600;
+  font-display: swap;
+  src: local("Pretendard GOV SemiBold"), url("pretendard-gov/dist/web/static/woff2-subset/PretendardGOV-SemiBold.subset.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Pretendard GOV";
+  font-weight: 700;
+  font-display: swap;
+  src: local("Pretendard GOV Bold"), url("pretendard-gov/dist/web/static/woff2-subset/PretendardGOV-Bold.subset.woff2") format("woff2");
+}
+@font-face {
+  font-family: "D2Coding";
+  font-weight: 400;
+  font-display: swap;
+  src: local("D2Coding"), url("d2coding/fonts/d2coding-subset.woff2") format("woff2");
+}

@@ -1,0 +1,121 @@
+import { barBeatAt, maxChordsOf, type GameProfile, type Rat, type Song } from "@mmlce/core";
+import { gameScores, trackSource, type Diagnostic, type SongDiagnostic } from "@mmlce/mml";
+
+/** 출력 점검판의 악보 한 줄 */
+export interface OutputRow {
+  /** 곡 안에서 1부터 (트랙 목록의 악보 번호와 같다) */
+  readonly number: number;
+  readonly playerId: string;
+  /** 같은 연주자의 몇 번째 악보인지 (0부터, 화음 수 한도로 나뉘었을 때) */
+  readonly index: number;
+  readonly instrument: string;
+  readonly maxChords: number;
+  readonly tracks: readonly { readonly trackId: string; readonly name: string; readonly count: number; readonly over: boolean }[];
+  /** 게임에 붙여넣을 글 (MML@...;) */
+  readonly text: string;
+  /** 글자 수 한도를 넘는 트랙이 있다 */
+  readonly over: boolean;
+  /** 게임에서 접혀 나는 음 수 */
+  readonly fold: number;
+  readonly errors: number;
+  readonly warnings: number;
+  /** 출력기로 정확히 못 써서 화면 글을 그대로 넣은 트랙 */
+  readonly asIs: readonly string[];
+  /** 음을 쪼갤 수 없어 뒤쪽 음 경계로 옮겨 쓴 템포 수 */
+  readonly moved: number;
+}
+
+/** 게임 범위 밖 템포와 고칠 방법: 그 구간 음 길이를 factor배(작으면 1/factor) 하고 템포를 to로 */
+export interface TempoAdvice {
+  readonly at: Rat;
+  readonly bpm: number;
+  readonly bar: number;
+  readonly beat: number;
+  readonly high: boolean;
+  /** 템포를 몇 배로 나누거나(빠를 때) 곱하나(느릴 때). 2의 거듭제곱 */
+  readonly factor: number;
+  readonly to: number;
+  /** 그 구간 음 길이에 곱할 수. 빠를 때 1/factor(짧게), 느릴 때 factor(길게) */
+  readonly lengthScale: number;
+}
+
+/** 점검판에 따로 보이므로 악보별 수에서 빼는 검사 */
+const SHOWN_ELSEWHERE = new Set(["char-limit", "tempo-range"]);
+
+/**
+ * 악보마다 게임에 넣을 글과 점검 결과. diagnostics는 곡 검사(analyzeSong) 결과로,
+ * 트랙 글의 검사와 곡 검사를 트랙별로 센다
+ */
+export function outputRows(
+  song: Song,
+  profile: GameProfile,
+  diagnostics: { readonly tracks: readonly { readonly track: { readonly id: string }; readonly diagnostics: readonly Diagnostic[] }[]; readonly song: readonly SongDiagnostic[] },
+): OutputRow[] {
+  const limit = profile.charLimitPerScore;
+  const instrumentOf = (playerId: string) => song.players.find((p) => p.id === playerId)?.instrument.canonical;
+  const byTrack = new Map<string, { level: string; code: string }[]>();
+  for (const a of diagnostics.tracks) byTrack.set(a.track.id, [...a.diagnostics]);
+  for (const d of diagnostics.song) if (d.trackId) byTrack.get(d.trackId)?.push(d);
+  return gameScores(song, (id) => maxChordsOf(profile, instrumentOf(id))).map((score, k) => {
+    const list = score.trackIds.flatMap((id) => byTrack.get(id) ?? []).filter((d) => !SHOWN_ELSEWHERE.has(d.code));
+    const tracks = score.texts.map(({ trackId, text }) => ({
+      trackId,
+      name: song.tracks.find((t) => t.id === trackId)?.name ?? trackId,
+      count: text.length,
+      over: text.length > limit,
+    }));
+    return {
+      number: k + 1,
+      playerId: score.playerId,
+      index: score.index,
+      instrument: instrumentOf(score.playerId) ?? "piano",
+      maxChords: maxChordsOf(profile, instrumentOf(score.playerId)),
+      tracks,
+      text: score.text,
+      over: tracks.some((t) => t.over),
+      fold: list.filter((d) => d.code === "pitch-fold").length,
+      errors: list.filter((d) => d.level === "error").length,
+      warnings: list.filter((d) => d.level === "warning" && d.code !== "pitch-fold").length,
+      asIs: score.asIs,
+      moved: score.moved.length,
+    };
+  });
+}
+
+/**
+ * 게임 범위 밖 템포마다 고칠 방법. 음 하나의 초 = 길이 × 240 / 템포라서, 너무 빠르면 템포를 반씩 줄이고
+ * 음 길이도 그만큼 줄이면(1/2, 1/4 …: 4분음표 → 8분음표) 빠르기가 같고, 너무 느리면 그 반대(길이 ×2 …).
+ * 템포가 홀수라 반으로 나누어떨어지지 않으면 가까운 정수를 권한다
+ */
+export function tempoAdvice(song: Song, range: { readonly min: number; readonly max: number }): TempoAdvice[] {
+  const out: TempoAdvice[] = [];
+  for (const e of song.tempo) {
+    const high = e.bpm > range.max;
+    if (!high && e.bpm >= range.min) continue;
+    let factor = 1;
+    if (high) while (e.bpm / factor > range.max) factor *= 2;
+    else while (e.bpm * factor < range.min && factor < 64) factor *= 2;
+    const to = Math.round(high ? e.bpm / factor : e.bpm * factor);
+    out.push({ at: e.at, bpm: e.bpm, ...barBeatAt(song.timeSig, e.at), high, factor, to, lengthScale: high ? 1 / factor : factor });
+  }
+  return out;
+}
+
+/** 미리보기 한 줄: 트랙 MML 글자 수가 어떻게 바뀌나 */
+export interface PreviewRow {
+  readonly trackId: string;
+  readonly name: string;
+  readonly before: number;
+  readonly after: number;
+}
+
+/** 두 곡의 트랙별 MML 글자 수 (트랙 목록에 보이는 수와 같은 글). 바뀐 트랙과 한도를 넘는 트랙만 */
+export function previewRows(before: Song, after: Song, limit: number): PreviewRow[] {
+  const length = (song: Song, id: string) => {
+    const track = song.tracks.find((t) => t.id === id);
+    return track ? trackSource(song, track).text.length : 0;
+  };
+  return after.tracks
+    .map((t) => ({ trackId: t.id, name: t.name, before: length(before, t.id), after: length(after, t.id) }))
+    .filter((r) => r.before !== r.after || r.after > limit);
+}

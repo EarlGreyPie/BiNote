@@ -1,0 +1,26 @@
+name: 문제 신고 / Bug report
+description: 앱이 이상하게 동작할 때 / Something doesn't work
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        사운드팩(.dls) 파일은 넥슨 자산이므로 올리지 마세요. 곡은 MML@ 글이나 작은 예시로 충분해요.
+        Please don't attach soundpack (.dls) files; they are Nexon assets.
+  - type: textarea
+    id: what
+    attributes:
+      label: 무슨 일이 있었나요 / What happened
+      description: 무엇을 했고, 무엇을 기대했고, 실제로 어떻게 됐는지 / Steps, expected, actual
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: 판 정보 / Version
+      description: 설정 맨 아래 "BiNote v… · 커밋 …" 줄 / The "BiNote v… · commit …" line at the bottom of Settings
+  - type: input
+    id: env
+    attributes:
+      label: 기기·브라우저 / Device & browser
+      placeholder: Windows 11 Chrome, iPad Safari, Galaxy Tab Chrome …

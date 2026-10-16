@@ -1,0 +1,45 @@
+import type { GameProfile, Song } from "@mmlce/core";
+import { splitSong, type SplitResult } from "@mmlce/mml";
+import type { Schedule, SlotPatch } from "@mmlce/audio/browser";
+import { WorkerJob } from "./workerJob";
+
+export interface SplitRequest {
+  readonly song: Song;
+  readonly profile: GameProfile;
+}
+
+/** 악보책 나누기 (Web Worker) */
+export function splitJob(makeWorker = workerMaker(() => new Worker(new URL("./split.worker.ts", import.meta.url), { type: "module" }))) {
+  return new WorkerJob<SplitRequest, SplitResult>(makeWorker, ({ song, profile }, onProgress) => splitSong(song, profile, { onProgress }));
+}
+
+export interface WavRequest {
+  readonly schedule: Schedule;
+  readonly patches: readonly SlotPatch[];
+  /** 사운드팩 파일 바이트 */
+  readonly packs: readonly { readonly id: string; readonly bank: number; readonly bytes: ArrayBuffer }[];
+}
+
+export interface WavResult {
+  readonly wav: ArrayBuffer;
+}
+
+/** 사운드팩으로 일정을 그려 WAV 파일 바이트로. 신스 라이브러리는 이때 불러온다 */
+export async function renderWavFile(request: WavRequest, onProgress: (fraction: number) => void): Promise<WavResult> {
+  const { loadSoundBank, renderPatched, toWav } = await import("@mmlce/audio");
+  // 불러오는 사이 취소됐으면 여기서 멈춘다 (화면 쪽 계산일 때 진행률 콜백이 던진다)
+  onProgress(0);
+  const packs = request.packs.map((p) => ({ id: p.id, bank: p.bank, soundBank: loadSoundBank(p.bytes) }));
+  onProgress(0);
+  const result = await renderPatched(request.schedule, request.patches, packs, { onProgress });
+  return { wav: toWav(result) };
+}
+
+/** WAV 저장 (Web Worker) */
+export function wavJob(makeWorker = workerMaker(() => new Worker(new URL("./wav.worker.ts", import.meta.url), { type: "module" }))) {
+  return new WorkerJob<WavRequest, WavResult>(makeWorker, renderWavFile);
+}
+
+function workerMaker(make: () => Worker): (() => Worker) | undefined {
+  return typeof Worker === "undefined" ? undefined : make;
+}

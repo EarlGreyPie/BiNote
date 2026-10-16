@@ -1,0 +1,36 @@
+name: 번역 신고 / Translation report / 翻訳の報告 / 翻譯回報 / 翻译反馈
+description: 번역이 틀렸거나 어색할 때 / 翻訳の誤り・不自然な表現 / 翻譯錯誤或不自然 / 翻译错误或不自然
+labels: [translation]
+body:
+  - type: dropdown
+    id: language
+    attributes:
+      label: 언어 / Language
+      options:
+        - 日本語 (ja)
+        - 繁體中文 (zh-TW)
+        - 简体中文 (zh-Hans)
+        - English (en)
+        - 한국어 (ko)
+    validations:
+      required: true
+  - type: textarea
+    id: where
+    attributes:
+      label: 어디에 나오는 문구인가요 / Where does it appear
+      description: 메뉴·버튼·안내 이름, 가능하면 화면 캡처 / Menu, button or message; a screenshot helps
+    validations:
+      required: true
+  - type: textarea
+    id: now
+    attributes:
+      label: 지금 문구 / Current text
+    validations:
+      required: true
+  - type: textarea
+    id: better
+    attributes:
+      label: 고친 문구와 이유 / Suggested text and why
+      description: 게임 안 공식 표기(악기·아이템 이름 등)라면 그렇다고 적어 주세요 / Note if it is the official in-game term
+    validations:
+      required: true

@@ -1,0 +1,44 @@
+import {
+  decodeText,
+  looksLikeMmlAt,
+  isProjectFileName,
+  looksLikeProject,
+  read3mle,
+  readMmi,
+  readMmlAt,
+  readProject,
+  type ProjectEditor,
+  type ReadResult,
+} from "@mmlce/fileio";
+import { t } from "./i18n.svelte";
+
+/** 프로젝트 파일이면 편집 화면 상태도 함께 */
+export type OpenResult = ReadResult & { readonly editor?: ProjectEditor };
+
+/**
+ * 확장자로 형식을 고른다. 프로젝트 확장자(PROJECT_EXTENSIONS)는 MMLCE 프로젝트, .mmi는 마비꼬, 게임 MML@ 글이면 그것으로,
+ * 나머지(.mml·.txt)는 3MLE 형식으로 읽는다. 프로젝트를 열 수 없으면 ProjectError를 던진다
+ */
+export async function openScore(file: File): Promise<OpenResult> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  // 프로젝트는 늘 UTF-8 (3MLE처럼 CP949로 다시 읽지 않는다)
+  if (isProjectFileName(file.name)) return readProject(new TextDecoder().decode(bytes));
+  const text = decodeText(bytes);
+  if (looksLikeProject(text)) return readProject(text);
+  if (/\.mmi$/i.test(file.name)) {
+    const parts = [t("ui.mmiMelody"), t("ui.mmiChord", { n: 1 }), t("ui.mmiChord", { n: 2 }), t("ui.mmiSong")] as const;
+    return readMmi(text, { parts, songPlayer: (name) => t("ui.mmiSongPlayer", { name }) });
+  }
+  if (looksLikeMmlAt(text)) return readMmlAt(text, { playerName: t("ui.pastePlayer") });
+  return read3mle(text, { scoreName: (n) => t("ui.scoreN", { n }) });
+}
+
+/** 바이트를 파일로 내려받게 한다 */
+export function download(bytes: Uint8Array, name: string): void {
+  const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: "application/octet-stream" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}

@@ -1,0 +1,124 @@
+import type { Rat } from "./rat.js";
+
+/** 곡 전체 하나의 템포 지도에 들어가는 변화. 편집기 안에서는 범위 제한이 없다. */
+export interface TempoEvent {
+  readonly at: Rat;
+  readonly bpm: number;
+}
+
+export interface TimeSigEvent {
+  readonly at: Rat;
+  readonly beats: number;
+  readonly unit: number;
+}
+
+export interface Marker {
+  readonly id: string;
+  readonly at: Rat;
+  readonly label: string;
+}
+
+/**
+ * 악기는 사운드팩 번호가 아니라 공통 ID로 저장한다.
+ * 팩마다 같은 악기의 번호가 다르기 때문이다(기타 30/40 등).
+ */
+export interface InstrumentRef {
+  readonly canonical: string;
+  readonly packId?: string;
+  readonly program?: number;
+}
+
+/** 악기 하나를 든 연주자. 화음 수 제한의 단위. */
+export interface Player {
+  readonly id: string;
+  readonly name: string;
+  readonly instrument: InstrumentRef;
+}
+
+export interface Note {
+  readonly id: string;
+  readonly start: Rat;
+  readonly dur: Rat;
+  /** MIDI 음 번호 (o4c = 60) */
+  readonly pitch: number;
+  /** 프로필 범위의 v 값 */
+  readonly vol: number;
+  /** "next"면 & 로 다음 음과 잇는다 */
+  readonly tie: "none" | "next";
+}
+
+/** 출력할 때 존중할 사용자 표기 습관. 비어 있으면 최적화기가 마음대로 고른다. */
+export interface SpellingHints {
+  readonly preferRelativeOctave?: boolean;
+  readonly defaultLength?: number;
+}
+
+export type TrackRole = "melody" | "harmony" | "bass" | "free";
+
+/**
+ * 사용자가 쓴 MML 원문. 있으면 화면과 글자 수에 원문을 그대로 쓴다(쓴 사람의 표기를 바꾸지 않음).
+ * 피아노롤처럼 음을 직접 고치는 편집은 원문을 지우고, 그때부터는 출력기가 다시 쓴다.
+ */
+export interface TrackText {
+  readonly text: string;
+  /** 마비꼬 startDelta처럼 원문 앞에 붙는 시작 위치 */
+  readonly offset?: Rat;
+}
+
+/** 화음 하나 = 트랙 하나 = MML 채널 하나. 한 트랙은 동시에 한 음만 낸다. */
+export interface Track {
+  readonly id: string;
+  readonly playerId: string;
+  readonly name: string;
+  readonly color: string;
+  readonly role: TrackRole;
+  readonly mute: boolean;
+  readonly solo: boolean;
+  /** 시작 위치 순, 서로 겹치지 않음 */
+  readonly notes: readonly Note[];
+  readonly spelling: SpellingHints;
+  readonly mml?: TrackText;
+  /**
+   * 이 트랙만 다른 악기로 연주할 때. 없으면 악보(연주자) 악기를 쓴다.
+   * 게임은 악보 하나(최대 6트랙)에 연주자 여럿이 들어가고 연주자마다 악기가 따로다
+   * (첫 연주자 1~3트랙, 그다음부터 한 명이 1트랙씩)
+   */
+  readonly instrument?: InstrumentRef;
+  /** 3MLE·마비꼬 파일의 채널 볼륨(0~127)·팬(0~127, 64 가운데). 편집기는 쓰지 않고 저장할 때 그대로 돌려준다 */
+  readonly mix?: { readonly volume?: number; readonly pan?: number };
+}
+
+export interface SourceRef {
+  readonly id: string;
+  readonly kind: "audio" | "midi";
+  readonly fileName: string;
+  /** 원곡 시작과 MML 시작의 차이(초) */
+  readonly offsetSec: number;
+}
+
+export interface SongMeta {
+  readonly title: string;
+  readonly author: string;
+  readonly profileId: string;
+  /** 3MLE 파일의 메모. 저장할 때 그대로 돌려준다 */
+  readonly memo?: string;
+}
+
+export interface Song {
+  readonly meta: SongMeta;
+  readonly tempo: readonly TempoEvent[];
+  readonly timeSig: readonly TimeSigEvent[];
+  readonly markers: readonly Marker[];
+  readonly players: readonly Player[];
+  readonly tracks: readonly Track[];
+  readonly sources: readonly SourceRef[];
+}
+
+/** 트랙이 실제로 쓰는 악기: 트랙에 따로 정했으면 그것, 아니면 악보 악기, 둘 다 없으면 피아노 */
+export function trackInstrument(song: Pick<Song, "players">, track: Pick<Track, "playerId" | "instrument">): InstrumentRef {
+  return track.instrument ?? song.players.find((p) => p.id === track.playerId)?.instrument ?? { canonical: "piano" };
+}
+
+export function emptySong(meta: SongMeta): Song {
+  return { meta, tempo: [], timeSig: [], markers: [], players: [], tracks: [], sources: [] };
+}

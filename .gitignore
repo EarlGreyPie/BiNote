@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.vite/
+coverage/
+# 사운드팩(DLS)은 넥슨 자산이라 저장소에 넣지 않는다
+*.dls
+*.sf2

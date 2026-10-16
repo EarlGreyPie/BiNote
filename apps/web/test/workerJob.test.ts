@@ -1,0 +1,111 @@
+import { describe, expect, it } from "vitest";
+import { emptySong, MOBILE_PROFILE, type Song } from "@mmlce/core";
+import { parseTrackText, splitSong } from "@mmlce/mml";
+import { splitJob, type SplitRequest } from "../src/lib/jobs";
+import { WorkerJob, type JobReply, type JobRequest } from "../src/lib/workerJob";
+import type { SplitResult } from "@mmlce/mml";
+
+type SplitReply = JobReply<SplitResult>;
+
+const profile = { ...MOBILE_PROFILE, charLimitPerScore: 40 };
+const song: Song = {
+  ...emptySong({ title: "", author: "", profileId: "mobile" }),
+  players: [{ id: "p1", name: "피아노", instrument: { canonical: "piano" } }],
+  tracks: [
+    { id: "a", playerId: "p1", name: "a", color: "", role: "free", mute: false, solo: false, notes: parseTrackText("a", { text: "cdefgab>c<".repeat(6) }).notes, spelling: {} },
+  ],
+};
+
+/** 실제 워커 대신: 받은 요청을 같은 splitSong으로 계산해 다음 틱에 답한다 */
+class FakeWorker {
+  onmessage: ((e: MessageEvent<SplitReply>) => void) | null = null;
+  onerror: ((e: ErrorEvent) => void) | null = null;
+  terminated = false;
+  constructor(private readonly fail = false) {}
+  postMessage({ id, request }: JobRequest<SplitRequest>) {
+    setTimeout(() => {
+      if (this.terminated) return;
+      if (this.fail) {
+        this.onerror?.({ preventDefault() {} } as ErrorEvent);
+        return;
+      }
+      const send = (data: SplitReply) => this.onmessage?.({ data } as MessageEvent<SplitReply>);
+      const result = splitSong(request.song, request.profile, { onProgress: (progress) => send({ id, progress }) });
+      send({ id, result });
+    }, 0);
+  }
+  terminate() {
+    this.terminated = true;
+  }
+}
+
+describe("WorkerJob (악보책 나누기)", () => {
+  it("워커로 나누고 진행률을 알린다", async () => {
+    const runner = splitJob(() => new FakeWorker() as unknown as Worker);
+    const seen: number[] = [];
+    const result = await runner.run({ song, profile }, (p) => seen.push(p));
+    expect(result).toEqual(splitSong(song, profile));
+    expect(result!.parts.length).toBeGreaterThan(1);
+    expect(seen.at(-1)).toBe(1);
+    expect(seen).toEqual([...seen].sort((a, b) => a - b));
+    expect(runner.busy).toBe(false);
+  });
+
+  it("취소하면 undefined로 끝나고 워커를 멈춘다", async () => {
+    const workers: FakeWorker[] = [];
+    const runner = splitJob(() => {
+      const w = new FakeWorker();
+      workers.push(w);
+      return w as unknown as Worker;
+    });
+    const running = runner.run({ song, profile });
+    runner.cancel();
+    expect(await running).toBeUndefined();
+    expect(workers[0]!.terminated).toBe(true);
+    // 다음 요청은 새 워커로
+    expect(await runner.run({ song, profile })).toBeDefined();
+    expect(workers.length).toBe(2);
+  });
+
+  it("새로 시작하면 앞 요청은 undefined, 뒤 요청만 결과를 받는다", async () => {
+    const runner = splitJob(() => new FakeWorker() as unknown as Worker);
+    const first = runner.run({ song, profile });
+    const second = runner.run({ song, profile });
+    expect(await first).toBeUndefined();
+    expect(await second).toBeDefined();
+  });
+
+  it("워커가 실패하거나 없으면 화면 쪽에서 계산한다", async () => {
+    expect(await splitJob(() => new FakeWorker(true) as unknown as Worker).run({ song, profile })).toEqual(splitSong(song, profile));
+    expect(await splitJob(undefined).run({ song, profile })).toEqual(splitSong(song, profile));
+  });
+
+  it("화면 쪽 계산은 취소된 뒤 진행률을 알리지 않고 다음 보고에서 멈춘다", async () => {
+    let release!: () => void;
+    const loaded = new Promise<void>((r) => (release = r));
+    let steps = 0;
+    // 느린 모듈 불러오기 뒤 진행률을 알리며 계산하는 local
+    const runner = new WorkerJob<number, number>(undefined, async (n, onProgress) => {
+      await loaded;
+      for (let i = 1; i <= n; i++) {
+        onProgress(i / n);
+        steps++;
+      }
+      return n;
+    });
+    const seen: number[] = [];
+    const running = runner.run(5, (p) => seen.push(p));
+    await new Promise((r) => setTimeout(r, 40));
+    runner.cancel();
+    release();
+    expect(await running).toBeUndefined();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(seen).toEqual([]);
+    expect(steps).toBe(0);
+    expect(runner.busy).toBe(false);
+    // 다음 요청은 정상으로
+    const again: number[] = [];
+    expect(await runner.run(2, (p) => again.push(p))).toBe(2);
+    expect(again).toEqual([0.5, 1]);
+  });
+});

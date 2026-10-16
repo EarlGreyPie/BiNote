@@ -1,0 +1,23 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "packages/i18n"
+    },
+    {
+      "path": "packages/core"
+    },
+    {
+      "path": "packages/mml"
+    },
+    {
+      "path": "packages/fileio"
+    },
+    {
+      "path": "packages/audio"
+    },
+    {
+      "path": "packages/midi"
+    }
+  ]
+}
