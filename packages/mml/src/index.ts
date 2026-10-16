@@ -7,6 +7,7 @@ export * from "./edit.js";
 export * from "./optimizer.js";
 export * from "./split.js";
 export * from "./distribute.js";
+export * from "./books.js";
 export * from "./clipboard.js";
 export * from "./game-output.js";
 export * from "./structure.js";

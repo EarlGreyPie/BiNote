@@ -1,6 +1,6 @@
 <script lang="ts">
   import { positionToSeconds, type Song } from "@mmlce/core";
-  import { playerScores, type SplitResult } from "@mmlce/mml";
+  import { playerScores, type FewerBooks, type SplitResult } from "@mmlce/mml";
   import { t } from "./i18n.svelte";
 
   interface Props {
@@ -9,10 +9,14 @@
     limit: number;
     /** 악보 하나에 넣을 수 있는 트랙 수 (profile.maxChordsPerPlayer) */
     maxChords: number | ((playerId: string) => number);
+    /** 트랙 사이 음을 고르게 옮기면 권이 줄어드는지 (checking: 계산 중) */
+    fewer?: FewerBooks | "checking" | undefined;
+    /** 고르게 옮기고 다시 나누기 (distributeChords에 줄 채널 글자 수) */
+    onfewer: (limit: number) => void;
     onclose: () => void;
   }
 
-  let { song, result, limit, maxChords, onclose }: Props = $props();
+  let { song, result, limit, maxChords, fewer, onfewer, onclose }: Props = $props();
   let copied = $state("");
 
   function clock(seconds: number): string {
@@ -51,6 +55,14 @@
     <span class="spacer"></span>
     <button class="small" onclick={onclose}>{t("ui.close")}</button>
   </header>
+  {#if fewer === "checking"}
+    <p class="muted help">{t("ui.splitFewerChecking")}</p>
+  {:else if fewer}
+    <p class="fewer">
+      {t("ui.splitFewer", { from: fewer.from, to: fewer.to, moved: fewer.moved })}
+      <button class="small" onclick={() => onfewer(fewer.limit)}>{t("ui.splitFewerApply")}</button>
+    </p>
+  {/if}
   <p class="muted help">{t("ui.splitHelp")}</p>
   {#each result.parts as part, i (i)}
     {@const from = positionToSeconds(song.tempo, part.start)}
@@ -87,6 +99,17 @@
 </section>
 
 <style>
+  .fewer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin: 4px 0;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    font-size: 13px;
+  }
   .split {
     border: 1px solid var(--line);
     border-radius: 6px;

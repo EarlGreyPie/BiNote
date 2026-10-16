@@ -342,6 +342,7 @@ Try these in order.
 1. **Distribute chords**: moves notes from tracks over the limit into free tracks of the same player. They stay on the same instrument, so the notes are kept as they are. (When the score has several tracks of the same instrument.)
 2. **Shrink MML**: rewrites the MML of every track shorter while keeping each note's pitch, start and length. Your own spaces, line breaks and comments are lost. If shrinking would drop notes, nothing is changed and you are told.
 3. **Split into score books**: cuts all tracks at the same point into several books.
+   - Always uses the fewest books. If one long track forces extra books, a "spread tracks evenly: N → M books" hint appears; applying it moves notes to same-instrument tracks and splits again (undo with Ctrl+Z).
    - Places where everyone rests are chosen first.
    - Octave, volume and tempo are written again at the start of each book.
    - Each book ends early by the delay before the next one starts (about 1 second) to keep the beat. Notes in that stretch can be shortened or dropped. Check "notes cut at the end" and the length warnings in the result, and listen around the book boundaries before using it.

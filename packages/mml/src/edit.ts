@@ -230,10 +230,10 @@ function restoreSong(song: Song): Command {
  * 화음 분산 명령. 음을 옮긴 뒤 모든 트랙을 최적화 출력기로 다시 쓴다
  * (곡 템포를 채널마다 다시 나눠 넣어야 하므로 옮기지 않은 트랙의 표기도 바뀐다).
  */
-export function distributeSong(profile: GameProfile, label = "화음 분산"): Command {
+export function distributeSong(profile: GameProfile, label = "화음 분산", limit?: number): Command {
   return {
     label,
-    apply: (song) => compactSong(profile).apply(distributeChords(song, profile).song),
+    apply: (song) => compactSong(profile).apply(distributeChords(song, profile, limit === undefined ? {} : { limit }).song),
     invert: (before) => restoreSong(before),
   };
 }

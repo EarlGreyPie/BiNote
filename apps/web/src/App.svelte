@@ -83,6 +83,7 @@
     setTrackNotes,
     setTrackText,
     type SplitResult,
+    type FewerBooks,
   } from "@mmlce/mml";
   import { analyzeSong, noteSpan, spanAt, textTimeline } from "./lib/analysis";
   import { Engine } from "./lib/engine";
@@ -106,7 +107,7 @@
   import { forgetPack, loadPacks, savePack } from "./lib/packStore";
   import { fileAccept, hasExtension } from "./lib/fileAccept";
   import { AutosaveTracker } from "./lib/autosave";
-  import { splitJob, wavJob } from "./lib/jobs";
+  import { booksJob, splitJob, wavJob } from "./lib/jobs";
   import NoteList from "./lib/NoteList.svelte";
   import { forgetWork, listWorks, loadWork, newWorkId, saveWork, type WorkSummary } from "./lib/workStore";
   import { parseEditorState, withTrackView, type EditorState, type ReferenceFit, type TrackViewState, type VideoFit } from "./lib/projectEditor";
@@ -506,6 +507,9 @@
   let splitProgress = $state<number | undefined>(undefined);
   const splitting = $derived(splitProgress !== undefined);
   const splitRunner = splitJob();
+  /** 나눈 뒤 트랙 사이 음을 고르게 옮기면 권이 줄어드는지. checking이면 계산 중 */
+  let fewer = $state.raw<{ song: Song; value: FewerBooks | "checking" | undefined } | undefined>(undefined);
+  const booksRunner = booksJob();
   /** 나누기 요청 번호 (WAV의 wavToken과 같은 쓰임) */
   let splitToken = 0;
   /** WAV로 저장하는 중이면 진행률 (0~1). 그리기는 Web Worker에서 한다 */
@@ -570,9 +574,31 @@
     if (token !== splitToken) return;
     splitTarget = undefined;
     splitProgress = undefined;
-    if (result && song === target) split = { song: target, result };
+    if (result && song === target) {
+      split = { song: target, result };
+      void checkFewer(target, result.parts.length);
+    }
+  }
+
+  /** 나눈 결과보다 권을 줄일 수 있는지 뒤에서 따로 계산한다 (나누기 결과는 먼저 보여 준다) */
+  async function checkFewer(target: Song, books: number) {
+    fewer = undefined;
+    if (books < 2) return;
+    fewer = { song: target, value: "checking" };
+    const value = await booksRunner.run({ song: target, profile: $state.snapshot(profile) as GameProfile, books });
+    if (fewer?.song === target) fewer = { song: target, value };
+  }
+
+  /** 트랙 사이 음을 고르게 옮기고(실행 취소 한 칸) 다시 나눈다 */
+  function applyFewer(limit: number) {
+    if (!history || !song) return;
+    booksRunner.cancel();
+    fewer = undefined;
+    sync(history.run(distributeSong(profile, t("ui.splitFewerUndo"), limit)));
+    void runSplit();
   }
   function cancelSplit() {
+    booksRunner.cancel();
     splitToken++;
     splitTarget = undefined;
     splitRunner.cancel();
@@ -2379,7 +2405,19 @@
             {/if}
             {#if split && split.song === song}
               <div class="split-wrap">
-                <SplitPanel song={split.song} result={split.result} limit={profile.charLimitPerScore} maxChords={chordsOf} onclose={() => (split = undefined)} />
+                <SplitPanel
+                  song={split.song}
+                  result={split.result}
+                  limit={profile.charLimitPerScore}
+                  maxChords={chordsOf}
+                  fewer={fewer?.song === split.song ? fewer.value : undefined}
+                  onfewer={applyFewer}
+                  onclose={() => {
+                    booksRunner.cancel();
+                    fewer = undefined;
+                    split = undefined;
+                  }}
+                />
               </div>
             {/if}
           {/snippet}

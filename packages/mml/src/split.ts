@@ -11,8 +11,10 @@ import { audibleTempo } from "./tempo-text.js";
  * 악보책 나누기 (설계 8장). 채널 하나라도 글자 수 한도를 넘으면 곡을 여러 권으로 나눈다.
  * 모든 채널을 같은 시점에서 자른다(연주자끼리 박자가 어긋나지 않게).
  *
+ * 권 수는 늘 가장 적게: 먼저 권마다 가장 멀리까지 넣어 최소 권 수와 그때의 권 끝들을 구한다.
  * 자르는 자리 고르기: 한도 안에 들어가는 가장 먼 자리까지 찾은 뒤, 그 앞쪽 일부(window) 안에서
  * (1) 마커, (2) 끊기는 음이 가장 적은 곳(모두 쉬는 곳이면 0), (3) 더 뒤쪽 순으로 고른다.
+ * 다만 고른 자리에서 남은 곡을 남은 권 수 안에 넣을 수 있을 때만 골라, 좋은 자리를 고르느라 권이 늘지 않게 한다.
  * 각 권의 시작에서 옥타브·길이·볼륨은 출력기가 기본값부터 다시 쓰고, 그때의 템포를 다시 적는다.
  * 게임은 악보(연주자)마다 따로 붙여넣고 따로 넘기므로, 템포와 권 끝 쉼표는 악보마다 넣는다.
  *
@@ -88,29 +90,30 @@ export function splitSong(song: Song, profile: GameProfile, options: SplitOption
     const until = sub(end, trim);
     return { trim, until, ...render(song, scores, tracks, tempo, start, until, quick, cmp(end, songEnd) < 0, verify) };
   };
-  // 실제로 내보낼 글(앞당김·끝 쉼표 포함)로 한도를 검사한다. 단순 출력이 들어가면 최적화 출력도 들어간다
+  // 실제로 내보낼 글(앞당김·끝 쉼표 포함)로 한도를 검사한다. 단순 출력이 들어가면 최적화 출력도 들어간다.
+  // 같은 구간을 여러 번 묻게 되므로(최소 권 수 계산 + 자리 고르기) 결과를 기억해 둔다
+  const fitMemo = new Map<string, boolean>();
   const fits = (start: Rat, end: Rat) => {
-    if (part(start, end, true).texts.every((t) => t.text.length <= limit)) return true;
-    return part(start, end).texts.every((t) => t.text.length <= limit);
+    const key = `${start.n}/${start.d}-${end.n}/${end.d}`;
+    const known = fitMemo.get(key);
+    if (known !== undefined) return known;
+    const ok = part(start, end, true).texts.every((t) => t.text.length <= limit) || part(start, end).texts.every((t) => t.text.length <= limit);
+    fitMemo.set(key, ok);
+    return ok;
   };
 
-  // 진행률: 정한 권 끝, 권을 찾는 동안에는 한도 안에 들어간다고 확인한 가장 먼 자리 (줄어들지 않게)
+  // 진행률: 정한 권 끝, 권을 찾는 동안에는 한도 안에 들어간다고 확인한 가장 먼 자리 (줄어들지 않게).
+  // 최소 권 수를 먼저 한 번 훑으므로 앞 절반은 그 훑기, 뒤 절반은 실제로 자르기다
   let shown = 0;
+  let phase = 0;
   const report = (at: Rat) => {
-    const fraction = Math.min(1, toNumber(at) / toNumber(songEnd));
+    const fraction = Math.min(1, (phase + toNumber(at) / toNumber(songEnd)) / 2);
     if (fraction > shown) options.onProgress?.((shown = fraction));
   };
 
-  const parts: SplitPart[] = [];
-  let start: Rat = ZERO;
-  while (cmp(start, songEnd) < 0) {
-    if (fits(start, songEnd)) {
-      const last = part(start, songEnd, false, true);
-      parts.push({ start, end: songEnd, texts: last.texts, cut: 0, trim: ZERO, moved: last.moved, lossy: last.lossy });
-      break;
-    }
-    const after = candidates.filter((c) => cmp(c, start) > 0);
-    // 한도 안에 들어가는 가장 먼 후보 (길이는 끝으로 갈수록 늘어난다고 보고 이분 탐색)
+  /** start에서 한 권에 넣을 수 있는 가장 먼 후보의 번호 (after 안에서). 없으면 -1 */
+  const farthest = (start: Rat, after: readonly Rat[]) => {
+    // 길이는 끝으로 갈수록 늘어난다고 보고 이분 탐색
     let lo = 0;
     let hi = after.length - 1;
     let best = -1;
@@ -129,6 +132,51 @@ export function splitSong(song: Song, profile: GameProfile, options: SplitOption
       if (fits(start, after[i]!)) best = i;
       else if (quick.some((t) => t.text.length > Math.max(limit * 1.1, limit + 16))) break;
     }
+    return best;
+  };
+
+  // 1) 최소 권 수: 권마다 가장 멀리까지 넣으면 권 수가 가장 적다. 그 권 끝들(greedy)을 기억해 두고,
+  //    실제로 자를 때 k번째 권 끝이 greedy의 k번째 끝보다 앞서지 않게 해서 권 수가 늘지 않게 한다
+  const greedy: Rat[] = [];
+  for (let at: Rat = ZERO; cmp(at, songEnd) < 0; ) {
+    if (fits(at, songEnd)) break;
+    const after = candidates.filter((c) => cmp(c, at) > 0);
+    const best = farthest(at, after);
+    at = best < 0 ? (after[0] ?? songEnd) : after[best]!;
+    greedy.push(at);
+  }
+  phase = 1;
+  shown = Math.max(shown, 0.5);
+
+  /**
+   * at에서 시작해 남은 곡을 budget권 안에 넣을 수 있는지. greedy의 같은 차례 끝(k번째)보다 뒤면 늘 된다
+   * (늦게 시작해서 권이 늘지는 않는다). 앞이면 가장 멀리 넣기로 budget권까지만 따라가 본다
+   */
+  const finishes = (at: Rat, k: number, budget: number) => {
+    const floor = greedy[k];
+    if (!floor || cmp(at, floor) >= 0) return true;
+    let pos = at;
+    for (let used = 0; used < budget; used++) {
+      if (fits(pos, songEnd)) return true;
+      const after = candidates.filter((c) => cmp(c, pos) > 0);
+      const best = farthest(pos, after);
+      if (best < 0) return false;
+      pos = after[best]!;
+    }
+    return false;
+  };
+
+  // 2) 자리 고르기: 최소 권 수를 지키는 범위에서 마커 → 끊기는 음이 적은 곳 → 뒤쪽 순
+  const parts: SplitPart[] = [];
+  let start: Rat = ZERO;
+  while (cmp(start, songEnd) < 0) {
+    if (fits(start, songEnd)) {
+      const last = part(start, songEnd, false, true);
+      parts.push({ start, end: songEnd, texts: last.texts, cut: 0, trim: ZERO, moved: last.moved, lossy: last.lossy });
+      break;
+    }
+    const after = candidates.filter((c) => cmp(c, start) > 0);
+    const best = farthest(start, after);
     let end: Rat;
     if (best < 0) {
       // 음 하나도 못 넣는 경우는 없겠지만, 그래도 앞으로 나아가게 첫 후보에서 자른다
@@ -144,10 +192,12 @@ export function splitSong(song: Song, profile: GameProfile, options: SplitOption
         if (gapMs && gap === ZERO) return Number.MAX_SAFE_INTEGER;
         return cutCount(tracks, c, gap);
       };
-      // 마커 → 끊기는 음이 적은 곳 → 뒤쪽 순. 이분 탐색은 길이가 늘기만 한다고 가정하므로 고른 자리도 다시 검사한다
+      // 이분 탐색은 길이가 늘기만 한다고 가정하므로 고른 자리도 다시 검사한다
       const byCost = (a: Rat, b: Rat) => cost(a) - cost(b) || cmp(b, a);
       const ranked = [...[...marked].sort(byCost), ...pool.filter((c) => !marked.includes(c)).sort(byCost)];
-      end = ranked.find((c) => fits(start, c)) ?? [...after.slice(0, best + 1)].reverse().find((c) => fits(start, c)) ?? after[0]!;
+      // 이 권 끝에서 남은 곡을 남은 권 수 안에 넣을 수 있어야 한다 (권 수가 늘지 않게)
+      const budget = greedy.length - parts.length;
+      end = ranked.find((c) => fits(start, c) && finishes(c, parts.length, budget)) ?? far;
     }
     const chosen = part(start, end, false, true);
     parts.push({ start, end, texts: chosen.texts, cut: cutCount(tracks, end, chosen.trim), trim: chosen.trim, moved: chosen.moved, lossy: chosen.lossy });

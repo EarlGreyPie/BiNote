@@ -21,8 +21,16 @@ export interface DistributeResult {
 /** 한 연주자에서 시도할 최대 옮기기 횟수 */
 const MAX_MOVES = 200;
 
-export function distributeChords(song: Song, profile: GameProfile): DistributeResult {
-  const limit = profile.charLimitPerScore;
+export interface DistributeOptions {
+  /**
+   * 채널마다 맞출 글자 수. 생략하면 프로필 한도(한 권에 넣기).
+   * 악보책으로 나눌 때는 "권 수 × 한도"보다 조금 작게 주어 채널 길이를 고르게 해 권 수를 줄인다
+   */
+  readonly limit?: number;
+}
+
+export function distributeChords(song: Song, profile: GameProfile, options: DistributeOptions = {}): DistributeResult {
+  const limit = options.limit ?? profile.charLimitPerScore;
   let tracks = song.tracks.map((t) => ({ ...t, notes: [...t.notes].sort((a, b) => cmp(a.start, b.start)) }));
   let moved = 0;
 

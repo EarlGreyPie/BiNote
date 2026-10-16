@@ -1,5 +1,5 @@
 import type { GameProfile, Song } from "@mmlce/core";
-import { splitSong, type SplitResult } from "@mmlce/mml";
+import { fewerBooks, splitSong, type FewerBooks, type SplitResult } from "@mmlce/mml";
 import type { Schedule, SlotPatch } from "@mmlce/audio/browser";
 import { WorkerJob } from "./workerJob";
 
@@ -11,6 +11,18 @@ export interface SplitRequest {
 /** 악보책 나누기 (Web Worker) */
 export function splitJob(makeWorker = workerMaker(() => new Worker(new URL("./split.worker.ts", import.meta.url), { type: "module" }))) {
   return new WorkerJob<SplitRequest, SplitResult>(makeWorker, ({ song, profile }, onProgress) => splitSong(song, profile, { onProgress }));
+}
+
+export interface BooksRequest {
+  readonly song: Song;
+  readonly profile: GameProfile;
+  /** 지금 나눈 권 수 */
+  readonly books: number;
+}
+
+/** 트랙 사이 음을 고르게 옮겨 악보책 권 수를 줄일 수 있는지 (Web Worker). 줄일 수 없으면 undefined */
+export function booksJob(makeWorker = workerMaker(() => new Worker(new URL("./books.worker.ts", import.meta.url), { type: "module" }))) {
+  return new WorkerJob<BooksRequest, FewerBooks | undefined>(makeWorker, ({ song, profile, books }) => fewerBooks(song, profile, books));
 }
 
 export interface WavRequest {
