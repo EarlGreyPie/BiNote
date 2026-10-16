@@ -232,7 +232,7 @@
     return () => compactQuery?.removeEventListener("change", onchange);
   });
   let statusPanel = $state<StatusPanel | undefined>(undefined);
-  let settings = $state<{ section: "packs" | "playback" | "display" | "keys" } | undefined>(undefined);
+  let settings = $state<{ section: "packs" | "playback" | "display" | "language" | "keys" } | undefined>(undefined);
   let meterOpen = $state(false);
   let addScoreOpen = $state(false);
   let tuningName = $state<TuningName>("standard");

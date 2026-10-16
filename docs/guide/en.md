@@ -417,7 +417,8 @@ The app checks for a new version each time it opens, and if it stays open for a 
 |---|---|
 | Sound packs | Add and remove, check priority (list order), storage status |
 | Playback | Master volume, Display sync, Light keys while playing, MIDI keys Velocity → v |
-| Display | Theme (Follow system · Light · Dark), Accent color, Note look (Rounded corners · Border · Shade by v · Note names when zoomed in), Track colors (By position in score · Hue per score · Saved in file), MML editor text and text size, Language |
+| Display | Theme (Follow system · Light · Dark), Accent color, Note look (Rounded corners · Border · Shade by v · Note names when zoomed in), Track colors (By position in score · Hue per score · Saved in file), MML editor text and text size |
+| Language | Pick the interface language. At first BiNote follows your browser language (English if it is not Korean, English, Japanese, Traditional or Simplified Chinese) and remembers your choice |
 | Shortcuts | Open shortcut settings (Key set: BiNote default / MabiIcco compatible, change keys) |
 
 At the bottom are the version info and links to the guide and **About BiNote**.

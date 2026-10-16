@@ -38,7 +38,7 @@
     onclose: () => void;
   }
 
-  type Section = "packs" | "playback" | "display" | "keys";
+  type Section = "packs" | "playback" | "display" | "language" | "keys";
 
   let {
     packs,
@@ -75,9 +75,14 @@
     dialog.showModal();
   });
 
-  const SECTIONS: readonly Section[] = ["packs", "playback", "display", "keys"];
+  const SECTIONS: readonly Section[] = ["packs", "playback", "display", "language", "keys"];
+  /** 언어 칸은 글자를 못 읽는 언어로 바뀌어도 찾을 수 있게 영어 "Language"를 늘 같이 적는다 */
   const sectionLabel = (s: Section) =>
-    t(s === "packs" ? "ui.settingsPacks" : s === "playback" ? "ui.settingsPlayback" : s === "display" ? "ui.settingsDisplay" : "ui.settingsKeys");
+    s === "language"
+      ? i18n.locale === "en"
+        ? t("ui.language")
+        : `${t("ui.language")} · Language`
+      : t(s === "packs" ? "ui.settingsPacks" : s === "playback" ? "ui.settingsPlayback" : s === "display" ? "ui.settingsDisplay" : "ui.settingsKeys");
 </script>
 
 <dialog bind:this={dialog} {onclose}>
@@ -171,12 +176,15 @@
             </select>
           </span>
         </div>
-        <label class="row">
-          <span>{t("ui.language")}</span>
-          <select value={i18n.locale} onchange={(e) => setLocale(e.currentTarget.value as Locale)}>
-            {#each LOCALES as l (l)}<option value={l}>{LOCALE_LABELS[l]}</option>{/each}
-          </select>
-        </label>
+      {:else if section === "language"}
+        <div class="langs" role="radiogroup" aria-label={t("ui.language")}>
+          {#each LOCALES as l (l)}
+            <label class="lang" lang={l === "zh-TW" ? "zh-Hant" : l}>
+              <input type="radio" name="locale" value={l} checked={i18n.locale === l} onchange={() => setLocale(l)} />
+              <span>{LOCALE_LABELS[l]}</span>
+            </label>
+          {/each}
+        </div>
         {#if i18n.locale !== "ko" && i18n.locale !== "en"}
           <p class="muted help">
             {t("ui.translationNote")}
@@ -272,6 +280,15 @@
   .primary {
     justify-self: start;
   }
+  .langs {
+    display: grid;
+    gap: 6px;
+  }
+  .lang {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
   .help {
     margin: -4px 0 0;
     font-size: 12px;
@@ -303,8 +320,14 @@
       grid-template-columns: minmax(0, 1fr);
       gap: 8px;
     }
+    /* 칸 이름이 길어도(언어 · Language) 글자가 꺾이지 않게 한 줄로 두고, 넘치면 옆으로 민다 */
     nav {
       grid-auto-flow: column;
+      grid-auto-columns: max-content;
+      overflow-x: auto;
+    }
+    nav button {
+      white-space: nowrap;
     }
   }
   .swatches,

@@ -11,7 +11,8 @@ function initialLocale(): Locale {
     const found = matchLocale(lang);
     if (found) return found;
   }
-  return "ko";
+  // 고를 수 있는 언어가 아니면(프랑스어·베트남어 등) 한국어보다 읽힐 가능성이 큰 영어로 연다
+  return "en";
 }
 
 /** 언어 이름 (각 언어로 적는다) */
