@@ -506,6 +506,7 @@ export const ja: Partial<Record<MessageKey, string>> = {
   "ui.updateCheck": "アップデートを確認",
   "ui.updateChecking": "新しいバージョンを確認しています…",
   "ui.updateLatest": "最新バージョンです",
+  "ui.changelog": "更新内容",
   "ui.updateFound": "新しいバージョン（{version}）の準備ができました。再読み込みすると切り替わります（編集中の曲は自動で保存されます）",
   "ui.updateCheckFailed": "確認できませんでした。インターネット接続を確認してください",
   "ui.updateUnsupported": "このブラウザではアップデートを確認できません。ページを再読み込みすると最新版を読み込みます",

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { i18n, t } from "./i18n.svelte";
   import Icon from "./Icon.svelte";
-  import { guideUrl, REPO_URL } from "./links";
+  import { CHANGELOG_URL, guideUrl, REPO_URL } from "./links";
   import { applyUpdate, checkForUpdate, pwa } from "./pwa.svelte";
 
   /**
@@ -75,6 +75,7 @@
       {status}
       {#if pwa.newVersion !== null}
         <button class="primary" onclick={() => applyUpdate(beforeUpdate)}>{t("ui.updateReload")}</button>
+        <a href={CHANGELOG_URL} target="_blank" rel="noopener">{t("ui.changelog")}</a>
       {/if}
     </p>
   {/if}
@@ -84,6 +85,7 @@
 
   <p class="links">
     <a href={guideUrl(i18n.locale)} target="_blank" rel="noopener">{t("ui.helpGuide")}</a>
+    <a href={CHANGELOG_URL} target="_blank" rel="noopener">{t("ui.changelog")}</a>
     <a href={sourceUrl} target="_blank" rel="noopener">{t("ui.aboutSource")}</a>
     <a href="./licenses/GPL-3.0.txt" target="_blank" rel="noopener">GPL-3.0</a>
     <a href="./licenses/third-party.txt" target="_blank" rel="noopener">{t("ui.aboutLicenses")}</a>
@@ -166,6 +168,7 @@
     margin-top: 16px;
     font-size: 12px;
   }
+  .status a,
   .links a {
     color: var(--accent);
   }

@@ -181,6 +181,7 @@ export const en: Partial<Record<MessageKey, string>> = {
   "ui.updateCheck": "Check for updates",
   "ui.updateChecking": "Checking for a new version…",
   "ui.updateLatest": "You're on the latest version",
+  "ui.changelog": "What's new",
   "ui.updateFound": "A new version ({version}) is ready. Reload to switch (your current song is kept by autosave)",
   "ui.updateCheckFailed": "Couldn't check. Please check your internet connection",
   "ui.updateUnsupported": "This browser can't check for updates. Reloading the page loads the latest version",

@@ -506,6 +506,7 @@ export const zhTW: Partial<Record<MessageKey, string>> = {
   "ui.updateCheck": "檢查更新",
   "ui.updateChecking": "正在檢查新版本…",
   "ui.updateLatest": "目前已是最新版本",
+  "ui.changelog": "更新內容",
   "ui.updateFound": "新版本（{version}）已準備好。重新整理後即會更新（編輯中的樂曲會自動保留）",
   "ui.updateCheckFailed": "無法檢查，請確認網路連線",
   "ui.updateUnsupported": "此瀏覽器無法檢查更新，重新整理頁面即可載入最新版本",

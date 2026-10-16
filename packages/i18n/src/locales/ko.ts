@@ -504,6 +504,7 @@ export const ko = {
   "ui.updateCheck": "업데이트 확인",
   "ui.updateChecking": "새 버전을 확인하는 중이에요…",
   "ui.updateLatest": "지금 버전이 최신이에요",
+  "ui.changelog": "바뀐 내용",
   "ui.updateFound": "새 버전({version})이 준비됐어요. 새로고침하면 바뀌어요 (고치던 곡은 자동 보존돼요)",
   "ui.updateCheckFailed": "확인하지 못했어요. 인터넷 연결을 확인해 주세요",
   "ui.updateUnsupported": "이 브라우저에서는 업데이트를 확인할 수 없어요. 페이지를 새로고침하면 최신 버전을 받아요",

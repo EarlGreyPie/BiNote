@@ -506,6 +506,7 @@ export const zhHans: Partial<Record<MessageKey, string>> = {
   "ui.updateCheck": "检查更新",
   "ui.updateChecking": "正在检查新版本…",
   "ui.updateLatest": "当前已是最新版本",
+  "ui.changelog": "更新内容",
   "ui.updateFound": "新版本（{version}）已就绪，刷新后即可更新（正在编辑的乐曲会自动保留）",
   "ui.updateCheckFailed": "无法检查，请确认网络连接",
   "ui.updateUnsupported": "此浏览器无法检查更新，刷新页面即可加载最新版本",
