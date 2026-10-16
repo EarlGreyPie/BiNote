@@ -208,6 +208,8 @@ export const zhTW: Partial<Record<MessageKey, string>> = {
   "ui.deleteBar": "刪除小節",
   "ui.barHelp": "在鋼琴卷簾中 Shift+點按的游標位置插入或刪除一個小節（所有音軌與速度一起推移）",
   "ui.colorScheme": "音軌顏色",
+  "ui.tabTrackTint": "指法譜數字顯示音軌顏色",
+  "ui.tabTrackTintHelp": "將同一演奏者的多條音軌合併顯示在指法譜時，以音軌顏色淡淡填滿數字底色，未選取音軌的數字以淺色顯示。",
   "ui.colorByPosition": "依樂譜內位置",
   "ui.colorByScore": "每份樂譜一個色系",
   "ui.colorStored": "檔案中儲存的顏色",

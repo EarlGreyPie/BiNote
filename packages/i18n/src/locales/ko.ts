@@ -206,6 +206,8 @@ export const ko = {
   "ui.deleteBar": "마디 빼기",
   "ui.barHelp": "피아노롤에서 Shift+클릭한 커서 자리에 한 마디를 넣거나 뺍니다 (모든 트랙과 템포를 같이 밀거나 당김)",
   "ui.colorScheme": "트랙 색",
+  "ui.tabTrackTint": "타브 숫자에 트랙 색",
+  "ui.tabTrackTintHelp": "한 연주자의 트랙 여러 개를 타브에 모아 볼 때, 숫자 칸을 트랙 색으로 옅게 칠하고 고른 트랙이 아닌 숫자는 흐리게 씁니다.",
   "ui.colorByPosition": "악보 안 위치",
   "ui.colorByScore": "악보마다 색 계열",
   "ui.colorStored": "파일에 저장된 색",

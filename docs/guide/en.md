@@ -195,6 +195,7 @@ Switch with the Piano roll/Tab button (Alt+T). The tab gathers the tracks of the
 - `L`: tie to the next note with & · `(5)` held · `5/7` slide
 - Chord notes at the same spot go into free tracks of the same score
 - You can choose a tuning (Standard, Drop D, DADGAD, Baritone and more) and a capo
+- With several tracks, each number is tinted with its track color and numbers from other tracks are dimmed (turn off in Settings → Display → Track colors on tab numbers)
 - On touch, use the **Fret pad**
 
 ### MIDI keys

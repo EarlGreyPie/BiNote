@@ -5,6 +5,7 @@
   import { guideUrl, REPO_URL } from "./links";
   import { MASTER_MAX } from "./engine";
   import { pwa } from "./pwa.svelte";
+  import { setTabTint, tabTint } from "./tabTint.svelte";
   import { LANE_MAX, LANE_MIN, saveVolumeLane, volumeLane, type LaneState } from "./volumeLane.svelte";
 
   import Icon from "./Icon.svelte";
@@ -174,6 +175,10 @@
             <option value="position">{t("ui.colorByPosition")}</option>
             <option value="stored">{t("ui.colorStored")}</option>
           </select>
+        </label>
+        <label class="row" title={t("ui.tabTrackTintHelp")}>
+          <input type="checkbox" checked={tabTint.on} onchange={(e) => setTabTint(e.currentTarget.checked)} />
+          <span>{t("ui.tabTrackTint")}</span>
         </label>
         <label class="row">
           <span>{t("ui.theme")}</span>

@@ -208,6 +208,8 @@ export const ja: Partial<Record<MessageKey, string>> = {
   "ui.deleteBar": "小節を削除",
   "ui.barHelp": "ピアノロールでShift+クリックしたカーソル位置に1小節を挿入または削除します（すべてのトラックとテンポを一緒に後ろへずらすか前へ詰めます）",
   "ui.colorScheme": "トラックの色",
+  "ui.tabTrackTint": "タブ譜の数字にトラックの色",
+  "ui.tabTrackTintHelp": "演奏者の複数トラックをタブ譜にまとめて表示するとき、数字の枠をトラックの色で薄く塗り、選択中でないトラックの数字は薄く表示します。",
   "ui.colorByPosition": "楽譜内の位置",
   "ui.colorByScore": "楽譜ごとの色系統",
   "ui.colorStored": "ファイルに保存された色",

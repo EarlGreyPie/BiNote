@@ -13,6 +13,7 @@
   import { laneItems, type LaneTrack } from "./volumeLaneEdit";
   import { LANE_MAX, LANE_MIN, laneThickness, saveVolumeLane, volumeLane } from "./volumeLane.svelte";
   import type { RollView } from "./roll";
+  import { tabTint } from "./tabTint.svelte";
 
   interface Props {
     song: Song;
@@ -43,7 +44,6 @@
 
   let { song, activeTrackId, tuning, playhead, onunplayable, division, noteDur, onedit, onpreview, volume = $bindable(), volumeRange, colors, locked, laneTrackIds, melodyIds }: Props = $props();
 
-  const LEFT = 28;
   // 위쪽에 마디 번호 줄과 변속(템포·박자) 줄을 둔다
   const TOP = 42;
   // 줄 간격(타브 크기). 숫자 글자 크기도 같이 커진다. 이 브라우저에 기억한다
@@ -53,6 +53,8 @@
     return Number.isFinite(v) && v >= 14 && v <= 44 ? v : 18;
   }));
   const fontPx = $derived(Math.round(Math.min(20, Math.max(11, gap * 0.62))));
+  /** 줄 이름 칸 너비. 글자가 커져도 맨 앞(0박) 숫자가 줄 이름에 닿지 않게 같이 넓힌다 */
+  const LEFT = $derived(Math.max(28, Math.round(fontPx * 2.2) + 6));
   function setGap(next: number) {
     gap = Math.min(44, Math.max(14, Math.round(next)));
     saveStored(GAP_KEY, String(gap));
@@ -108,6 +110,8 @@
   });
   /** 슬라이드로 닿는 음 → 출발 음 (줄 배정이 같은 줄을 먼저 고른다) */
   const slides = $derived(new Map(links.flatMap((l) => (l.kind === "slide" ? [[l.to, l.from] as const] : []))));
+  /** 음 id → 트랙 id (여러 트랙을 모아 보일 때 숫자에 트랙 색을 칠한다) */
+  const trackOf = $derived(new Map(tracks.flatMap((t) => t.notes.map((n) => [n.id, t.id] as const))));
   const events = $derived(assignTab(tracks.flatMap((t) => struck(t.notes)), tuning, prefer, slides));
 
   /** 타브 커서: 시간(격자에 맞춤)과 줄(1 = 가장 높은 줄) */
@@ -365,15 +369,20 @@
       if (entry) width = Math.max(100, Math.floor(entry.contentRect.width));
     });
     observer.observe(wrap);
+    // 휠은 타브 줄 칸뿐 아니라 그 아래 빈 곳·음량 레인 위에서도 시간을 굴린다
+    // (예전에는 줄 칸 위에서만 받아서, 빈 곳에서 굴리면 아무 일도 없었다)
     const onwheel = (e: WheelEvent) => {
+      if (e.target instanceof Element && e.target.closest(".pad, .tools")) return;
       e.preventDefault();
+      // 줄 단위(Firefox 등)·쪽 단위로 오는 휠 값도 픽셀로 바꾼다
+      const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? width : 1;
       if (e.ctrlKey || e.metaKey) pxPerWhole = Math.min(2000, Math.max(40, pxPerWhole * (e.deltaY > 0 ? 0.85 : 1.18)));
-      else start = Math.max(0, start + (e.deltaY + e.deltaX) / pxPerWhole);
+      else start = Math.min(timeMax, Math.max(0, start + ((e.deltaY + e.deltaX) * unit) / pxPerWhole));
     };
-    canvas.addEventListener("wheel", onwheel, { passive: false });
+    host.addEventListener("wheel", onwheel, { passive: false });
     return () => {
       observer.disconnect();
-      canvas.removeEventListener("wheel", onwheel);
+      host.removeEventListener("wheel", onwheel);
     };
   });
 
@@ -439,6 +448,14 @@
       g.fillText(names[(open + tuning.capo) % 12]!, 6, y(i + 1) + fontPx * 0.36);
     });
 
+    // 프렛 숫자·이음·슬라이드는 줄 이름 칸 오른쪽에만 그린다.
+    // 왼쪽으로 스크롤되어 나간 음이 줄 이름(A, E…)을 덮어 "8"처럼 보이던 문제를 막는다
+    const labelEdge = 8 + Math.max(...tuning.strings.map((open) => g.measureText(names[(open + tuning.capo) % 12]!).width));
+    g.save();
+    g.beginPath();
+    g.rect(labelEdge, 0, width - labelEdge, height);
+    g.clip();
+
     // 프렛 숫자. 칠 수 없는 음은 아래에 ×
     // 같은 줄에서 슬라이드로 이어진 음이 너무 붙어 있으면(48분음표 꾸밈음 등) "7\6\5"처럼 한 덩어리로 쓴다
     const placed = new Map<string, { string: number; fret: number; t: number }>();
@@ -475,7 +492,16 @@
         const left = x(first.t) - g.measureText(String(first.fret)).width / 2 - 2;
         g.fillStyle = css("--panel");
         g.fillRect(left, y(string) - fontPx / 2 - 1, w, fontPx + 2);
-        g.fillStyle = css("--text");
+        // 트랙 색 설정을 켰고 트랙이 둘 이상이면 숫자 칸을 그 트랙 색으로 옅게 칠하고, 고른 트랙이 아닌 숫자는 흐리게 쓴다
+        const owner = trackOf.get(first.id);
+        const tint = tabTint.on && tracks.length > 1 && owner ? colors?.get(owner) : undefined;
+        if (tint) {
+          g.globalAlpha = 0.32;
+          g.fillStyle = tint;
+          g.fillRect(left, y(string) - fontPx / 2 - 1, w, fontPx + 2);
+          g.globalAlpha = 1;
+        }
+        g.fillStyle = css(tint && owner !== activeTrackId ? "--muted" : "--text");
         g.fillText(text, left + 2, y(string) + fontPx * 0.36);
         i = j;
       }
@@ -525,6 +551,7 @@
       }
     }
     g.textAlign = "left";
+    g.restore();
 
     // 타브 커서: 그 줄·그 자리에 칸 표시
     if (cursor) {

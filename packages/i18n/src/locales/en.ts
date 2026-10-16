@@ -407,6 +407,8 @@ export const en: Partial<Record<MessageKey, string>> = {
   "ui.deleteBar": "Delete bar",
   "ui.barHelp": "Insert or delete one bar at the cursor (Shift+click in the piano roll); all tracks and tempo move together",
   "ui.colorScheme": "Track colors",
+  "ui.tabTrackTint": "Track colors on tab numbers",
+  "ui.tabTrackTintHelp": "When a player's tracks are shown together in tab view, tint each fret number with its track color and dim numbers from other tracks.",
   "ui.colorByPosition": "By position in score",
   "ui.colorByScore": "Hue per score",
   "ui.colorStored": "Saved in file",

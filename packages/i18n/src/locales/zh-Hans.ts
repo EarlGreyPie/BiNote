@@ -208,6 +208,8 @@ export const zhHans: Partial<Record<MessageKey, string>> = {
   "ui.deleteBar": "删除小节",
   "ui.barHelp": "在钢琴卷帘中 Shift+点击设置的光标处插入或删除一个小节（所有音轨和速度一起后移或前移）",
   "ui.colorScheme": "音轨颜色",
+  "ui.tabTrackTint": "指法谱数字显示音轨颜色",
+  "ui.tabTrackTintHelp": "将同一演奏者的多条音轨合在指法谱中显示时，用音轨颜色淡淡地填充数字底色，未选中音轨的数字显示为浅色。",
   "ui.colorByPosition": "按乐谱内位置",
   "ui.colorByScore": "每份乐谱一个色系",
   "ui.colorStored": "文件中保存的颜色",
