@@ -111,3 +111,19 @@ export function withTrackView(
   const { [trackId]: _old, ...rest } = views;
   return hidden || locked ? { ...rest, [trackId]: { ...(hidden ? { hidden: true } : {}), ...(locked ? { locked: true } : {}) } } : rest;
 }
+
+/**
+ * 편집 상태를 비교용 글로 바꾼다. 객체 키는 정렬해 넣으므로, 숨기기·잠그기를 껐다 켜서 키 순서만 바뀐
+ * 상태는 같은 글이 된다 (프로젝트 저장 뒤 바뀌었는지 볼 때 쓴다)
+ */
+export function editorStateKey(state: EditorState): string {
+  const sorted = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(sorted);
+    if (value && typeof value === "object") {
+      const obj = value as Record<string, unknown>;
+      return Object.fromEntries(Object.keys(obj).sort().map((k) => [k, sorted(obj[k])]));
+    }
+    return value;
+  };
+  return JSON.stringify(sorted(state));
+}

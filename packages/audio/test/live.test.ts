@@ -145,6 +145,19 @@ describe("실시간 재생 예약", () => {
     expect(sink.log.at(-1)).toBe("silence");
   });
 
+  it("끊기를 쓸 수 있으면 아직 오지 않은 켜기를 끝소리 없이 자른다", () => {
+    const sink = new FakeSink();
+    const cuts: string[] = [];
+    const cutting: LiveSink = Object.assign(sink, { cut: (channel: number, time: number) => void cuts.push(`cut ${channel} @${time.toFixed(2)}`) });
+    const player = new LivePlayer(cutting, { lookahead: 1, startDelay: 0.1, timers: manualTimers });
+    player.start(schedule, patches);
+    sink.currentTime = 10.2;
+    player.stop();
+    expect(cuts).toEqual(["cut 0 @10.60", "cut 0 @10.23"]);
+    expect(sink.log).not.toContain("off 0 62 @10.60");
+    expect(sink.log.at(-1)).toBe("silence");
+  });
+
   it("소리 낼 패치가 없는 지점은 건너뛴다", () => {
     const sink = new FakeSink();
     const player = new LivePlayer(sink, { timers: manualTimers });

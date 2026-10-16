@@ -14,6 +14,8 @@ export const pwa = $state<{
   lastChecked: number;
   /** 새로고침 전에 작업을 보존하지 못해 바꾸지 않았다 */
   updateFailed: boolean;
+  /** 새 판으로 바꾸는 중 (저장하고 새로고침을 기다린다). 이때는 바꾸기 단추를 다시 누를 수 없다 */
+  applying: boolean;
   storage: "unknown" | "persisted" | "best-effort" | "unsupported";
 }>({
   updateReady: false,
@@ -21,6 +23,7 @@ export const pwa = $state<{
   check: "idle",
   lastChecked: 0,
   updateFailed: false,
+  applying: false,
   storage: "unknown",
 });
 
@@ -124,19 +127,28 @@ export async function checkForUpdate(quiet = false): Promise<void> {
   }
 }
 
+/** 새로고침하기로 정한 뒤 새 판 전환이 이만큼 안 오면 직접 새로고침한다 */
+const RELOAD_FALLBACK_MS = 10_000;
+
 /**
- * 새 판으로 바꾸고 새로고침한다. 그 전에 할 일(자동 보존 등)이 끝나기를 기다리고,
- * 실패하면 바꾸지 않는다 (사용자가 프로젝트로 저장한 뒤 다시 누를 수 있게).
+ * 새 판으로 바꾸고 새로고침한다. 그 전에 할 일(입력 막기·자동 보존 등)이 끝나기를 기다리고,
+ * 실패하면 바꾸지 않는다 (사용자가 프로젝트로 저장한 뒤 다시 누를 수 있게). 이때 before가 막은 것은 before가 풀어야 한다.
+ * 한 번에 하나만 한다: 하는 중에 다시 부르면(띠·정보 창·저장하지 않고 새로고침) 아무것도 하지 않는다.
+ * before가 끝나면 새로고침하기로 정한 것이라 되돌리지 않는다. 새 판 전환이 오지 않아도 직접 새로고침한다.
  * 다른 탭에서 이미 바꿨으면 이 탭은 새로고침만 하면 된다
  */
 export async function applyUpdate(before?: () => Promise<void> | void): Promise<void> {
+  if (pwa.applying) return;
+  pwa.applying = true;
   try {
     await before?.();
   } catch {
     pwa.updateFailed = true;
+    pwa.applying = false;
     return;
   }
   pwa.updateFailed = false;
+  setTimeout(() => location.reload(), RELOAD_FALLBACK_MS);
   if (waiting && waiting.state === "installed") {
     requested = true;
     waiting.postMessage("skip-waiting");

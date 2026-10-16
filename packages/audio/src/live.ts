@@ -16,7 +16,12 @@ export interface LiveSink {
   pitchBend(channel: number, semitones: number, time: number): void;
   /** 피치 벤드 범위(반음)를 정한다 */
   setBendRange(channel: number, semitones: number, time: number): void;
-  /** 울리는 소리와 예약된 소리를 모두 끈다 */
+  /**
+   * 그 시각에 채널 소리를 끝소리(릴리스) 없이 바로 끊는다 (MIDI All Sound Off).
+   * 같은 시각에 먼저 넣은 켜기 뒤에 처리되어야 한다. 없으면 noteOff로 대신한다
+   */
+  cut?(channel: number, time: number): void;
+  /** 울리는 소리를 모두 끈다 */
   silence(): void;
 }
 
@@ -34,6 +39,9 @@ export interface LivePlayerOptions {
   readonly startDelay?: number;
   readonly timers?: TimerHost;
 }
+
+/** 정지 뒤 한 번 더 끊을 때까지의 틈(초). 신스가 한두 처리 단위 늦게 켜는 음까지 덮는다 */
+const STOP_GUARD = 0.03;
 
 const defaultTimers: TimerHost = {
   setInterval: (fn, ms) => globalThis.setInterval(fn, ms),
@@ -135,10 +143,28 @@ export class LivePlayer {
     this.handle = undefined;
     if (this.schedule) {
       const now = this.sink.currentTime;
-      // 이미 신스 큐에 들어간 앞날의 켜기는 지울 수 없으니, 같은 시각에 곧바로 끈다
-      for (const f of this.future) if (f.at > now) this.sink.noteOff(f.channel, f.note, f.at);
+      // 이미 신스 큐에 들어간 앞날의 켜기는 지울 수 없으니, 같은 시각에 곧바로 끊는다.
+      // noteOff면 켜진 뒤 끝소리(릴리스)가 남아 멈춘 뒤에도 "띠잉" 하고 울리므로 끝소리 없이 자른다
+      const cutAt = new Map<number, Set<number>>();
+      for (const f of this.future) {
+        if (f.at <= now) continue;
+        if (!this.sink.cut) {
+          this.sink.noteOff(f.channel, f.note, f.at);
+          continue;
+        }
+        const times = cutAt.get(f.channel) ?? new Set<number>();
+        if (!times.has(f.at)) this.sink.cut(f.channel, f.at);
+        times.add(f.at);
+        cutAt.set(f.channel, times);
+      }
       this.quietAfter = Math.max(this.quietAfter, ...this.future.map((f) => f.at));
       this.sink.silence();
+      // 정지 바로 앞에 켜진 음은 신스가 아직 처리하기 전일 수 있다 (정지보다 늦게 켜진다). 쓰던 채널을 조금 뒤에 한 번 더 끊는다
+      if (this.sink.cut) {
+        const after = now + STOP_GUARD;
+        for (const ch of new Set([...this.bySlot.values()].map((p) => p.channel))) this.sink.cut(ch, after);
+        this.quietAfter = Math.max(this.quietAfter, after);
+      }
     }
     this.future = [];
     this.sounding.clear();

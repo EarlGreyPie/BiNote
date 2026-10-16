@@ -1,5 +1,6 @@
-import { add, cmp, eq, normalizeTempo, sub, type Rat, type Song, type TempoEvent } from "@mmlce/core";
+import { add, cmp, eq, normalizeTempo, sub, type Rat, type Song, type TempoEvent, type Track } from "@mmlce/core";
 import { scoreChunks } from "./clipboard.js";
+import { parseMml } from "./parser.js";
 import { canWriteExactly, type PrintableNote } from "./printer.js";
 import { audibleTempo } from "./tempo-text.js";
 
@@ -31,6 +32,8 @@ export function placeTempo(
   moved?: TempoMove[],
   /** 이 템포 다음에 빠르기가 바뀌는 자리 (생략하면 tempo 목록의 다음 템포). 다른 곳에 이미 적힌 템포를 빼고 넘길 때 쓴다 */
   nextOf?: (event: TempoEvent) => Rat | undefined,
+  /** 정확한 자리에 쓸 수 없고 옮기면 다음 템포를 넘어 아무 데도 쓰지 않은 템포 */
+  dropped?: TempoEvent[],
 ): TempoEvent[][] {
   const out: TempoEvent[][] = channels.map(() => []);
   if (channels.length === 0) return out;
@@ -60,7 +63,10 @@ export function placeTempo(
       const to = bestSnap!;
       // 옮긴 자리까지 다음 템포가 나오면 이 템포는 들리지 않는다
       const next = nextOf ? nextOf(t) : events[k + 1]?.at;
-      if (next && cmp(next, to) <= 0) return;
+      if (next && cmp(next, to) <= 0) {
+        dropped?.push(t);
+        return;
+      }
       event = { at: to, bpm: t.bpm };
       moved?.push({ bpm: t.bpm, from: t.at, to });
     }
@@ -108,18 +114,38 @@ export function placeTempoByScore(
   song: Song,
   maxChords: number | ((playerId: string) => number) = Number.MAX_SAFE_INTEGER,
   moved?: Map<string, TempoMove[]>,
+  /** 글을 다시 쓰지 않는 트랙(잠근 트랙). 템포를 맡기지 않고, 그 글에 이미 있는 템포는 다시 넣지 않는다 */
+  fixed?: ReadonlySet<string>,
+  /** 주면 어느 채널에도 쓰지 않은 템포를 적는다 (뒤 음 경계로 옮겨 쓴 것은 moved, 여기에는 넣지 않는다) */
+  dropped?: TempoEvent[],
 ): Map<string, TempoEvent[]> {
   const out = new Map<string, TempoEvent[]>();
+  const all = audibleTempo(song.tempo);
   for (const ids of scoreTrackIds(song, maxChords)) {
     const tracks = ids.map((id) => song.tracks.find((t) => t.id === id)!);
+    const open = fixed ? tracks.filter((t) => !fixed.has(t.id)) : tracks;
+    if (open.length === 0) continue;
+    // 잠근 트랙 글에 이미 적힌 템포 (같은 자리·같은 빠르기)는 이 악보에 있는 것으로 친다
+    const written = tracks.filter((t) => fixed?.has(t.id)).flatMap(writtenTempo);
+    const tempo = written.length > 0 ? all.filter((e) => !written.some((w) => eq(w.at, e.at) && w.bpm === e.bpm)) : all;
     const list: TempoMove[] = [];
     const placed = placeTempo(
-      tracks.map((t) => t.notes),
-      audibleTempo(song.tempo),
+      open.map((t) => t.notes),
+      tempo,
       list,
+      // 옮긴 템포가 들리는지는 잠근 트랙에 적힌 템포까지 넣은 곡 템포로 본다
+      tempo === all ? undefined : (event) => all.find((e) => cmp(e.at, event.at) > 0)?.at,
+      dropped,
     );
-    tracks.forEach((t, k) => out.set(t.id, placed[k] ?? []));
+    open.forEach((t, k) => out.set(t.id, placed[k] ?? []));
     if (list.length > 0) moved?.set(ids[0]!, list);
   }
   return out;
+}
+
+/** 트랙 원문에 적힌 들리는 템포 (원문이 없으면 없다). 같은 자리에 여럿 적혔으면(t90t120) 마지막 것만 들린다 */
+function writtenTempo(track: Track): TempoEvent[] {
+  if (!track.mml) return [];
+  const offset = track.mml.offset;
+  return normalizeTempo(parseMml(track.mml.text).tempo.map((t) => (offset ? { ...t, at: add(t.at, offset) } : t)));
 }

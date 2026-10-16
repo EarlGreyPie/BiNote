@@ -54,6 +54,7 @@
     if (portrait && reveal?.focus) portraitView = "mml";
   });
   const chars = $derived(new Map(tracks.map((a) => [a.track.id, a.text.length])));
+  const checks = $derived(new Map(tracks.map((a) => [a.track.id, a.diagnostics.length])));
   const active = $derived(tracks.find((a) => a.track.id === activeTrackId));
   /** 악보 안에서 몇 번째 트랙인지 (1부터) */
   function indexOf(id: string | undefined): number {
@@ -85,7 +86,7 @@
     </div>
     {#if showStructure}
       <div class="structure" class:full={portrait}>
-        <StructureList {song} {groups} {chars} {colors} {activeTrackId} {charLimit} {trackInstrument} {actions} />
+        <StructureList {song} {groups} {chars} {checks} {colors} {activeTrackId} {charLimit} {trackInstrument} {actions} />
       </div>
     {/if}
   {/if}

@@ -26,6 +26,7 @@
   import { onMount } from "svelte";
   import { fonts } from "./fonts.svelte";
   import { noteClipboard } from "./noteClipboard.svelte";
+  import { rollFlow } from "./rollFlow.svelte";
   import { t } from "./i18n.svelte";
   import { drawRoll } from "./rollDraw";
   import { Pinch, pinchRatio, type PinchFrame } from "./pinch";
@@ -464,10 +465,10 @@
   });
 
   // 재생 위치가 화면 밖으로 나가면 따라간다
-  // 건반에 맞춘 배경 영상이 있으면 영상처럼 계속 흘려 건반 선 = 지금 재생 위치로 둔다 (영상 속 음과 롤 음이 겹친다)
+  // 건반에 맞춘 배경 영상이 있거나 "계속 흐르기"를 골랐으면 계속 흘려 건반 선 = 지금 재생 위치로 둔다 (영상 속 음과 롤 음이 겹친다)
   $effect(() => {
     if (head === undefined) return;
-    if (videoStyle) {
+    if (videoStyle || rollFlow.mode === "flow") {
       start = Math.max(0, head);
       return;
     }

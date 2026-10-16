@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { emptySong, type Song } from "@mmlce/core";
-import { parseEditorState, withTrackView } from "../src/lib/projectEditor";
+import { editorStateKey, parseEditorState, withTrackView } from "../src/lib/projectEditor";
 
 const song: Song = {
   ...emptySong({ title: "", author: "", profileId: "mobile" }),
@@ -55,5 +55,22 @@ describe("withTrackView", () => {
     expect(v).toEqual({ t1: { hidden: true, locked: true } });
     v = withTrackView(withTrackView(v, "t1", { locked: false }), "t1", { hidden: false });
     expect(v).toEqual({});
+  });
+});
+
+describe("editorStateKey", () => {
+  it("숨기기·잠그기 순서만 바뀐 상태는 같고, 값이 바뀌면 다르다", () => {
+    const base = { division: 4, viewMode: "roll" as const, tuning: "standard" as const, capo: 0 };
+    let ab = withTrackView({}, "a", { hidden: true });
+    ab = withTrackView(ab, "b", { locked: true });
+    // a를 껐다 다시 켜면 키 순서가 b, a가 된다
+    const ba = withTrackView(withTrackView(ab, "a", { hidden: false }), "a", { hidden: true });
+    expect(Object.keys(ab)).toEqual(["a", "b"]);
+    expect(Object.keys(ba)).toEqual(["b", "a"]);
+    expect(editorStateKey({ ...base, trackView: ab })).toBe(editorStateKey({ ...base, trackView: ba }));
+    expect(editorStateKey({ ...base, trackView: ab })).not.toBe(editorStateKey({ ...base, trackView: withTrackView(ab, "b", { locked: false }) }));
+    expect(editorStateKey({ ...base, video: { name: "v", opacity: 1, offset: 0, fit: "contain", low: 21, high: 108, keyLine: 0.9, stretch: false } as never })).not.toBe(
+      editorStateKey({ ...base, video: { name: "v", opacity: 1, offset: 2, fit: "contain", low: 21, high: 108, keyLine: 0.9, stretch: false } as never }),
+    );
   });
 });

@@ -1,4 +1,5 @@
 import { audioToWav, SoundBankLoader, SpessaSynthProcessor, type BasicSoundBank } from "spessasynth_core";
+import { PeakLimiter } from "./limiter.js";
 import { assignPatches, type SlotPatch, type Unresolved } from "./patches.js";
 import { BEND_RANGE, bendValue } from "./schedule.js";
 import type { InstrumentGains, SoundPackRegistry } from "./registry.js";
@@ -51,6 +52,10 @@ export interface RenderOptions {
   readonly tailSeconds?: number;
   /** 그린 길이 (0~1). 블록마다 부르지 않고 대략 1%마다 */
   readonly onProgress?: (fraction: number) => void;
+  /** 전체 음량 (재생의 전체 음량과 같은 배율). 기본 1 */
+  readonly volume?: number;
+  /** 재생과 같은 리미터를 마지막에 거친다. 기본 켬 (끄는 것은 시험용) */
+  readonly limit?: boolean;
 }
 
 /**
@@ -87,6 +92,8 @@ export async function renderPatched(
   let index = 0;
   const events = schedule.events;
   const step = Math.max(1, Math.floor(total / 100));
+  const volume = options.volume ?? 1;
+  const limiter = options.limit === false ? undefined : new PeakLimiter(sampleRate);
   let nextReport = step;
 
   while (cursor < total) {
@@ -102,10 +109,31 @@ export async function renderPatched(
     const next = index < events.length ? Math.round(events[index]!.time * sampleRate) : total;
     const count = Math.max(1, Math.min(BLOCK, next - cursor, total - cursor));
     synth.process(left, right, cursor, count);
+    // 재생과 같은 끝단: 전체 음량 → 리미터
+    if (volume !== 1) {
+      for (let i = cursor; i < cursor + count; i++) {
+        left[i] = left[i]! * volume;
+        right[i] = right[i]! * volume;
+      }
+    }
+    limiter?.process(left, right, cursor, count);
     cursor += count;
     if (cursor >= nextReport) {
       options.onProgress?.(Math.min(1, cursor / total));
       nextReport += step;
+    }
+  }
+  // 리미터는 latency 샘플만큼 늦춰 내보낸다: 남은 소리를 마저 꺼내고 앞을 잘라 시작을 맞춘다
+  if (limiter) {
+    const lag = limiter.latency;
+    const tailLeft = new Float32Array(lag);
+    const tailRight = new Float32Array(lag);
+    limiter.process(tailLeft, tailRight);
+    left.copyWithin(0, lag);
+    right.copyWithin(0, lag);
+    for (let i = Math.max(0, total - lag); i < total; i++) {
+      left[i] = tailLeft[i + lag - total]!;
+      right[i] = tailRight[i + lag - total]!;
     }
   }
   return { left, right, sampleRate, unresolved: [] };

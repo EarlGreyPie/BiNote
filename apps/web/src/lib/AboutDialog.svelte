@@ -13,10 +13,12 @@
     checkNow?: boolean;
     /** 새로고침 전에 고치던 곡을 보존하는 일 */
     beforeUpdate: () => Promise<void> | void;
+    /** 자동 보존이 계속 안 될 때 저장 없이 바꾸기 (묻고 나서) */
+    onreloadanyway: () => void;
     onclose: () => void;
   }
 
-  let { checkNow = false, beforeUpdate, onclose }: Props = $props();
+  let { checkNow = false, beforeUpdate, onreloadanyway, onclose }: Props = $props();
 
   /** 공개 사이트면 이 판을 빌드한 커밋의 소스로, 아니면 저장소 첫 화면으로 */
   const sourceUrl = __MMLCE_BUILD__.published && __MMLCE_BUILD__.commit ? `${REPO_URL}/tree/${__MMLCE_BUILD__.commit}` : REPO_URL;
@@ -74,7 +76,8 @@
     <p class="status" role="status">
       {status}
       {#if pwa.newVersion !== null}
-        <button class="primary" onclick={() => applyUpdate(beforeUpdate)}>{t("ui.updateReload")}</button>
+        <button class="primary" disabled={pwa.applying} onclick={() => applyUpdate(beforeUpdate)}>{t("ui.updateReload")}</button>
+        {#if pwa.updateFailed}<button disabled={pwa.applying} onclick={onreloadanyway}>{t("ui.updateReloadAnyway")}</button>{/if}
         <a href={CHANGELOG_URL} target="_blank" rel="noopener">{t("ui.changelog")}</a>
       {/if}
     </p>

@@ -46,6 +46,7 @@
     addPlayer,
     addTrack,
     appendSong,
+    compactResult,
     compactSong,
     deleteTime,
     distributeChords,
@@ -82,13 +83,15 @@
     setTracksNotes,
     setTrackNotes,
     setTrackText,
-    type SplitResult,
+    type BookPlan,
+    type BookProgress,
     type FewerBooks,
   } from "@mmlce/mml";
   import { analyzeSong, noteSpan, spanAt, textTimeline } from "./lib/analysis";
   import { Engine, MASTER_MAX } from "./lib/engine";
   import { diag, i18n, instrumentName, LOCALE_LABELS, setLocale, t } from "./lib/i18n.svelte";
-  import { download, openScore } from "./lib/load";
+  import { openScore } from "./lib/load";
+  import { loadSaveTarget, saveFile } from "./lib/saveTarget.svelte";
   import { flushAllEditors } from "./lib/MmlEditor.svelte";
   import ReferenceBar from "./lib/ReferenceBar.svelte";
   import TapBar from "./lib/TapBar.svelte";
@@ -106,11 +109,11 @@
   import { clock } from "./lib/time";
   import { forgetPack, loadPacks, savePack } from "./lib/packStore";
   import { fileAccept, hasExtension } from "./lib/fileAccept";
-  import { AutosaveTracker } from "./lib/autosave";
+  import { AutosaveQueue, AutosaveTracker } from "./lib/autosave";
   import { booksJob, splitJob, wavJob } from "./lib/jobs";
   import NoteList from "./lib/NoteList.svelte";
   import { forgetWork, listWorks, loadWork, newWorkId, saveWork, type WorkSummary } from "./lib/workStore";
-  import { parseEditorState, withTrackView, type EditorState, type ReferenceFit, type TrackViewState, type VideoFit } from "./lib/projectEditor";
+  import { editorStateKey, parseEditorState, withTrackView, type EditorState, type ReferenceFit, type TrackViewState, type VideoFit } from "./lib/projectEditor";
   import RecoverList from "./lib/RecoverList.svelte";
   import RecoverDialog from "./lib/RecoverDialog.svelte";
   import NoteInfo from "./lib/NoteInfo.svelte";
@@ -137,6 +140,7 @@
   import KeymapDialog from "./lib/KeymapDialog.svelte";
   import AboutDialog from "./lib/AboutDialog.svelte";
   import SplitPanel from "./lib/SplitPanel.svelte";
+  import { setSplitSpread, setSplitThorough, splitPrefs } from "./lib/splitPrefs.svelte";
   import OutputPanel from "./lib/OutputPanel.svelte";
   import OptimizePreview from "./lib/OptimizePreview.svelte";
   import { outputRows, previewRows, tempoAdvice } from "./lib/output";
@@ -233,7 +237,7 @@
     return () => compactQuery?.removeEventListener("change", onchange);
   });
   let statusPanel = $state<StatusPanel | undefined>(undefined);
-  let settings = $state<{ section: "packs" | "playback" | "display" | "language" | "keys" } | undefined>(undefined);
+  let settings = $state<{ section: "packs" | "playback" | "display" | "save" | "language" | "keys" } | undefined>(undefined);
   let meterOpen = $state(false);
   let addScoreOpen = $state(false);
   let tuningName = $state<TuningName>("standard");
@@ -501,10 +505,12 @@
     if (song) outputOpen = true;
   }
 
-  /** 나누기 결과. 곡이 바뀌면 지운다 */
-  let split = $state.raw<{ song: Song; result: SplitResult } | undefined>(undefined);
-  /** 나누는 중이면 진행률 (0~1). 계산은 Web Worker에서 한다 */
-  let splitProgress = $state<number | undefined>(undefined);
+  /** 나누기 결과. song은 나눌 때의 곡(바뀌면 지운다), plan.song은 실제로 나눈 곡(화음을 고르게 나눴으면 옮긴 곡) */
+  let split = $state.raw<{ song: Song; plan: BookPlan; locked: string } | undefined>(undefined);
+  /** 잠금 상태 비교용 */
+  const lockKey = (ids: Iterable<string>) => [...ids].sort().join("\n");
+  /** 나누는 중이면 단계와 진행률 (0~1). 계산은 Web Worker에서 한다 */
+  let splitProgress = $state<BookProgress | undefined>(undefined);
   const splitting = $derived(splitProgress !== undefined);
   const splitRunner = splitJob();
   /** 나눈 뒤 트랙 사이 음을 고르게 옮기면 권이 줄어드는지. checking이면 계산 중 */
@@ -531,23 +537,25 @@
   }
 
   /** 글자 수 줄이기·화음 분산 미리보기. 적용하면 같은 명령을 실행 취소 한 칸으로 넣는다 */
-  let optimizing = $state.raw<{ kind: "compact" | "distribute"; before: Song; after: Song; moved: number } | undefined>(undefined);
+  let optimizing = $state.raw<{ kind: "compact" | "distribute"; before: Song; after: Song; moved: number; kept?: "notes" | "tempo" } | undefined>(undefined);
 
   function compact() {
     if (!song) return;
-    optimizing = { kind: "compact", before: song, after: compactSong(profile).apply(song), moved: 0 };
+    const r = compactResult(song, profile, lockedIds);
+    optimizing = { kind: "compact", before: song, after: r.song, moved: 0, ...(r.kept ? { kept: r.kept } : {}) };
   }
 
   function distribute() {
     if (!song) return;
-    const spread = distributeChords(song, profile);
-    optimizing = { kind: "distribute", before: song, after: compactSong(profile).apply(spread.song), moved: spread.moved };
+    // 잠근 트랙은 음을 빼지도 넣지도 않고, 글도 다시 쓰지 않는다
+    const spread = distributeChords(song, profile, { locked: lockedIds });
+    optimizing = { kind: "distribute", before: song, after: compactSong(profile, undefined, lockedIds).apply(spread.song), moved: spread.moved };
   }
 
   function applyOptimize() {
     if (!history || !song || !optimizing || optimizing.before !== song) return;
     const before = totalChars(song);
-    const next = history.run(optimizing.kind === "compact" ? compactSong(profile) : distributeSong(profile));
+    const next = history.run(optimizing.kind === "compact" ? compactSong(profile, undefined, lockedIds) : distributeSong(profile, undefined, undefined, lockedIds));
     sync(next);
     flash(t("ui.compactDone", { before, after: totalChars(next) }));
   }
@@ -558,25 +566,34 @@
     return g ? t("ui.scoreN", { n: g.number }) : "";
   }
 
-  /** 지금 나누고 있는 곡 */
+  /** 나누기 단계별 진행 표시 글 */
+  const SPLIT_STAGE = { spread: "ui.splitStageSpread", split: "ui.splitting", thorough: "ui.splitStageThorough" } as const;
+  /** 지금 나누고 있는 곡과 그 계산에 쓴 잠금 */
   let splitTarget: Song | undefined;
+  let splitLocked = "";
   async function runSplit() {
     if (!song) return;
     const target = song;
     splitTarget = target;
     split = undefined;
-    splitProgress = 0;
+    splitProgress = { stage: splitPrefs.spread ? "spread" : "split", fraction: 0 };
     const token = ++splitToken;
-    const result = await splitRunner.run({ song: target, profile: $state.snapshot(profile) as GameProfile }, (p) => {
+    const request = { song: target, profile: $state.snapshot(profile) as GameProfile, spread: splitPrefs.spread, thorough: splitPrefs.thorough, locked: [...lockedIds] };
+    const locked = lockKey(request.locked);
+    splitLocked = locked;
+    const plan = await splitRunner.run(request, (p) => {
       if (token === splitToken) splitProgress = p;
     });
     // 취소했거나 다른 나누기가 시작됐으면 버린다
     if (token !== splitToken) return;
     splitTarget = undefined;
     splitProgress = undefined;
-    if (result && song === target) {
-      split = { song: target, result };
-      void checkFewer(target, result.parts.length);
+    // 계산하는 동안 잠금이 바뀌었으면 옛 잠금으로 옮긴 결과이므로 버리고 다시 나눈다
+    if (plan && song === target && lockKey(lockedIds) !== locked) return void runSplit();
+    if (plan && song === target) {
+      split = { song: target, plan, locked };
+      // 화음을 고르게 나누지 않았을 때만: 나눈 뒤 옮기면 줄어드는지 따로 알려 준다
+      if (!request.spread) void checkFewer(target, plan.result.parts.length);
     }
   }
 
@@ -585,8 +602,10 @@
     fewer = undefined;
     if (books < 2) return;
     fewer = { song: target, value: "checking" };
-    const value = await booksRunner.run({ song: target, profile: $state.snapshot(profile) as GameProfile, books });
-    if (fewer?.song === target) fewer = { song: target, value };
+    const locked = lockKey(lockedIds);
+    const value = await booksRunner.run({ song: target, profile: $state.snapshot(profile) as GameProfile, books, locked: [...lockedIds] });
+    // 잠금이 바뀌었으면 쓰지 않는다 (다시 나누면서 새로 계산한다)
+    if (fewer?.song === target && lockKey(lockedIds) === locked) fewer = { song: target, value };
   }
 
   /** 트랙 사이 음을 고르게 옮기고(실행 취소 한 칸) 다시 나눈다 */
@@ -594,7 +613,8 @@
     if (!history || !song) return;
     booksRunner.cancel();
     fewer = undefined;
-    sync(history.run(distributeSong(profile, t("ui.splitFewerUndo"), limit)));
+    // 적용할 때의 잠금으로 다시 옮긴다 (계산한 뒤 잠금이 바뀌었어도 잠근 트랙은 건드리지 않는다)
+    sync(history.run(distributeSong(profile, t("ui.splitFewerUndo"), limit, lockedIds)));
     void runSplit();
   }
   function cancelSplit() {
@@ -604,6 +624,15 @@
     splitRunner.cancel();
     splitProgress = undefined;
   }
+  // 나눈 뒤나 나누는 중에 트랙 잠금이 바뀌면 다시 나눈다: 화음 분산 결과가 잠금에 따라 달라진다
+  // (나누는 중이면 옛 잠금의 계산은 멈추고 새로 시작한다)
+  $effect(() => {
+    const now = lockKey(lockedIds);
+    untrack(() => {
+      const stale = (split && split.song === song && split.locked !== now) || (splitTarget && splitTarget === song && splitLocked !== now);
+      if (stale) void runSplit();
+    });
+  });
   // 나누는 동안 곡이 바뀌면 (편집·열기) 계산을 멈춘다: 결과가 옛 곡 것이라 쓸 수 없다
   $effect(() => {
     const now = song;
@@ -702,9 +731,75 @@
     // 편집기에 아직 반영 안 된 입력까지 넣고 저장한다
     flushAllEditors();
     const current = history?.song ?? song;
-    download(new TextEncoder().encode(writeProject(current, { editor: { ...editorState() }, app: APP_VERSION })), `${baseName()}${PROJECT_EXTENSION}`);
+    const editor = editorState();
+    void saveFile(new TextEncoder().encode(writeProject(current, { editor: { ...editor }, app: APP_VERSION })), `${baseName()}${PROJECT_EXTENSION}`).then((outcome) => {
+      // 폴더에 썼거나 공유 창에서 보냈으면 저장을 확인한 것: 자동 보존이 안 돼도 이 곡·편집 상태로는 새 판으로 바꿀 수 있다
+      if (outcome === "written" || outcome === "shared") projectSaved = { song: current, editor: editorStateKey(editor) };
+    });
     notices = [];
     offerUtf8 = false;
+  }
+
+  /** 프로젝트 파일로 저장한 것이 확인된 곡과 그때의 편집 상태(원곡·영상 맞춤 등, 파일에 함께 들어간다).
+   *  다운로드는 끝났는지 알 수 없어 넣지 않는다 */
+  let projectSaved: { song: Song; editor: string } | undefined;
+
+  /** 지금 곡과 편집 상태가 확인된 프로젝트 저장과 같은지 */
+  function savedAsProject(): boolean {
+    return !!history && !!projectSaved && history.song === projectSaved.song && editorStateKey(editorState()) === projectSaved.editor;
+  }
+
+  /** 새 판으로 바꾸는 동안 화면 입력과 MIDI 건반 입력을 막는다 */
+  function lockForUpdate(on: boolean) {
+    document.body.inert = on;
+    document.body.style.cursor = on ? "wait" : "";
+    midiKeys.paused = on;
+  }
+
+  /** 자동 보존을 이만큼 기다려도 끝나지 않으면 실패로 본다 (막은 화면이 풀리지 않는 일이 없게) */
+  const UPDATE_SAVE_WAIT_MS = 15_000;
+
+  /**
+   * 새 판으로 바꾸기 전: 화면 입력을 막고, 편집 중인 입력을 넣고 자동 보존한다. 막은 뒤라 기다리는 동안
+   * 새 입력이 생기지 않는다.
+   * - 저장되면(또는 자동 보존은 실패했지만 지금 곡·편집 상태를 프로젝트 파일로 저장한 것이 확인됐으면) 새로고침하기로
+   *   정한 것이다. 되돌리지 않고 새로고침까지 막은 채로 둔다. 새 판 전환이 오지 않아도 applyUpdate가 직접 새로고침한다
+   *   (새로고침 뒤 새 판이 아직 기다리면 안내가 다시 뜬다). 막은 뒤에는 고칠 수 없으므로 잃는 입력이 없다.
+   *   바꾸기는 한 번에 하나라(applyUpdate), 막고 푸는 것은 지금 하는 바꾸기만 한다.
+   * - 아니면 막은 것을 풀고 거부해 새로고침을 멈춘다. 이때는 새 판 전환을 요청하지 않았다
+   */
+  async function beforeUpdate(): Promise<void> {
+    lockForUpdate(true);
+    const save = () =>
+      new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("autosave timeout")), UPDATE_SAVE_WAIT_MS);
+        flushAutosave().then(resolve, reject).finally(() => clearTimeout(timer));
+      });
+    try {
+      // 막기 전에 친 글·누른 건반(아직 반영 대기 중)까지 넣는다
+      midiKeys.flushPending();
+      flushAllEditors();
+      await save();
+      // 저장을 기다리는 사이 반영된 것이 있으면 한 번 더 적는다
+      flushAllEditors();
+      if (history && autosaved.dirty(history.song)) await save();
+    } catch (e) {
+      flushAllEditors();
+      if (!savedAsProject()) {
+        lockForUpdate(false);
+        throw e;
+      }
+    }
+  }
+
+  /** 자동 보존이 계속 안 될 때: 묻고 나서 저장 없이 새 판으로 바꾼다 */
+  function reloadWithoutSaving() {
+    if (pwa.applying) return;
+    // 저장은 건너뛰지만 막기·직접 새로고침은 다른 바꾸기와 같다 (바꾸는 동안 친 것이 사라지지 않게)
+    if (confirm(t("ui.updateReloadAnywayConfirm")))
+      void applyUpdate(() => {
+        lockForUpdate(true);
+      });
   }
 
   // 작업 자동 보존: 곡을 열거나 새로 만들 때마다 새 작업 id. 고친 뒤에만 적는다
@@ -714,7 +809,8 @@
    *  저장이 실패하면 적지 않은 것으로 남아 다음 기회에 다시 적는다 */
   const autosaved = new AutosaveTracker<Song>();
   let autosaveTimer: ReturnType<typeof setTimeout> | undefined;
-  let autosaveQueue: Promise<void> = Promise.resolve();
+  /** 보낸 순서대로 적고, 실패하면 거부로 알린다 (업데이트 새로고침이 저장 실패를 성공으로 보지 않게) */
+  const autosaveQueue = new AutosaveQueue(autosaved);
   let works = $state.raw<readonly WorkSummary[]>([]);
   let recoverOpen = $state(false);
 
@@ -726,27 +822,26 @@
   if (typeof matchMedia !== "undefined" && matchMedia("(display-mode: standalone)").matches) void requestPersistentStorage();
   else void checkStorage();
 
-  /** 바뀐 곡을 자동 보존에 적는다. 돌려준 약속은 그 저장(또는 이미 진행 중인 저장)이 끝나면 풀린다 */
+  /**
+   * 바뀐 곡을 자동 보존에 적는다. 돌려준 약속은 지금 곡이 적히면(또는 이미 진행 중인 그 저장이 성공하면) 풀리고,
+   * 적지 못하면 거부된다
+   */
   function flushAutosave(): Promise<void> {
     clearTimeout(autosaveTimer);
     autosaveTimer = undefined;
-    const current = history?.song;
-    if (!autosaved.dirty(current)) return autosaveQueue;
-    const done = autosaved.begin(current);
-    const record = {
-      id: workId,
-      savedAt: Date.now(),
-      fileName,
-      title: current.meta.title,
-      trackCount: current.tracks.length,
-      noteCount: current.tracks.reduce((sum, tr) => sum + tr.notes.length, 0),
-      project: writeProject(current, { editor: { ...editorState() }, app: APP_VERSION }),
-    };
-    // 보낸 순서대로 적는다: 늦게 끝난 앞 저장이 뒤 저장을 덮지 않게
-    const job = autosaveQueue.then(() => saveWork(record)).then(done);
-    // 한 번 실패해도 다음 저장은 이어서 한다
-    autosaveQueue = job.catch(() => {});
-    return job;
+    return autosaveQueue.flush(history?.song, (current) => {
+      const record = {
+        id: workId,
+        savedAt: Date.now(),
+        fileName,
+        title: current.meta.title,
+        trackCount: current.tracks.length,
+        noteCount: current.tracks.reduce((sum, tr) => sum + tr.notes.length, 0),
+        project: writeProject(current, { editor: { ...editorState() }, app: APP_VERSION }),
+      };
+      // 보낸 순서대로 적는다: 늦게 끝난 앞 저장이 뒤 저장을 덮지 않게
+      return () => saveWork(record);
+    });
   }
 
   $effect(() => {
@@ -956,6 +1051,7 @@
     storedPacks = new Set([...restored].filter((name) => packs.some((p) => p.label === name)));
   }
   void restorePacks();
+  void loadSaveTarget();
 
   /** 끄기·솔로는 듣는 방법이라 실행 취소 기록에 넣지 않는다 */
   function updateTrack(id: string, change: Partial<Pick<Track, "mute" | "solo">>) {
@@ -1705,7 +1801,7 @@
   function save3mle(encoding: "cp949" | "utf-8" = "cp949") {
     if (!song) return;
     const result = encode3mle(song, { encoding });
-    download(result.bytes, `${baseName()}.mml`);
+    void saveFile(result.bytes, `${baseName()}.mml`);
     notices = result.diagnostics;
     offerUtf8 = result.unencodable.length > 0;
   }
@@ -1744,7 +1840,7 @@
       error = t("ui.wavFailed");
       return;
     }
-    download(new Uint8Array(result.wav), name);
+    void saveFile(new Uint8Array(result.wav), name);
     const missing = [...new Set(prepared.unresolved.map((u) => instrumentName(u.instrument)))];
     if (missing.length > 0) error = t("ui.wavUnresolved", { list: missing.join(", ") });
   }
@@ -1756,13 +1852,13 @@
 
   function saveMidi() {
     if (!song) return;
-    download(writeSmf(songToSmf(song, 480, profile.volume.max)), `${baseName()}.mid`);
+    void saveFile(writeSmf(songToSmf(song, 480, profile.volume.max)), `${baseName()}.mid`);
   }
 
   function saveMmi() {
     if (!song) return;
     const result = writeMmi(song);
-    download(new TextEncoder().encode(result.text), `${baseName()}.mmi`);
+    void saveFile(new TextEncoder().encode(result.text), `${baseName()}.mmi`);
     notices = result.diagnostics;
     offerUtf8 = false;
   }
@@ -2138,7 +2234,7 @@
 {/if}
 
 {#if about}
-  <AboutDialog checkNow={about.checkNow} beforeUpdate={() => (flushAllEditors(), flushAutosave())} onclose={() => (about = undefined)} />
+  <AboutDialog checkNow={about.checkNow} {beforeUpdate} onreloadanyway={reloadWithoutSaving} onclose={() => (about = undefined)} />
 {/if}
 
 {#if recoverOpen}
@@ -2434,12 +2530,23 @@
             {#if split && split.song === song}
               <div class="split-wrap">
                 <SplitPanel
-                  song={split.song}
-                  result={split.result}
+                  song={split.plan.song}
+                  result={split.plan.result}
+                  spread={split.plan.spread}
                   limit={profile.charLimitPerScore}
                   maxChords={chordsOf}
                   fewer={fewer?.song === split.song ? fewer.value : undefined}
                   onfewer={applyFewer}
+                  spreadOn={splitPrefs.spread}
+                  thoroughOn={splitPrefs.thorough}
+                  onspread={(on) => {
+                    setSplitSpread(on);
+                    void runSplit();
+                  }}
+                  onthorough={(on) => {
+                    setSplitThorough(on);
+                    void runSplit();
+                  }}
                   onclose={() => {
                     booksRunner.cancel();
                     fewer = undefined;
@@ -2458,8 +2565,8 @@
     <div class="job-toast" role="status">
       {#if splitProgress !== undefined}
         <div class="job">
-          <span>{t("ui.splitting")} {Math.round(splitProgress * 100)}%</span>
-          <span class="job-bar"><span style:width="{Math.round(splitProgress * 100)}%"></span></span>
+          <span>{t(SPLIT_STAGE[splitProgress.stage])} {Math.round(splitProgress.fraction * 100)}%</span>
+          <span class="job-bar"><span style:width="{Math.round(splitProgress.fraction * 100)}%"></span></span>
           <button class="small" onclick={cancelSplit}>{t("ui.cancel")}</button>
         </div>
       {/if}
@@ -2481,7 +2588,7 @@
     title={t(o.kind === "compact" ? "ui.previewCompactTitle" : "ui.previewDistributeTitle")}
     summary={o.kind === "compact"
       ? kept
-        ? t("ui.compactKept")
+        ? t(o.kept === "tempo" ? "ui.compactKeptTempo" : "ui.compactKept")
         : t("ui.previewCompactSummary")
       : kept
         ? t("ui.previewDistributeNone")
@@ -2564,7 +2671,8 @@
 {#if pwa.updateReady}
   <div class="update-bar" role="status">
     <span>{t(pwa.updateFailed ? "ui.updateSaveFailed" : "ui.updateReady")}</span>
-    <button onclick={() => applyUpdate(() => (flushAllEditors(), flushAutosave()))}>{t("ui.updateReload")}</button>
+    <button disabled={pwa.applying} onclick={() => applyUpdate(beforeUpdate)}>{t("ui.updateReload")}</button>
+    {#if pwa.updateFailed}<button disabled={pwa.applying} onclick={reloadWithoutSaving}>{t("ui.updateReloadAnyway")}</button>{/if}
     <button class="icon" title={t("ui.dismiss")} aria-label={t("ui.dismiss")} onclick={() => (pwa.updateReady = false)}><Icon name="x" /></button>
   </div>
 {/if}

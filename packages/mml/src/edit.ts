@@ -18,11 +18,11 @@ import {
 } from "@mmlce/core";
 import { parseMml, type ParseResult } from "./parser.js";
 import { optimizeMml } from "./optimizer.js";
-import { placeTempo, placeTempoByScore, scoreTrackIds } from "./tempo-placement.js";
+import { placeTempo, placeTempoByScore, scoreTrackIds, type TempoMove } from "./tempo-placement.js";
 import { chordsPerScore } from "./clipboard.js";
 import { distributeChords } from "./distribute.js";
 import { sameSound } from "./compare.js";
-import { audibleTempo, localAt, spliceText, surgicalSource, tempoInsertOffset, tempoTokens, type TempoToken } from "./tempo-text.js";
+import { audibleTempo, localAt, spliceText, surgicalSource, sameTempo, tempoInsertOffset, tempoTokens, type TempoToken } from "./tempo-text.js";
 
 /** 곡 프로필로 연주자마다 악보 하나에 담는 트랙 수 (모르는 프로필이면 모바일) */
 export function songChordsPerScore(song: Song): (playerId: string) => number {
@@ -186,32 +186,91 @@ export function setTrackNotes(trackId: string, notes: readonly Note[], label = "
   };
 }
 
+/** 글자 수 줄이기 결과. kept면 곡을 그대로 두었고 그 까닭 */
+export type CompactResult =
+  | { readonly song: Song; readonly kept?: undefined }
+  | {
+      readonly song: Song;
+      /** notes: 출력기가 쓸 수 없는 길이의 음이 있다. tempo: 어느 악보의 템포를 글에 다 적을 수 없다(잠근 트랙 등) */
+      readonly kept: "notes" | "tempo";
+    };
+
 /**
- * 모든 트랙을 최적화 출력기로 다시 쓰는 명령 (소리는 같고 글자 수만 준다).
+ * 모든 트랙을 최적화 출력기로 다시 쓴다 (소리는 같고 글자 수만 준다). compactSong과 같고, 그대로 둔 까닭을 함께 돌려준다.
  * 게임은 악보마다 템포를 따로 읽으므로 곡 템포를 악보마다 모두 넣는다 (profile이 없으면 곡 프로필로 악보를 묶는다).
- * 사용자가 쓴 원문 표기는 바뀐다.
+ * 사용자가 쓴 원문 표기는 바뀐다. locked에 든 트랙(잠근 트랙)은 그대로 두고 템포도 맡기지 않는다.
+ * 다시 쓴 뒤 음이 달라지거나, 어느 채널에도 쓸 수 없는 템포가 있거나, 다시 읽은 악보 템포가 곡 템포와 다르면 곡을 그대로 둔다
  */
-export function compactSong(profile?: GameProfile, label = "글자 수 줄이기"): Command {
+export function compactResult(song: Song, profile?: GameProfile, locked?: ReadonlySet<string>): CompactResult {
+  // 잠근 트랙에는 템포를 맡기지 않는다 (그 글은 다시 쓰지 않으므로 맡기면 템포가 악보에서 사라진다)
+  const dropped: TempoEvent[] = [];
+  const moved = new Map<string, TempoMove[]>();
+  const chords = profile ? chordsPerScore(song, profile) : songChordsPerScore(song);
+  const placed = placeTempoByScore(song, chords, moved, locked, dropped);
+  // 어느 채널에도 쓸 수 없는 템포가 있으면 (잠근 트랙만 경계가 맞는 등) 그대로 둔다. 뒤 음 경계로 옮겨 쓴 템포는 출력과 같으므로 괜찮다
+  if (dropped.length > 0) return { song, kept: "tempo" };
+  const tracks: Track[] = [];
+  for (const t of song.tracks) {
+    // 잠근 트랙은 글도 그대로 둔다
+    if (locked?.has(t.id)) {
+      tracks.push(t);
+      continue;
+    }
+    const mml: TrackText = { text: optimizeMml(t.notes, { tempo: placed.get(t.id) ?? [] }).text };
+    const notes = parseTrackText(t.id, mml).notes;
+    // 출력기가 쓸 수 없는 길이(아주 짧은 셋잇단 등)는 버려지므로, 다시 읽은 음이 원래 음과 다르면
+    // 곡을 그대로 둔다 (글자 수를 줄이려다 음을 잃지 않게)
+    if (!sameSound(t.notes, notes)) return { song, kept: "notes" };
+    tracks.push({ ...t, notes, mml });
+  }
+  // 악보마다 글에 적힌 들리는 템포가 곡 템포(뒤 음 경계로 옮겨 쓴 것은 옮긴 자리)와 같은지 다시 읽어 본다.
+  // 출력기가 아주 짧은 쉼표를 빼면 두 템포가 한 자리에 겹쳐 앞 템포가 들리지 않을 수 있다
+  const map = audibleTempo(song.tempo);
+  for (const ids of scoreTrackIds(song, chords)) {
+    // 글이 하나도 바뀌지 않은 악보(모두 잠근 악보 등)는 볼 것이 없다. 전에 뒤 음 경계로 옮겨 쓴 템포가 그대로 남아 있어도 괜찮다
+    const unchanged = ids.every((id) => {
+      const before = song.tracks.find((x) => x.id === id);
+      const after = tracks.find((x) => x.id === id);
+      return before === after || (!!before?.mml && before.mml.text === after?.mml?.text && !before.mml.offset);
+    });
+    if (unchanged) continue;
+    const moves = moved.get(ids[0]!) ?? [];
+    const expected = audibleTempo(
+      normalizeTempo(
+        map.map((e) => {
+          const move = moves.find((m) => eq(m.from, e.at) && m.bpm === e.bpm);
+          return move ? { at: move.to, bpm: e.bpm } : e;
+        }),
+      ),
+    );
+    const written = audibleTempo(
+      normalizeTempo(
+        ids.flatMap((id) => {
+          const t = tracks.find((x) => x.id === id);
+          return t?.mml ? parseTrackText(t.id, t.mml).tempo : [];
+        }),
+      ),
+    );
+    if (!sameTempo(written, expected)) return { song, kept: "tempo" };
+  }
+  return {
+    song: {
+      ...song,
+      // 채널마다 같은 템포가 적혀 있던 것은 하나로 합치고, 들리지 않는 같은 빠르기 템포는 쓰지 않으므로 지도에서도 뺀다
+      tempo: audibleTempo(song.tempo),
+      tracks,
+    },
+  };
+}
+
+/**
+ * 모든 트랙을 최적화 출력기로 다시 쓰는 명령 (소리는 같고 글자 수만 준다). 그대로 둘 때는 compactResult를 본다.
+ * locked에 든 트랙(잠근 트랙)은 그대로 둔다.
+ */
+export function compactSong(profile?: GameProfile, label = "글자 수 줄이기", locked?: ReadonlySet<string>): Command {
   return {
     label,
-    apply(song) {
-      const placed = placeTempoByScore(song, profile ? chordsPerScore(song, profile) : songChordsPerScore(song));
-      const tracks: Track[] = [];
-      for (const t of song.tracks) {
-        const mml: TrackText = { text: optimizeMml(t.notes, { tempo: placed.get(t.id) ?? [] }).text };
-        const notes = parseTrackText(t.id, mml).notes;
-        // 출력기가 쓸 수 없는 길이(아주 짧은 셋잇단 등)는 버려지므로, 다시 읽은 음이 원래 음과 다르면
-        // 곡을 그대로 둔다 (글자 수를 줄이려다 음을 잃지 않게)
-        if (!sameSound(t.notes, notes)) return song;
-        tracks.push({ ...t, notes, mml });
-      }
-      return {
-        ...song,
-        // 채널마다 같은 템포가 적혀 있던 것은 하나로 합치고, 들리지 않는 같은 빠르기 템포는 쓰지 않으므로 지도에서도 뺀다
-        tempo: audibleTempo(song.tempo),
-        tracks,
-      };
-    },
+    apply: (song) => compactResult(song, profile, locked).song,
     invert(before) {
       return restoreSong(before);
     },
@@ -228,12 +287,15 @@ function restoreSong(song: Song): Command {
 
 /**
  * 화음 분산 명령. 음을 옮긴 뒤 모든 트랙을 최적화 출력기로 다시 쓴다
- * (곡 템포를 채널마다 다시 나눠 넣어야 하므로 옮기지 않은 트랙의 표기도 바뀐다).
+ * (곡 템포를 채널마다 다시 나눠 넣어야 하므로 옮기지 않은 트랙의 표기도 바뀐다). 잠근 트랙은 음도 글도 그대로 둔다.
  */
-export function distributeSong(profile: GameProfile, label = "화음 분산", limit?: number): Command {
+export function distributeSong(profile: GameProfile, label = "화음 분산", limit?: number, locked?: ReadonlySet<string>): Command {
   return {
     label,
-    apply: (song) => compactSong(profile).apply(distributeChords(song, profile, limit === undefined ? {} : { limit }).song),
+    apply: (song) =>
+      compactSong(profile, label, locked).apply(
+        distributeChords(song, profile, { ...(limit === undefined ? {} : { limit }), ...(locked ? { locked } : {}) }).song,
+      ),
     invert: (before) => restoreSong(before),
   };
 }

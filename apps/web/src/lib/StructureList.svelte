@@ -16,6 +16,8 @@
     groups: readonly ScoreGroup[];
     /** 트랙 id → MML 글자 수 */
     chars: ReadonlyMap<string, number>;
+    /** 트랙 id → MML 검사 개수 (0이면 안 보인다) */
+    checks?: ReadonlyMap<string, number>;
     colors: ReadonlyMap<string, string>;
     activeTrackId: string | undefined;
     charLimit: number;
@@ -24,7 +26,7 @@
     actions: TrackActions;
   }
 
-  let { song, groups, chars, colors, activeTrackId, charLimit, trackInstrument, actions }: Props = $props();
+  let { song, groups, chars, checks, colors, activeTrackId, charLimit, trackInstrument, actions }: Props = $props();
 
   // 접기·펼치기: 기본은 고른 트랙이 든 악보만 펼침. 눌러서 바꾼 것은 고른 트랙이 바뀌면 되돌린다
   let collapsed = $state<ReadonlySet<number>>(new Set());
@@ -250,6 +252,9 @@
             <span class="tname"><InlineName value={track.name} title={t("ui.renameHelp")} onrename={(name) => actions.renameTrack(id, name)} /></span>
             <!-- 트랙 악기는 늘 보인다. 악보 악기와 다른 트랙만 강조색 테두리로 (악보 악기를 바꿔도 줄마다 무엇이 나는지 바로 보이게) -->
             <span class="pill small-pill" class:own={!!player && own !== player.instrument.canonical} title={t("ui.trackInstrumentHelp")}>{instrumentName(own)}</span>
+            {#if checks?.get(id)}
+              <span class="checks" title={t("ui.editorChecks", { count: checks.get(id) ?? 0 })}><span class="alert-dot"></span>{checks.get(id)}</span>
+            {/if}
             <span class="spacer"></span>
             <button
               class="ms eye"
@@ -376,6 +381,20 @@
   /* 음량 레인에 같이 그리는 트랙 */
   .track-row.lane {
     box-shadow: inset 0 0 0 1.5px var(--track-color);
+  }
+  .checks {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 11px;
+    color: var(--danger);
+    flex-shrink: 0;
+  }
+  .alert-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--danger);
   }
   .melody {
     color: var(--track-color);

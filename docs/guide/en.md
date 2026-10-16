@@ -75,7 +75,7 @@ If you were editing a song, a **Recent work** list appears below the buttons. Yo
    t120o4l4v8cdefgab>c
    ```
 3. If you added a sound pack, listen with **Play** (Space). Without a sound pack you can still edit and copy for the game.
-4. Save a `.mme` file with **File → Save project** (Ctrl+Alt+S). Ctrl+S is different: it saves as 3MLE (.mml).
+4. Save a `.mme` file with **File → Save project** (Ctrl+S). Saving as 3MLE (.mml) is Ctrl+Alt+S.
 5. In **File → Put in game…**, check errors, warnings and character counts.
 6. Click the **Copy … MML@** button of the score you want, and paste it into an empty score in the game. If there are several scores, copy them one at a time.
 
@@ -128,7 +128,7 @@ These limits are BiNote's current check values, measured on the Korean server (a
 
 ### Track panel
 
-- **Structure list**: shows scores, then the tracks in each. Each track has M (mute) and S (solo), a character-count bar, a lock and a ⋯ menu (Move up, Move down, Duplicate track, Move to another score, Move to a new score / Copy to a new score, Hide in roll).
+- **Structure list**: shows scores, then the tracks in each. Each track has M (mute) and S (solo), a character-count bar, a lock and a ⋯ menu (Move up, Move down, Duplicate track, Move to another score, Move to a new score / Copy to a new score, Hide in roll). A track with MML checks shows a red dot and the count next to its name.
 - Double-click a name to rename it (Enter to confirm, Esc to cancel).
 - Drag the handle on the left to move a track to another score. On touch, long-press a track to open its menu.
 - **MML editor**: edits the MML text of the selected track. Syntax errors and game limit problems are underlined; hover over an underline to see the details.
@@ -166,7 +166,7 @@ Changes made in the piano roll, the MML editor and the tab all apply to the same
 - **Layer**: draws only the Selected track, the same Score, or All tracks in the roll. Notes of other tracks appear faded; with "Click other tracks' notes to switch" on, clicking one switches to that track.
 - Clicking a note highlights its place in the MML text; double-clicking lets you type there right away.
 - Moving around: wheel (time) · Shift+wheel (pitch) · Ctrl+wheel (zoom time) · Ctrl+Shift+wheel (key height) · Fit all button
-- **Vertical roll**: for tracing falling-note videos
+- **Vertical roll**: for tracing falling-note videos Set Settings → Display → **Roll during playback** to **Scroll continuously** and notes keep falling onto the keyboard while playing (for recording vertical videos).
 
 ### MML editor
 
@@ -310,7 +310,7 @@ Toolbar ⋯ → **Background video…** (in the piano roll). Put a falling-note 
 
 ### Useful together
 
-- **Vertical roll**: matches the direction of falling-note videos.
+- **Vertical roll**: matches the direction of falling-note videos. Choose Settings → Display → Roll during playback → **Scroll continuously** to get falling notes even without a video.
 - View → **Light keys while playing**: shows the notes being played on the keys.
 - Settings → Playback → **Display sync**: + if the playhead runs ahead of the sound, − if it lags. iPad and Bluetooth earphones may need another 100–300ms.
 
@@ -343,7 +343,8 @@ Try these in order.
 1. **Distribute chords**: moves notes from tracks over the limit into free tracks of the same player. They stay on the same instrument, so the notes are kept as they are. (When the score has several tracks of the same instrument.)
 2. **Shrink MML**: rewrites the MML of every track shorter while keeping each note's pitch, start and length. Your own spaces, line breaks and comments are lost. If shrinking would drop notes, nothing is changed and you are told.
 3. **Split into score books**: cuts all tracks at the same point into several books.
-   - Always uses the fewest books. If one long track forces extra books, a "spread tracks evenly: N → M books" hint appears; applying it moves notes to same-instrument tracks and splits again (undo with Ctrl+Z).
+   - **Distribute chords before splitting** (on by default): before splitting, moves notes between tracks of the same instrument to even out channel lengths. If every channel then fits the limit, no split is needed; if it saves books, the split uses the moved result. The song you are editing stays as it is; "Apply to song" moves the notes in the song too (undo with Ctrl+Z). When off, only the book split runs, and a "N → M books" hint appears if moving notes would help.
+   - **Thorough split** (off by default): at each book end, follows several more cut points near the limit to find a split with fewer books. It takes longer, so the stage and a progress bar show at the bottom while it runs. Short songs always get the exact fewest books even without this option.
    - Places where everyone rests are chosen first.
    - Octave, volume and tempo are written again at the start of each book.
    - Each book ends early by the delay before the next one starts (about 1 second) to keep the beat. Notes in that stretch can be shortened or dropped. Check "notes cut at the end" and the length warnings in the result, and listen around the book boundaries before using it.
@@ -383,12 +384,20 @@ Importing MIDI does not copy the original exactly. Notes beyond the chord count 
 
 | Format | Menu | When |
 |---|---|---|
-| **Project .mme** | Save project (Ctrl+Alt+S) | **Recommended for keeping your work and moving it to another device.** Keeps fractional positions, track structure and editor state (older .mmlce files also open) |
-| 3MLE .mml | Save as 3MLE (Ctrl+S) | To open in 3MLE. The default is CP949, and characters it lacks become ?, so save as UTF-8 if needed |
+| **Project .mme** | Save project (Ctrl+S) | **Recommended for keeping your work and moving it to another device.** Keeps fractional positions, track structure and editor state (older .mmlce files also open) |
+| 3MLE .mml | Save as 3MLE (Ctrl+Alt+S) | To open in 3MLE. The default is CP949, and characters it lacks become ?, so save as UTF-8 if needed |
 | MabiIcco .mmi | Save as MabiIcco (Ctrl+Shift+S) | To open in MabiIcco. You are told about notes that do not fit its grid (96 per quarter note) |
 | MIDI .mid | Save as MIDI | For DAWs and similar. Instruments become GM programs, and bass drum and cymbal go on the drum channel. Notes of different pitches tied with `&` are saved as separate notes in MIDI |
 | WAV | Save as WAV | Renders the whole song with the current sound packs into an audio file (mute and solo as heard). Needs a sound pack |
 | MML@ text | Put in game | For pasting into the game |
+
+### Where files are saved
+
+Set this in Settings → **Saving**. By default files are downloaded by the browser (Downloads folder).
+
+- Chrome and Edge on a PC: **Choose folder** sets a save folder, and every saved file goes there. A file with the same name is overwritten. After the browser restarts, the first save may ask you to allow the folder again.
+- iPad and iPhone: with **Save through the share sheet** (on by default), saving opens the share sheet. Use "Save to Files" to pick a folder, or send the file straight to an app such as Google Drive.
+- Other browsers (Firefox and so on) save to the Downloads folder.
 
 What a project (.mme) includes and does not include:
 
@@ -419,7 +428,8 @@ The app checks for a new version each time it opens, and if it stays open for a 
 |---|---|
 | Sound packs | Add and remove, check priority (list order), storage status |
 | Playback | Master volume, Display sync, Light keys while playing, MIDI keys Velocity → v |
-| Display | Theme (Follow system · Light · Dark), Accent color, Note look (Rounded corners · Border · Shade by v · Note names when zoomed in), Track colors (By position in score · Hue per score · Saved in file), MML editor text and text size |
+| Display | Theme (Follow system · Light · Dark), Accent color, Note look (Rounded corners · Border · Shade by v · Note names when zoomed in), Track colors (By position in score · Hue per score · Saved in file), MML editor text and text size, Roll during playback (Turn pages · Scroll continuously) |
+| Saving | Choose a save folder (Chrome and Edge on a PC), Save through the share sheet (iPad and iPhone) |
 | Language | Pick the interface language. At first BiNote follows your browser language (English if it is not Korean, English, Japanese, Traditional or Simplified Chinese) and remembers your choice |
 | Shortcuts | Open shortcut settings (Key set: BiNote default / MabiIcco compatible, change keys) |
 
@@ -438,9 +448,9 @@ While typing in the MML editor, only Ctrl/Alt combinations and F keys work as sh
 | Category | Key | What it does |
 |---|---|---|
 | File | Ctrl+O | Open file |
-| | Ctrl+S | Save as 3MLE |
+| | Ctrl+S | Save project |
 | | Ctrl+Shift+S | Save as MabiIcco |
-| | Ctrl+Alt+S | Save project |
+| | Ctrl+Alt+S | Save as 3MLE |
 | Playback | Space | Play / pause |
 | | F5 | Play |
 | | Esc | Stop |

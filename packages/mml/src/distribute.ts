@@ -1,4 +1,4 @@
-import { add, cmp, eq, trackInstrument, type GameProfile, type Note, type Rat, type Song, type Track } from "@mmlce/core";
+import { add, cmp, eq, trackInstrument, type GameProfile, type Note, type Rat, type Song, type TempoEvent, type Track } from "@mmlce/core";
 import { chordsPerScore } from "./clipboard.js";
 import { optimizeMml } from "./optimizer.js";
 import { placeTempoByScore } from "./tempo-placement.js";
@@ -27,23 +27,24 @@ export interface DistributeOptions {
    * 악보책으로 나눌 때는 "권 수 × 한도"보다 조금 작게 주어 채널 길이를 고르게 해 권 수를 줄인다
    */
   readonly limit?: number;
+  /** 잠근 트랙 id: 음을 빼지도 넣지도 않는다 */
+  readonly locked?: ReadonlySet<string>;
 }
 
 export function distributeChords(song: Song, profile: GameProfile, options: DistributeOptions = {}): DistributeResult {
   const limit = options.limit ?? profile.charLimitPerScore;
-  let tracks = song.tracks.map((t) => ({ ...t, notes: [...t.notes].sort((a, b) => cmp(a.start, b.start)) }));
+  const start = baseOf(song, profile, options.locked);
+  let tracks = start.tracks;
+  const placed = start.placed;
   let moved = 0;
-
-  // 템포 자리는 처음 한 번 정해 두고 어림한다 (옮기는 동안 매번 다시 정하면 느리다)
-  // 게임에는 악보마다 템포를 넣으므로 악보마다 자리를 정한다
-  const placedBy = placeTempoByScore({ ...song, tracks }, chordsPerScore(song, profile));
-  const placed = tracks.map((t) => placedBy.get(t.id) ?? []);
   const lengthOf = (k: number) => optimizeMml(tracks[k]!.notes, { tempo: placed[k] ?? [] }).text.length;
-  let sizes = tracks.map((_, k) => lengthOf(k));
+  let sizes = start.sizes;
 
   // 같은 악보 안에서도 트랙마다 악기가 다를 수 있으니, 실제 악기가 같은 트랙끼리만 옮긴다 (소리가 바뀌지 않게)
   const groups = new Map<string, number[]>();
   tracks.forEach((t, k) => {
+    // 잠근 트랙은 옮기는 데 쓰지 않는다 (보내는 쪽도 받는 쪽도)
+    if (options.locked?.has(t.id)) return;
     const inst = trackInstrument(song, t);
     const key = `${t.playerId}|${inst.canonical}|${inst.program ?? ""}`;
     groups.set(key, [...(groups.get(key) ?? []), k]);
@@ -107,6 +108,31 @@ export function distributeChords(song: Song, profile: GameProfile, options: Dist
     moved,
     over: out.filter((_, k) => sizes[k]! > limit).map((t) => t.id),
   };
+}
+
+interface DistributeBase {
+  readonly song: Song;
+  readonly profile: GameProfile;
+  readonly locked: string;
+  readonly tracks: Track[];
+  readonly placed: readonly (readonly TempoEvent[])[];
+  readonly sizes: number[];
+}
+
+/** 한도와 상관없는 준비(정렬·템포 자리·채널 글자 수)는 같은 곡이면 다시 하지 않는다 (악보책 나누기는 한도를 바꿔 가며 여러 번 분산한다) */
+let lastBase: DistributeBase | undefined;
+
+function baseOf(song: Song, profile: GameProfile, locked: ReadonlySet<string> | undefined): DistributeBase {
+  const lockedKey = locked ? [...locked].sort().join("\n") : "";
+  if (lastBase && lastBase.song === song && lastBase.profile === profile && lastBase.locked === lockedKey) return lastBase;
+  const tracks = song.tracks.map((t) => ({ ...t, notes: [...t.notes].sort((a, b) => cmp(a.start, b.start)) }));
+  // 템포 자리는 처음 한 번 정해 두고 어림한다 (옮기는 동안 매번 다시 정하면 느리다)
+  // 게임에는 악보마다 템포를 넣으므로 악보마다 자리를 정한다. 잠근 트랙에는 맡기지 않는다 (글자 수 줄이기와 같게)
+  const placedBy = placeTempoByScore({ ...song, tracks }, chordsPerScore(song, profile), undefined, locked);
+  const placed = tracks.map((t) => placedBy.get(t.id) ?? []);
+  const sizes = tracks.map((t, k) => optimizeMml(t.notes, { tempo: placed[k] ?? [] }).text.length);
+  lastBase = { song, profile, locked: lockedKey, tracks, placed, sizes };
+  return lastBase;
 }
 
 /**

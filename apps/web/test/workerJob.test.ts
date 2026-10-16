@@ -1,11 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { emptySong, MOBILE_PROFILE, type Song } from "@mmlce/core";
-import { parseTrackText, splitSong } from "@mmlce/mml";
-import { splitJob, type SplitRequest } from "../src/lib/jobs";
+import { parseTrackText, planBooks, splitSong, type BookPlan, type BookProgress } from "@mmlce/mml";
+import { planSplit, splitJob, type SplitRequest } from "../src/lib/jobs";
 import { WorkerJob, type JobReply, type JobRequest } from "../src/lib/workerJob";
-import type { SplitResult } from "@mmlce/mml";
-
-type SplitReply = JobReply<SplitResult>;
+type SplitReply = JobReply<BookPlan, BookProgress>;
 
 const profile = { ...MOBILE_PROFILE, charLimitPerScore: 40 };
 const song: Song = {
@@ -16,7 +14,10 @@ const song: Song = {
   ],
 };
 
-/** 실제 워커 대신: 받은 요청을 같은 splitSong으로 계산해 다음 틱에 답한다 */
+/** 화음 분산을 끈 나누기 요청 (트랙이 하나라 어차피 옮길 곳도 없다) */
+const request: SplitRequest = { song, profile, spread: false, thorough: false };
+
+/** 실제 워커 대신: 받은 요청을 같은 planSplit으로 계산해 다음 틱에 답한다 */
 class FakeWorker {
   onmessage: ((e: MessageEvent<SplitReply>) => void) | null = null;
   onerror: ((e: ErrorEvent) => void) | null = null;
@@ -30,7 +31,7 @@ class FakeWorker {
         return;
       }
       const send = (data: SplitReply) => this.onmessage?.({ data } as MessageEvent<SplitReply>);
-      const result = splitSong(request.song, request.profile, { onProgress: (progress) => send({ id, progress }) });
+      const result = planSplit(request, (progress) => send({ id, progress }));
       send({ id, result });
     }, 0);
   }
@@ -43,9 +44,10 @@ describe("WorkerJob (악보책 나누기)", () => {
   it("워커로 나누고 진행률을 알린다", async () => {
     const runner = splitJob(() => new FakeWorker() as unknown as Worker);
     const seen: number[] = [];
-    const result = await runner.run({ song, profile }, (p) => seen.push(p));
-    expect(result).toEqual(splitSong(song, profile));
-    expect(result!.parts.length).toBeGreaterThan(1);
+    const result = await runner.run(request, (p) => seen.push(p.fraction));
+    expect(result).toEqual(planBooks(song, profile, { spread: false }));
+    expect(result!.result).toEqual(splitSong(song, profile));
+    expect(result!.result.parts.length).toBeGreaterThan(1);
     expect(seen.at(-1)).toBe(1);
     expect(seen).toEqual([...seen].sort((a, b) => a - b));
     expect(runner.busy).toBe(false);
@@ -58,26 +60,27 @@ describe("WorkerJob (악보책 나누기)", () => {
       workers.push(w);
       return w as unknown as Worker;
     });
-    const running = runner.run({ song, profile });
+    const running = runner.run(request);
     runner.cancel();
     expect(await running).toBeUndefined();
     expect(workers[0]!.terminated).toBe(true);
     // 다음 요청은 새 워커로
-    expect(await runner.run({ song, profile })).toBeDefined();
+    expect(await runner.run(request)).toBeDefined();
     expect(workers.length).toBe(2);
   });
 
   it("새로 시작하면 앞 요청은 undefined, 뒤 요청만 결과를 받는다", async () => {
     const runner = splitJob(() => new FakeWorker() as unknown as Worker);
-    const first = runner.run({ song, profile });
-    const second = runner.run({ song, profile });
+    const first = runner.run(request);
+    const second = runner.run(request);
     expect(await first).toBeUndefined();
     expect(await second).toBeDefined();
   });
 
   it("워커가 실패하거나 없으면 화면 쪽에서 계산한다", async () => {
-    expect(await splitJob(() => new FakeWorker(true) as unknown as Worker).run({ song, profile })).toEqual(splitSong(song, profile));
-    expect(await splitJob(undefined).run({ song, profile })).toEqual(splitSong(song, profile));
+    const plan = planBooks(song, profile, { spread: false });
+    expect(await splitJob(() => new FakeWorker(true) as unknown as Worker).run(request)).toEqual(plan);
+    expect(await splitJob(undefined).run(request)).toEqual(plan);
   });
 
   it("화면 쪽 계산은 취소된 뒤 진행률을 알리지 않고 다음 보고에서 멈춘다", async () => {

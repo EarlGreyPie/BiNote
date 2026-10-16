@@ -58,9 +58,10 @@ function grid(keys: Partial<Record<GridDivision, readonly string[]>>): Bindings 
 
 const COMMON: Bindings = {
   "file.open": ["Ctrl+O"],
-  "file.save3mle": ["Ctrl+S"],
+  // Ctrl+S는 BiNote 자기 형식(.mme). 3MLE·마비꼬는 내보내기라 Alt·Shift를 붙인다
+  "file.save3mle": ["Ctrl+Alt+S"],
   "file.saveMmi": ["Ctrl+Shift+S"],
-  "file.saveProject": ["Ctrl+Alt+S"],
+  "file.saveProject": ["Ctrl+S"],
   "edit.undo": ["Ctrl+Z"],
   "edit.redo": ["Ctrl+Y", "Ctrl+Shift+Z"],
   "edit.selectAll": ["Ctrl+A"],

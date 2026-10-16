@@ -1,22 +1,30 @@
 <script lang="ts">
   import { positionToSeconds, type Song } from "@mmlce/core";
-  import { playerScores, type FewerBooks, type SplitResult } from "@mmlce/mml";
+  import { playerScores, type BookSpread, type FewerBooks, type SplitResult } from "@mmlce/mml";
   import { t } from "./i18n.svelte";
 
   interface Props {
+    /** 나눈 곡 (화음을 고르게 나눴으면 옮긴 곡) */
     song: Song;
     result: SplitResult;
+    /** 나누기 전에 화음을 고르게 나눠 권이 줄었으면 그 내용 */
+    spread?: BookSpread | undefined;
+    /** 나누기 방식: 화음 고르게 나눈 뒤 나누기, 꼼꼼히 나누기. 바꾸면 다시 나눈다 */
+    spreadOn: boolean;
+    thoroughOn: boolean;
+    onspread: (on: boolean) => void;
+    onthorough: (on: boolean) => void;
     limit: number;
     /** 악보 하나에 넣을 수 있는 트랙 수 (profile.maxChordsPerPlayer) */
     maxChords: number | ((playerId: string) => number);
     /** 트랙 사이 음을 고르게 옮기면 권이 줄어드는지 (checking: 계산 중) */
     fewer?: FewerBooks | "checking" | undefined;
-    /** 고르게 옮기고 다시 나누기 (distributeChords에 줄 채널 글자 수) */
+    /** 고르게 옮기고 다시 나누기·편집 중인 곡에도 적용 (distributeChords에 줄 채널 글자 수) */
     onfewer: (limit: number) => void;
     onclose: () => void;
   }
 
-  let { song, result, limit, maxChords, fewer, onfewer, onclose }: Props = $props();
+  let { song, result, spread, spreadOn, thoroughOn, onspread, onthorough, limit, maxChords, fewer, onfewer, onclose }: Props = $props();
   let copied = $state("");
 
   function clock(seconds: number): string {
@@ -50,11 +58,27 @@
   <header>
     <h2>{t("ui.split")}</h2>
     <span class="muted">
-      {result.needed ? t("ui.splitCount", { count: result.parts.length }) : t("ui.splitNotNeeded")}
+      {result.needed ? t("ui.splitCount", { count: result.parts.length }) : spread ? t("ui.splitNotNeededSpread") : t("ui.splitNotNeeded")}
     </span>
     <span class="spacer"></span>
     <button class="small" onclick={onclose}>{t("ui.close")}</button>
   </header>
+  <div class="modes">
+    <label title={t("ui.splitSpreadHint")}>
+      <input type="checkbox" checked={spreadOn} onchange={(e) => onspread(e.currentTarget.checked)} />
+      {t("ui.splitSpread")}
+    </label>
+    <label title={t("ui.splitThoroughHint")}>
+      <input type="checkbox" checked={thoroughOn} onchange={(e) => onthorough(e.currentTarget.checked)} />
+      {t("ui.splitThorough")}
+    </label>
+  </div>
+  {#if spread}
+    <p class="fewer">
+      {spread.from === undefined ? t("ui.splitSpreadOne", { moved: spread.moved }) : t("ui.splitSpreadDone", { from: spread.from, to: spread.to, moved: spread.moved })}
+      <button class="small" onclick={() => onfewer(spread.limit)}>{t("ui.splitSpreadApply")}</button>
+    </p>
+  {/if}
   {#if fewer === "checking"}
     <p class="muted help">{t("ui.splitFewerChecking")}</p>
   {:else if fewer}
@@ -99,6 +123,18 @@
 </section>
 
 <style>
+  .modes {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 16px;
+    margin: 4px 0;
+    font-size: 13px;
+  }
+  .modes label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
   .fewer {
     display: flex;
     flex-wrap: wrap;

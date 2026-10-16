@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { emptySong, History, rat, type Song } from "@mmlce/core";
-import { appendSong, compactSong, mergeTies, parseTrackText, setTrackText, trackSource } from "../src/index.js";
+import { appendSong, compactResult, compactSong, mergeTies, scoresMissingTempo, tempoMismatch, parseTrackText, setTrackText, trackSource } from "../src/index.js";
 
 function base(): Song {
   const t1 = parseTrackText("t1", { text: "t120 cde" });
@@ -101,6 +101,140 @@ describe("compactSong 음 보존", () => {
     const track = { id: "a", playerId: "p", name: "a", color: "#000", role: "free" as const, mute: false, solo: false, notes, spelling: {} };
     const song = { ...emptySong({ title: "", author: "", profileId: "mobile" }), tracks: [track] };
     expect(compactSong().apply(song)).toBe(song);
+  });
+});
+
+describe("compactSong 잠근 트랙의 템포", () => {
+  const make = (id: string, text: string) => ({ id, playerId: "p", name: id, color: "#000", role: "free" as const, mute: false, solo: false, notes: parseTrackText(id, { text }).notes, spelling: {}, mml: { text } });
+  const songOf = (a: string, b: string) => ({
+    ...emptySong({ title: "", author: "", profileId: "mobile" }),
+    players: [{ id: "p", name: "피아노", instrument: { canonical: "piano" } }],
+    tracks: [make("a", a), make("b", b)],
+    tempo: [...parseTrackText("a", { text: a }).tempo, ...parseTrackText("b", { text: b }).tempo],
+  });
+  const written = (s: Song) => s.tracks.flatMap((t) => parseTrackText(t.id, t.mml!).tempo.map((e) => e.bpm));
+
+  it("잠근 트랙에 템포를 맡기지 않아 악보 글에서 템포가 사라지지 않는다", () => {
+    const song = songOf("g", "t90cdef");
+    const out = compactSong(undefined, undefined, new Set(["a"])).apply(song);
+    expect(out.tracks[0]).toBe(song.tracks[0]);
+    expect(written(out)).toEqual([90]);
+  });
+
+  it("잠근 글의 같은 자리에 템포가 여럿이면 마지막 것만 적힌 것으로 본다 (t90t120)", () => {
+    const song = songOf("t90t120ggggg", "t90cdef");
+    const r = compactResult(song, undefined, new Set(["a"]));
+    expect(r.kept).toBeUndefined();
+    const out = r.song;
+    // 그 자리에서 들리는 템포는 120이므로 지도의 90은 다른 트랙에 남아야 한다
+    expect(parseTrackText("b", out.tracks[1]!.mml!).tempo.map((e) => e.bpm)).toEqual([90]);
+    expect(tempoMismatch(out)).toBe(tempoMismatch(song));
+  });
+
+  it("템포를 글에 다 적을 수 없으면 줄이지 않고 그 까닭을 알린다", () => {
+    const ns = [5, 7, 11, 13, 17];
+    const h = ns.map((n) => `r${n}`).join("");
+    const q = ns.map((n) => `r${n}`.repeat(n - 1)).join("");
+    const song = songOf("t90" + h + "r19t90g", h + "t120" + q + "c");
+    expect(scoresMissingTempo(song)).toEqual([]);
+    const r = compactResult(song, undefined, new Set(["a"]));
+    expect(r.kept).toBe("tempo");
+    expect(r.song).toBe(song);
+    expect(compactSong(undefined, undefined, new Set(["a"])).apply(song)).toBe(song);
+  });
+
+  it("잠근 트랙 글에 이미 있는 템포는 다른 트랙에 또 넣지 않는다", () => {
+    const song = songOf("t90g", "cdef");
+    const out = compactSong(undefined, undefined, new Set(["a"])).apply(song);
+    expect(out.tracks[0]).toBe(song.tracks[0]);
+    expect(written(out)).toEqual([90]);
+  });
+});
+
+describe("compactSong 옮겨 쓰는 템포", () => {
+  it("음 가운데라 뒤 음 경계로 옮겨 쓰는 템포는 막지 않는다 (원문 없는 트랙이 있는 악보)", () => {
+    const make = (id: string, text: string, withText: boolean) => ({
+      id, playerId: "p", name: id, color: "#000", role: "free" as const, mute: false, solo: false,
+      notes: parseTrackText(id, { text }).notes, spelling: {}, ...(withText ? { mml: { text } } : {}),
+    });
+    for (let k = 1; k < 48; k++) {
+      const song: Song = {
+        ...emptySong({ title: "", author: "", profileId: "mobile" }),
+        players: [{ id: "p", name: "피아노", instrument: { canonical: "piano" } }],
+        tracks: [make("a", "c8 d8 e8 f8 g8 a8 b8 >c8", false), make("b", "e8 f8 g8 a8 b8 >c8 d8 e8", true)],
+        tempo: [{ at: rat(0), bpm: 150 }, { at: rat(k, 192), bpm: 90 }],
+      };
+      const r = compactResult(song);
+      expect(r.kept, `k=${k}`).toBeUndefined();
+    }
+  });
+});
+
+describe("compactSong 겹치는 템포", () => {
+  it("출력기가 아주 짧은 쉼표를 빼 두 템포가 한 자리에 겹치면 줄이지 않는다", () => {
+    const song: Song = {
+      ...emptySong({ title: "", author: "", profileId: "mobile" }),
+      players: [{ id: "p", name: "피아노", instrument: { canonical: "piano" } }],
+      tracks: [
+        { id: "a", playerId: "p", name: "a", color: "#000", role: "free", mute: false, solo: false, notes: parseTrackText("a", { text: "c4" }).notes, spelling: {} },
+        { id: "b", playerId: "p", name: "b", color: "#000", role: "free", mute: false, solo: false, notes: parseTrackText("b", { text: "t150e1" }).notes, spelling: {}, mml: { text: "t150e1" } },
+      ],
+      tempo: [{ at: rat(0), bpm: 150 }, { at: rat(17, 64), bpm: 90 }, { at: rat(13, 48), bpm: 120 }],
+    };
+    const r = compactResult(song);
+    expect(r.kept).toBe("tempo");
+    expect(r.song).toBe(song);
+  });
+});
+
+describe("compactSong 두 번 줄이기", () => {
+  it("한 번 줄여 템포를 옮겨 쓴 악보를 잠그고 다시 줄여도 막지 않는다", () => {
+    const make = (id: string, playerId: string, text: string, withText: boolean) => ({
+      id, playerId, name: id, color: "#000", role: "free" as const, mute: false, solo: false,
+      notes: parseTrackText(id, { text }).notes, spelling: {}, ...(withText ? { mml: { text } } : {}),
+    });
+    const song: Song = {
+      ...emptySong({ title: "", author: "", profileId: "mobile" }),
+      players: [
+        { id: "p", name: "피아노", instrument: { canonical: "piano" } },
+        { id: "q", name: "류트", instrument: { canonical: "lute" } },
+      ],
+      tracks: [
+        make("a", "p", "c8 d8 e8 f8 g8 a8 b8 >c8", false),
+        make("b", "p", "e8 f8 g8 a8 b8 >c8 d8 e8", true),
+        make("c", "q", "c8 c8 c8 c8 c8 c8 c8 c8", true),
+      ],
+      tempo: [{ at: rat(0), bpm: 150 }, { at: rat(1, 192), bpm: 90 }],
+    };
+    const once = compactResult(song);
+    expect(once.kept).toBeUndefined();
+    // 첫 악보를 잠그고 다시 줄인다 (둘째 악보는 원문을 되돌려 다시 줄일 거리를 만든다)
+    const again = { ...once.song, tracks: once.song.tracks.map((t) => (t.id === "c" ? song.tracks[2]! : t)) };
+    const r = compactResult(again, undefined, new Set(["a", "b"]));
+    expect(r.kept).toBeUndefined();
+    expect(r.song.tracks[0]).toBe(again.tracks[0]);
+    expect(r.song.tracks[1]).toBe(again.tracks[1]);
+  });
+
+  it("따로인 두 악보에서 한쪽을 잠그고 다시 줄여도 막지 않는다 (옮긴 템포가 1/32 경계에 있는 경우)", () => {
+    const make = (id: string, playerId: string, text: string) => ({
+      id, playerId, name: id, color: "#000", role: "free" as const, mute: false, solo: false,
+      notes: parseTrackText(id, { text }).notes, spelling: {}, mml: { text },
+    });
+    const song: Song = {
+      ...emptySong({ title: "", author: "", profileId: "mobile" }),
+      players: [
+        { id: "p", name: "피아노", instrument: { canonical: "piano" } },
+        { id: "q", name: "류트", instrument: { canonical: "lute" } },
+      ],
+      tracks: [make("a", "p", "t150 c64 d64 t90 e64"), make("b", "q", "t150 e64 f64 t90 g64")],
+      tempo: [{ at: rat(0), bpm: 150 }, { at: rat(1, 48), bpm: 90 }],
+    };
+    const once = compactResult(song);
+    expect(once.kept).toBeUndefined();
+    const r = compactResult(once.song, undefined, new Set(["a"]));
+    expect(r.kept).toBeUndefined();
+    expect(r.song.tracks[0]).toBe(once.song.tracks[0]);
   });
 });
 

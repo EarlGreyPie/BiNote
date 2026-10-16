@@ -32,13 +32,3 @@ export async function openScore(file: File): Promise<OpenResult> {
   if (looksLikeMmlAt(text)) return readMmlAt(text, { playerName: t("ui.pastePlayer") });
   return read3mle(text, { scoreName: (n) => t("ui.scoreN", { n }) });
 }
-
-/** 바이트를 파일로 내려받게 한다 */
-export function download(bytes: Uint8Array, name: string): void {
-  const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: "application/octet-stream" }));
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = name;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}

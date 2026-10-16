@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AutosaveTracker } from "../src/lib/autosave";
+import { AutosaveQueue, AutosaveTracker } from "../src/lib/autosave";
 
 describe("AutosaveTracker", () => {
   it("연 그대로면 적지 않고, 고친 상태는 적는다", () => {
@@ -65,5 +65,48 @@ describe("AutosaveTracker", () => {
     back(true);
     expect(a.dirty("A")).toBe(false);
     expect(a.dirty("B")).toBe(true);
+  });
+});
+
+describe("AutosaveQueue", () => {
+  it("저장이 false로 실패하면 거부해 업데이트 새로고침을 막는다 (beta.6 점검 1번)", async () => {
+    const tracker = new AutosaveTracker<string>();
+    tracker.reset("open");
+    const q = new AutosaveQueue(tracker);
+    await expect(q.flush("A", () => async () => false)).rejects.toThrow();
+    // 실패한 상태는 다시 적을 것으로 남는다
+    expect(tracker.dirty("A")).toBe(true);
+    await expect(q.flush("A", () => async () => true)).resolves.toBeUndefined();
+  });
+
+  it("적는 중인 상태를 다시 부르면 그 저장의 결과를 따른다", async () => {
+    const tracker = new AutosaveTracker<string>();
+    tracker.reset("open");
+    const q = new AutosaveQueue(tracker);
+    let finish!: (ok: boolean) => void;
+    const first = q.flush("A", () => () => new Promise<boolean>((r) => (finish = r)));
+    first.catch(() => {});
+    let called = false;
+    // 적는 중이라 새로 보내지 않고, 앞 저장이 실패하면 함께 실패한다
+    const again = q.flush("A", () => ((called = true), async () => true));
+    await Promise.resolve();
+    finish(false);
+    await expect(again).rejects.toThrow();
+    expect(called).toBe(false);
+  });
+
+  it("이미 적은 상태면 바로 풀리고, 앞 저장이 끝난 뒤에 다음 저장을 한다", async () => {
+    const tracker = new AutosaveTracker<string>();
+    tracker.reset("open");
+    const q = new AutosaveQueue(tracker);
+    await expect(q.flush("open", () => async () => false)).resolves.toBeUndefined();
+    const order: string[] = [];
+    let finishA!: (ok: boolean) => void;
+    const a = q.flush("A", () => () => new Promise<boolean>((r) => (finishA = () => (order.push("A"), r(true)))));
+    const b = q.flush("B", () => async () => (order.push("B"), true));
+    await Promise.resolve();
+    finishA(true);
+    await Promise.all([a, b]);
+    expect(order).toEqual(["A", "B"]);
   });
 });

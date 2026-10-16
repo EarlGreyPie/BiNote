@@ -36,6 +36,15 @@ self.addEventListener("activate", (event) => {
   );
 });
 
+// 담아 둔 것은 지금 판 캐시에서 먼저 찾는다. 시작 페이지처럼 여러 판에 같은 주소로 든 파일은 caches.match가
+// 먼저 만든 옛 캐시에서 꺼내 옛 판이 열릴 수 있다. 옛 캐시는 지금 판에 없는 파일(옛 탭이 부르는 옛 판 파일)을 찾을 때만 쓴다
+function fromCache(request) {
+  return caches
+    .open(CACHE)
+    .then((cache) => cache.match(request))
+    .then((cached) => cached ?? caches.match(request));
+}
+
 self.addEventListener("fetch", (event) => {
   const request = event.request;
   if (request.method !== "GET" || new URL(request.url).origin !== self.location.origin) return;
@@ -49,8 +58,8 @@ self.addEventListener("fetch", (event) => {
           return response;
         }
         // 새로 배포해 옛 판 파일이 서버에서 없어졌으면(404) 담아 둔 것을 쓴다
-        return caches.match(request).then((cached) => cached ?? response);
+        return fromCache(request).then((cached) => cached ?? response);
       })
-      .catch(() => caches.match(request).then((cached) => cached ?? Response.error())),
+      .catch(() => fromCache(request).then((cached) => cached ?? Response.error())),
   );
 });

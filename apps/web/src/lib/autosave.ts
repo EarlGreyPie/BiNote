@@ -43,3 +43,37 @@ export class AutosaveTracker<T> {
     };
   }
 }
+
+/**
+ * 자동 보존 저장을 보낸 순서대로 이어서 하고, 지금 상태가 실제로 적혔는지 기다릴 수 있게 한다.
+ * 저장은 실패를 예외 대신 false로 알리므로, flush는 false를 거부로 바꿔 돌려준다
+ * (업데이트 새로고침처럼 "적혔을 때만" 해야 하는 일이 실패를 성공으로 오해하지 않게)
+ */
+export class AutosaveQueue<T> {
+  private queue: Promise<unknown> = Promise.resolve();
+  /** 마지막으로 보낸 저장과 그 상태 */
+  private last: { state: T; job: Promise<void> } | undefined;
+
+  constructor(private readonly tracker: AutosaveTracker<T>) {}
+
+  /**
+   * current를 적는다. prepare는 바로 불러 적을 내용을 만들고, 돌려준 함수는 앞 저장이 끝난 뒤 부른다.
+   * 적을 것이 없으면(이미 적었거나 적는 중) 그 상태를 적는 저장을 기다린다. 적지 못하면 거부된다
+   */
+  flush(current: T | undefined, prepare: (state: T) => () => Promise<boolean>): Promise<void> {
+    if (!this.tracker.dirty(current)) {
+      // 적는 중인 상태면 그 저장의 결과를 따른다. 이미 적은 상태면 할 일이 없다
+      return current !== undefined && this.last?.state === current ? this.last.job : Promise.resolve();
+    }
+    const save = prepare(current);
+    const done = this.tracker.begin(current);
+    const job = this.queue.then(save).then((ok) => {
+      done(ok);
+      if (!ok) throw new Error("autosave failed");
+    });
+    // 한 번 실패해도 다음 저장은 이어서 한다
+    this.queue = job.catch(() => {});
+    this.last = { state: current, job };
+    return job;
+  }
+}

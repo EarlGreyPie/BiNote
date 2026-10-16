@@ -37,6 +37,15 @@ export class MidiKeys {
     if (this.status) this.status = { ...this.status, velocity };
   }
 
+  /** 켜 두면 건반을 눌러도 악보에 넣지 않는다 (새 판으로 바꾸는 동안) */
+  paused = false;
+
+  /** 기다리던 화음을 지금 넣는다 (저장 직전 등) */
+  flushPending(): void {
+    clearTimeout(this.timer);
+    this.flush();
+  }
+
   /** 기다리던 화음을 버린다 (새 곡을 열 때 등) */
   dropPending(): void {
     clearTimeout(this.timer);
@@ -81,6 +90,7 @@ export class MidiKeys {
   }
 
   private keyDown(pitch: number, velocity: number): void {
+    if (this.paused) return;
     this.held.add(pitch);
     this.on.previewOn(pitch, velocity);
     // 창은 첫 건반에서 한 번만 연다. 뒤 건반이 창을 늘리지 않아 빠른 단음 연주가 화음으로 뭉치지 않는다

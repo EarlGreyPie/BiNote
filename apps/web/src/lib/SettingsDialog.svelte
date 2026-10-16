@@ -6,6 +6,8 @@
   import { MASTER_MAX } from "./engine";
   import { pwa } from "./pwa.svelte";
   import { setTabTint, tabTint } from "./tabTint.svelte";
+  import { rollFlow, setRollFlow, type RollFlow } from "./rollFlow.svelte";
+  import { canPickFolder, canShareFiles, clearSaveFolder, pickSaveFolder, saveTarget, setSaveShare } from "./saveTarget.svelte";
   import { LANE_MAX, LANE_MIN, saveVolumeLane, volumeLane, type LaneState } from "./volumeLane.svelte";
 
   import Icon from "./Icon.svelte";
@@ -44,7 +46,7 @@
     onclose: () => void;
   }
 
-  type Section = "packs" | "playback" | "display" | "language" | "keys";
+  type Section = "packs" | "playback" | "display" | "save" | "language" | "keys";
 
   let {
     packs,
@@ -88,14 +90,14 @@
     dialog.showModal();
   });
 
-  const SECTIONS: readonly Section[] = ["packs", "playback", "display", "language", "keys"];
+  const SECTIONS: readonly Section[] = ["packs", "playback", "display", "save", "language", "keys"];
   /** 언어 칸은 글자를 못 읽는 언어로 바뀌어도 찾을 수 있게 영어 "Language"를 늘 같이 적는다 */
   const sectionLabel = (s: Section) =>
     s === "language"
       ? i18n.locale === "en"
         ? t("ui.language")
         : `${t("ui.language")} · Language`
-      : t(s === "packs" ? "ui.settingsPacks" : s === "playback" ? "ui.settingsPlayback" : s === "display" ? "ui.settingsDisplay" : "ui.settingsKeys");
+      : t(s === "packs" ? "ui.settingsPacks" : s === "playback" ? "ui.settingsPlayback" : s === "display" ? "ui.settingsDisplay" : s === "save" ? "ui.settingsSave" : "ui.settingsKeys");
 </script>
 
 <dialog bind:this={dialog} {onclose}>
@@ -176,6 +178,14 @@
             <option value="stored">{t("ui.colorStored")}</option>
           </select>
         </label>
+        <label class="row" title={t("ui.rollFlowHelp")}>
+          <span>{t("ui.rollFlow")}</span>
+          <select value={rollFlow.mode} onchange={(e) => setRollFlow(e.currentTarget.value as RollFlow)}>
+            <option value="page">{t("ui.rollFlowPage")}</option>
+            <option value="flow">{t("ui.rollFlowFlow")}</option>
+          </select>
+        </label>
+        <p class="muted help">{t("ui.rollFlowHelp")}</p>
         <label class="row" title={t("ui.tabTrackTintHelp")}>
           <input type="checkbox" checked={tabTint.on} onchange={(e) => setTabTint(e.currentTarget.checked)} />
           <span>{t("ui.tabTrackTint")}</span>
@@ -245,6 +255,26 @@
           />
           <output>{volumeLane.size}px</output>
         </label>
+      {:else if section === "save"}
+        {#if canPickFolder}
+          <div class="row">
+            <span>{t("ui.saveFolder")}</span>
+            <span class="checks">
+              <span class="folder-name">{saveTarget.folder ?? t("ui.saveFolderDownloads")}</span>
+              <button onclick={() => void pickSaveFolder()}>{t("ui.saveFolderPick")}…</button>
+              {#if saveTarget.folder}<button onclick={() => void clearSaveFolder()}>{t("ui.saveFolderClear")}</button>{/if}
+            </span>
+          </div>
+          <p class="muted help">{t("ui.saveFolderHelp")}</p>
+        {:else if canShareFiles}
+          <label class="row">
+            <input type="checkbox" checked={saveTarget.share} onchange={(e) => setSaveShare(e.currentTarget.checked)} />
+            <span>{t("ui.saveShare")}</span>
+          </label>
+          <p class="muted help">{t("ui.saveShareHelp")}</p>
+        {:else}
+          <p class="muted help">{t("ui.saveDownloadOnly")}</p>
+        {/if}
       {:else if section === "language"}
         <div class="langs" role="radiogroup" aria-label={t("ui.language")}>
           {#each LOCALES as l (l)}
@@ -448,6 +478,10 @@
     }
   }
   .swatches,
+  .folder-name {
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
   .checks {
     display: flex;
     flex-wrap: wrap;

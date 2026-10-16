@@ -10,6 +10,8 @@ import {
   type Unresolved,
   type InstrumentGains,
   type SlotPatch,
+  limiterWorkletSource,
+  PeakLimiter,
 } from "@mmlce/audio/browser";
 import { getProfile, positionToSeconds, type Rat, type Song } from "@mmlce/core";
 import type { WorkletSynthesizer } from "spessasynth_lib";
@@ -19,6 +21,8 @@ import type { WavRequest } from "./jobs";
 
 /** CC 0 = 뱅크 선택(MSB) */
 const BANK_SELECT = 0;
+/** 리미터 워크릿 이름 */
+const LIMITER = "mmlce-limiter";
 
 /**
  * 브라우저 재생 엔진. AudioWorklet 안의 SpessaSynth에 사운드팩을 여러 개 올리고,
@@ -87,18 +91,23 @@ export class Engine {
     const { WorkletSynthesizer } = await import("spessasynth_lib");
     const context = new AudioContext();
     await context.audioWorklet.addModule(processorUrl);
+    // 리미터는 WAV 저장과 같은 코드(PeakLimiter)를 워크릿으로 올린다
+    const limiterUrl = URL.createObjectURL(new Blob([limiterWorkletSource(LIMITER)], { type: "text/javascript" }));
+    try {
+      await context.audioWorklet.addModule(limiterUrl);
+    } finally {
+      URL.revokeObjectURL(limiterUrl);
+    }
     const synth = new WorkletSynthesizer(context);
     // 전체 음량: 신스 → 음량 → 스피커 (미리듣기 대체 소리도 같은 음량을 지난다)
     const master = context.createGain();
     master.gain.value = this.masterVolume;
-    // 음량을 1보다 크게 올려도 소리가 깨지지 않게 끝에 리미터를 둔다 (평소 크기에서는 거의 손대지 않는다)
-    const limiter = context.createDynamicsCompressor();
-    limiter.threshold.value = -3;
-    limiter.knee.value = 0;
-    limiter.ratio.value = 20;
-    limiter.attack.value = 0.003;
-    limiter.release.value = 0.1;
+    // 음량을 1보다 크게 올리거나 악기별 음량을 키워도 소리가 깨지지 않게 끝에 리미터를 둔다
+    // (문턱 −3dB 아래에서는 손대지 않는다). WAV 저장도 같은 리미터를 거친다
+    const limiter = new AudioWorkletNode(context, LIMITER, { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2] });
     master.connect(limiter).connect(context.destination);
+    // 리미터는 다가올 봉우리를 미리 보려고 소리를 조금(3ms) 늦춘다. 재생선도 그만큼 늦춘다
+    this.limiterLag = new PeakLimiter(context.sampleRate).latency / context.sampleRate;
     this.master = master;
     synth.connect(master);
     await synth.isReady;
@@ -129,6 +138,8 @@ export class Engine {
         synth.controllerChange(channel, 101, 127, { time });
         synth.controllerChange(channel, 100, 127, { time });
       },
+      // All Sound Off(CC 120): 그 채널 음을 끝소리 없이 바로 끊는다. 신스 큐는 같은 시각이면 넣은 순서대로 처리한다
+      cut: (channel, time) => synth.controllerChange(channel, 120, 0, { time }),
       silence: () => synth.stopAll(true),
     };
     this.player = new LivePlayer(sink);
@@ -172,6 +183,9 @@ export class Engine {
   /** 한 번이라도 소리를 낸 뒤인지 (첫 재생은 시작을 조금 늦춘다) */
   private warmed = false;
 
+  /** 리미터가 늦추는 시간(초) */
+  private limiterLag = 0;
+
   /** 사용자가 정한 화면 싱크 보정(초). +면 재생선을 더 늦춘다 */
   syncOffset = 0;
 
@@ -182,7 +196,7 @@ export class Engine {
   get outputLag(): number {
     const c = this.context;
     const reported = c ? (c.outputLatency || 0) + (c.baseLatency || 0) : 0;
-    return reported + this.syncOffset;
+    return reported + this.limiterLag + this.syncOffset;
   }
 
   /** 지금 들리는 곡 위치(초). 출력 지연만큼 늦춰 재생선이 소리와 맞게 한다 */
@@ -223,7 +237,8 @@ export class Engine {
     const packs = await Promise.all(
       [...this.packFiles].filter(([id]) => used.has(id)).map(async ([id, { bank, file }]) => ({ id, bank, bytes: await file.arrayBuffer() })),
     );
-    return { request: { schedule, patches, packs }, unresolved };
+    // 재생과 같은 끝단(전체 음량 → 리미터)으로 그려, 들은 소리와 저장한 소리가 같게 한다
+    return { request: { schedule, patches, packs, volume: this.masterVolume }, unresolved };
   }
 
   /** 악기별 음량(dB). 설정 창에서 바꾸면 재생 중인 소리에도 바로 적용한다 */
@@ -333,7 +348,10 @@ export class Engine {
     this.reference = await context.decodeAudioData(await file.arrayBuffer());
     if (!this.referenceGain) {
       this.referenceGain = context.createGain();
-      this.referenceGain.connect(context.destination);
+      // 합성음은 리미터를 지나며 3ms 늦게 나오므로 원곡도 같은 만큼 늦춰 함께 듣는 시각을 맞춘다
+      const delay = context.createDelay(0.05);
+      delay.delayTime.value = this.limiterLag;
+      this.referenceGain.connect(delay).connect(context.destination);
     }
     if (this.playing) this.startReference();
     return this.reference.duration;

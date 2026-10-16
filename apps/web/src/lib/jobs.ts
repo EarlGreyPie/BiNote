@@ -1,35 +1,29 @@
 import type { GameProfile, Song } from "@mmlce/core";
-import { fewerBooks, splitSong, type FewerBooks, type SplitResult } from "@mmlce/mml";
+import type { BookPlan, BookProgress, FewerBooks } from "@mmlce/mml";
+import { fewerOf, planSplit, type BooksRequest, type SplitRequest } from "./splitPlan";
+
+export { fewerOf, planSplit, type BooksRequest, type SplitRequest };
 import type { Schedule, SlotPatch } from "@mmlce/audio/browser";
 import { WorkerJob } from "./workerJob";
 
-export interface SplitRequest {
-  readonly song: Song;
-  readonly profile: GameProfile;
-}
-
 /** 악보책 나누기 (Web Worker) */
 export function splitJob(makeWorker = workerMaker(() => new Worker(new URL("./split.worker.ts", import.meta.url), { type: "module" }))) {
-  return new WorkerJob<SplitRequest, SplitResult>(makeWorker, ({ song, profile }, onProgress) => splitSong(song, profile, { onProgress }));
-}
-
-export interface BooksRequest {
-  readonly song: Song;
-  readonly profile: GameProfile;
-  /** 지금 나눈 권 수 */
-  readonly books: number;
+  return new WorkerJob<SplitRequest, BookPlan, BookProgress>(makeWorker, planSplit);
 }
 
 /** 트랙 사이 음을 고르게 옮겨 악보책 권 수를 줄일 수 있는지 (Web Worker). 줄일 수 없으면 undefined */
 export function booksJob(makeWorker = workerMaker(() => new Worker(new URL("./books.worker.ts", import.meta.url), { type: "module" }))) {
-  return new WorkerJob<BooksRequest, FewerBooks | undefined>(makeWorker, ({ song, profile, books }) => fewerBooks(song, profile, books));
+  return new WorkerJob<BooksRequest, FewerBooks | undefined>(makeWorker, fewerOf);
 }
+
 
 export interface WavRequest {
   readonly schedule: Schedule;
   readonly patches: readonly SlotPatch[];
   /** 사운드팩 파일 바이트 */
   readonly packs: readonly { readonly id: string; readonly bank: number; readonly bytes: ArrayBuffer }[];
+  /** 전체 음량 (재생과 같은 배율. 리미터도 재생과 같이 거친다) */
+  readonly volume?: number;
 }
 
 export interface WavResult {
@@ -43,7 +37,7 @@ export async function renderWavFile(request: WavRequest, onProgress: (fraction: 
   onProgress(0);
   const packs = request.packs.map((p) => ({ id: p.id, bank: p.bank, soundBank: loadSoundBank(p.bytes) }));
   onProgress(0);
-  const result = await renderPatched(request.schedule, request.patches, packs, { onProgress });
+  const result = await renderPatched(request.schedule, request.patches, packs, { onProgress, ...(request.volume === undefined ? {} : { volume: request.volume }) });
   return { wav: toWav(result) };
 }
 

@@ -43,7 +43,7 @@ describe("renderPatched (WAV 저장)", () => {
     const schedule = buildSchedule(song, MOBILE_PROFILE);
     const peak = async (gains: Record<string, number>) => {
       const { patches } = assignPatches(schedule, registry, gains);
-      const r = await renderPatched(schedule, patches, [{ id: "saw#0", bank: 0, soundBank: loadSoundBank(bytes) }]);
+      const r = await renderPatched(schedule, patches, [{ id: "saw#0", bank: 0, soundBank: loadSoundBank(bytes) }], { limit: false });
       return r.left.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
     };
     expect(assignPatches(schedule, registry).patches[0]!.gain).toBeUndefined();
@@ -53,5 +53,28 @@ describe("renderPatched (WAV 저장)", () => {
     expect(louder / plain).toBeCloseTo(2, 1);
     // 다른 팩 이름으로 적은 값은 쓰지 않는다
     expect(await peak({ [gainKey("other.dls", 0)]: 6 })).toBeCloseTo(plain, 5);
+  });
+
+  it("리미터를 거쳐도 시작이 늦어지지 않고, 문턱 아래 소리는 그대로다", async () => {
+    const song: Song = {
+      ...emptySong({ title: "", author: "", profileId: "mobile" }),
+      players: [{ id: "p1", name: "류트", instrument: { canonical: "lute", program: 0 } }],
+      tracks: [{ id: "a", playerId: "p1", name: "a", color: "", role: "free", mute: false, solo: false, notes: [{ id: "n", start: rat(0), dur: rat(1, 4), pitch: 60, vol: 6, tie: "none" as const }], spelling: {} }],
+    };
+    const bytes = BasicSoundBank.getSampleSoundBankFile();
+    const registry = new SoundPackRegistry();
+    registry.add("saw#0", "saw.sf2", { presets: [{ program: 0, bankMSB: 0, name: "Saw Wave" }] });
+    const schedule = buildSchedule(song, MOBILE_PROFILE);
+    const { patches } = assignPatches(schedule, registry);
+    const render = (limit: boolean, volume = 1) => renderPatched(schedule, patches, [{ id: "saw#0", bank: 0, soundBank: loadSoundBank(bytes) }], { limit, volume });
+    const off = await render(false);
+    const on = await render(true);
+    const quiet = off.left.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
+    expect(quiet).toBeLessThan(0.7);
+    expect(on.left.length).toBe(off.left.length);
+    expect(on.left).toEqual(off.left);
+    // 크게 올리면 처음부터 끝까지 문턱 둘레
+    const loud = await render(true, 8);
+    expect(loud.left.reduce((m, v) => Math.max(m, Math.abs(v)), 0)).toBeLessThan(0.85);
   });
 });
