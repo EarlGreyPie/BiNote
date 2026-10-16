@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { SoundPackInfo } from "@mmlce/audio/browser";
+  import type { InstrumentGains, SoundPackInfo } from "@mmlce/audio/browser";
   import {
     add,
     cmp,
@@ -86,7 +86,7 @@
     type FewerBooks,
   } from "@mmlce/mml";
   import { analyzeSong, noteSpan, spanAt, textTimeline } from "./lib/analysis";
-  import { Engine } from "./lib/engine";
+  import { Engine, MASTER_MAX } from "./lib/engine";
   import { diag, i18n, instrumentName, LOCALE_LABELS, setLocale, t } from "./lib/i18n.svelte";
   import { download, openScore } from "./lib/load";
   import { flushAllEditors } from "./lib/MmlEditor.svelte";
@@ -1228,7 +1228,7 @@
   const MASTER_KEY = "mmlce.masterVolume";
   const initialMasterVolume = loadStored(MASTER_KEY, (raw) => {
     const v = raw === null ? NaN : Number(raw);
-    return Number.isFinite(v) ? Math.min(1.5, Math.max(0, v)) : 1;
+    return Number.isFinite(v) ? Math.min(MASTER_MAX, Math.max(0, v)) : 1;
   });
   let masterVolume = $state(initialMasterVolume);
   function setMasterVolume(v: number) {
@@ -1237,6 +1237,28 @@
     saveStored(MASTER_KEY, String(v));
   }
   engine.setMasterVolume(initialMasterVolume);
+
+  // 악기별 음량 (dB, 팩 이름#번호 → 값). 이 기기에만 기억하고 곡 파일에는 넣지 않는다
+  const GAINS_KEY = "mmlce.instrumentGains";
+  const initialGains = loadStored<InstrumentGains>(GAINS_KEY, (raw) => {
+      try {
+        const v: unknown = raw ? JSON.parse(raw) : {};
+        if (!v || typeof v !== "object") return {};
+        return Object.fromEntries(Object.entries(v).filter((e): e is [string, number] => typeof e[1] === "number" && Number.isFinite(e[1])));
+      } catch {
+        return {};
+      }
+    });
+  let instrumentGains = $state.raw<InstrumentGains>(initialGains);
+  function setInstrumentGain(key: string, db: number) {
+    const next = { ...instrumentGains };
+    if (db === 0) delete next[key];
+    else next[key] = db;
+    instrumentGains = next;
+    engine.setInstrumentGains(next);
+    saveStored(GAINS_KEY, JSON.stringify(next));
+  }
+  engine.setInstrumentGains(initialGains);
 
   // 화면 싱크 보정(ms, 기억): 재생선이 소리보다 앞서거나 늦으면 맞춘다
   const SYNC_KEY = "mmlce.syncOffsetMs";
@@ -2087,6 +2109,8 @@
     onaddpack={() => packInput.click()}
     {masterVolume}
     onvolume={setMasterVolume}
+    {instrumentGains}
+    ongain={setInstrumentGain}
     {syncOffsetMs}
     onsync={setSyncOffset}
     {lightKeys}
@@ -2172,7 +2196,7 @@
   <span class="spacer"></span>
   <label class="volume" title={t("ui.masterVolume")}>
     <Icon name="volume" />
-    <input type="range" min="0" max="1.5" step="0.05" value={masterVolume} oninput={(e) => setMasterVolume(Number(e.currentTarget.value))} />
+    <input type="range" min="0" max={MASTER_MAX} step="0.05" value={masterVolume} oninput={(e) => setMasterVolume(Number(e.currentTarget.value))} />
   </label>
   <span class="divider"></span>
   <button class="icon" class:on={!!midiKeys.status} title={t("ui.midiKeysHelp")} aria-label={t("ui.midiKeys")} onclick={() => midiKeys.toggle()}>

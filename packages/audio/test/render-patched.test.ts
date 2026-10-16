@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { BasicSoundBank } from "spessasynth_core";
 import { emptySong, MOBILE_PROFILE, rat, type Song } from "@mmlce/core";
-import { assignPatches, buildSchedule, loadSoundBank, renderPatched, SoundPackRegistry, toWav } from "../src/index.js";
+import { assignPatches, buildSchedule, gainKey, loadSoundBank, renderPatched, SoundPackRegistry, toWav } from "../src/index.js";
 
 describe("renderPatched (WAV 저장)", () => {
   it("합성한 작은 사운드팩(톱니파 하나)으로 곡을 그려 WAV 바이트를 만든다", async () => {
@@ -29,5 +29,29 @@ describe("renderPatched (WAV 저장)", () => {
     expect(loud).toBeGreaterThan(100);
     expect(seen.length).toBeGreaterThan(10);
     expect(seen.at(-1)).toBeGreaterThan(0.95);
+  });
+
+  it("악기별 음량(dB)을 채널 배율로 넣어 그린다: +6dB면 약 2배", async () => {
+    const song: Song = {
+      ...emptySong({ title: "", author: "", profileId: "mobile" }),
+      players: [{ id: "p1", name: "류트", instrument: { canonical: "lute", program: 0 } }],
+      tracks: [{ id: "a", playerId: "p1", name: "a", color: "", role: "free", mute: false, solo: false, notes: [{ id: "n", start: rat(0), dur: rat(1, 4), pitch: 60, vol: 8, tie: "none" as const }], spelling: {} }],
+    };
+    const bytes = BasicSoundBank.getSampleSoundBankFile();
+    const registry = new SoundPackRegistry();
+    registry.add("saw#0", "saw.sf2", { presets: [{ program: 0, bankMSB: 0, name: "Saw Wave" }] });
+    const schedule = buildSchedule(song, MOBILE_PROFILE);
+    const peak = async (gains: Record<string, number>) => {
+      const { patches } = assignPatches(schedule, registry, gains);
+      const r = await renderPatched(schedule, patches, [{ id: "saw#0", bank: 0, soundBank: loadSoundBank(bytes) }]);
+      return r.left.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
+    };
+    expect(assignPatches(schedule, registry).patches[0]!.gain).toBeUndefined();
+    const plain = await peak({});
+    const louder = await peak({ [gainKey("saw.sf2", 0)]: 6 });
+    expect(plain).toBeGreaterThan(0);
+    expect(louder / plain).toBeCloseTo(2, 1);
+    // 다른 팩 이름으로 적은 값은 쓰지 않는다
+    expect(await peak({ [gainKey("other.dls", 0)]: 6 })).toBeCloseTo(plain, 5);
   });
 });

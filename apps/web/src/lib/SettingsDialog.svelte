@@ -1,8 +1,9 @@
 <script lang="ts">
-  import type { SoundPackInfo } from "@mmlce/audio/browser";
+  import { gainKey, type InstrumentGains, type SoundPackInfo } from "@mmlce/audio/browser";
   import { LOCALES, type Locale } from "@mmlce/i18n";
-  import { i18n, LOCALE_LABELS, setLocale, t } from "./i18n.svelte";
+  import { i18n, instrumentName, LOCALE_LABELS, setLocale, t } from "./i18n.svelte";
   import { guideUrl, REPO_URL } from "./links";
+  import { MASTER_MAX } from "./engine";
   import { pwa } from "./pwa.svelte";
 
   import Icon from "./Icon.svelte";
@@ -21,6 +22,9 @@
     onaddpack: () => void;
     masterVolume: number;
     onvolume: (v: number) => void;
+    /** 악기별 음량 (dB). 키는 gainKey(팩 이름, 번호) */
+    instrumentGains: InstrumentGains;
+    ongain: (key: string, db: number) => void;
     syncOffsetMs: number;
     onsync: (ms: number) => void;
     lightKeys: boolean;
@@ -48,6 +52,8 @@
     onaddpack,
     masterVolume,
     onvolume,
+    instrumentGains,
+    ongain,
     syncOffsetMs,
     onsync,
     lightKeys,
@@ -67,6 +73,11 @@
   function setLook(k: keyof NoteLook, on: boolean) {
     onappearance({ ...appearance, note: { ...appearance.note, [k]: on } });
   }
+
+  /** 악기별 음량 범위 (dB) */
+  const GAIN_RANGE = 12;
+  const dbText = (db: number) => (db > 0 ? `+${db}` : `${db}`) + " dB";
+  const packChanged = (pack: SoundPackInfo) => pack.instruments.filter((i) => instrumentGains[gainKey(pack.label, i.program)]).length;
 
   let dialog: HTMLDialogElement;
   // svelte-ignore state_referenced_locally
@@ -107,8 +118,39 @@
       {:else if section === "playback"}
         <label class="row" title={t("ui.masterVolume")}>
           <span>{t("ui.masterVolume")}</span>
-          <input type="range" min="0" max="1.5" step="0.05" value={masterVolume} oninput={(e) => onvolume(Number(e.currentTarget.value))} />
+          <input type="range" min="0" max={MASTER_MAX} step="0.05" value={masterVolume} oninput={(e) => onvolume(Number(e.currentTarget.value))} />
         </label>
+        <h3 class="sub">{t("ui.instrumentGains")}</h3>
+        {#if packs.length === 0}
+          <p class="muted help">{t("ui.instrumentGainsNoPack")}</p>
+        {:else}
+          <p class="muted help">{t("ui.instrumentGainsHelp")}</p>
+          {#each packs as pack (pack.id)}
+            <details class="gains" open={packs.length === 1}>
+              <summary>
+                <span class="pack-name">{pack.label}</span>
+                {#if packChanged(pack)}<span class="muted">{t("ui.instrumentGainsChanged", { count: packChanged(pack) })}</span>{/if}
+              </summary>
+              {#each pack.instruments as ins (ins.program)}
+                {@const key = gainKey(pack.label, ins.program)}
+                {@const db = instrumentGains[key] ?? 0}
+                <div class="gain-row">
+                  <span class="gain-name" title={ins.name}>{ins.canonical ? instrumentName(ins.canonical) : ins.name}</span>
+                  <input
+                    type="range"
+                    min={-GAIN_RANGE}
+                    max={GAIN_RANGE}
+                    step="1"
+                    value={db}
+                    aria-label={`${ins.name} ${t("ui.instrumentGains")}`}
+                    oninput={(e) => ongain(key, Number(e.currentTarget.value))}
+                  />
+                  <button class="gain-value" class:changed={db !== 0} title={t("ui.instrumentGainsReset")} disabled={db === 0} onclick={() => ongain(key, 0)}>{dbText(db)}</button>
+                </div>
+              {/each}
+            </details>
+          {/each}
+        {/if}
         <label class="row" title={t("ui.syncOffsetHelp")}>
           <span>{t("ui.syncOffset")}</span>
           <input class="num wide" type="number" step="10" min="-1000" max="1000" value={syncOffsetMs} onchange={(e) => onsync(Number(e.currentTarget.value) || 0)} />
@@ -217,6 +259,54 @@
   dialog[open] {
     display: flex;
     flex-direction: column;
+  }
+  .sub {
+    margin: 14px 0 2px;
+    font-size: 0.9rem;
+  }
+  .gains {
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 4px 8px;
+    margin-top: 6px;
+  }
+  .gains summary {
+    cursor: pointer;
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    padding: 2px 0;
+    font-size: 13px;
+  }
+  .pack-name {
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .gain-row {
+    display: grid;
+    grid-template-columns: minmax(0, 9em) minmax(0, 1fr) 4.5em;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    padding: 2px 0;
+  }
+  .gain-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .gain-row input {
+    width: 100%;
+  }
+  .gain-value {
+    font-size: 11px;
+    padding: 1px 4px;
+    font-variant-numeric: tabular-nums;
+  }
+  .gain-value.changed {
+    color: var(--accent);
   }
   dialog::backdrop {
     background: rgb(0 0 0 / 0.4);

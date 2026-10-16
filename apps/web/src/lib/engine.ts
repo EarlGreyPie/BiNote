@@ -8,6 +8,8 @@ import {
   type LiveSink,
   type SoundPackInfo,
   type Unresolved,
+  type InstrumentGains,
+  type SlotPatch,
 } from "@mmlce/audio/browser";
 import { getProfile, positionToSeconds, type Rat, type Song } from "@mmlce/core";
 import type { WorkletSynthesizer } from "spessasynth_lib";
@@ -24,6 +26,8 @@ const BANK_SELECT = 0;
  */
 /** 재생 채널(16n+9 제외)과 미리듣기 채널 63까지 */
 const MAX_CHANNELS = 64;
+/** 전체 음량 최대 (4배 ≈ +12dB). 사운드팩이 작게 녹음된 경우를 위해 1보다 크게 둔다 */
+export const MASTER_MAX = 4;
 
 /** 오디오가 막 깨어났을 때 첫 음 앞에 두는 여유(초). 그동안 신스가 악기 샘플을 준비한다 */
 const COLD_START_DELAY = 0.4;
@@ -87,7 +91,14 @@ export class Engine {
     // 전체 음량: 신스 → 음량 → 스피커 (미리듣기 대체 소리도 같은 음량을 지난다)
     const master = context.createGain();
     master.gain.value = this.masterVolume;
-    master.connect(context.destination);
+    // 음량을 1보다 크게 올려도 소리가 깨지지 않게 끝에 리미터를 둔다 (평소 크기에서는 거의 손대지 않는다)
+    const limiter = context.createDynamicsCompressor();
+    limiter.threshold.value = -3;
+    limiter.knee.value = 0;
+    limiter.ratio.value = 20;
+    limiter.attack.value = 0.003;
+    limiter.release.value = 0.1;
+    master.connect(limiter).connect(context.destination);
     this.master = master;
     synth.connect(master);
     await synth.isReady;
@@ -101,6 +112,7 @@ export class Engine {
       get currentTime() {
         return context.currentTime;
       },
+      setGain: (channel, gain) => synth.midiChannels[channel]?.setSystemParameter("gain", gain),
       setPatch(channel, bank, program, time) {
         synth.controllerChange(channel, BANK_SELECT, bank, { time });
         synth.programChange(channel, program, { time });
@@ -190,8 +202,9 @@ export class Engine {
     if (cold) await waitForClock(context);
     this.warmed = true;
     const schedule = buildSchedule(song, getProfile(song.meta.profileId), from ? { from } : {});
-    const { patches, unresolved } = assignPatches(schedule, this.registry);
+    const { patches, unresolved } = assignPatches(schedule, this.registry, this.gains);
     this.ensureChannels(Math.max(-1, ...patches.map((p) => p.channel)));
+    this.playingPatches = patches;
     this.player!.start(schedule, patches, { ...(loop ? { loop } : {}), ...(cold ? { delay: COLD_START_DELAY } : {}) });
     this.fromSeconds = from ? positionToSeconds(song.tempo, from) : 0;
     this.startReference();
@@ -205,12 +218,26 @@ export class Engine {
   async wavRequest(song: Song): Promise<{ request: WavRequest; unresolved: Unresolved[] } | undefined> {
     if (this.packFiles.size === 0) return undefined;
     const schedule = buildSchedule(song, getProfile(song.meta.profileId));
-    const { patches, unresolved } = assignPatches(schedule, this.registry);
+    const { patches, unresolved } = assignPatches(schedule, this.registry, this.gains);
     const used = new Set(patches.map((p) => p.packId));
     const packs = await Promise.all(
       [...this.packFiles].filter(([id]) => used.has(id)).map(async ([id, { bank, file }]) => ({ id, bank, bytes: await file.arrayBuffer() })),
     );
     return { request: { schedule, patches, packs }, unresolved };
+  }
+
+  /** 악기별 음량(dB). 설정 창에서 바꾸면 재생 중인 소리에도 바로 적용한다 */
+  private gains: InstrumentGains = {};
+  private playingPatches: readonly SlotPatch[] = [];
+
+  setInstrumentGains(gains: InstrumentGains): void {
+    this.gains = gains;
+    const synth = this.synth;
+    if (!synth) return;
+    for (const p of this.playingPatches) {
+      synth.midiChannels[p.channel]?.setSystemParameter("gain", this.registry.gainOf(p.packId, p.program, gains));
+    }
+    this.previewKey = "";
   }
 
   stop(): void {
@@ -243,6 +270,7 @@ export class Engine {
     if (key !== this.previewKey) {
       synth.controllerChange(ch, BANK_SELECT, patch.bank);
       synth.programChange(ch, patch.program);
+      synth.midiChannels[ch]?.setSystemParameter("gain", this.registry.gainOf(patch.packId, patch.program, this.gains));
       this.previewKey = key;
     }
     synth.noteOn(ch, pitch, velocity);

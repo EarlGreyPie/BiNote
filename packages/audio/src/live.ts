@@ -8,6 +8,8 @@ import { BEND_RANGE, type Schedule } from "./schedule.js";
 export interface LiveSink {
   readonly currentTime: number;
   setPatch(channel: number, bank: number, program: number, time: number): void;
+  /** 채널 음량 배율 (악기별 음량). 시각 없이 바로 바뀐다 */
+  setGain?(channel: number, gain: number): void;
   noteOn(channel: number, note: number, velocity: number, time: number): void;
   noteOff(channel: number, note: number, time: number): void;
   /** 채널 높이를 반음 단위로 옮긴다 (다른 음 붙임). 범위는 BEND_RANGE */
@@ -120,6 +122,7 @@ export class LivePlayer {
     const patchAt = Math.min(this.origin, Math.max(this.sink.currentTime, this.quietAfter + 0.001));
     for (const p of patches) {
       this.sink.setPatch(p.channel, p.bank, p.program, patchAt);
+      this.sink.setGain?.(p.channel, p.gain ?? 1);
       this.sink.setBendRange(p.channel, BEND_RANGE, patchAt);
       this.sink.pitchBend(p.channel, 0, patchAt);
     }

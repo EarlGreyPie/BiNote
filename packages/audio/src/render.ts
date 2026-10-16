@@ -1,7 +1,7 @@
 import { audioToWav, SoundBankLoader, SpessaSynthProcessor, type BasicSoundBank } from "spessasynth_core";
 import { assignPatches, type SlotPatch, type Unresolved } from "./patches.js";
 import { BEND_RANGE, bendValue } from "./schedule.js";
-import type { SoundPackRegistry } from "./registry.js";
+import type { InstrumentGains, SoundPackRegistry } from "./registry.js";
 import type { Schedule } from "./schedule.js";
 
 /** 사운드팩 파일 바이트를 SpessaSynth 사운드뱅크로 읽는다. DLS·SF2 모두 된다 */
@@ -40,8 +40,9 @@ export async function renderOffline(
   registry: SoundPackRegistry,
   packs: readonly LoadedPack[],
   options: RenderOptions = {},
+  gains: InstrumentGains = {},
 ): Promise<RenderResult> {
-  const { patches, unresolved } = assignPatches(schedule, registry);
+  const { patches, unresolved } = assignPatches(schedule, registry, gains);
   return { ...(await renderPatched(schedule, patches, packs, options)), unresolved };
 }
 
@@ -75,6 +76,7 @@ export async function renderPatched(
   for (const p of patches) {
     synth.controllerChange(p.channel, 0, p.bank);
     synth.programChange(p.channel, p.program);
+    synth.midiChannels[p.channel]!.setSystemParameter("gain", p.gain ?? 1);
     setBendRange(synth, p.channel, BEND_RANGE);
   }
 

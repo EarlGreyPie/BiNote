@@ -1,4 +1,4 @@
-import type { SoundPackRegistry } from "./registry.js";
+import type { InstrumentGains, SoundPackRegistry } from "./registry.js";
 import type { Schedule } from "./schedule.js";
 
 /**
@@ -15,6 +15,8 @@ export interface SlotPatch {
   readonly bank: number;
   readonly program: number;
   readonly packId: string;
+  /** 악기별 음량 배율 (설정의 악기별 음량). 없으면 1 */
+  readonly gain?: number;
 }
 
 export interface Unresolved {
@@ -26,6 +28,7 @@ export interface Unresolved {
 export function assignPatches(
   schedule: Schedule,
   registry: SoundPackRegistry,
+  gains: InstrumentGains = {},
 ): { patches: SlotPatch[]; unresolved: Unresolved[] } {
   const patches: SlotPatch[] = [];
   const unresolved: Unresolved[] = [];
@@ -36,7 +39,8 @@ export function assignPatches(
       unresolved.push({ slot: index, instrument: slot.instrument });
       return;
     }
-    patches.push({ slot: index, channel, bank: patch.bank, program: patch.program, packId: patch.packId });
+    const gain = registry.gainOf(patch.packId, patch.program, gains);
+    patches.push({ slot: index, channel, bank: patch.bank, program: patch.program, packId: patch.packId, ...(gain !== 1 ? { gain } : {}) });
   });
   return { patches, unresolved };
 }
