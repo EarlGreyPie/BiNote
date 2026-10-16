@@ -1,5 +1,6 @@
 import { loadStored, saveStored } from "./persist";
 import { describeDiagnostic, hasKey, LOCALES, matchLocale, translate, type Locale, type MessageKey, type Params } from "@mmlce/i18n";
+import { splitPackProgram } from "@mmlce/core";
 
 const STORAGE_KEY = "mmlce.locale";
 
@@ -51,6 +52,9 @@ export function instrumentName(canonical: string): string {
   const key = `inst.${canonical}`;
   if (hasKey(key)) return translate(i18n.locale, key);
   // 팩마다 번호가 다른 악기(기타 30/40 등)는 번호로 보여 준다
+  // 마비꼬 추가 팩 번호(팩 × 512 + 번호)는 마비꼬 화면과 같이 "번호.팩"으로
   const numbered = /^mabi:(\d+)$/.exec(canonical);
-  return numbered ? `#${numbered[1]}` : canonical;
+  if (!numbered) return canonical;
+  const { pack, number } = splitPackProgram(Number(numbered[1]));
+  return pack > 0 ? `#${number}.${pack}` : `#${number}`;
 }

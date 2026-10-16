@@ -5,8 +5,6 @@
   import { guideUrl, REPO_URL } from "./links";
   import { pwa } from "./pwa.svelte";
 
-  /** 공개 사이트면 이 판을 빌드한 커밋의 소스로, 아니면 저장소 첫 화면으로 */
-  const sourceUrl = __MMLCE_BUILD__.published && __MMLCE_BUILD__.commit ? `${REPO_URL}/tree/${__MMLCE_BUILD__.commit}` : REPO_URL;
   import Icon from "./Icon.svelte";
   import PackBar from "./PackBar.svelte";
   import type { MidiKeys } from "./midiKeys.svelte";
@@ -33,6 +31,8 @@
     appearance: Appearance;
     onappearance: (a: Appearance) => void;
     onkeymap: () => void;
+    /** BiNote 정보 창 열기 (업데이트 확인·링크) */
+    onabout: () => void;
     /** 처음 열 항목 (사운드팩 없음 표시를 눌러 열었으면 사운드팩) */
     initial?: Section;
     onclose: () => void;
@@ -58,6 +58,7 @@
     appearance,
     onappearance,
     onkeymap,
+    onabout,
     initial = "packs",
     onclose,
   }: Props = $props();
@@ -188,14 +189,10 @@
     </div>
   </div>
   <p class="about muted">
-    {t("ui.about", { version: __MMLCE_BUILD__.version, commit: __MMLCE_BUILD__.commit || "-", date: new Date(__MMLCE_BUILD__.date).toLocaleString(i18n.locale) })}<br />
-    {t("ui.aboutCredit")} ·
+    {t("ui.about", { version: __MMLCE_BUILD__.version, commit: __MMLCE_BUILD__.commit || "-", date: new Date(__MMLCE_BUILD__.date).toLocaleString(i18n.locale) })}
+    · {t("ui.aboutCredit")} ·
     <a href={guideUrl(i18n.locale)} target="_blank" rel="noopener">{t("ui.helpGuide")}</a> ·
-    <a href={sourceUrl} target="_blank" rel="noopener">{t("ui.aboutSource")}</a> ·
-    <a href="./licenses/GPL-3.0.txt" target="_blank" rel="noopener">GPL-3.0</a> ·
-    <a href="./licenses/third-party.txt" target="_blank" rel="noopener">{t("ui.aboutLicenses")}</a> ·
-    <a href={`${REPO_URL}/issues/new/choose`} target="_blank" rel="noopener">{t("ui.aboutReport")}</a><br />
-    {t("ui.aboutUnofficial")}
+    <button class="link" onclick={onabout}>{t("ui.aboutTitle")}…</button>
   </p>
 </dialog>
 
@@ -281,6 +278,15 @@
   }
   .about a {
     color: var(--accent);
+  }
+  .about .link {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--accent);
+    font: inherit;
+    text-decoration: underline;
+    cursor: pointer;
   }
   .about {
     margin: 12px 0 0;

@@ -230,7 +230,7 @@ export function writeMmi(song: Song): { text: string; diagnostics: FileDiagnosti
       const lead = cmp(earliest, ZERO) < 0 ? earliest : ZERO;
       const shift = (at: Rat) => sub(at, lead);
       const texts = group.map((track) => {
-        // 마비꼬는 4분음표 96칸 격자 밖의 음(불규칙 음표)을 오류로 처리한다고 알려져 있다
+        // 4분음표 96칸 격자 밖의 음(9·7분음표 등). 마비꼬 1.5.12에서 이런 파일도 열리는 것은 확인했고, 위치는 격자로 맞춰질 수 있다
         const offGrid = track.notes.filter((n) => !ratToTick(n.start).exact || !ratToTick(n.dur).exact).length;
         if (offGrid > 0) {
           diagnostics.push({

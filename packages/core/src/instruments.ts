@@ -41,7 +41,21 @@ export function instrumentByName(name: string): InstrumentInfo | undefined {
   return INSTRUMENTS.find((i) => i.aliases.includes(key));
 }
 
-/** 파일에 적힌 악기 번호로 공통 ID를 찾는다. 번호가 겹치지 않는 악기만 */
+/**
+ * 마비꼬는 추가 사운드팩의 악기를 화면에 "번호.팩"(예: 24.2)으로 보이고, 파일에는 팩 × 512 + 번호로 적는다.
+ * 팩 0은 PC 마비노기 기본 음원이다. 실제 파일(1048 = 하프 24.2, 1090 = 북 66.2 등)로 확인한 규칙
+ */
+export const MABIICCO_PACK_STRIDE = 512;
+
+export function splitPackProgram(program: number): { pack: number; number: number } {
+  return { pack: Math.floor(program / MABIICCO_PACK_STRIDE), number: program % MABIICCO_PACK_STRIDE };
+}
+
+/**
+ * 파일에 적힌 악기 번호로 공통 ID를 찾는다. 번호가 겹치지 않는 악기만.
+ * 마비꼬 추가 팩 번호(팩 × 512 + 번호)도 팩 안 번호가 PC 마비노기와 같아서 같은 표로 찾는다
+ */
 export function instrumentByProgram(program: number): InstrumentInfo | undefined {
-  return INSTRUMENTS.find((i) => i.program === program);
+  const { number } = splitPackProgram(program);
+  return INSTRUMENTS.find((i) => i.program === number);
 }

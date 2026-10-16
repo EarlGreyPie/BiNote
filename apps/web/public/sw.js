@@ -1,9 +1,10 @@
 // 오프라인 실행용 서비스 워커. 앱 파일을 처음 받을 때 담아 두고,
 // 연결이 없으면 담아 둔 것을 쓴다. 사운드팩·악보 파일은 사용자가 직접 고르므로 담지 않는다.
-// 빌드할 때 vite 설정(precacheList)이 이 두 줄을 채운다: 빌드마다 바뀌는 캐시 이름과 앱 파일 목록.
+// 빌드할 때 vite 설정(precacheList)이 이 세 줄을 채운다: 빌드마다 바뀌는 캐시 이름, 앱 파일 목록, 판 번호.
 // 소리 엔진·글꼴처럼 나중에 불러오는 파일도 처음 설치할 때 받아 두어, 처음부터 오프라인에서 쓸 수 있게 한다
 const CACHE = "mmlce-dev";
 const PRECACHE = [];
+const VERSION = "dev";
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -17,6 +18,8 @@ self.addEventListener("install", (event) => {
 });
 self.addEventListener("message", (event) => {
   if (event.data === "skip-waiting") self.skipWaiting();
+  // 앱이 받아 둔 새 판의 번호를 물으면 답한다 (정보 창의 "새 판 1.0.1을 받았습니다")
+  if (event.data === "version") event.ports[0]?.postMessage(VERSION);
 });
 self.addEventListener("activate", (event) => {
   event.waitUntil(

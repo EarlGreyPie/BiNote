@@ -1,4 +1,4 @@
-import { add, cmp, toFloat, trackInstrument, type InstrumentRef, type Note, type Song, type Track } from "@mmlce/core";
+import { add, cmp, splitPackProgram, toFloat, trackInstrument, type InstrumentRef, type Note, type Song, type Track } from "@mmlce/core";
 import { GM_DRUM_KEY, gmProgramOf } from "./gm.js";
 import type { Smf, SmfEvent } from "./smf.js";
 
@@ -36,7 +36,8 @@ export function songToSmf(song: Song, ppq = 480, volumeMax = 15, programs: "gm" 
   const plans = units.map(({ player, instrument, tracks: own }, _i, all) => {
     const canonical = instrument.canonical;
     const drumKey = programs === "gm" ? GM_DRUM_KEY[canonical] : undefined;
-    const program = programs === "gm" ? gmProgramOf(canonical) : (instrument.program ?? 0);
+    // 마비노기 번호는 마비꼬 추가 팩 번호(팩 × 512 + 번호)면 팩 안 번호만 쓴다. MIDI 악기 번호는 0~127
+    const program = programs === "gm" ? gmProgramOf(canonical) : splitPackProgram(instrument.program ?? 0).number & 0x7f;
     const several = all.filter((u) => u.player === player).length > 1;
     const notes = own
       .flatMap((t) => soundNotes(t.notes))

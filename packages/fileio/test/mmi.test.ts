@@ -95,4 +95,27 @@ describe("writeMmi 격자 경고", () => {
     const { diagnostics } = writeMmi(a);
     expect(diagnostics).toMatchObject([{ code: "mmi-off-grid", params: { count: 2 } }]);
   });
+
+  it("마비꼬 추가 팩 번호(팩 × 512 + 번호)는 팩 안 번호로 악기를 찾고, 저장할 때 같은 번호로 쓴다", () => {
+    const text = [
+      "[mml-score]",
+      "mml-track=MML@c4,,;",
+      "name=하프",
+      "program=1048",
+      "mml-track=MML@d4,,;",
+      "name=북",
+      "program=1090",
+      "mml-track=MML@e4,,;",
+      "name=기타",
+      "program=1566",
+    ].join("\n");
+    const { song } = readMmi(text);
+    // 24.2 하프, 66.2 북. 30.3은 팩마다 다른 모바일 악기라 번호 그대로 둔다
+    expect(song.players.map((p) => p.instrument)).toEqual([
+      { canonical: "harp", program: 1048 },
+      { canonical: "bass-drum", program: 1090 },
+      { canonical: "mabi:1566", program: 1566 },
+    ]);
+    expect([...writeMmi(song).text.matchAll(/^program=(\d+)$/gm)].map((m) => m[1])).toEqual(["1048", "1090", "1566"]);
+  });
 });

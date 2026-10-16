@@ -111,7 +111,7 @@ These limits are BiNote's current check values, measured on the Korean server (a
 ## 3. A tour of the screen
 
 ```
-┌ Top bar: File · Edit · Song · View · Undo · Play · Volume · MIDI keys · Panel · Guide (?) · Settings ┐
+┌ Top bar: File · Edit · Song · View · Undo · Play · Volume · MIDI keys · Panel · Help (?) · Settings ┐
 ├ Toolbar: Piano roll/Tab · Tools · Grid · New note · Input v · Layer · Zoom · ⋯                 ┤
 ├ Work area: Piano roll (or Tab)  │  Track panel (structure list + MML editor)                  ┤
 └ Status bar: Selected track · Characters · Checks · Sound packs · Help                           ┘
@@ -405,6 +405,8 @@ The song you are editing is kept in this browser automatically (latest 10). Afte
 
 When a new version is out, a "A new version is ready" bar appears. Click **Reload** and BiNote waits for the autosave of your current song to finish, then switches to the new version. If the autosave fails, it does not switch and tells you; in that case save as a project (.mme) and click again. For important work, saving as .mme before clicking is safer. You can also close the notice and keep working.
 
+The app checks for a new version each time it opens, and if it stays open for a long time it checks again at most once an hour when you come back to the window. To check right away, use **?** → **Check for updates** in the top bar.
+
 ---
 
 ## 12. Settings
@@ -418,7 +420,9 @@ When a new version is out, a "A new version is ready" bar appears. Click **Reloa
 | Display | Theme (Follow system · Light · Dark), Accent color, Note look (Rounded corners · Border · Shade by v · Note names when zoomed in), Track colors (By position in score · Hue per score · Saved in file), MML editor text and text size, Language |
 | Shortcuts | Open shortcut settings (Key set: BiNote default / MabiIcco compatible, change keys) |
 
-At the bottom are the version info and links to the guide, Source code, Licenses & notices and Report a problem or translation. You can also open this guide with the **?** button next to Settings (⚙) in the top bar, or from Help in the status bar.
+At the bottom are the version info and links to the guide and **About BiNote**.
+
+The **?** menu next to Settings (⚙) in the top bar has Guide, Shortcuts, Check for updates and About BiNote. The **About BiNote** window shows the version, checks for updates and links to the source code, licenses and problem reports. You can also open this guide from Help in the status bar.
 
 ---
 

@@ -295,6 +295,12 @@ describe("songToSmf", () => {
     expect(parts.map((p) => p.suggestion.canonical)).toEqual(["piano", "violin", "bass-drum"]);
   });
 
+  it("마비노기 번호로 쓸 때 마비꼬 추가 팩 번호(1048 = 24.2)는 팩 안 번호만 쓴다", () => {
+    const s = playerSong(["harp"]);
+    const song = { ...s, players: s.players.map((p) => ({ ...p, instrument: { canonical: "harp", program: 1048 } })) };
+    expect(programs(songToSmf(song, 480, 15, "mabinogi")).map((e) => e.value)).toEqual([24]);
+  });
+
   it("같은 악기 연주자는 채널을 함께 써서 16명이 넘어도 다른 악기와 섞이지 않는다", () => {
     // 겹치는 같은 높이가 없게 연주자마다 다른 음
     const s = playerSong([...Array(16).fill("piano"), "flute"]);

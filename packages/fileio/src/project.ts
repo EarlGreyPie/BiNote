@@ -46,7 +46,7 @@ export type ProjectEditor = Readonly<Record<string, unknown>>;
 
 export interface ProjectWriteOptions {
   readonly editor?: ProjectEditor;
-  /** 저장한 앱 판 (예: "0.1.0 · c51c7ba") */
+  /** 저장한 앱 판 (예: "1.0.0-beta.1 · c51c7ba") */
   readonly app?: string;
   readonly savedAt?: Date;
 }

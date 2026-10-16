@@ -134,6 +134,7 @@
   import PianoRoll from "./lib/PianoRoll.svelte";
   import TabView from "./lib/TabView.svelte";
   import KeymapDialog from "./lib/KeymapDialog.svelte";
+  import AboutDialog from "./lib/AboutDialog.svelte";
   import SplitPanel from "./lib/SplitPanel.svelte";
   import OutputPanel from "./lib/OutputPanel.svelte";
   import OptimizePreview from "./lib/OptimizePreview.svelte";
@@ -246,6 +247,8 @@
   const KEYMAP_STORAGE = "mmlce.keymap";
   let keymap = $state.raw<KeymapSettings>(loadStored(KEYMAP_STORAGE, (raw) => parseSettings(parseJson(raw) ?? null)));
   let showKeymap = $state(false);
+  /** BiNote 정보 창. checkNow면 열자마자 업데이트를 확인한다 */
+  let about = $state<{ checkNow: boolean } | undefined>(undefined);
   const bindings = $derived(resolve(keymap));
   let roll = $state<ReturnType<typeof PianoRoll> | undefined>(undefined);
   let openInput: HTMLInputElement;
@@ -1608,6 +1611,15 @@
     ...LOCALES.map((l) => ({ label: LOCALE_LABELS[l], checked: i18n.locale === l, run: () => setLocale(l) })),
   ]);
 
+  /** 위 띠 ? 메뉴: 가이드북, 단축키, 업데이트 확인, BiNote 정보 */
+  const helpMenu: MenuItem[] = $derived([
+    { label: t("ui.helpGuide"), run: () => window.open(guideUrl(i18n.locale), "_blank", "noopener") },
+    { label: t("ui.keymap") + "…", hint: keyOf("view.keymap"), run: () => (showKeymap = true) },
+    { separator: true },
+    { label: t("ui.updateCheck") + "…", run: () => (about = { checkNow: true }) },
+    { label: t("ui.aboutTitle") + "…", run: () => (about = { checkNow: false }) },
+  ]);
+
   /** 커서(없으면 처음)부터 재생. 반복 구간이 있으면 그 시작부터 끝까지를 끊김 없이 되풀이한다 */
   async function play() {
     if (song) await playback.play(song, cursor, loop);
@@ -2062,9 +2074,17 @@
       settings = undefined;
       showKeymap = true;
     }}
+    onabout={() => {
+      settings = undefined;
+      about = { checkNow: false };
+    }}
     initial={settings.section}
     onclose={() => (settings = undefined)}
   />
+{/if}
+
+{#if about}
+  <AboutDialog checkNow={about.checkNow} beforeUpdate={() => (flushAllEditors(), flushAutosave())} onclose={() => (about = undefined)} />
 {/if}
 
 {#if recoverOpen}
@@ -2142,7 +2162,7 @@
       <Icon name={paneDock === "bottom" ? "panel-bottom" : "panel-right"} />
     </button>
   {/if}
-  <button class="icon" title={t("ui.helpGuide")} aria-label={t("ui.helpGuide")} onclick={() => window.open(guideUrl(i18n.locale), "_blank", "noopener")}><Icon name="help" /></button>
+  <Menu icon="help" title={t("ui.helpTitle")} align="right" items={helpMenu} />
   <button class="icon" title={t("ui.settings")} aria-label={t("ui.settings")} onclick={() => (settings = { section: "packs" })}><Icon name="settings" /></button>
 </header>
 

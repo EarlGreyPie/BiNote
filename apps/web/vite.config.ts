@@ -8,7 +8,7 @@ import { defineConfig, type Plugin } from "vite";
  * 빌드한 파일 목록을 서비스 워커(public/sw.js)에 적어 넣는다. 캐시 이름은 파일 이름(해시)으로 만들어,
  * 새로 배포하면 옛 캐시를 지우고 새 파일을 받는다
  */
-function precacheList(): Plugin {
+function precacheList(info: { version: string }): Plugin {
   let files: string[] = [];
   let outDir = "dist";
   return {
@@ -29,7 +29,8 @@ function precacheList(): Plugin {
       for (const ch of files.sort().join("|")) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
       const sw = readFileSync(path, "utf8")
         .replace('const CACHE = "mmlce-dev";', `const CACHE = "mmlce-${hash.toString(36)}";`)
-        .replace("const PRECACHE = [];", `const PRECACHE = ${JSON.stringify(list)};`);
+        .replace("const PRECACHE = [];", `const PRECACHE = ${JSON.stringify(list)};`)
+        .replace('const VERSION = "dev";', `const VERSION = ${JSON.stringify(info.version)};`);
       writeFileSync(path, sw);
       // 앱 자체 라이선스(GPL-3.0) 본문을 라이선스 고지 옆에 둔다. 정보 화면에서 오프라인으로도 열린다
       copyFileSync(new URL("../../LICENSE", import.meta.url), join(outDir, "licenses", "GPL-3.0.txt"));
@@ -53,9 +54,11 @@ function buildInfo(): { version: string; commit: string; date: string; published
   return { version, commit: commit.slice(0, 7), date: new Date().toISOString(), published: !!process.env.CF_PAGES_COMMIT_SHA };
 }
 
+const build = buildInfo();
+
 export default defineConfig({
-  define: { __MMLCE_BUILD__: JSON.stringify(buildInfo()) },
+  define: { __MMLCE_BUILD__: JSON.stringify(build) },
   // GitHub Pages 등 하위 경로에 올려도 되도록 상대 경로로 만든다
   base: "./",
-  plugins: [svelte(), precacheList()],
+  plugins: [svelte(), precacheList(build)],
 });
