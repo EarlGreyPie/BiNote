@@ -63,7 +63,8 @@ If you were editing a song, a **Recent work** list appears below the buttons. Yo
 **You can edit without a sound pack.** To hear sound, add a sound pack (.dls, .sf2, .sf3). Mabinogi sound packs are Nexon assets and are not included in BiNote, so you need to get one separately.
 
 - To add one: Settings (⚙) → Sound packs → Add sound pack, or click "No sound pack" in the status bar
-- If you add several, **packs higher in the list are used first**. The pack you add first goes on top. There is no button to reorder packs; to change the priority, remove the packs and add them again in the order you want.
+- If you add several, **packs higher in the list are used first**. The pack you add first goes on top. Use the ▲▼ buttons next to a pack to change the order; the order is kept the next time you open the app.
+- Instruments with a MabiIcco `.2`/`.3` suffix (e.g. `#40.3`) always use the pack for that number (`.2` = Furika, `.3` = Harmonic Muse, recognised by file name) regardless of order. Because the same number can be a different instrument in another pack, they are reported as not found if that pack isn't loaded. Named instruments such as the harp fall back to the same instrument in another pack.
 - Added packs are stored in this browser and loaded automatically next time. Files are never sent to a server.
 - If a pack lacks an instrument, BiNote shows "Instruments not found in any sound pack".
 
@@ -428,7 +429,7 @@ The app checks for a new version each time it opens, and if it stays open for a 
 
 | Section | Items |
 |---|---|
-| Sound packs | Add and remove, check priority (list order), storage status |
+| Sound packs | Add and remove, check and change priority (list order), storage status |
 | Playback | Master volume, Light keys while playing, MIDI keys Velocity → v, Display sync, Instrument volumes |
 | Display | Theme (Follow system · Light · Dark), Accent color, Note look (Rounded corners · Border · Shade by v · Note names when zoomed in), Track colors (By position in score · Hue per score · Saved in file), MML editor text and text size, Roll during playback (Turn pages · Scroll continuously) |
 | Saving | Choose a save folder (Chrome and Edge on a PC), Save through the share sheet (iPad and iPhone) |
@@ -498,7 +499,7 @@ While typing in the MML editor, only Ctrl/Alt combinations and F keys work as sh
 ## 15. Frequently asked questions
 
 **There is no sound.**
-Check the status bar to see whether a sound pack is added. If "Instruments not found in any sound pack" appears, add a pack that has that instrument. If another pack's sound is used first, remove the packs and add them again in the order you want. On iPhone and iPad, also check the silent switch.
+Check the status bar to see whether a sound pack is added. If "Instruments not found in any sound pack" appears, add a pack that has that instrument. If another pack's sound is used first, change the order with ▲▼ in the sound pack list in Settings. On iPhone and iPad, also check the silent switch.
 
 **I get an error when I paste into the game.**
 Check the error and warning counts in the Put in game window, then find and fix the spots with Checks in the status bar. Also make sure you pasted only one score at a time.

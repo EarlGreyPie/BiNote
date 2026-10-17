@@ -23,6 +23,7 @@
     stored: ReadonlySet<string>;
     loadingPack: string;
     onremovepack: (id: string) => void;
+    onmovepack: (id: string, step: -1 | 1) => void;
     onaddpack: () => void;
     masterVolume: number;
     onvolume: (v: number) => void;
@@ -53,6 +54,7 @@
     stored,
     loadingPack,
     onremovepack,
+    onmovepack,
     onaddpack,
     masterVolume,
     onvolume,
@@ -115,9 +117,10 @@
     <div class="content">
       {#if section === "packs"}
         <div class="packs-list">
-          <PackBar {packs} {stored} loading={loadingPack} onremove={onremovepack} />
+          <PackBar {packs} {stored} loading={loadingPack} onremove={onremovepack} onmove={onmovepack} />
         </div>
         <button class="primary" onclick={onaddpack}>{t("ui.addPack")}…</button>
+        <p class="muted help">{t("ui.packOrderHelp")}</p>
         <p class="muted help">{t(pwa.storage === "persisted" ? "ui.storagePersisted" : "ui.storageBestEffort")}</p>
       {:else if section === "playback"}
         <label class="row" title={t("ui.masterVolume")}>

@@ -63,6 +63,22 @@ export async function savePack(file: File): Promise<boolean> {
   }
 }
 
+/** 우선순위를 바꾼 순서대로 저장해 다음에 열 때도 같은 순서로 불러온다 */
+export async function savePackOrder(names: readonly string[]): Promise<void> {
+  try {
+    const all = await run<StoredPack[]>("readonly", (s) => s.getAll() as IDBRequest<StoredPack[]>);
+    const base = Date.now();
+    for (const pack of all) {
+      const i = names.indexOf(pack.name);
+      // 목록에 없는 팩은 뒤로
+      const order = base + (i < 0 ? names.length : i);
+      await run("readwrite", (s) => s.put({ ...pack, order } satisfies StoredPack));
+    }
+  } catch {
+    // 무시. 이번 사용에는 지장 없다
+  }
+}
+
 export async function forgetPack(name: string): Promise<void> {
   try {
     await run("readwrite", (s) => s.delete(name));

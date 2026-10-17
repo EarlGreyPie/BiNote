@@ -122,4 +122,24 @@ describe("velocityForVolume", () => {
   it("실측 곡선이면 세기 = v×127/15", () => {
     for (let v = 1; v <= 15; v++) expect(velocityForVolume(MOBILE_PROFILE, v)).toBe(Math.round((v * 127) / 15));
   });
+
+  it("번호로만 아는 악기(#42.3)도 canonicalOf가 알려 준 악기의 음역·샘플 길이로 그린다", () => {
+    const base = emptySong({ title: "", author: "", profileId: "mobile" });
+    const song: Song = {
+      ...base,
+      tempo: [{ at: rat(0), bpm: 120 }],
+      players: [{ id: "p", name: "", instrument: { canonical: `mabi:${3 * 512 + 42}`, program: 3 * 512 + 42 } }],
+      tracks: [{ id: "t", playerId: "p", name: "", color: "", role: "free", mute: false, solo: false, spelling: {},
+        notes: [{ id: "n", start: rat(0), dur: rat(1), pitch: 48, vol: 15, tie: "none" }] }],
+    };
+    const plain = buildSchedule(song, MOBILE_PROFILE);
+    expect(plain.events.find((e) => e.type === "on")?.note).toBe(48);
+    const known = buildSchedule(song, MOBILE_PROFILE, { canonicalOf: () => "cat-harmonica" });
+    const on = known.events.find((e) => e.type === "on")!;
+    const off = known.events.find((e) => e.type === "off")!;
+    expect(on.note).toBe(72);
+    expect(off.time).toBeLessThan(1);
+    // 패치는 원래 번호로 찾는다
+    expect(known.slots[0]).toMatchObject({ instrument: `mabi:${3 * 512 + 42}`, program: 3 * 512 + 42 });
+  });
 });

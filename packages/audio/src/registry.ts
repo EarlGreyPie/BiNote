@@ -1,4 +1,4 @@
-import { instrumentByName } from "@mmlce/core";
+import { instrumentByName, isMabiiccoPack, splitPackProgram } from "@mmlce/core";
 
 /** 사운드팩에서 읽은 악기 하나 */
 export interface PackInstrument {
@@ -33,6 +33,8 @@ export interface ResolvedPatch {
   readonly bank: number;
   readonly program: number;
   readonly name: string;
+  /** 찾은 프리셋을 이름으로 알아본 공통 ID. `mabi:번호`로 찾았어도 음역·샘플 길이를 이걸로 정한다 */
+  readonly canonical?: string;
 }
 
 /** 등록부가 읽어야 하는 사운드뱅크 정보. SpessaSynth의 BasicSoundBank가 이 모양을 갖는다 */
@@ -89,18 +91,36 @@ export class SoundPackRegistry {
   /**
    * 공통 ID(예: "folk-guitar")나 `mabi:번호`를 실제 패치로.
    * `preferPack`을 주면 그 팩을 먼저 본다(트랙별로 팩을 고른 경우).
+   * 마비꼬 추가 팩 번호(팩 × 512 + 번호, 화면의 "40.3", 파일의 1576)는 `mabi:번호`나 `program`에서 팩 번호를 읽는다.
+   * - 그 팩 번호에 맞는 사운드팩(.2 = Furika, .3 = Harmonic Muse)을 올린 순서와 상관없이 먼저 본다.
+   * - 번호로만 찾을 때는 그 팩(또는 `preferPack`) 안에서만 찾는다. 팩마다 같은 번호가 다른 악기일 수 있어서
+   *   (기타가 Fury 30번, Harmonic Muse 40번) 다른 팩의 같은 번호로 넘어가면 다른 악기가 울린다. 없으면 찾지 못한 악기
+   * - 공통 ID(하프 등)는 같은 악기임이 이름으로 확인되므로 그 팩에 없으면 다른 팩에서도 찾는다
    */
   resolve(instrument: string, program?: number, preferPack?: string): ResolvedPatch | undefined {
-    const order = preferPack
-      ? [...this.packs.filter((p) => p.id === preferPack), ...this.packs.filter((p) => p.id !== preferPack)]
-      : this.packs;
     const numbered = /^mabi:(\d+)$/.exec(instrument);
+    const raw = numbered ? Number(numbered[1]) : program;
+    const split = raw === undefined ? undefined : splitPackProgram(raw);
+    const suffix = split?.pack ?? 0;
+    const own = (p: SoundPackInfo) => suffix > 0 && isMabiiccoPack(suffix, p.label);
+    // 번호로 찾아도 되는 팩: 팩 번호가 없으면 모든 팩, 있으면 그 팩과 사용자가 고른 팩만
+    const byNumber = (p: SoundPackInfo) => suffix === 0 || own(p) || p.id === preferPack;
+    const first = (want: (p: SoundPackInfo) => boolean, list: readonly SoundPackInfo[]) => [
+      ...list.filter(want),
+      ...list.filter((p) => !want(p)),
+    ];
+    let order: readonly SoundPackInfo[] = first(own, this.packs);
+    if (preferPack) order = first((p) => p.id === preferPack, order);
     for (const pack of order) {
+      const number = split && byNumber(pack) ? split.number : undefined;
       const found = numbered
-        ? pack.instruments.find((i) => i.program === Number(numbered[1]))
+        ? number === undefined ? undefined : pack.instruments.find((i) => i.program === number)
         : (pack.instruments.find((i) => i.canonical === instrument) ??
-          (program === undefined ? undefined : pack.instruments.find((i) => i.program === program && !i.canonical)));
-      if (found) return { packId: pack.id, bank: pack.bank, program: found.program, name: found.name };
+          (number === undefined ? undefined : pack.instruments.find((i) => i.program === number && !i.canonical)));
+      if (found) {
+        const patch = { packId: pack.id, bank: pack.bank, program: found.program, name: found.name };
+        return found.canonical ? { ...patch, canonical: found.canonical } : patch;
+      }
     }
     return undefined;
   }

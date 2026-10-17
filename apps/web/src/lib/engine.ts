@@ -154,6 +154,9 @@ export class Engine {
     return synth;
   }
 
+  /** 번호로만 아는 악기(#42.3 등)를 지금 올린 팩의 프리셋 이름으로 알아본다. 음역·샘플 길이를 맞추려고 */
+  private canonicalOf = (instrument: string, program: number | undefined) => this.registry.resolve(instrument, program)?.canonical;
+
   /** 올린 사운드팩 파일 (WAV 저장 때 워커에서 다시 읽는다) */
   private packFiles = new Map<string, { bank: number; file: File }>();
 
@@ -168,6 +171,11 @@ export class Engine {
       .filter((p) => p.bankMSB === bank)
       .map((p) => ({ program: p.program, bankMSB: 0, name: p.name }));
     return this.registry.add(id, file.name, { presets });
+  }
+
+  /** 사운드팩 우선순위 바꾸기. 위에 있는 팩이 먼저 쓰인다 */
+  setPackOrder(ids: readonly string[]): void {
+    this.registry.setOrder(ids);
   }
 
   async removePack(id: string): Promise<void> {
@@ -215,7 +223,7 @@ export class Engine {
     await context.resume();
     if (cold) await waitForClock(context);
     this.warmed = true;
-    const schedule = buildSchedule(song, getProfile(song.meta.profileId), from ? { from } : {});
+    const schedule = buildSchedule(song, getProfile(song.meta.profileId), { ...(from ? { from } : {}), canonicalOf: this.canonicalOf });
     const { patches, unresolved } = assignPatches(schedule, this.registry, this.gains);
     this.ensureChannels(Math.max(-1, ...patches.map((p) => p.channel)));
     this.playingPatches = patches;
@@ -231,7 +239,7 @@ export class Engine {
    */
   async wavRequest(song: Song): Promise<{ request: WavRequest; unresolved: Unresolved[] } | undefined> {
     if (this.packFiles.size === 0) return undefined;
-    const schedule = buildSchedule(song, getProfile(song.meta.profileId));
+    const schedule = buildSchedule(song, getProfile(song.meta.profileId), { canonicalOf: this.canonicalOf });
     const { patches, unresolved } = assignPatches(schedule, this.registry, this.gains);
     const used = new Set(patches.map((p) => p.packId));
     const packs = await Promise.all(

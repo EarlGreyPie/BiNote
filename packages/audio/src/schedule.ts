@@ -39,6 +39,11 @@ export interface Schedule {
 export interface ScheduleOptions {
   /** 이 위치부터 재생 (커서 위치부터 재생). 걸쳐 있는 음은 그 위치에서 시작한다 */
   readonly from?: Rat;
+  /**
+   * 트랙 악기의 실제 공통 ID를 알려 준다(보통 사운드팩 등록부). `mabi:1578`(#42.3)처럼 번호로만 아는 악기도
+   * 팩의 프리셋 이름이 냥모니카면 냥모니카 음역·샘플 길이로 그린다. 모르면 undefined
+   */
+  readonly canonicalOf?: (instrument: string, program: number | undefined) => string | undefined;
 }
 
 /**
@@ -82,11 +87,12 @@ export function buildSchedule(song: Song, profile: GameProfile, options: Schedul
   for (const track of song.tracks) {
     if (track.mute || (anySolo && !track.solo)) continue;
     const ref = trackInstrument(song, track);
-    const instrument = ref.canonical;
+    // 패치는 원래 ID·번호(1578 등)로 찾고, 음역·샘플 길이는 실제 악기로 정한다
+    const instrument = options.canonicalOf?.(ref.canonical, ref.program) ?? ref.canonical;
     const range = soundingRangeOf(profile, instrument);
     const key = track.id;
     const slot = slots.length;
-    slots.push(ref.program === undefined ? { key, instrument } : { key, instrument, program: ref.program });
+    slots.push(ref.program === undefined ? { key, instrument: ref.canonical } : { key, instrument: ref.canonical, program: ref.program });
 
     let previousLegato = false;
     // 다른 음 붙임 사슬: 첫 음을 계속 누른 채 높이만 옮긴다. 게임은 붙인 음의 샘플로 바꿔 타되 샘플 안 위치를

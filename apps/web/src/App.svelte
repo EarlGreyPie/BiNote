@@ -113,7 +113,7 @@
   import { loadStored, parseJson, saveStored } from "./lib/persist";
   import { untrack } from "svelte";
   import { clock } from "./lib/time";
-  import { forgetPack, loadPacks, savePack } from "./lib/packStore";
+  import { forgetPack, loadPacks, savePack, savePackOrder } from "./lib/packStore";
   import { fileAccept, hasExtension } from "./lib/fileAccept";
   import { AutosaveQueue, AutosaveTracker } from "./lib/autosave";
   import { booksJob, splitJob, wavJob } from "./lib/jobs";
@@ -1084,6 +1084,18 @@
     }
     loadingPack = "";
     packs = [...engine.registry.list];
+  }
+
+  /** 사운드팩을 한 칸 위(-1)나 아래(+1)로. 저장해 둔 순서도 함께 바꾼다 */
+  function movePack(id: string, step: -1 | 1) {
+    const list = [...engine.registry.list];
+    const i = list.findIndex((p) => p.id === id);
+    const j = i + step;
+    if (i < 0 || j < 0 || j >= list.length) return;
+    [list[i], list[j]] = [list[j]!, list[i]!];
+    engine.setPackOrder(list.map((p) => p.id));
+    packs = [...engine.registry.list];
+    void savePackOrder(packs.map((p) => p.label));
   }
 
   async function removePack(id: string) {
@@ -2312,6 +2324,7 @@
     stored={storedPacks}
     {loadingPack}
     onremovepack={removePack}
+    onmovepack={movePack}
     onaddpack={() => packInput.click()}
     {masterVolume}
     onvolume={setMasterVolume}

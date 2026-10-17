@@ -73,4 +73,41 @@ describe.skipIf(!dir)("실제 사운드팩으로 그리기", () => {
     const result = await renderOffline(buildSchedule(song, MOBILE_PROFILE), registry, [{ id, bank: info.bank, soundBank }], { sampleRate: 22050, tailSeconds: 0.5 });
     expect(Math.max(...result.left.map(Math.abs))).toBeGreaterThan(1e-2);
   });
+
+  it("같은 악기가 든 두 팩을 함께 올려도 섞이지 않고, 고른 팩의 소리가 난다", { timeout: 240_000 }, async () => {
+    const banks = FILES.map(([, file]) => {
+      const bytes = readFileSync(join(dir!, file));
+      return loadSoundBank(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+    });
+    // 팩 하나씩만 올린 것과 두 팩을 함께 올린 것을 같은 곡으로 그려 비교한다
+    const render = async (song: Song, use: readonly number[]) => {
+      const registry = new SoundPackRegistry();
+      const packs: LoadedPack[] = use.map((i) => {
+        const [id, file] = FILES[i]!;
+        const info = registry.add(id, file, banks[i]!);
+        return { id, bank: info.bank, soundBank: banks[i]! };
+      });
+      const result = await renderOffline(buildSchedule(song, MOBILE_PROFILE), registry, packs, { sampleRate: 22050, tailSeconds: 0.5 });
+      expect(result.unresolved).toEqual([]);
+      return result.left;
+    };
+    const same = (a: Float32Array, b: Float32Array) => a.length === b.length && a.every((x, i) => Math.abs(x - b[i]!) < 1e-6);
+    const one = (instrument: string): Song => {
+      const base = testSong();
+      return { ...base, players: [{ ...base.players[0]!, instrument: { canonical: instrument } }], tracks: [base.tracks[0]!] };
+    };
+
+    // 두 팩 모두에 있는 기타(Fury 30번, Harmonic Muse 40번)는 우선순위가 앞인 팩(먼저 올린 팩) 소리.
+    // 두 팩의 피아노는 샘플이 같아 구별되지 않으므로 기타로 본다
+    const guitar = one("folk-guitar");
+    const furyGuitar = await render(guitar, [0]);
+    const museGuitar = await render(guitar, [1]);
+    expect(same(furyGuitar, museGuitar)).toBe(false);
+    expect(same(await render(guitar, [0, 1]), furyGuitar)).toBe(true);
+    expect(same(await render(guitar, [1, 0]), museGuitar)).toBe(true);
+
+    // 40.3은 Fury 팩을 먼저 올려도 Harmonic Muse 팩 40번(기타) 소리
+    expect(same(await render(one(`mabi:${3 * 512 + 40}`), [0, 1]), museGuitar)).toBe(true);
+    expect(Math.max(...museGuitar.map(Math.abs))).toBeGreaterThan(1e-2);
+  });
 });
