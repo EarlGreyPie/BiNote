@@ -108,6 +108,8 @@ describe.skipIf(!dir)("실제 사운드팩으로 그리기", () => {
 
     // 40.3은 Fury 팩을 먼저 올려도 Harmonic Muse 팩 40번(기타) 소리
     expect(same(await render(one(`mabi:${3 * 512 + 40}`), [0, 1]), museGuitar)).toBe(true);
+    // 30.2는 .3 팩을 먼저 올려도 .2 팩 30번(기타) 소리
+    expect(same(await render(one(`mabi:${2 * 512 + 30}`), [1, 0]), furyGuitar)).toBe(true);
     expect(Math.max(...museGuitar.map(Math.abs))).toBeGreaterThan(1e-2);
   });
 });

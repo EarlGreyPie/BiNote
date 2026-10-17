@@ -87,5 +87,8 @@ describe("SoundPackRegistry", () => {
     expect(r.resolve(`mabi:${3 * 512 + 40}`)).toBeUndefined();
     r.add("muse", "Harmonic Muse Pack v0.25.dls", muse);
     expect(r.resolve(`mabi:${3 * 512 + 40}`)).toMatchObject({ packId: "muse" });
+    // 원본 .2 팩 이름도 .2로 본다
+    expect(r.resolve(`mabi:${2 * 512 + 40}`)).toMatchObject({ packId: "fury" });
+    expect(r.resolve(`mabi:${2 * 512 + 42}`)).toBeUndefined();
   });
 });

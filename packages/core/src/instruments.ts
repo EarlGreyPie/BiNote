@@ -52,13 +52,13 @@ export function splitPackProgram(program: number): { pack: number; number: numbe
 }
 
 /**
- * 마비꼬 팩 번호가 가리키는 사운드팩을 파일 이름으로 알아본다. .2 = Furika, .3 = Harmonic Muse.
- * 이름이 비슷한 "Fury Harmonic muse Pack"은 마비꼬에서 .3이 아니므로 뺀다.
+ * 마비꼬 팩 번호(.2·.3)가 가리키는 사운드팩을 파일 이름으로 알아본다.
+ * .2는 원본 팩과 그걸 고친 팩 이름을 모두 받는다. .2 팩 파일 이름에도 .3 팩 이름이 들어 있으므로 .3에서는 뺀다.
  * 모르는 팩 번호면 false
  */
 export function isMabiiccoPack(pack: number, label: string): boolean {
-  if (pack === 2) return /furika/i.test(label);
-  if (pack === 3) return /harmonic\s*muse/i.test(label) && !/fury/i.test(label);
+  if (pack === 2) return /fur(y|ika)/i.test(label);
+  if (pack === 3) return /harmonic\s*muse/i.test(label) && !/fur(y|ika)/i.test(label);
   return false;
 }
 

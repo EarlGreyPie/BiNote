@@ -415,7 +415,7 @@ export const en: Partial<Record<MessageKey, string>> = {
   "ui.remove": "Remove",
   "ui.packUp": "Move up (use first)",
   "ui.packDown": "Move down",
-  "ui.packOrderHelp": "Packs higher in the list are used first. If several packs have the same instrument, the top one plays; use ▲▼ to change the order. Instruments with a MabiIcco .2/.3 suffix (e.g. #40.3) always use the pack for that number (.2 = Furika, .3 = Harmonic Muse) regardless of order, and are reported as not found if that pack isn't loaded. Named instruments such as the harp fall back to the same instrument in another pack.",
+  "ui.packOrderHelp": "Packs higher in the list are used first. If several packs have the same instrument, the top one plays; use ▲▼ to change the order. Instruments written only as a MabiIcco number (e.g. #40.3) are looked up only in the pack matching their .2/.3 suffix, regardless of order, and are reported as not found if that pack isn't loaded. Named instruments such as the harp (24.2) use the matching pack first and fall back to the same instrument in another pack.",
   "ui.allTracks": "All",
   "ui.scoreN": "Score {n}",
   "ui.tabsVertical": "Tabs on side",

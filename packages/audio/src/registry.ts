@@ -92,9 +92,9 @@ export class SoundPackRegistry {
    * 공통 ID(예: "folk-guitar")나 `mabi:번호`를 실제 패치로.
    * `preferPack`을 주면 그 팩을 먼저 본다(트랙별로 팩을 고른 경우).
    * 마비꼬 추가 팩 번호(팩 × 512 + 번호, 화면의 "40.3", 파일의 1576)는 `mabi:번호`나 `program`에서 팩 번호를 읽는다.
-   * - 그 팩 번호에 맞는 사운드팩(.2 = Furika, .3 = Harmonic Muse)을 올린 순서와 상관없이 먼저 본다.
+   * - 그 팩 번호에 맞는 사운드팩(.2·.3)을 올린 순서와 상관없이 먼저 본다.
    * - 번호로만 찾을 때는 그 팩(또는 `preferPack`) 안에서만 찾는다. 팩마다 같은 번호가 다른 악기일 수 있어서
-   *   (기타가 Fury 30번, Harmonic Muse 40번) 다른 팩의 같은 번호로 넘어가면 다른 악기가 울린다. 없으면 찾지 못한 악기
+   *   (같은 기타가 한 팩은 30번, 다른 팩은 40번) 다른 팩의 같은 번호로 넘어가면 다른 악기가 울린다. 없으면 찾지 못한 악기
    * - 공통 ID(하프 등)는 같은 악기임이 이름으로 확인되므로 그 팩에 없으면 다른 팩에서도 찾는다
    */
   resolve(instrument: string, program?: number, preferPack?: string): ResolvedPatch | undefined {

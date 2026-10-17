@@ -64,7 +64,7 @@ If you were editing a song, a **Recent work** list appears below the buttons. Yo
 
 - To add one: Settings (⚙) → Sound packs → Add sound pack, or click "No sound pack" in the status bar
 - If you add several, **packs higher in the list are used first**. The pack you add first goes on top. Use the ▲▼ buttons next to a pack to change the order; the order is kept the next time you open the app.
-- Instruments with a MabiIcco `.2`/`.3` suffix (e.g. `#40.3`) always use the pack for that number (`.2` = Furika, `.3` = Harmonic Muse, recognised by file name) regardless of order. Because the same number can be a different instrument in another pack, they are reported as not found if that pack isn't loaded. Named instruments such as the harp fall back to the same instrument in another pack.
+- Instruments written only as a MabiIcco number (e.g. `#40.3`) are looked up only in the pack matching their `.2`/`.3` suffix (recognised by file name), regardless of order. Because the same number can be a different instrument in another pack, they are reported as not found instead of borrowing another pack's number. Named instruments such as the harp (`24.2`) use the matching pack first and fall back to the same instrument in another pack.
 - Added packs are stored in this browser and loaded automatically next time. Files are never sent to a server.
 - If a pack lacks an instrument, BiNote shows "Instruments not found in any sound pack".
 
