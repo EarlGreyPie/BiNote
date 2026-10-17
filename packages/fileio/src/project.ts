@@ -8,6 +8,7 @@ import {
   type Marker,
   type Note,
   type Player,
+  type PlayerTab,
   type Rat,
   type Song,
   type SourceRef,
@@ -115,6 +116,36 @@ export function writeProject(song: Song, options: ProjectWriteOptions = {}): str
       return `${indent}"notes": [\n${notes.map((n) => inner + JSON.stringify(n)).join(",\n")}\n${indent}]`;
     }) + "\n"
   );
+}
+
+/**
+ * 떼어 낸 악보 표시(splitFrom)는 곡에 있는 다른 악보만 가리키게 한다. 없는 악보·자기 자신·돌고 도는 연결은 지운다
+ * (나중에 같은 id로 만든 새 악보를 원래 악보로 잘못 보고 트랙을 합치지 않게)
+ */
+function cleanSplitFrom(players: Player[]): void {
+  const byId = new Map(players.map((p) => [p.id, p]));
+  const cyclic = (start: Player): boolean => {
+    const seen = new Set<string>([start.id]);
+    for (let at = start.splitFrom; at !== undefined; at = byId.get(at)?.splitFrom) {
+      if (seen.has(at)) return true;
+      seen.add(at);
+    }
+    return false;
+  };
+  const drop = new Set(players.filter((p) => p.splitFrom !== undefined && (!byId.has(p.splitFrom) || p.splitFrom === p.id || cyclic(p))).map((p) => p.id));
+  for (const [i, p] of players.entries()) {
+    if (!drop.has(p.id)) continue;
+    const { splitFrom: _from, ...rest } = p;
+    players[i] = rest;
+  }
+}
+
+/** 악보의 타브 튜닝. 이름은 앱이 다시 검사한다(모르는 이름은 기본 튜닝). 카포는 0~24 정수만 */
+function readTab(raw: unknown): PlayerTab | undefined {
+  if (!isObject(raw) || typeof raw.tuning !== "string" || !raw.tuning) return undefined;
+  const capo = raw.capo;
+  if (typeof capo !== "number" || !Number.isInteger(capo) || capo < 0 || capo > 24) return undefined;
+  return { tuning: raw.tuning, capo };
 }
 
 /** 글이 프로젝트 파일로 보이는지 (확장자가 없거나 다를 때). format 값은 이름이 바뀌어도 "mmlce" 그대로 둔다 */
@@ -242,8 +273,18 @@ function readSong(raw: Obj, diagnostics: FileDiagnostic[]): Song {
     let id = str(p.id);
     if (!id || playerIds.has(id)) id = freshId(`p${i + 1}`, playerIds);
     playerIds.add(id);
-    players.push({ id, name: str(p.name), instrument: readInstrument(p.instrument) ?? { canonical: "piano" } });
+    const splitFrom = str(p.splitFrom);
+    const tab = readTab(p.tab);
+    players.push({
+      id,
+      name: str(p.name),
+      instrument: readInstrument(p.instrument) ?? { canonical: "piano" },
+      ...(splitFrom ? { splitFrom } : {}),
+      ...(tab ? { tab } : {}),
+    });
   }
+
+  cleanSplitFrom(players);
 
   const tracks: Track[] = [];
   const trackIds = new Set<string>();

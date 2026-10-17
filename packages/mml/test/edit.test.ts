@@ -256,4 +256,11 @@ describe("appendSong", () => {
     expect(next.tempo.map((t) => t.bpm)).toEqual([120, 90]);
     expect(history.undo()).toEqual(song);
   });
+  it("떼어 낸 악보 표시도 새 id로 옮기고, 더하는 곡에 없는 악보를 가리키면 버린다 (#96 점검 2번)", () => {
+    const other = base();
+    const p = other.players[0]!;
+    const split = { ...other, players: [p, { ...p, id: "p2", splitFrom: "p1" }, { ...p, id: "p3", splitFrom: "zz" }] };
+    const next = appendSong(split).apply(base());
+    expect(next.players.map((q) => [q.id, q.splitFrom])).toEqual([["p1", undefined], ["p2", undefined], ["p3", "p2"], ["p4", undefined]]);
+  });
 });

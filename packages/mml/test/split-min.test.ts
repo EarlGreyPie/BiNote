@@ -76,9 +76,10 @@ describe("splitSong 꼼꼼히 나누기 (큰 곡 방식)", { timeout: 120_000 },
     // exactBudget 0: 작은 곡이라도 큰 곡처럼 정확한 계산 없이 나눈다
     const s = song(["t120 l8 " + mixedTrack(27, 60), mixedTrack(527, 35)]);
     const profile = { ...MOBILE_PROFILE, charLimitPerScore: 50 };
-    const greedy = splitSong(s, profile, { exactBudget: 0 }).parts.length;
-    const thorough = splitSong(s, profile, { exactBudget: 0, thorough: true });
-    const exact = splitSong(s, profile, { exactBudget: Infinity }).parts.length;
+    // 짧게 넘어가는 음 버리기를 끈다: 버리면 글이 짧아져 가장 멀리 넣기도 3권이 되어 이 사례가 성립하지 않는다
+    const greedy = splitSong(s, profile, { exactBudget: 0, minCarrySec: 0 }).parts.length;
+    const thorough = splitSong(s, profile, { exactBudget: 0, thorough: true, minCarrySec: 0 });
+    const exact = splitSong(s, profile, { exactBudget: Infinity, minCarrySec: 0 }).parts.length;
     expect(greedy).toBe(4);
     expect(thorough.parts.length).toBe(exact);
     expect(exact).toBe(3);

@@ -1,7 +1,7 @@
 import type { Song } from "@mmlce/core";
 import type { ProjectEditor } from "@mmlce/fileio";
 import { GRID_DIVISIONS } from "./keymap";
-import { TUNINGS, type ScoreTuning, type TuningName } from "./tunings";
+import { isTuningName, type ScoreTuning, type TuningName } from "./tunings";
 import { NOTE_LENGTHS, type NoteLength } from "./roll";
 
 /**
@@ -39,7 +39,7 @@ export interface EditorState {
   readonly viewMode?: "roll" | "tab";
   readonly tuning?: TuningName;
   readonly capo?: number;
-  /** 악보(연주자) id → 그 악보의 타브 튜닝. 따로 고른 악보만 적고, 없는 악보는 tuning·capo를 쓴다 */
+  /** 악보(연주자) id → 그 악보의 타브 튜닝. 1.0.0-beta.8 파일만 적었다 (읽기만 한다. 지금은 곡의 Player.tab에 적는다) */
   readonly scoreTunings?: Readonly<Record<string, ScoreTuning>>;
   readonly reference?: ReferenceFit;
   readonly video?: VideoFit;
@@ -51,7 +51,7 @@ type Obj = Record<string, unknown>;
 const isObject = (v: unknown): v is Obj => typeof v === "object" && v !== null && !Array.isArray(v);
 const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 
-const validTuning = (v: unknown): v is TuningName => typeof v === "string" && Object.hasOwn(TUNINGS, v);
+const validTuning = isTuningName;
 const validCapo = (v: unknown): v is number => Number.isInteger(v) && (v as number) >= 0 && (v as number) <= 24;
 
 /** 파일에 적힌 화면 상태를 검사한다. 모르는 값·맞지 않는 값은 버린다 (곡은 그대로 열린다) */

@@ -66,6 +66,24 @@ describe("AutosaveTracker", () => {
     expect(a.dirty("A")).toBe(false);
     expect(a.dirty("B")).toBe(true);
   });
+
+  it("같은 값을 앞서 적은 저장이 끝나도 뒤에 보낸 저장은 적는 중으로 남는다 (beta.8 점검)", () => {
+    const a = new AutosaveTracker<string>();
+    a.reset("open");
+    const first = a.begin("A");
+    const b = a.begin("B");
+    const back = a.begin("A");
+    first(true);
+    // 첫 A가 끝나도 마지막 A는 아직 적는 중이다
+    expect(a.pending).toBe(true);
+    b(true);
+    expect(a.pending).toBe(true);
+    // 기록이 지금 B라도 적는 중인 A가 끝나면 A가 된다: A를 또 보내지 않는다
+    expect(a.dirty("A")).toBe(false);
+    back(true);
+    expect(a.pending).toBe(false);
+    expect(a.dirty("A")).toBe(false);
+  });
 });
 
 describe("AutosaveTracker (곡 + 튜닝 묶음, PR #89 점검 1번)", () => {
@@ -145,5 +163,23 @@ describe("AutosaveQueue", () => {
     finishA(true);
     await Promise.all([a, b]);
     expect(order).toEqual(["A", "B"]);
+  });
+
+  it("적은 상태와 값이 같아도 다른 상태를 적는 중이면 그 저장을 기다린다 (beta.8 점검)", async () => {
+    const tracker = new AutosaveTracker<string>();
+    tracker.reset("open");
+    const q = new AutosaveQueue(tracker);
+    let finishB!: (ok: boolean) => void;
+    await q.flush("A", () => async () => true);
+    const b = q.flush("B", () => () => new Promise<boolean>((r) => (finishB = r)));
+    b.catch(() => {});
+    // 실행 취소로 A: B가 끝나면 기록이 B이므로 A를 다시 보낸다
+    let resent = false;
+    const back = q.flush("A", () => ((resent = true), async () => true));
+    expect(resent).toBe(true);
+    await Promise.resolve();
+    finishB(true);
+    await expect(back).resolves.toBeUndefined();
+    expect(tracker.dirty("A")).toBe(false);
   });
 });

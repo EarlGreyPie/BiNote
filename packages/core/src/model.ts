@@ -33,6 +33,19 @@ export interface Player {
   readonly id: string;
   readonly name: string;
   readonly instrument: InstrumentRef;
+  /**
+   * 오르골·축음기 악보에서 다른 악기 트랙을 떼어 내 만든 악보면 원래 악보 id.
+   * 원래 악보를 다시 보통 악기로 바꾸면 이 악보 트랙을 원래 악보로 돌려보낸다
+   */
+  readonly splitFrom?: string;
+  /** 이 악보에 고른 타브 보기 튜닝(앱이 아는 이름)과 카포. 없으면 앱 기본 튜닝. 실행 취소·다시 실행을 곡과 함께 따른다 */
+  readonly tab?: PlayerTab;
+}
+
+/** 악보 하나의 타브 튜닝 이름과 카포 (0~24) */
+export interface PlayerTab {
+  readonly tuning: string;
+  readonly capo: number;
 }
 
 export interface Note {

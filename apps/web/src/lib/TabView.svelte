@@ -144,8 +144,9 @@
     else onedit?.(edit.changes, label);
   }
 
-  function enterFret(fret: number) {
-    if (!cursor || !activeTrackId || fret > tuning.maxFret || cursor.string > tuning.strings.length) return;
+  /** 커서 자리에 프렛 음을 넣는다. 넣지 못했으면(한도 거절 등) false */
+  function enterFret(fret: number): boolean {
+    if (!cursor || !activeTrackId || fret > tuning.maxFret || cursor.string > tuning.strings.length) return false;
     const pitch = tuning.strings[cursor.string - 1]! + tuning.capo + fret;
     // 트랙 수 한도는 음소거한 트랙도 센다 (타브에는 안 보여도 악보 자리는 차지한다)
     const scoreTracks = song.tracks.filter((t) => t.playerId === player).length;
@@ -153,10 +154,11 @@
     const edit = placeTabNote(song, tracks.map((t) => t.id), activeTrackId, cursor.at, noteDur ?? rat(1, division), pitch, noteAtCursor(), volume, room);
     if (edit.full) {
       apply(edit, "타브 입력");
-      return;
+      return false;
     }
     apply(edit, "타브 입력", cursor.string);
     onpreview?.(pitch);
+    return true;
   }
 
   // 두 손가락 집기(아이패드 등): 가로로 벌리면 확대·축소, 가운데를 따라 옮긴다
@@ -270,8 +272,8 @@
   });
 
   function padFret(fret: number) {
-    enterFret(fret);
-    if (padAdvance && !padChord) moveCursor("right");
+    // 한도로 거절된 음이면 커서를 그 자리에 둔다
+    if (enterFret(fret) && padAdvance && !padChord) moveCursor("right");
   }
 
   function onkeydown(e: KeyboardEvent) {

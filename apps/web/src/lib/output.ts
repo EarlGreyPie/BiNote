@@ -23,6 +23,8 @@ export interface OutputRow {
   readonly asIs: readonly string[];
   /** 붙여넣을 글 뒤에 붙은, 소리 내지 않는 트랙 수 (오르골·축음기 악보 길이·템포 맞추기) */
   readonly silent: number;
+  /** 붙여넣을 글에 든 소리 없는 트랙 중 글자 수 한도를 넘는 트랙 이름 (그 트랙도 게임 입력 한도를 넘는다) */
+  readonly silentOver: readonly string[];
   /** 음을 쪼갤 수 없어 뒤쪽 음 경계로 옮겨 쓴 템포 수 */
   readonly moved: number;
 }
@@ -58,7 +60,10 @@ export function outputRows(
   const byTrack = new Map<string, { level: string; code: string }[]>();
   for (const a of diagnostics.tracks) byTrack.set(a.track.id, [...a.diagnostics]);
   for (const d of diagnostics.song) if (d.trackId) byTrack.get(d.trackId)?.push(d);
-  return gameScores(song, (id) => maxChordsOf(profile, instrumentOf(id)), profile.maxChordsPerPlayer).map((score, k) => {
+  const scores = gameScores(song, (id) => maxChordsOf(profile, instrumentOf(id)), profile.maxChordsPerPlayer);
+  // 트랙마다 쓴 글 (소리 없는 자리에 붙인 트랙은 그 트랙의 악보에서 쓴 글 그대로)
+  const written = new Map(scores.flatMap((s) => s.texts.map((x) => [x.trackId, x.text] as const)));
+  return scores.map((score, k) => {
     const list = score.trackIds.flatMap((id) => byTrack.get(id) ?? []).filter((d) => !SHOWN_ELSEWHERE.has(d.code));
     const tracks = score.texts.map(({ trackId, text }) => ({
       trackId,
@@ -66,6 +71,9 @@ export function outputRows(
       count: text.length,
       over: text.length > limit,
     }));
+    const silentOver = score.pasted
+      .filter((id): id is string => id !== null && !score.trackIds.includes(id) && (written.get(id)?.length ?? 0) > limit)
+      .map((id) => song.tracks.find((t) => t.id === id)?.name ?? id);
     return {
       number: k + 1,
       playerId: score.playerId,
@@ -74,12 +82,13 @@ export function outputRows(
       maxChords: maxChordsOf(profile, instrumentOf(score.playerId)),
       tracks,
       text: score.text,
-      over: tracks.some((t) => t.over),
+      over: tracks.some((t) => t.over) || silentOver.length > 0,
       fold: list.filter((d) => d.code === "pitch-fold").length,
       errors: list.filter((d) => d.level === "error").length,
       warnings: list.filter((d) => d.level === "warning" && d.code !== "pitch-fold").length,
       asIs: score.asIs,
       silent: score.pasted.filter((id) => id !== null && !score.trackIds.includes(id)).length,
+      silentOver,
       moved: score.moved.length,
     };
   });

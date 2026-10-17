@@ -1,4 +1,4 @@
-import { add, cmp, DEFAULT_BPM, eq, maxChordsOf, normalizeTempo, rat, sub, ZERO, type GameProfile, type Rat, type Song, type TempoEvent } from "@mmlce/core";
+import { add, cmp, DEFAULT_BPM, eq, maxChordsOf, normalizeTempo, positionToSeconds, rat, sub, ZERO, type GameProfile, type Rat, type Song, type TempoEvent } from "@mmlce/core";
 import { scoreChunks } from "./clipboard.js";
 import { optimizeMml } from "./optimizer.js";
 import { printMml, restText, type PrintableNote } from "./printer.js";
@@ -24,6 +24,8 @@ import { audibleTempo } from "./tempo-text.js";
  * 권 사이 지연: 악보책은 다음 권으로 넘어갈 때 scoreBookGapMs(실측 1010ms)만큼 늦게 시작한다.
  * 그래서 앞 권을 자르는 자리보다 그만큼 일찍 끝내 박자를 맞추고(trim), 자를 자리는 그 구간에서
  * 울리는 음이 가장 적은 곳으로 고른다. 쉼표가 있으면 잃는 게 없고, 없으면 걸친 음 끝이 짧아진다.
+ * 자르는 자리에 걸친 음은 다음 권 첫머리에서 다시 치는데, 다음 권으로 넘어가는 부분이 아주 짧으면(MIN_CARRY_SEC 미만)
+ * 다시 치면 "툭" 하고만 나므로 넘기지 않고 버린다 (이런 음도 cut에 든다: 자르는 자리에 걸친 음).
  */
 export interface SplitOptions {
   /** 한도 안에 들어가는 가장 먼 자리에서 이 비율만큼 앞까지를 자를 후보로 본다 */
@@ -39,6 +41,8 @@ export interface SplitOptions {
   readonly thorough?: boolean;
   /** 정확한 최소 권 수를 계산할 곡 크기 (어림 비용). 시험용, 보통은 생략 */
   readonly exactBudget?: number;
+  /** 다음 권으로 넘겨 다시 칠 가장 짧은 길이(초). 이보다 짧게 넘어가는 음은 버린다. 생략하면 MIN_CARRY_SEC, 0이면 늘 다시 친다 */
+  readonly minCarrySec?: number;
   /** 권 하나를 정할 때마다 곡 어디까지 왔는지 (0~1) */
   readonly onProgress?: (fraction: number) => void;
 }
@@ -68,6 +72,7 @@ export function splitSong(song: Song, profile: GameProfile, options: SplitOption
   const limit = profile.charLimitPerScore;
   const window = options.window ?? 0.25;
   const gapMs = options.gapMs === undefined ? profile.scoreBookGapMs : options.gapMs;
+  const minCarry = options.minCarrySec ?? MIN_CARRY_SEC;
   const tracks = song.tracks.map((t) => [...t.notes].sort((a, b) => cmp(a.start, b.start)));
   // 들리지 않는 같은 빠르기 템포는 쓰지 않는다
   const tempo = audibleTempo(song.tempo);
@@ -98,7 +103,7 @@ export function splitSong(song: Song, profile: GameProfile, options: SplitOption
   const part = (start: Rat, end: Rat, quick = false, verify = false) => {
     const trim = cmp(end, songEnd) < 0 ? gapAt(tempo, end, gapMs, start) : ZERO;
     const until = sub(end, trim);
-    return { trim, until, ...render(song, scores, tracks, tempo, start, until, quick, cmp(end, songEnd) < 0, verify) };
+    return { trim, until, ...render(song, scores, tracks, tempo, start, until, quick, cmp(end, songEnd) < 0, verify, minCarry) };
   };
   // 실제로 내보낼 글(앞당김·끝 쉼표 포함)로 한도를 검사한다. 단순 출력이 들어가면 최적화 출력도 들어간다.
   // 같은 구간을 여러 번 묻게 되므로(최소 권 수 계산 + 자리 고르기) 결과를 기억해 둔다
@@ -411,8 +416,12 @@ function render(
   quick = false,
   padEnd = false,
   verify = false,
+  minCarry = 0,
 ): { texts: { trackId: string; text: string }[]; moved: number; lossy: string[] } {
-  const chunks = tracks.map((notes) => clip(notes, start, end));
+  // 앞 권에서 넘어온 음의 남은 부분이 아주 짧으면 다시 치지 않는다 (곡 처음부터 쓰는 권은 넘어온 음이 없다)
+  const shortCarry = (n: PrintableNote, noteEnd: Rat) =>
+    n.tie !== "next" && positionToSeconds(tempo, noteEnd) - positionToSeconds(tempo, start) < minCarry - 1e-9;
+  const chunks = tracks.map((notes) => clip(notes, start, end, minCarry > 0 && cmp(start, ZERO) > 0 ? shortCarry : undefined));
   const moves: TempoMove[] = [];
   const lossy: string[] = [];
   const local = tempoIn(tempo, start, end);
@@ -476,11 +485,13 @@ function scoreIndexes(song: Song, maxChords: number | ((playerId: string) => num
   return rest.length > 0 ? [...out, rest] : out;
 }
 
-function clip(notes: readonly PrintableNote[], start: Rat, end: Rat): PrintableNote[] {
+/** [start, end)에 드는 음. drop은 start 앞에서 넘어온 음 중 버릴 음 (&로 이어지는 음은 버리지 않는다) */
+function clip(notes: readonly PrintableNote[], start: Rat, end: Rat, drop?: (n: PrintableNote, noteEnd: Rat) => boolean): PrintableNote[] {
   const out: PrintableNote[] = [];
   for (const n of notes) {
     const noteEnd = add(n.start, n.dur);
     if (cmp(noteEnd, start) <= 0 || cmp(n.start, end) >= 0) continue;
+    if (drop && cmp(n.start, start) < 0 && drop(n, noteEnd)) continue;
     const s = max(n.start, start);
     const e = min(noteEnd, end);
     // 끝에서 잘린 음, 또는 이어질 음이 다음 권에 있는 음은 & 를 풀어 준다
@@ -506,6 +517,11 @@ function tempoIn(tempo: readonly TempoEvent[], start: Rat, end: Rat): TempoEvent
  * 빠지지 않더라도 어긋남이 가장 작도록 가장 짧은 쉼표로 쓴다
  */
 export const THROWAWAY_REST = "r64";
+/**
+ * 다음 권으로 넘겨 다시 칠 만한 가장 짧은 길이(초). 이보다 짧게 남은 음은 다시 치면 끝 소리(실측 약 0.15초)만
+ * 들려 "툭" 하므로 넘기지 않는다
+ */
+export const MIN_CARRY_SEC = 0.15;
 /** 이분 탐색 뒤에 더 훑어볼 후보 수 */
 const LOOK_PAST = 32;
 /** 정확한 최소 권 수를 구할 때 그려 볼 구간 수의 어림 상한 (후보 수² ÷ 권 수) */

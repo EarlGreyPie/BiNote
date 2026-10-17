@@ -36,6 +36,17 @@ describe("outputRows", () => {
     expect(rows.map((r) => r.number)).toEqual([1, 2, 3]);
     expect(rows.slice(1).every((r) => r.instrument === "music-box" && !r.over)).toBe(true);
   });
+
+  it("소리 없는 자리에 붙인 트랙이 글자 수를 넘으면 그 악보도 넘침으로 알린다 (beta.8 점검)", () => {
+    const profile = { ...MOBILE_PROFILE, charLimitPerScore: 20 };
+    const long = "cdefgab>cdefgab>cdefgab";
+    const s = song(["x", "y", "z", "w"].map((id, k) => track(id, "p2", k === 0 ? long : "c4")));
+    const rows = outputRows(s, profile, analyzeSong(s, profile));
+    expect(rows.map((r) => [r.over, r.silentOver])).toEqual([
+      [true, []],
+      [true, ["x"]],
+    ]);
+  });
 });
 
 describe("tempoAdvice", () => {

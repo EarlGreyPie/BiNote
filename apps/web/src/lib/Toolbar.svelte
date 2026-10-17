@@ -2,6 +2,9 @@
   /** 롤에 그릴 트랙: 고른 트랙만 / 고른 트랙의 악보 / 곡 전체 */
   export type RollLayer = "track" | "score" | "all";
 
+  /** 카포 0~24 (파일에 적을 수 있는 범위와 같다) */
+  const CAPOS = Array.from({ length: 25 }, (_, c) => c);
+
   function lengthLabel(l: NoteLength): string {
     if (l === "grid") return t("ui.noteLengthGrid");
     return ["12", "24", "48"].includes(l) ? t("ui.noteLengthTriplet", { n: l }) : `l${l}`;
@@ -244,7 +247,7 @@
     <label class="field">
       <span class="muted">{t("ui.capo")}</span>
       <select value={capo} onchange={(e) => oncapo(Number(e.currentTarget.value))}>
-        {#each [0, 1, 2, 3, 4, 5, 6, 7] as c (c)}<option value={c}>{c}</option>{/each}
+        {#each CAPOS as c (c)}<option value={c}>{c}</option>{/each}
       </select>
     </label>
     <label class="field">

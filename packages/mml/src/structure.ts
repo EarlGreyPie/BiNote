@@ -1,4 +1,4 @@
-import { add, cmp, div, emptySong, fitNotes, INSTRUMENTS, tieChains, removeNotes, replaceNotes, meterGrid, rat, sub, ZERO, type Command, type InstrumentRef, type Note, type Player, type Rat, type Song, type Track, type TrackRole } from "@mmlce/core";
+import { add, cmp, div, emptySong, fitNotes, INSTRUMENTS, tieChains, removeNotes, replaceNotes, meterGrid, trackInstrument, rat, sub, ZERO, type Command, type InstrumentRef, type Note, type Player, type PlayerTab, type Rat, type Song, type Track, type TrackRole } from "@mmlce/core";
 
 /** 트랙 색 (3MLE·마비꼬와 비슷한 6색을 차례로) */
 const TRACK_COLORS = ["#4f8cff", "#ff7a59", "#2bb673", "#b061ff", "#f2b705", "#00b8d9"];
@@ -11,6 +11,20 @@ function nextId(prefix: string, used: readonly string[]): string {
     if (m) max = Math.max(max, Number(m[1]));
   }
   return `${prefix}${max + 1}`;
+}
+
+/**
+ * 트랙이 다 빠진 연주자를 지운다. 지운 악보를 원래 악보(splitFrom)로 가리키던 악보는 그 연결을 지운다
+ * (나중에 같은 id로 만든 새 악보를 원래 악보로 잘못 보지 않게)
+ */
+function dropEmptyPlayer(song: Song, tracks: readonly Track[], playerId: string): readonly Player[] {
+  if (tracks.some((t) => t.playerId === playerId)) return song.players;
+  return song.players.filter((p) => p.id !== playerId).map((p) => (p.splitFrom === playerId ? withoutSplitFrom(p) : p));
+}
+
+function withoutSplitFrom(player: Player): Player {
+  const { splitFrom: _from, ...rest } = player;
+  return rest;
 }
 
 function sameInstrument(a: Player["instrument"], b: Player["instrument"]): boolean {
@@ -91,8 +105,22 @@ export function setPlayerInstrument(
         p.id !== playerId ? p : { ...p, instrument: instrumentRef(canonical), name: names && p.name === names.from ? names.to : p.name },
       ),
     };
-    return split ? splitSoloTracks(next, playerId, split) : next;
+    if (!split) return next;
+    return split.solo(canonical) ? splitSoloTracks(next, playerId, split) : mergeSplitBack(next, playerId, split);
   });
+}
+
+/**
+ * 원래 악보로 돌아갈 수 있는데 한도 때문에 남은 악보와 트랙 수 (돌려보내기 뒤의 곡으로 센다).
+ * owner를 보통 악기로 바꾼 뒤에 부른다
+ */
+export function blockedSplitBack(song: Song, playerId: string, split: SoloSplit): { playerId: string; tracks: number }[] {
+  const owner = song.players.find((p) => p.id === playerId);
+  if (!owner || split.solo(owner.instrument.canonical)) return [];
+  return song.players
+    .filter((p) => p.splitFrom === playerId)
+    .map((p) => ({ playerId: p.id, tracks: song.tracks.filter((t) => t.playerId === p.id && !split.solo(trackInstrument(song, t).canonical)).length }))
+    .filter((b) => b.tracks > 0);
 }
 
 /** 장식품 악기 악보를 정리할 때 쓰는 정보 */
@@ -101,6 +129,45 @@ export interface SoloSplit {
   readonly solo: (canonical: string) => boolean;
   /** 떼어 낸 트랙을 담을 새 악보 이름. 그 순간의 곡을 보고 번호를 붙인다 */
   readonly name: (song: Song, canonical: string) => string;
+  /** 게임 악보 하나의 트랙 한도 (profile.maxChordsPerPlayer). 돌려보낼 때 넘지 않게 */
+  readonly limit: number;
+}
+
+/**
+ * 오르골·축음기 악보를 다시 보통 악기로 바꿨을 때, 그 악보에서 떼어 냈던 악보(splitFrom)의 트랙을 원래 악보 끝으로 돌려보낸다.
+ * 트랙은 쓰던 악기를 트랙 악기로 가져가고(악보 악기와 같으면 지운다), 한도를 넘으면 그 악보는 그대로 둔다.
+ * 실제로 치는 악기가 장식품(오르골·축음기)인 트랙은 보통 악보에 둘 수 없으므로 돌려보내지 않는다.
+ * 다 돌려보낸 악보는 트랙이 없어져 지워지고(moveTrack), 그 악보에서 다시 떼어 냈던 악보(A→B→C의 C)는
+ * 이제 A에서 떼어 낸 악보가 되어 같은 번에 차례로 돌려보낸다. 남은 악보(B)에서 떼어 낸 악보는 B를 따라 남는다
+ */
+export function mergeSplitBack(song: Song, playerId: string, split: SoloSplit): Song {
+  const owner = song.players.find((p) => p.id === playerId);
+  if (!owner || split.solo(owner.instrument.canonical)) return song;
+  const childrenOf = (id: string) => song.players.filter((p) => p.splitFrom === id && p.id !== playerId).map((p) => p.id);
+  const queue = childrenOf(playerId);
+  const seen = new Set<string>([playerId, ...queue]);
+  /** 원래 악보가 다 돌아가 지워져, 이제 owner에서 떼어 낸 악보로 이어 받은 악보 */
+  const adopted: string[] = [];
+  let next = song;
+  for (let id = queue.shift(); id !== undefined; id = queue.shift()) {
+    const ids = next.tracks.filter((t) => t.playerId === id && !split.solo(trackInstrument(next, t).canonical)).map((t) => t.id);
+    if (ids.length > 0 && tracksOf(next, playerId).length + ids.length <= split.limit)
+      for (const t of ids) next = moveTrack(t, playerId, Number.MAX_SAFE_INTEGER).apply(next);
+    if (next.players.some((p) => p.id === id)) continue;
+    for (const child of childrenOf(id)) {
+      if (seen.has(child)) continue;
+      seen.add(child);
+      adopted.push(child);
+      queue.push(child);
+    }
+  }
+  if (next === song) return song;
+  return {
+    ...next,
+    // 지워진 악보를 가리키던 연결은 moveTrack이 지우므로, 이어 받은 악보는 owner를 가리키게 다시 적는다
+    players: next.players.map((p) => (adopted.includes(p.id) ? { ...p, splitFrom: playerId } : p)),
+    tracks: next.tracks.map((t) => (t.playerId === playerId && t.instrument && sameInstrument(t.instrument, owner.instrument) ? withoutInstrument(t) : t)),
+  };
 }
 
 function withoutInstrument(track: Track): Track {
@@ -135,7 +202,7 @@ export function splitSoloTracks(song: Song, playerId: string, split: SoloSplit):
   for (const list of buckets.values()) {
     const instrument = list[0]!.instrument!;
     const id = nextId("p", next.players.map((p) => p.id));
-    next = { ...next, players: [...next.players, { id, name: split.name(next, instrument.canonical), instrument }] };
+    next = { ...next, players: [...next.players, { id, name: split.name(next, instrument.canonical), instrument, splitFrom: playerId }] };
     list.forEach((t, i) => (next = moveTrack(t.id, id, i).apply(next)));
     next = { ...next, tracks: next.tracks.map((t) => (t.playerId === id && t.instrument && sameInstrument(t.instrument, instrument) ? withoutInstrument(t) : t)) };
   }
@@ -188,7 +255,7 @@ export function removeTrack(trackId: string, label = "트랙 지우기"): Comman
     const track = song.tracks.find((t) => t.id === trackId);
     if (!track) return song;
     const tracks = song.tracks.filter((t) => t.id !== trackId);
-    const players = tracks.some((t) => t.playerId === track.playerId) ? song.players : song.players.filter((p) => p.id !== track.playerId);
+    const players = dropEmptyPlayer(song, tracks, track.playerId);
     return { ...song, tracks, players };
   });
 }
@@ -238,7 +305,7 @@ export function moveTrack(trackId: string, playerId: string, index: number, labe
     // 제자리면 곡을 그대로 돌려준다 (실행 취소 기록에 빈 단계가 안 생기게)
     if (track.playerId === playerId && song.tracks.indexOf(track) === pos) return song;
     const tracks = [...rest.slice(0, pos), moved, ...rest.slice(pos)];
-    const players = tracks.some((t) => t.playerId === track.playerId) ? song.players : song.players.filter((p) => p.id !== track.playerId);
+    const players = dropEmptyPlayer(song, tracks, track.playerId);
     return { ...song, tracks, players };
   });
 }
@@ -375,6 +442,15 @@ export function renamePlayer(playerId: string, name: string, label = "악보 이
   return replaceWith(label, (song) =>
     name.trim() === "" ? song : { ...song, players: song.players.map((p) => (p.id === playerId ? { ...p, name: name.trim() } : p)) },
   );
+}
+
+/** 악보의 타브 튜닝·카포를 정한다 (실행 취소 한 칸). 같은 값이면 곡을 그대로 돌려준다 */
+export function setPlayerTab(playerId: string, tab: PlayerTab, label = "튜닝"): Command {
+  return replaceWith(label, (song) => {
+    const player = song.players.find((p) => p.id === playerId);
+    if (!player || (player.tab?.tuning === tab.tuning && player.tab.capo === tab.capo)) return song;
+    return { ...song, players: song.players.map((p) => (p === player ? { ...p, tab: { tuning: tab.tuning, capo: tab.capo } } : p)) };
+  });
 }
 
 /**

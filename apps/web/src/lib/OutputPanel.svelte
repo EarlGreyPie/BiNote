@@ -106,6 +106,7 @@
             </button>
           {/each}
         </div>
+        {#if row.silentOver.length > 0}<p class="muted note">{t("ui.outputSilentOver", { names: row.silentOver.join(", "), limit })}</p>{/if}
         {#if row.asIs.length > 0}<p class="muted note">{t("ui.outputAsIs")}</p>{/if}
         {#if row.moved > 0}<p class="muted note">{t("ui.outputTempoMoved", { count: row.moved })}</p>{/if}
       </li>

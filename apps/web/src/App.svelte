@@ -65,6 +65,7 @@
     duplicateTrack,
     moveTrack,
     moveTrackToNewPlayer,
+    blockedSplitBack,
     duplicateTrackToNewPlayer,
     shiftTrack,
     trackMoveBlock,
@@ -78,8 +79,10 @@
     moveTempo,
     setTempos,
     fillScoreTempo,
+    keepScoreTempo,
     scoresMissingTempo,
     setPlayerInstrument,
+    setPlayerTab,
     setTrackInstrument,
     type SoloSplit,
     setTrackRole,
@@ -137,7 +140,7 @@
   import VoiceDialog, { parseVoicePrefs, VOICE_STORAGE, type VoiceMode, type VoiceOptions, type VoicePreview } from "./lib/VoiceDialog.svelte";
   import TransposeDialog, { type TransposeCheck, type TransposeScope } from "./lib/TransposeDialog.svelte";
   import { Playback } from "./lib/playback.svelte";
-  import { TUNINGS, type ScoreTuning, type TuningName } from "./lib/tunings";
+  import { TUNINGS, isTuningName, type ScoreTuning, type TuningName } from "./lib/tunings";
   import PianoRoll from "./lib/PianoRoll.svelte";
   import TabView from "./lib/TabView.svelte";
   import KeymapDialog from "./lib/KeymapDialog.svelte";
@@ -246,8 +249,6 @@
   let addScoreOpen = $state(false);
   let tuningName = $state<TuningName>("standard");
   let capo = $state(0);
-  /** 악보(연주자)마다 고른 타브 튜닝. 고르지 않은 악보는 tuningName·capo를 쓴다 */
-  let scoreTunings = $state.raw<Readonly<Record<string, ScoreTuning>>>({});
   let unplayable = $state(0);
   /** 배경 영상은 사용자가 고른 로컬 파일만 쓴다 */
   let video = $state<BackgroundVideo | undefined>(undefined);
@@ -385,7 +386,11 @@
   });
   /** 고른 트랙의 악보. 타브 튜닝은 이 악보 것을 보이고 바꾼다 */
   const tabScore = $derived(song?.tracks.find((t) => t.id === activeTrackId)?.playerId);
-  const scoreTuning = $derived<ScoreTuning>((tabScore !== undefined && Object.hasOwn(scoreTunings, tabScore) ? scoreTunings[tabScore] : undefined) ?? { tuning: tuningName, capo });
+  // 악보마다 고른 튜닝은 곡의 악보(Player.tab)에 있어 실행 취소·다시 실행을 곡과 함께 따른다. 고르지 않은 악보는 tuningName·capo
+  const scoreTuning = $derived.by<ScoreTuning>(() => {
+    const tab = song?.players.find((p) => p.id === tabScore)?.tab;
+    return tab && isTuningName(tab.tuning) ? { tuning: tab.tuning, capo: tab.capo } : { tuning: tuningName, capo };
+  });
   const tuning = $derived<TabTuning>({ ...STANDARD_TUNING, strings: TUNINGS[scoreTuning.tuning].strings, capo: scoreTuning.capo });
   function setScoreTuning(change: Partial<ScoreTuning>) {
     if (tabScore === undefined) {
@@ -393,7 +398,7 @@
       if (change.capo !== undefined) capo = change.capo;
       return;
     }
-    scoreTunings = { ...scoreTunings, [tabScore]: { ...scoreTuning, ...change } };
+    if (history) runIfChanged(setPlayerTab(tabScore, { ...scoreTuning, ...change }, t("ui.tuning")));
   }
 
 
@@ -705,9 +710,16 @@
     if (state.division) division = state.division;
     noteLength = state.noteLength ?? "grid";
     if (state.viewMode) viewMode = state.viewMode;
-    if (state.tuning) tuningName = state.tuning;
-    if (state.capo !== undefined) capo = state.capo;
-    scoreTunings = state.scoreTunings ?? {};
+    // 튜닝을 적지 않은 옛 파일은 기본 튜닝으로 연다 (앞 곡의 튜닝·카포를 이어 쓰지 않는다)
+    tuningName = state.tuning ?? "standard";
+    capo = state.capo ?? 0;
+    // 1.0.0-beta.8 파일은 악보별 튜닝을 화면 상태에 적었다: 연 곡의 악보로 옮긴다 (막 연 곡이라 실행 취소 기록 없이)
+    const old = state.scoreTunings;
+    if (history && old && Object.keys(old).length > 0) {
+      const next = { ...history.song, players: history.song.players.map((p) => (Object.hasOwn(old, p.id) && !p.tab ? { ...p, tab: old[p.id]! } : p)) };
+      history = new History(next);
+      sync(next);
+    }
     // 파일에 적힌 튜닝을 되살린 것은 고친 것이 아니다: 연 그대로의 상태로 다시 잡는다
     autosaved.reset(autosaveState());
     savedFits = { reference: state.reference, video: state.video };
@@ -745,7 +757,6 @@
       viewMode,
       tuning: tuningName,
       capo,
-      ...(Object.keys(scoreTunings).length > 0 ? { scoreTunings } : {}),
       ...(ref ? { reference: ref } : {}),
       ...(vid ? { video: vid } : {}),
       ...(Object.keys(trackView).length > 0 ? { trackView } : {}),
@@ -835,7 +846,7 @@
    * 트랙 고르기·보기 방식 같은 다른 화면 상태만 바뀐 것으로는 새 기록을 만들지 않는다
    */
   type AutosaveState = { readonly song: Song; readonly tabs: string };
-  const tabsKey = $derived(editorStateKey({ tuning: tuningName, capo, scoreTunings }));
+  const tabsKey = $derived(editorStateKey({ tuning: tuningName, capo }));
   function autosaveState(current: Song | undefined = history?.song): AutosaveState | undefined {
     return current ? { song: current, tabs: tabsKey } : undefined;
   }
@@ -947,7 +958,9 @@
     workId = newWorkId();
     savedFits = {};
     trackView = {};
-    scoreTunings = {};
+    // 새 곡은 기본 튜닝으로 시작한다. 프로젝트 파일이면 applyEditor가 적힌 튜닝으로 다시 잡는다
+    tuningName = "standard";
+    capo = 0;
     autosaved.reset(autosaveState(next));
     history = new History(next);
     sync(next);
@@ -983,9 +996,7 @@
   function addNewPlayer(canonical: string) {
     if (!history) return;
     const s = history.song;
-    const n = s.players.filter((p) => p.instrument.canonical === canonical).length + 1;
-    const name = t("ui.newPlayerName", { instrument: instrumentName(canonical), n });
-    const next = history.run(addPlayer(canonical, name, t("ui.newTrackName", { n: 1 }), t("ui.addPlayer")));
+    const next = history.run(addPlayer(canonical, freshScoreName(s, canonical), t("ui.newTrackName", { n: 1 }), t("ui.addPlayer")));
     sync(next);
     activeTrackId = next.tracks.find((tr) => !s.tracks.some((o) => o.id === tr.id))?.id ?? activeTrackId;
   }
@@ -1990,7 +2001,7 @@
       case "track.moveUp":
       case "track.moveDown": {
         if (!activeTrackId) return false;
-        runIfChanged(shiftTrack(activeTrackId, command === "track.moveUp" ? -1 : 1, t("ui.moveTrack")));
+        runIfChanged(keepScoreTempo(shiftTrack(activeTrackId, command === "track.moveUp" ? -1 : 1, t("ui.moveTrack"))));
         return true;
       }
       case "view.tab":
@@ -2100,9 +2111,9 @@
       const player = history?.song.players.find((p) => p.id === playerId);
       if (!history || !player) return;
       const from = instrumentName(player.instrument.canonical);
-      runSoloSplit(setPlayerInstrument(playerId, canonical, { from, to: instrumentName(canonical) }, t("ui.instrument"), soloSplit));
+      runSoloSplit(keepScoreTempo(setPlayerInstrument(playerId, canonical, { from, to: instrumentName(canonical) }, t("ui.instrument"), soloSplit)));
     },
-    trackInstrument: (id, canonical) => runSoloSplit(setTrackInstrument(id, canonical, t("ui.trackInstrument"), soloSplit)),
+    trackInstrument: (id, canonical) => runSoloSplit(keepScoreTempo(setTrackInstrument(id, canonical, t("ui.trackInstrument"), soloSplit))),
     listen: updateTrack,
     viewOf: (id) => trackView[id] ?? {},
     view: (id, change) => (trackView = withTrackView(trackView, id, change)),
@@ -2111,9 +2122,9 @@
       const s = history?.song;
       return !!s && shiftTrack(id, step).apply(s) !== s;
     },
-    shift: (id, step) => runIfChanged(shiftTrack(id, step, t("ui.moveTrack"))),
+    shift: (id, step) => runIfChanged(keepScoreTempo(shiftTrack(id, step, t("ui.moveTrack")))),
     move: (id, playerId, index) => {
-      if (history && !trackMoveBlock(history.song, id, playerId, profile.maxChordsPerPlayer)) runIfChanged(moveTrack(id, playerId, index, t("ui.moveTrack")));
+      if (history && !trackMoveBlock(history.song, id, playerId, profile.maxChordsPerPlayer)) runIfChanged(keepScoreTempo(moveTrack(id, playerId, index, t("ui.moveTrack"))));
     },
     moveTargets: (id) => {
       const s = history?.song;
@@ -2131,13 +2142,13 @@
       const s = history?.song;
       const track = s?.tracks.find((tr) => tr.id === id);
       if (!s || !track) return;
-      runIfChanged(moveTrackToNewPlayer(id, newScoreName(s, track), t("ui.moveTrackToNew")));
+      runIfChanged(keepScoreTempo(moveTrackToNewPlayer(id, newScoreName(s, track), t("ui.moveTrackToNew"))));
     },
     copyToNewScore: (id) => {
       const s = history?.song;
       const track = s?.tracks.find((tr) => tr.id === id);
       if (!s || !track) return;
-      const next = runIfChanged(duplicateTrackToNewPlayer(id, t("ui.duplicateTrackName", { name: track.name }), newScoreName(s, track), t("ui.copyTrackToNew")));
+      const next = runIfChanged(keepScoreTempo(duplicateTrackToNewPlayer(id, t("ui.duplicateTrackName", { name: track.name }), newScoreName(s, track), t("ui.copyTrackToNew"))));
       // 복제본(새 트랙)을 고른다
       const copy = next?.tracks.find((tr) => !s.tracks.some((o) => o.id === tr.id));
       if (copy) activeTrackId = copy.id;
@@ -2162,8 +2173,13 @@
 
   /** 트랙을 새 악보로 보낼 때 붙일 이름: "<트랙 악기> n" */
   function newScoreName(s: Song, track: Track): string {
-    const canonical = trackInstrument(s, track).canonical;
-    const n = s.players.filter((p) => p.instrument.canonical === canonical).length + 1;
+    return freshScoreName(s, trackInstrument(s, track).canonical);
+  }
+  /** 새 악보 이름 "악기 n". 지우거나 이름을 바꿔 이미 있는 이름이면 번호를 올린다 */
+  function freshScoreName(s: Song, canonical: string): string {
+    const names = new Set(s.players.map((p) => p.name));
+    let n = s.players.filter((p) => p.instrument.canonical === canonical).length + 1;
+    while (names.has(t("ui.newPlayerName", { instrument: instrumentName(canonical), n }))) n++;
     return t("ui.newPlayerName", { instrument: instrumentName(canonical), n });
   }
 
@@ -2184,16 +2200,36 @@
    */
   const soloSplit: SoloSplit = {
     solo: (canonical) => isSoloInstrument(profile, canonical),
-    name: (s, canonical) => t("ui.newPlayerName", { instrument: instrumentName(canonical), n: s.players.filter((p) => p.instrument.canonical === canonical).length + 1 }),
+    get limit() {
+      return profile.maxChordsPerPlayer;
+    },
+    name: freshScoreName,
   };
 
-  /** 악기 바꾸기를 실행하고, 트랙을 새 악보로 떼어 냈으면 몇 트랙인지 알린다 */
+  /** 악기 바꾸기를 실행하고, 트랙을 새 악보로 떼어 냈거나 원래 악보로 돌려보냈으면 몇 트랙인지 알린다 */
   function runSoloSplit(command: Command) {
     if (!history) return;
     const owners = new Map(history.song.tracks.map((tr) => [tr.id, tr.playerId]));
+    const beforeSong = history.song;
+    const before = new Set(beforeSong.players.map((p) => p.id));
     sync(history.run(command));
-    const moved = history.song.tracks.filter((tr) => owners.has(tr.id) && owners.get(tr.id) !== tr.playerId).length;
-    if (moved > 0) error = t("ui.soloSplitMoved", { n: moved });
+    const moved = history.song.tracks.filter((tr) => owners.has(tr.id) && owners.get(tr.id) !== tr.playerId);
+    // 원래 있던 악보로 옮겼으면 떼어 냈던 트랙을 돌려보낸 것
+    const back = moved.filter((tr) => before.has(tr.playerId)).length;
+    // 보통 악기로 바꾼 악보인데 한도 때문에 돌아오지 못한 떼어 낸 악보가 있으면 함께 알린다
+    const changed = history.song.players.filter((p) => {
+      const was = beforeSong.players.find((q) => q.id === p.id);
+      return was !== undefined && was.instrument.canonical !== p.instrument.canonical;
+    });
+    const blocked = changed.flatMap((p) => blockedSplitBack(history!.song, p.id, soloSplit));
+    const notes: string[] = [];
+    if (moved.length > back) notes.push(t("ui.soloSplitMoved", { n: moved.length - back }));
+    else if (back > 0) notes.push(t("ui.soloMergedBack", { n: back }));
+    if (blocked.length > 0) {
+      const names = blocked.map((b) => history!.song.players.find((p) => p.id === b.playerId)?.name ?? b.playerId).join(", ");
+      notes.push(t("ui.soloBackBlocked", { names, n: blocked.reduce((sum, b) => sum + b.tracks, 0), limit: profile.maxChordsPerPlayer }));
+    }
+    if (notes.length > 0) error = notes.join(" ");
   }
 
 </script>

@@ -10,12 +10,34 @@ function sample(): Song {
     meta: { ...song.meta, title: "연습곡", author: "EarlGreyPie", memo: "메모" },
     markers: [{ id: "m1", at: rat(1, 7), label: "A" }],
     timeSig: [{ at: rat(0), beats: 3, unit: 4 }],
+    // 오르골에서 떼어 낸 악보 표시와 악보 타브 튜닝도 왕복한다
+    players: [...song.players, { id: "p9", name: "류트 1", instrument: { canonical: "lute", program: 0 }, splitFrom: song.players[0]!.id, tab: { tuning: "dropD", capo: 2 } }],
     tracks: song.tracks.map((tr, i) => (i === 1 ? { ...tr, instrument: { canonical: "lute", program: 0 }, mute: true, mix: { volume: 100, pan: 30 } } : tr)),
     sources: [{ id: "s1", kind: "audio", fileName: "원곡.mp3", offsetSec: 0.25 }],
   };
 }
 
 describe("writeProject / readProject", () => {
+  it("떼어 낸 악보 표시는 없는 악보·자기 자신·돌고 도는 연결이면 버린다 (#96 점검 2번)", () => {
+    const song = sample();
+    const base = song.players[0]!;
+    const players = [
+      { ...base, id: "a", splitFrom: "gone" },
+      { ...base, id: "b", splitFrom: "b" },
+      { ...base, id: "c", splitFrom: "d" },
+      { ...base, id: "d", splitFrom: "c" },
+      { ...base, id: "e", splitFrom: "a" },
+    ];
+    const back = readProject(writeProject({ ...song, players, tracks: song.tracks.map((t) => ({ ...t, playerId: "a" })) })).song;
+    expect(back.players.map((p) => [p.id, p.splitFrom])).toEqual([["a", undefined], ["b", undefined], ["c", undefined], ["d", undefined], ["e", "a"]]);
+  });
+
+  it("악보 타브 튜닝은 카포가 0~24 정수일 때만 읽는다", () => {
+    const song = sample();
+    const bad = writeProject({ ...song, players: song.players.map((p) => ({ ...p, tab: { tuning: "dropD", capo: 30 } })) });
+    expect(readProject(bad).song.players.every((p) => p.tab === undefined)).toBe(true);
+  });
+
   it("곡을 그대로 왕복한다 (분수 위치·이음·원문·악기·메모)", () => {
     const song = sample();
     const text = writeProject(song, { editor: { activeTrackId: song.tracks[1]!.id, division: 16 }, app: "test" });

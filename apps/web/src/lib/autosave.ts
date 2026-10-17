@@ -10,6 +10,8 @@ export class AutosaveTracker<T> {
   private saved: T | undefined;
   /** 지금 적고 있는 상태. 같은 상태를 두 번 보내지 않는다 */
   private saving: T | undefined;
+  /** 지금 적고 있는 상태를 보낸 순서. 값이 같아도 앞 저장의 응답이 뒤 저장을 지우지 않게 순서로 가린다 */
+  private savingSeq = 0;
   private work = 0;
   private seq = 0;
   private savedSeq = 0;
@@ -25,6 +27,11 @@ export class AutosaveTracker<T> {
     this.savedSeq = this.seq;
   }
 
+  /** 적는 중인 저장이 있나 (있으면 마지막으로 보낸 저장이다) */
+  get pending(): boolean {
+    return this.saving !== undefined;
+  }
+
   /** 적을 것이 있나. 적는 중인 상태가 있으면 그것과 비교한다 (그 저장이 끝나면 기록이 그것이 된다) */
   dirty(current: T | undefined): current is T {
     if (current === undefined) return false;
@@ -37,9 +44,10 @@ export class AutosaveTracker<T> {
     const work = this.work;
     const seq = ++this.seq;
     this.saving = current;
+    this.savingSeq = seq;
     return (ok) => {
       if (work !== this.work) return;
-      if (this.saving !== undefined && this.same(this.saving, current)) this.saving = undefined;
+      if (seq === this.savingSeq) this.saving = undefined;
       if (ok && seq > this.savedSeq) {
         this.savedSeq = seq;
         this.saved = current;
@@ -66,8 +74,8 @@ export class AutosaveQueue<T> {
    */
   flush(current: T | undefined, prepare: (state: T) => () => Promise<boolean>): Promise<void> {
     if (!this.tracker.dirty(current)) {
-      // 적는 중인 상태면 그 저장의 결과를 따른다. 이미 적은 상태면 할 일이 없다
-      return current !== undefined && this.last && this.tracker.same(this.last.state, current) ? this.last.job : Promise.resolve();
+      // 적는 중인 상태면 그 저장(마지막으로 보낸 저장)의 결과를 따른다. 이미 적은 상태면 할 일이 없다
+      return current !== undefined && this.tracker.pending && this.last ? this.last.job : Promise.resolve();
     }
     const save = prepare(current);
     const done = this.tracker.begin(current);

@@ -20,6 +20,9 @@ export const TUNINGS = {
 
 export type TuningName = keyof typeof TUNINGS;
 
+/** 앱이 아는 튜닝 이름인지 (파일·곡에 적힌 이름 검사) */
+export const isTuningName = (v: unknown): v is TuningName => typeof v === "string" && Object.hasOwn(TUNINGS, v);
+
 /** 악보 하나의 타브 튜닝과 카포 */
 export interface ScoreTuning {
   readonly tuning: TuningName;

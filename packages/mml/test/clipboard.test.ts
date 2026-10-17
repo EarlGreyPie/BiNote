@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { emptySong, type Player, type Song, type Track } from "@mmlce/core";
-import { mmlAt, playerScores } from "../src/index.js";
+import { emptySong, rat, type Player, type Song, type Track } from "@mmlce/core";
+import { mmlAt, pasteTrackIds, playerScores, scoreChunks } from "../src/index.js";
 
 const piano: Player = { id: "p1", name: "피아노", instrument: { canonical: "piano" } };
 const flute: Player = { id: "p2", name: "플루트", instrument: { canonical: "flute" } };
@@ -46,3 +46,22 @@ describe("playerScores 오르골", () => {
   });
 });
 
+describe("오르골 6트랙 넘는 입력 (beta.8 점검)", () => {
+  it("가장 늦게 끝나는 트랙이 빠진 악보는 마지막 붙임 자리를 그 트랙으로 바꿔 반복 길이를 맞춘다", () => {
+    const box: Player = { id: "p1", name: "오르골", instrument: { canonical: "music-box" } };
+    // 트랙 1만 온음표, 나머지는 4분음표 (점검 재현: 9트랙)
+    const tracks = [1, 2, 3, 4, 5, 6, 7, 8, 9].map((k) => ({
+      ...track(`t${k}`, "p1"),
+      notes: [{ id: `n${k}`, start: rat(0), dur: k === 1 ? rat(1) : rat(1, 4), pitch: 60, vol: 8, tie: "none" as const }],
+    }));
+    const song: Song = { ...emptySong({ title: "", author: "", profileId: "mobile" }), players: [box], tracks };
+    const pasted = scoreChunks(song, 3).map((c) => pasteTrackIds(song, c, 3, 6));
+    expect(pasted).toEqual([
+      ["t1", "t2", "t3", "t4", "t5", "t6"],
+      ["t4", "t5", "t6", "t7", "t8", "t1"],
+      ["t7", "t8", "t9", "t1", "t2", "t3"],
+    ]);
+    // 소리 칸(앞 3)은 그대로라 빠지는 음이 없다
+    expect(pasted.flatMap((p) => p.slice(0, 3))).toEqual(tracks.map((t) => t.id));
+  });
+});

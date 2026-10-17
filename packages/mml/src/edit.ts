@@ -321,6 +321,13 @@ export function appendSong(other: Song, label = "악보 더하기"): Command {
         "t",
       );
       const players = new Map(other.players.map((p) => [p.id, { ...p, id: playerId() }]));
+      // 떼어 낸 악보 표시(splitFrom)도 새 id로 옮긴다. 더하는 곡에 없는 악보를 가리키면 버린다
+      for (const [key, p] of players) {
+        if (p.splitFrom === undefined) continue;
+        const { splitFrom, ...rest } = p;
+        const to = players.get(splitFrom)?.id;
+        players.set(key, to ? { ...rest, splitFrom: to } : rest);
+      }
       const tracks = other.tracks.map((t) => {
         const id = trackId();
         const notes = t.mml ? parseTrackText(id, t.mml).notes : t.notes.map((n, k) => ({ ...n, id: `${id}.${k + 1}` }));
@@ -481,6 +488,25 @@ export function scoresMissingTempo(song: Song): string[][] {
 /** 곡 템포를 모든 악보의 글에 적는다 (악보 1에만 템포를 적은 곡 등). 실행 취소 한 칸 */
 export function fillScoreTempo(label = "악보마다 템포 넣기"): Command {
   return songCommand(label, (song) => songScores(song).reduce((next, ids) => fillScore(next, ids, scoreTempo(next, ids).missing), song));
+}
+
+/**
+ * 트랙을 다른 악보로 옮기는 명령(악기를 바꿔 새 악보로 떼어 내기, 트랙 옮기기 등)을 감싼다.
+ * 옮긴 뒤 새로 곡 템포가 빠진 악보는 그 악보 원문에도 적는다 (원문만 있는 트랙을 옮기면 출력기가 템포를 넣어 주지 않는다).
+ * 옮기기 전부터 빠져 있던 템포만 남은 악보는 그대로 둔다 (곡 메뉴 "악보마다 템포 넣기"가 따로 채운다). 실행 취소 한 칸
+ */
+export function keepScoreTempo(command: Command): Command {
+  return songCommand(command.label, (song) => {
+    const next = command.apply(song);
+    if (next === song || next.tempo.length === 0) return next;
+    // 트랙마다 옮기기 전 그 트랙의 악보에 빠져 있던 템포
+    const key = (id: string, e: TempoEvent) => `${id}|${e.bpm}@${e.at.n}/${e.at.d}`;
+    const before = new Set(songScores(song).flatMap((ids) => scoreTempo(song, ids).missing.flatMap((e) => ids.map((id) => key(id, e)))));
+    return songScores(next).reduce((out, ids) => {
+      const missing = scoreTempo(out, ids).missing;
+      return missing.some((e) => ids.some((id) => !before.has(key(id, e)))) ? fillScore(out, ids, missing) : out;
+    }, next);
+  });
 }
 
 /** at 위치 템포를 지운다. 그 템포를 나타내던 원문의 t도 모두 지운다 */

@@ -1,4 +1,4 @@
-import { maxChordsOf, type GameProfile, type Song } from "@mmlce/core";
+import { add, cmp, maxChordsOf, ZERO, type GameProfile, type Rat, type Song } from "@mmlce/core";
 
 /**
  * 게임에 붙여넣는 글. 악보 하나 = "MML@트랙1,트랙2,...;" (PC 마비노기와 같은 형식).
@@ -52,6 +52,8 @@ export function scoreChunks(song: Song, maxChords: number | ((playerId: string) 
  * 그 뒤에 그 연주자의 나머지 트랙을 차례로(맨 끝에서 처음으로 돌아) pasteLimit까지 붙여, 같은 곡을 나눠 치는
  * 오르골들의 길이·템포가 같게 한다. 소리 칸에 다른 악보 트랙이 들어가면 두 대에서 겹쳐 나므로 넣지 않는다
  * (6트랙 오르골: 1장 1~6, 2장 4·5·6·1·2·3 / 4트랙: 1장 1~4, 2장 4·빈·빈·1·2·3)
+ * 트랙이 pasteLimit보다 많아 다 못 붙이면, 가장 늦게 끝나는 트랙이 빠진 악보는 마지막 붙임 자리를 그 트랙으로 바꿔
+ * 모든 오르골의 반복 길이가 같게 한다 (음은 빼지 않는다: 소리 칸은 그대로)
  */
 export function pasteTrackIds(
   song: Song,
@@ -65,7 +67,21 @@ export function pasteTrackIds(
   const start = mine.indexOf(chunk.trackIds[0]!);
   const rest = [...mine.slice(start), ...mine.slice(0, start)].filter((id) => !chunk.trackIds.includes(id));
   const sounding = [...chunk.trackIds, ...Array<null>(Math.max(0, size - chunk.trackIds.length)).fill(null)];
-  return [...sounding, ...rest].slice(0, Math.max(pasteLimit, chunk.trackIds.length));
+  const out = [...sounding, ...rest].slice(0, Math.max(pasteLimit, chunk.trackIds.length));
+  if (out.length >= sounding.length + rest.length) return out;
+  const endOf = (id: string): Rat => (song.tracks.find((t) => t.id === id)?.notes ?? []).reduce((end, n) => {
+    const e = add(n.start, n.dur);
+    return cmp(e, end) > 0 ? e : end;
+  }, ZERO);
+  const songEnd = mine.reduce((end, id) => {
+    const e = endOf(id);
+    return cmp(e, end) > 0 ? e : end;
+  }, ZERO);
+  const reaches = (id: string | null) => id !== null && cmp(endOf(id), songEnd) >= 0;
+  if (out.some(reaches) || out.length <= sounding.length) return out;
+  const longest = rest.find(reaches);
+  if (longest !== undefined) out[out.length - 1] = longest;
+  return out;
 }
 
 /**

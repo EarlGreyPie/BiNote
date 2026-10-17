@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { History, rat, trackInstrument } from "@mmlce/core";
-import { addPlayer, addTrack, addTrackWithNotes, duplicateTrack, duplicateTrackToNewPlayer, moveTrack, moveTrackToNewPlayer, newSong, shiftTrack, trackMoveBlock, planMergeTracks, planMoveNotes, planVoiceByPitch, removeTrack, renamePlayer, renameTrack, setMeter, setPlayerInstrument, setTrackInstrument } from "../src/index.js";
+import { addPlayer, addTrack, addTrackWithNotes, duplicateTrack, duplicateTrackToNewPlayer, moveTrack, moveTrackToNewPlayer, newSong, shiftTrack, trackMoveBlock, planMergeTracks, planMoveNotes, planVoiceByPitch, removeTrack, renamePlayer, renameTrack, setMeter, setPlayerInstrument, setPlayerTab, setTrackInstrument, blockedSplitBack } from "../src/index.js";
 
 const fresh = () => newSong({ playerName: "피아노", trackName: "트랙 1" });
 
@@ -84,6 +84,7 @@ describe("오르골·축음기 악보의 트랙 악기", () => {
   const split = {
     solo: (c: string) => c === "music-box" || c === "gramophone",
     name: (s: { players: readonly { instrument: { canonical: string } }[] }, c: string) => `${c} ${s.players.filter((p) => p.instrument.canonical === c).length + 1}`,
+    limit: 6,
   };
   /** 피아노 악보 6트랙: 1~3 악보 악기, 4 플루트, 5 류트, 6 플루트 */
   const sixTracks = () => {
@@ -159,6 +160,103 @@ describe("오르골·축음기 악보의 트랙 악기", () => {
       ["p2", undefined],
       ["p2", { canonical: "flute", packId: "extra", program: 517 }],
     ]);
+  });
+
+  it("축음기로 바꿨다가 보통 악기로 돌리면 떼어 냈던 트랙이 원래 악보로 돌아온다", () => {
+    const { song, ids } = sixTracks();
+    const box = setPlayerInstrument("p1", "gramophone", undefined, "악기", split).apply(song);
+    expect(box.players.map((p) => [p.id, p.splitFrom])).toEqual([["p1", undefined], ["p2", "p1"]]);
+    const back = setPlayerInstrument("p1", "guitar", undefined, "악기", split).apply(box);
+    expect(back.players.map((p) => p.id)).toEqual(["p1"]);
+    expect(back.tracks.map((t) => [t.id, t.playerId, t.instrument?.canonical])).toEqual([
+      [ids[0], "p1", undefined],
+      [ids[1], "p1", undefined],
+      [ids[2], "p1", undefined],
+      [ids[3], "p1", "flute"],
+      [ids[4], "p1", "lute"],
+      [ids[5], "p1", "flute"],
+    ]);
+    // 떼어 낸 악기와 같은 악기로 돌리면 그 트랙은 악보 악기를 따른다
+    const flute = setPlayerInstrument("p1", "flute", undefined, "악기", split).apply(box);
+    expect(flute.tracks.map((t) => t.instrument?.canonical)).toEqual([undefined, undefined, undefined, undefined, "lute", undefined]);
+  });
+
+  it("축음기 트랙은 원래 악보를 보통 악기로 바꿔도 돌려보내지 않는다", () => {
+    const piano = addTrack("p1", "트랙 2").apply(fresh());
+    const gram = setTrackInstrument("t2", "gramophone", "악기", split).apply(piano);
+    expect(gram.players.map((p) => [p.instrument.canonical, p.splitFrom])).toEqual([["piano", undefined], ["gramophone", "p1"]]);
+    expect(setPlayerInstrument("p1", "guitar", undefined, "악기", split).apply(gram).tracks.map((t) => t.playerId)).toEqual(["p1", "p2"]);
+    // 떼어 낸 악보를 나중에 축음기로 바꿔도 마찬가지
+    const { song } = sixTracks();
+    const box = setPlayerInstrument("p1", "music-box", undefined, "악기", split).apply(song);
+    const later = setPlayerInstrument("p2", "gramophone").apply(box);
+    const back = setPlayerInstrument("p1", "piano", undefined, "악기", split).apply(later);
+    // 축음기 악보의 트랙 악기 류트는 돌아오고, 축음기로 치는 두 트랙은 남는다
+    expect(back.tracks.filter((t) => t.playerId === "p1").map((t) => t.instrument?.canonical)).toEqual([undefined, undefined, undefined, "lute"]);
+    expect(back.tracks.filter((t) => t.playerId === "p2")).toHaveLength(2);
+    // 떼어 낸 악보 안에서 트랙 악기만 축음기인 트랙은 남기고 나머지는 돌려보낸다
+    const mixed = { ...box, tracks: box.tracks.map((t, i) => (i === 4 ? { ...t, instrument: { canonical: "gramophone" } } : t)) };
+    const part = setPlayerInstrument("p1", "piano", undefined, "악기", split).apply(mixed);
+    expect(part.tracks.filter((t) => t.playerId === "p1")).toHaveLength(5);
+    expect(part.tracks.filter((t) => t.playerId === "p2").map((t) => t.instrument?.canonical)).toEqual(["gramophone"]);
+  });
+
+  it("돌려보내면 한도를 넘을 때, split을 주지 않을 때는 그대로 둔다", () => {
+    const { song } = sixTracks();
+    const box = setPlayerInstrument("p1", "music-box", undefined, "악기", split).apply(song);
+    const full = addTrack("p1", "x").apply(addTrack("p1", "y").apply(addTrack("p1", "z").apply(box)));
+    expect(setPlayerInstrument("p1", "piano", undefined, "악기", split).apply(full).players).toHaveLength(2);
+    expect(setPlayerInstrument("p1", "piano").apply(box).players).toHaveLength(2);
+  });
+
+  it("한도로 돌아오지 못한 악보와 트랙 수를 알려 준다 (#96 점검 4번)", () => {
+    const { song } = sixTracks();
+    const box = setPlayerInstrument("p1", "music-box", undefined, "악기", split).apply(song);
+    const full = addTrack("p1", "x").apply(box);
+    const kept = setPlayerInstrument("p1", "piano", undefined, "악기", split).apply(full);
+    expect(blockedSplitBack(kept, "p1", split)).toEqual([{ playerId: "p2", tracks: 3 }]);
+    // 다 돌아오면 남은 것이 없다
+    expect(blockedSplitBack(setPlayerInstrument("p1", "piano", undefined, "악기", split).apply(box), "p1", split)).toEqual([]);
+  });
+
+  it("A→B→C로 겹쳐 떼어 낸 뒤 B가 A로 다 돌아가면 C는 A를 원래 악보로 이어 받는다 (#96 점검 3번)", () => {
+    const { song } = sixTracks();
+    const box = setPlayerInstrument("p1", "music-box", undefined, "악기", split).apply(song);
+    // B(p2)의 류트 트랙을 축음기로 → C(p3), splitFrom p2
+    const lute = box.tracks.find((t) => t.instrument?.canonical === "lute")!;
+    const nested = setTrackInstrument(lute.id, "gramophone", "악기", split).apply(box);
+    expect(nested.players.map((p) => [p.id, p.splitFrom])).toEqual([["p1", undefined], ["p2", "p1"], ["p3", "p2"]]);
+    const back = setPlayerInstrument("p1", "guitar", undefined, "악기", split).apply(nested);
+    expect(back.players.map((p) => [p.id, p.splitFrom])).toEqual([["p1", undefined], ["p3", "p1"]]);
+    // C를 보통 악기로 바꾼 뒤 A를 다시 바꾸면 C도 돌아온다
+    const plain = setPlayerInstrument("p3", "harp").apply(back);
+    expect(setPlayerInstrument("p1", "piano", undefined, "악기", split).apply(plain).players.map((p) => p.id)).toEqual(["p1"]);
+  });
+
+  it("C를 먼저 보통 악기로 바꾸고 A를 바꾸면 B와 C가 한 번에 돌아오고, 한도 알림은 없다 (#97 3차 점검)", () => {
+    const { song } = sixTracks();
+    const box = setPlayerInstrument("p1", "music-box", undefined, "악기", split).apply(song);
+    const lute = box.tracks.find((t) => t.instrument?.canonical === "lute")!;
+    const nested = setTrackInstrument(lute.id, "gramophone", "악기", split).apply(box);
+    const plain = setPlayerInstrument("p3", "harp").apply(nested);
+    const back = setPlayerInstrument("p1", "guitar", undefined, "악기", split).apply(plain);
+    expect(back.players.map((p) => p.id)).toEqual(["p1"]);
+    expect(back.tracks).toHaveLength(6);
+    expect(blockedSplitBack(back, "p1", split)).toEqual([]);
+    // C가 축음기 그대로면 B만 돌아오고 C는 A를 원래 악보로 이어 받아 남는다(돌아갈 트랙이 없어 알림도 없다)
+    const stay = setPlayerInstrument("p1", "guitar", undefined, "악기", split).apply(nested);
+    expect(stay.players.map((p) => [p.id, p.splitFrom])).toEqual([["p1", undefined], ["p3", "p1"]]);
+    expect(blockedSplitBack(stay, "p1", split)).toEqual([]);
+  });
+
+  it("떼어 낸 악보를 지우면 그 악보를 가리키던 연결도 지운다 (같은 id로 만든 새 악보와 섞이지 않게)", () => {
+    const { song } = sixTracks();
+    const box = setPlayerInstrument("p1", "music-box", undefined, "악기", split).apply(song);
+    const lute = box.tracks.find((t) => t.instrument?.canonical === "lute")!;
+    const nested = setTrackInstrument(lute.id, "gramophone", "악기", split).apply(box);
+    let s = nested;
+    for (const t of nested.tracks.filter((tr) => tr.playerId === "p2")) s = removeTrack(t.id).apply(s);
+    expect(s.players.map((p) => [p.id, p.splitFrom])).toEqual([["p1", undefined], ["p3", undefined]]);
   });
 
   it("실행 취소 한 번에 악기와 옮긴 트랙이 함께 돌아온다", () => {
@@ -372,5 +470,56 @@ describe("트랙 순서·복제·악보 간 이동", () => {
     expect(s.players[2]).toMatchObject({ id: "p3", name: "하프 1", instrument: { canonical: "harp" } });
     expect(s.tracks.find((t) => t.id === "t3")!.instrument).toMatchObject({ canonical: "harp" });
     expect(duplicateTrackToNewPlayer("없음", "x", "y").apply(s)).toBe(s);
+  });
+});
+
+describe("악보 타브 튜닝 (PR #97 점검)", () => {
+  const base = () => newSong({ playerName: "피아노 1", trackName: "트랙 1" });
+  const tabOf = (s: { players: readonly { id: string; tab?: unknown }[] }, id: string) => s.players.find((p) => p.id === id)?.tab;
+
+  it("새 악보에 정한 튜닝은 실행 취소 → 다시 실행 뒤에도 남는다 (재현 A)", () => {
+    const h = new History(base());
+    h.run(addPlayer("lute", "류트 1", "트랙 1"));
+    h.run(setPlayerTab("p2", { tuning: "dropD", capo: 2 }));
+    h.undo();
+    expect(tabOf(h.song, "p2")).toBeUndefined();
+    expect(tabOf(h.redo()!, "p2")).toEqual({ tuning: "dropD", capo: 2 });
+    // 악보 추가까지 되돌렸다 다시 해도 같다
+    h.undo();
+    h.undo();
+    h.redo();
+    expect(tabOf(h.redo()!, "p2")).toEqual({ tuning: "dropD", capo: 2 });
+  });
+
+  it("지운 악보와 같은 id로 새로 만든 악보는 튜닝을 물려받지 않는다", () => {
+    const h = new History(base());
+    h.run(addPlayer("lute", "류트 1", "트랙 1"));
+    h.run(setPlayerTab("p2", { tuning: "bass4", capo: 0 }));
+    const track = h.song.tracks.find((t) => t.playerId === "p2")!;
+    h.run(removeTrack(track.id));
+    const again = h.run(addPlayer("lute", "류트 2", "트랙 1"));
+    expect(again.players.find((p) => p.id === "p2")?.name).toBe("류트 2");
+    expect(tabOf(again, "p2")).toBeUndefined();
+  });
+
+  it("다시 실행한 이름 바꾸기 뒤 바꾼 튜닝이 지우기 취소에서 그대로 돌아온다 (재현 B)", () => {
+    const h = new History(base());
+    h.run(addPlayer("guitar", "기타 1", "트랙 1"));
+    h.run(setPlayerTab("p2", { tuning: "dropD", capo: 2 }));
+    h.run(renamePlayer("p2", "기타"));
+    // 마지막 트랙을 지우면 악보도 지워진다
+    h.run(removeTrack("t2"));
+    expect(h.song.players.some((p) => p.id === "p2")).toBe(false);
+    h.undo();
+    h.undo();
+    h.redo();
+    h.run(setPlayerTab("p2", { tuning: "bass4", capo: 4 }));
+    h.run(removeTrack("t2"));
+    expect(tabOf(h.undo()!, "p2")).toEqual({ tuning: "bass4", capo: 4 });
+  });
+
+  it("같은 값이면 곡을 그대로 둔다", () => {
+    const s = setPlayerTab("p1", { tuning: "dropD", capo: 2 }).apply(base());
+    expect(setPlayerTab("p1", { tuning: "dropD", capo: 2 }).apply(s)).toBe(s);
   });
 });

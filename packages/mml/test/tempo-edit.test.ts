@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { emptySong, History, normalizeTempo, rat, type Song } from "@mmlce/core";
-import { compactSong, fillScoreTempo, moveTempo, parseMml, parseTrackText, scoresMissingTempo, removeTempoAt, setTempoAt, setTempos, setTrackText, tempoInsertOffset, tempoMismatch, trackSource } from "../src/index.js";
+import { compactSong, fillScoreTempo, keepScoreTempo, moveTempo, parseMml, parseTrackText, scoresMissingTempo, removeTempoAt, setTempoAt, setTempos, setTrackText, tempoInsertOffset, tempoMismatch, trackSource } from "../src/index.js";
+import { moveTrackToNewPlayer, setPlayerInstrument, shiftTrack } from "../src/structure.js";
 
 /** 원문들로 곡을 만든다. null이면 원문 없는(음만 있는) 트랙 */
 function songOf(...texts: (string | { text: string; notesOnly: true })[]): Song {
@@ -289,3 +290,48 @@ describe("공개 전 재점검: 옮겨 적은 템포와 원문", () => {
   });
 });
 
+
+describe("beta.8 점검: 옮긴 트랙의 악보 템포 (PR #91)", () => {
+  const split = { solo: (c: string) => c === "music-box", name: () => "플루트 1", limit: 6 };
+
+  it("원문만 있는 트랙을 오르골 악보에서 떼어 내면 새 악보 원문에도 곡 템포를 적는다", () => {
+    const base = songOf("t90c4", "d4");
+    const s: Song = { ...base, tracks: base.tracks.map((t, k) => (k === 1 ? { ...t, instrument: { canonical: "flute" } } : t)) };
+    const h = new History(s);
+    const next = h.run(keepScoreTempo(setPlayerInstrument("p1", "music-box", undefined, "악기", split)));
+    expect(next.players.length).toBe(2);
+    expect(texts(next)).toEqual(["t90c4", "t90d4"]);
+    expect(scoresMissingTempo(next)).toEqual([]);
+    expect(mirrored(next)).toBe(true);
+    expect(h.undo()).toBe(s);
+    // 감싸지 않으면 새 악보 글에 템포가 빠진다 (점검 재현)
+    expect(scoresMissingTempo(setPlayerInstrument("p1", "music-box", undefined, "악기", split).apply(s)).length).toBe(1);
+  });
+
+  it("새 악보로 옮기기도 같고, 옮기기 전부터 빠져 있던 악보는 그대로 둔다", () => {
+    const s = songOf("t90c4", "d4");
+    expect(texts(keepScoreTempo(moveTrackToNewPlayer("t2", "새 악보")).apply(s))).toEqual(["t90c4", "t90d4"]);
+    // p1·p2 둘 다 템포가 있고 p3만 원래 빠진 곡: p3는 손대지 않는다
+    const three: Song = {
+      ...songOf("t90c4", "t90d4", "e4"),
+      players: [
+        { id: "p1", name: "a", instrument: { canonical: "piano" } },
+        { id: "p2", name: "b", instrument: { canonical: "piano" } },
+        { id: "p3", name: "c", instrument: { canonical: "piano" } },
+      ],
+    };
+    const placed: Song = { ...three, tracks: three.tracks.map((t, k) => ({ ...t, playerId: `p${k + 1}` })) };
+    const changed = keepScoreTempo(setPlayerInstrument("p3", "flute")).apply(placed);
+    expect(changed).not.toBe(placed);
+    expect(texts(changed)).toEqual(["t90c4", "t90d4", "e4"]);
+  });
+
+  it("오르골 3+3 묶음 경계를 넘는 위·아래 옮기기도 템포를 적는다 (#97 점검 2번)", () => {
+    const base = songOf("t90c4", "d4", "e4", "t90f4", "g4", "a4");
+    const s: Song = { ...base, players: [{ id: "p1", name: "오르골", instrument: { canonical: "music-box" } }] };
+    expect(scoresMissingTempo(shiftTrack("t4", -1).apply(s)).length).toBe(1);
+    const next = keepScoreTempo(shiftTrack("t4", -1)).apply(s);
+    expect(scoresMissingTempo(next)).toEqual([]);
+    expect(mirrored(next)).toBe(true);
+  });
+});
