@@ -5,7 +5,8 @@
   /** 카포 0~24 (파일에 적을 수 있는 범위와 같다) */
   const CAPOS = Array.from({ length: 25 }, (_, c) => c);
 
-  function lengthLabel(l: NoteLength): string {
+  /** 새 음 길이 이름 (타브 숫자판도 쓴다) */
+  export function lengthLabel(l: NoteLength): string {
     if (l === "grid") return t("ui.noteLengthGrid");
     return ["12", "24", "48"].includes(l) ? t("ui.noteLengthTriplet", { n: l }) : `l${l}`;
   }

@@ -164,7 +164,7 @@ export const zhHans: Partial<Record<MessageKey, string>> = {
   "ui.markerDelete": "删除标记",
   "ui.meterDelete": "删除拍号",
   "ui.fretPadTie": "& 连接",
-  "ui.fretPadTieHelp": "用 & 将光标处的音符与下一个音符连接或解除连接。相同的音显示为延音 (5)，不同的音显示为滑音 5/7（键盘为 L）",
+  "ui.fretPadTieHelp": "用 & 将光标处的音符与紧接的下一个音符连接或解除连接。后面是空的时，会按新音符长度添加同一个音并连接，光标移到其后。相同的音显示为延音 (5)，不同的音显示为滑音 5/7（键盘为 L）",
   "ui.mmlPad": "MML 键盘",
   "ui.mmlPadHelp": "在屏幕下方显示 MML 字符键盘。开启后点击音轨文本也不会弹出屏幕键盘，键盘输入会写入最后点击的音轨文本（适用于 iPad）",
   "ui.mmlPadLeft": "光标左移",

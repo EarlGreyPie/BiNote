@@ -1,4 +1,4 @@
-import { add, cmp, placeNote, removeNotes, type InstrumentRef, type Note, type Rat, type Song } from "@mmlce/core";
+import { add, cmp, placeNote, removeNotes, sub, toggleTie, type InstrumentRef, type Note, type Rat, type Song } from "@mmlce/core";
 import { previousVolume } from "./midiInput";
 
 /** 타브에서 넣은 음이 들어갈 트랙과 바뀐 음 목록 */
@@ -68,6 +68,56 @@ export function placeTabNote(
     tie: "none",
   };
   return { changes: [{ trackId: track.id, notes: placeNote(track.notes, note) }], noteId: note.id };
+}
+
+/** 같은 트랙에서 note 뒤에 처음 오는 음 */
+function nextInTrack(notes: readonly Note[], note: Note): Note | undefined {
+  return [...notes].sort((a, b) => cmp(a.start, b.start)).find((n) => n.id !== note.id && cmp(n.start, note.start) > 0);
+}
+
+/**
+ * 타브에서 음 길이를 바꾼다 (기타 프로처럼 커서 음의 길이를 고른 길이로).
+ * 늘릴 때는 같은 트랙의 다음 음 앞까지만 늘려, 뒤 음을 지우지 않는다
+ */
+export function setTabNoteLength(song: Song, note: Note, dur: Rat): TabEdit {
+  const track = song.tracks.find((t) => t.notes.some((n) => n.id === note.id));
+  if (!track) return { changes: [], noteId: undefined };
+  const next = nextInTrack(track.notes, note);
+  const room = next ? sub(next.start, note.start) : undefined;
+  const len = room && cmp(dur, room) > 0 ? room : dur;
+  if (cmp(len, note.dur) === 0) return { changes: [], noteId: note.id };
+  return { changes: [{ trackId: track.id, notes: placeNote(track.notes, { ...note, dur: len }) }], noteId: note.id };
+}
+
+/**
+ * 타브의 & 잇기. 바로 뒤에 음이 붙어 있으면 그 음과 잇거나 풀고(다른 높이면 슬라이드),
+ * 뒤가 비어 있으면(쉼표) 같은 높이 음을 dur만큼 더해 이어 울린다 — 기타 프로의 붙임줄(Tie)·
+ * MuseScore 입력 중 +와 같다. 빈자리보다 길면 다음 음 앞까지만 넣는다.
+ * noteId는 더한 음(커서를 그 뒤로 옮길 때 쓴다)
+ */
+export function tieTabNote(song: Song, note: Note, dur: Rat): TabEdit {
+  const track = song.tracks.find((t) => t.notes.some((n) => n.id === note.id));
+  if (!track) return { changes: [], noteId: undefined };
+  const end = add(note.start, note.dur);
+  const next = nextInTrack(track.notes, note);
+  if (note.tie === "next" || (next && cmp(next.start, end) <= 0)) {
+    const notes = toggleTie(track.notes, note.id);
+    return notes ? { changes: [{ trackId: track.id, notes }], noteId: undefined } : { changes: [], noteId: undefined };
+  }
+  const room = next ? sub(next.start, end) : undefined;
+  const added: Note = {
+    id: `${track.id}.tab${Date.now().toString(36)}`,
+    start: end,
+    dur: room && cmp(dur, room) > 0 ? room : dur,
+    pitch: note.pitch,
+    vol: note.vol,
+    tie: "none",
+  };
+  const notes = placeNote(
+    track.notes.map((n) => (n.id === note.id ? { ...n, tie: "next" as const } : n)),
+    added,
+  );
+  return { changes: [{ trackId: track.id, notes }], noteId: added.id };
 }
 
 /** 타브에서 고른 음을 지운다 */

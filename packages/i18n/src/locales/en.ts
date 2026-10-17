@@ -371,7 +371,7 @@ export const en: Partial<Record<MessageKey, string>> = {
   "ui.markerDelete": "Delete marker",
   "ui.meterDelete": "Delete meter",
   "ui.fretPadTie": "& tie",
-  "ui.fretPadTieHelp": "Ties the cursor note to the next one with &, or unties it. Same pitch shows as held (5), a different pitch as a slide 5/7 (key: L)",
+  "ui.fretPadTieHelp": "Ties the cursor note to the note right after it with &, or unties it. If nothing follows, adds the same pitch for the new-note length, tied, and moves the cursor past it. Same pitch shows as held (5), a different pitch as a slide 5/7 (key: L)",
   "ui.mmlPad": "MML keypad",
   "ui.mmlPadHelp": "Shows an MML keypad at the bottom. While on, tapping track text doesn't open the on-screen keyboard; keys go into the last tapped track text (for iPad)",
   "ui.mmlPadLeft": "Cursor left",

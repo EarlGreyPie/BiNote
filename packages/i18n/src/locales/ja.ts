@@ -164,7 +164,7 @@ export const ja: Partial<Record<MessageKey, string>> = {
   "ui.markerDelete": "マーカーを削除",
   "ui.meterDelete": "拍子を削除",
   "ui.fretPadTie": "& 接続",
-  "ui.fretPadTieHelp": "カーソルの音を次の音と & でつなぐか、解除します。同じ音ならタイ（5）、異なる音ならスライド 5/7 で表示されます（キーボードはL）",
+  "ui.fretPadTieHelp": "カーソルの音をすぐ後の音と & でつなぐか、解除します。後ろが空いていれば同じ音を新しい音の長さだけ足してつなぎ、カーソルはその後ろへ移ります。同じ音ならタイ（5）、異なる音ならスライド 5/7 で表示されます（キーボードはL）",
   "ui.mmlPad": "MMLキーパッド",
   "ui.mmlPadHelp": "画面下にMML文字のキーパッドを表示します。オンの間はトラックのテキストをタップしても画面キーボードが出ず、キーパッドで最後にタップしたトラックのテキストに入力します（iPad用）",
   "ui.mmlPadLeft": "カーソルを左へ",

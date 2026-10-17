@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { assignTab, emptySong, rat, STANDARD_TUNING, type Note, type Song } from "@mmlce/core";
-import { fretFromKeys, placeTabNote, removeTabNote } from "../src/lib/tabInput";
+import { fretFromKeys, placeTabNote, removeTabNote, setTabNoteLength, tieTabNote } from "../src/lib/tabInput";
 
 function song(): Song {
   const base = emptySong({ title: "", author: "", profileId: "mobile" });
@@ -53,6 +53,44 @@ describe("타브 입력", () => {
     // 트랙이 이미 한도(2)면 넣지 않는다
     const full = placeTabNote(s, ["a", "b"], "a", rat(0), rat(1, 8), 55, undefined, undefined, 2);
     expect(full).toEqual({ changes: [], noteId: undefined, full: true });
+  });
+
+  it("음 길이를 바꾸되 뒤 음 앞까지만 늘린다", () => {
+    const n = (id: string, start: number, dur: number, pitch = 64): Note => ({ id, start: rat(start, 16), dur: rat(dur, 16), pitch, vol: 8, tie: "none" });
+    const base = song();
+    const s = { ...base, tracks: base.tracks.map((t) => (t.id === "a" ? { ...t, notes: [n("x", 0, 1), n("y", 8, 2)] } : t)) };
+    const x = s.tracks[0]!.notes[0]!;
+    const len = (d: { changes: { notes: Note[] }[] }) => d.changes[0]!.notes.map((m) => [m.id, m.dur.n, m.dur.d]);
+    // 4분음표로: 다음 음(8/16)까지 자리가 있어 그대로
+    expect(len(setTabNoteLength(s, x, rat(1, 4)))).toEqual([["x", 1, 4], ["y", 1, 8]]);
+    // 온음표로: 다음 음 앞(반음표)까지만 늘리고 다음 음은 남는다
+    expect(len(setTabNoteLength(s, x, rat(1)))).toEqual([["x", 1, 2], ["y", 1, 8]]);
+  });
+
+  it("& 잇기: 뒤가 비면 같은 음을 새 음 길이만큼 더해 잇고, 붙어 있으면 그 음과 잇는다", () => {
+    const n = (id: string, start: number, dur: number, pitch = 64): Note => ({ id, start: rat(start, 16), dur: rat(dur, 16), pitch, vol: 8, tie: "none" });
+    const base = song();
+    const withNotes = (notes: Note[]) => ({ ...base, tracks: base.tracks.map((t) => (t.id === "a" ? { ...t, notes } : t)) });
+    // 뒤가 비었다: 64를 8분음표 더해 잇는다
+    const s1 = withNotes([n("x", 0, 2)]);
+    const e1 = tieTabNote(s1, s1.tracks[0]!.notes[0]!, rat(1, 8));
+    const out1 = e1.changes[0]!.notes;
+    expect(out1.map((m) => [m.pitch, m.start.n, m.start.d, m.dur.n, m.dur.d, m.tie])).toEqual([
+      [64, 0, 1, 1, 8, "next"],
+      [64, 1, 8, 1, 8, "none"],
+    ]);
+    expect(e1.noteId).toBe(out1[1]!.id);
+    // 빈자리(1/16)보다 길면 다음 음 앞까지만
+    const s2 = withNotes([n("x", 0, 2), n("y", 3, 1, 67)]);
+    const out2 = tieTabNote(s2, s2.tracks[0]!.notes[0]!, rat(1, 4)).changes[0]!.notes;
+    expect(out2.map((m) => [m.pitch, m.dur.n, m.dur.d])).toEqual([[64, 1, 8], [64, 1, 16], [67, 1, 16]]);
+    // 바로 붙은 다른 음이면 슬라이드로 잇고, 다시 누르면 푼다
+    const s3 = withNotes([n("x", 0, 2), n("y", 2, 2, 67)]);
+    const tied = tieTabNote(s3, s3.tracks[0]!.notes[0]!, rat(1, 8));
+    expect(tied.changes[0]!.notes.map((m) => m.tie)).toEqual(["next", "none"]);
+    expect(tied.noteId).toBeUndefined();
+    const s4 = withNotes(tied.changes[0]!.notes);
+    expect(tieTabNote(s4, s4.tracks[0]!.notes[0]!, rat(1, 8)).changes[0]!.notes.map((m) => m.tie)).toEqual(["none", "none"]);
   });
 
   it("숫자 두 개를 이어 치면 두 자리 프렛", () => {

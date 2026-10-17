@@ -192,11 +192,13 @@ Write MML directly. Your edits show up in the piano roll and in playback. If the
 Switch with the Piano roll/Tab button (Alt+T). The tab gathers the tracks of the selected score and picks strings and frets automatically.
 
 - Click on a string to place the cursor, then **type the fret number** (two digits in a row), move with the arrow keys, delete with Delete
-- `L`: tie to the next note with & · `(5)` held · `5/7` slide
+- `+` / `-`: double / halve the cursor note (also sets the new-note length). On the fret pad, changing **New note** also changes the note at the cursor. Lengthening stops at the next note in the same track
+- Typing a fret over an existing note changes only its pitch, not its length
+- `L`: tie to the note right after with & · `(5)` held · `5/7` slide. If nothing follows, adds the same pitch for the new-note length, tied (an eighth + L rings as a quarter)
 - Chord notes at the same spot go into free tracks of the same score
 - You can choose a tuning (Standard, Drop D, DADGAD, Baritone and more) and a capo
 - With several tracks, each number is tinted with its track color and numbers from other tracks are dimmed (turn off in Settings → Display → Track colors on tab numbers)
-- On touch, use the **Fret pad**
+- On touch, use the **Fret pad**. Pick the length of new notes in **New note** at the top of the pad (Grid / l4 / l8 / triplets…, the same setting as New note in the toolbar). With "Advance after entering" on, the cursor moves on by that length
 
 ### MIDI keys
 

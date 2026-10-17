@@ -164,7 +164,7 @@ export const zhTW: Partial<Record<MessageKey, string>> = {
   "ui.markerDelete": "刪除標記",
   "ui.meterDelete": "刪除拍號",
   "ui.fretPadTie": "& 連結",
-  "ui.fretPadTieHelp": "將游標所在的音與下一個音以 & 連結或解除。同音顯示為延音 (5)，不同音顯示為滑音 5/7（鍵盤為 L）",
+  "ui.fretPadTieHelp": "將游標所在的音與緊接的下一個音以 & 連結或解除。後面是空的時，會依新音符長度加上同一個音並連結，游標移到其後。同音顯示為延音 (5)，不同音顯示為滑音 5/7（鍵盤為 L）",
   "ui.mmlPad": "MML 鍵盤",
   "ui.mmlPadHelp": "在畫面下方顯示 MML 字元鍵盤。開啟時點按音軌文字不會跳出螢幕鍵盤，而是用此鍵盤輸入到最後點按的音軌文字中（適用於 iPad）",
   "ui.mmlPadLeft": "游標左移",

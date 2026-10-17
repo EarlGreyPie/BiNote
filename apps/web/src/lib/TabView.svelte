@@ -1,12 +1,14 @@
 <script lang="ts">
-  import { add, assignTab, cmp, gridLines, rat, sub, toFloat, toggleTie, type Note, type Rat, type Song, type TabTuning } from "@mmlce/core";
+  import { add, assignTab, cmp, gridLines, mul, rat, sub, toFloat, type Note, type Rat, type Song, type TabTuning } from "@mmlce/core";
   import { t } from "./i18n.svelte";
   import { Pinch, pinchRatio } from "./pinch";
-  import { fretFromKeys, placeTabNote, removeTabNote, type TabEdit } from "./tabInput";
+  import { fretFromKeys, placeTabNote, removeTabNote, setTabNoteLength, tieTabNote, type TabEdit } from "./tabInput";
   import { onMount } from "svelte";
   import { fonts } from "./fonts.svelte";
   import { loadStored, saveStored } from "./persist";
   import VolumeBox from "./VolumeBox.svelte";
+  import { lengthLabel } from "./Toolbar.svelte";
+  import { NOTE_LENGTHS, noteLengthOf, type NoteLength } from "./roll";
   import Icon from "./Icon.svelte";
   import { drawVolumeLane } from "./laneDraw";
   import { LaneGesture } from "./laneGesture.svelte";
@@ -26,6 +28,9 @@
     division: number;
     /** 넣는 음 길이. 없으면 격자 한 칸 */
     noteDur?: Rat;
+    /** 새 음 길이 고르기 (숫자판에서도 바꿀 수 있게). noteDur은 이 값으로 정해진다 */
+    noteLength?: NoteLength;
+    onnotelength?: (length: NoteLength) => void;
     /** 타브에서 음을 넣거나 지울 때 (실행 취소 한 칸) */
     onedit?: (changes: TabEdit["changes"], label: string) => void;
     /** 빈 트랙이 없어 이 악보에 트랙을 더해 음을 넣을 때 (실행 취소 한 칸) */
@@ -48,7 +53,7 @@
     melodyIds?: ReadonlySet<string> | undefined;
   }
 
-  let { song, activeTrackId, tuning, playhead, onunplayable, division, noteDur, onedit, onnewtrack, onfull, maxTracks = Infinity, onpreview, volume = $bindable(), volumeRange, colors, locked, laneTrackIds, melodyIds }: Props = $props();
+  let { song, activeTrackId, tuning, playhead, onunplayable, division, noteDur, noteLength, onnotelength, onedit, onnewtrack, onfull, maxTracks = Infinity, onpreview, volume = $bindable(), volumeRange, colors, locked, laneTrackIds, melodyIds }: Props = $props();
 
   // 위쪽에 마디 번호 줄과 변속(템포·박자) 줄을 둔다
   const TOP = 42;
@@ -144,21 +149,27 @@
     else onedit?.(edit.changes, label);
   }
 
-  /** 커서 자리에 프렛 음을 넣는다. 넣지 못했으면(한도 거절 등) false */
-  function enterFret(fret: number): boolean {
-    if (!cursor || !activeTrackId || fret > tuning.maxFret || cursor.string > tuning.strings.length) return false;
+  /**
+   * 커서 자리에 프렛 음을 넣는다. 돌려주는 값은 그 자리 음의 실제 길이(다음 칸으로 넘길 만큼),
+   * 넣지 못했으면(한도 거절 등) undefined. 이미 있는 음 위에 치면 높이만 바꾸고 길이는 그대로다
+   * (기타 프로처럼 프렛만 고친다. 길이는 새 음 고르기·+/−로 바꾼다)
+   */
+  function enterFret(fret: number): Rat | undefined {
+    if (!cursor || !activeTrackId || fret > tuning.maxFret || cursor.string > tuning.strings.length) return undefined;
     const pitch = tuning.strings[cursor.string - 1]! + tuning.capo + fret;
     // 트랙 수 한도는 음소거한 트랙도 센다 (타브에는 안 보여도 악보 자리는 차지한다)
     const scoreTracks = song.tracks.filter((t) => t.playerId === player).length;
     const room = Math.max(0, maxTracks - (scoreTracks - tracks.length));
-    const edit = placeTabNote(song, tracks.map((t) => t.id), activeTrackId, cursor.at, noteDur ?? rat(1, division), pitch, noteAtCursor(), volume, room);
+    const replace = noteAtCursor();
+    const dur = noteDur ?? rat(1, division);
+    const edit = placeTabNote(song, tracks.map((t) => t.id), activeTrackId, cursor.at, dur, pitch, replace, volume, room);
     if (edit.full) {
       apply(edit, "타브 입력");
-      return false;
+      return undefined;
     }
     apply(edit, "타브 입력", cursor.string);
     onpreview?.(pitch);
-    return true;
+    return replace?.dur ?? dur;
   }
 
   // 두 손가락 집기(아이패드 등): 가로로 벌리면 확대·축소, 가운데를 따라 옮긴다
@@ -205,10 +216,33 @@
   /** 커서 음을 다음 음과 &로 잇거나 푼다 (다른 높이면 슬라이드) */
   function tieAtCursor() {
     const note = noteAtCursor();
-    const track = note && tracks.find((tr) => tr.notes.some((n) => n.id === note.id));
-    if (!note || !track) return;
-    const next = toggleTie(track.notes, note.id);
-    if (next) onedit?.([{ trackId: track.id, notes: next }], note.tie === "next" ? "이음줄 풀기" : "이음줄");
+    if (!note || !cursor) return;
+    const edit = tieTabNote(song, note, noteDur ?? rat(1, division));
+    const added = edit.changes[0]?.notes.find((n) => n.id === edit.noteId);
+    apply(edit, note.tie === "next" ? "이음줄 풀기" : "이음줄", cursor.string);
+    // 뒤가 비어 같은 음을 더해 이었으면 커서를 그 음 뒤로 (이어서 다음 음을 넣는다).
+    // 잠근 트랙이면 앱이 바꾸지 않으므로 커서도 그대로 둔다
+    const trackId = edit.changes[0]?.trackId;
+    if (added && trackId && !locked?.has(trackId)) cursor = { ...cursor, at: add(added.start, added.dur) };
+  }
+
+  /**
+   * 새 음 길이를 바꾼다. 길이를 콕 집어 고르면 커서 음 길이도 바꾼다 (기타 프로처럼 고른 박의 길이).
+   * "격자대로"는 다음에 넣을 음의 방식만 바꾼다
+   */
+  function changeLength(length: NoteLength) {
+    onnotelength?.(length);
+    if (length === "grid") return;
+    const note = noteAtCursor();
+    if (note) apply(setTabNoteLength(song, note, noteLengthOf(length, division)), "음 길이", cursor?.string);
+  }
+
+  /** +/− 키: 커서 음(없으면 새 음) 길이를 두 배 / 반으로 (온음표 ~ 64분음표) */
+  function stepLength(factor: 2 | 0.5) {
+    const now = noteAtCursor()?.dur ?? noteDur ?? rat(1, division);
+    const want = mul(now, factor === 2 ? rat(2) : rat(1, 2));
+    const length = NOTE_LENGTHS.find((l) => l !== "grid" && cmp(noteLengthOf(l, division), want) === 0);
+    if (length) changeLength(length);
   }
 
   /** 커서 음의 v (숫자판 볼륨 칸이 보여 준다) */
@@ -230,10 +264,9 @@
     if (note) apply(removeTabNote(song, note), "타브 지우기");
   }
 
-  /** 커서를 격자 한 칸(좌우) 또는 한 줄(위 = 높은 줄) 옮긴다 */
-  function moveCursor(dir: "left" | "right" | "up" | "down") {
+  /** 커서를 격자 한 칸(좌우, 또는 step만큼) 또는 한 줄(위 = 높은 줄) 옮긴다 */
+  function moveCursor(dir: "left" | "right" | "up" | "down", step = rat(1, division)) {
     if (!cursor) return;
-    const step = rat(1, division);
     if (dir === "right") cursor = { ...cursor, at: add(cursor.at, step) };
     else if (dir === "left") cursor = cmp(cursor.at, step) >= 0 ? { ...cursor, at: sub(cursor.at, step) } : cursor;
     else if (dir === "up") cursor = { ...cursor, string: Math.max(1, cursor.string - 1) };
@@ -272,8 +305,9 @@
   });
 
   function padFret(fret: number) {
-    // 한도로 거절된 음이면 커서를 그 자리에 둔다
-    if (enterFret(fret) && padAdvance && !padChord) moveCursor("right");
+    // 한도로 거절된 음이면 커서를 그 자리에 둔다. 넘어갈 때는 그 자리 음의 길이만큼 (4분음표면 다음 4분음표 자리)
+    const dur = enterFret(fret);
+    if (dur && padAdvance && !padChord) moveCursor("right", dur);
   }
 
   function onkeydown(e: KeyboardEvent) {
@@ -290,6 +324,8 @@
       enterFret(fret);
     } else if (key === "Delete" || key === "Backspace") deleteAtCursor();
     else if (key === "l" || key === "L" || key === "&") tieAtCursor();
+    else if (key === "+" || key === "=" || e.code === "NumpadAdd") stepLength(2);
+    else if (key === "-" || e.code === "NumpadSubtract") stepLength(0.5);
     else if (key === "ArrowRight") moveCursor("right");
     else if (key === "ArrowLeft") moveCursor("left");
     else if (key === "ArrowUp") moveCursor("up");
@@ -671,6 +707,15 @@
           />
           <label class="advance"><input type="checkbox" bind:checked={padAdvance} /> {t("ui.fretPadAdvance")}</label>
         </div>
+        {#if noteLength !== undefined && onnotelength}
+          <!-- 음 길이: 옆으로 미는 줄 밖에 두어 좁은 화면에서도 늘 보인다 -->
+          <label class="length" title={t("ui.noteLengthHelp")}>
+            {t("ui.noteLength")}
+            <select value={noteLength} onchange={(e) => changeLength(e.currentTarget.value as NoteLength)}>
+              {#each NOTE_LENGTHS as l (l)}<option value={l}>{lengthLabel(l)}</option>{/each}
+            </select>
+          </label>
+        {/if}
         <button class="close" title={t("ui.fretPadClose")} aria-label={t("ui.fretPadClose")} onclick={closePad}>×</button>
       </div>
       <div class="frets">
@@ -811,6 +856,16 @@
   }
   .moves > * {
     flex: none;
+  }
+  .length {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+  }
+  .length select {
+    min-height: 34px;
   }
   .moves button.on {
     background: var(--accent);

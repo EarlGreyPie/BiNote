@@ -2560,6 +2560,8 @@
           {playhead}
           {division}
           noteDur={newNoteDur}
+          {noteLength}
+          onnotelength={(l) => (noteLength = l)}
           bind:volume={inputVolume}
           volumeRange={profile.volume}
           {colors}
