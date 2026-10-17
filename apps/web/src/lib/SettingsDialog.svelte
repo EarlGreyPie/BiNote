@@ -7,7 +7,7 @@
   import { pwa } from "./pwa.svelte";
   import { setTabTint, tabTint } from "./tabTint.svelte";
   import { rollFlow, setRollFlow, type RollFlow } from "./rollFlow.svelte";
-  import { canPickFolder, canShareFiles, clearSaveFolder, pickSaveFolder, saveTarget, setSaveShare } from "./saveTarget.svelte";
+  import { canAskSave, canPickFolder, canShareFiles, pickSaveFolder, saveTarget, setSaveMode, setSaveShare } from "./saveTarget.svelte";
   import { LANE_MAX, LANE_MIN, saveVolumeLane, volumeLane, type LaneState } from "./volumeLane.svelte";
 
   import Icon from "./Icon.svelte";
@@ -259,16 +259,44 @@
           <output>{volumeLane.size}px</output>
         </label>
       {:else if section === "save"}
-        {#if canPickFolder}
-          <div class="row">
-            <span>{t("ui.saveFolder")}</span>
-            <span class="checks">
-              <span class="folder-name">{saveTarget.folder ?? t("ui.saveFolderDownloads")}</span>
-              <button onclick={() => void pickSaveFolder()}>{t("ui.saveFolderPick")}…</button>
-              {#if saveTarget.folder}<button onclick={() => void clearSaveFolder()}>{t("ui.saveFolderClear")}</button>{/if}
-            </span>
+        {#if canAskSave || canPickFolder}
+          <div class="save-modes" role="radiogroup" aria-label={t("ui.saveFolder")}>
+            {#if canAskSave}
+              <label class="row">
+                <input type="radio" name="save-mode" checked={saveTarget.mode === "ask"} onchange={() => setSaveMode("ask")} />
+                <span>{t("ui.saveAsk")}</span>
+              </label>
+              <p class="muted help">{t("ui.saveAskHelp")}</p>
+            {/if}
+            {#if canPickFolder}
+              <div class="row">
+                <label class="checks">
+                  <input
+                    type="radio"
+                    name="save-mode"
+                    checked={saveTarget.mode === "folder" && !!saveTarget.folder}
+                    onclick={(e) => {
+                      // 정해 둔 폴더가 없으면 먼저 고른다. 고르지 않고 닫으면 원래 방식 그대로
+                      if (saveTarget.folder) return;
+                      e.preventDefault();
+                      void pickSaveFolder();
+                    }}
+                    onchange={() => setSaveMode("folder")}
+                  />
+                  <span>{t("ui.saveFolderFixed")}</span>
+                </label>
+                <span class="checks">
+                  {#if saveTarget.folder}<span class="folder-name">{saveTarget.folder}</span>{/if}
+                  <button onclick={() => void pickSaveFolder()}>{t("ui.saveFolderPick")}…</button>
+                </span>
+              </div>
+              <p class="muted help">{t("ui.saveFolderHelp")}</p>
+            {/if}
+            <label class="row">
+              <input type="radio" name="save-mode" checked={saveTarget.mode === "download" || (saveTarget.mode === "folder" && !saveTarget.folder) || (saveTarget.mode === "ask" && !canAskSave)} onchange={() => setSaveMode("download")} />
+              <span>{t("ui.saveFolderDownloads")}</span>
+            </label>
           </div>
-          <p class="muted help">{t("ui.saveFolderHelp")}</p>
         {:else if canShareFiles}
           <label class="row">
             <input type="checkbox" checked={saveTarget.share} onchange={(e) => setSaveShare(e.currentTarget.checked)} />

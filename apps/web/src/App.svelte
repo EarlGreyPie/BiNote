@@ -97,7 +97,7 @@
   import { Engine, MASTER_MAX } from "./lib/engine";
   import { diag, i18n, instrumentName, LOCALE_LABELS, setLocale, t } from "./lib/i18n.svelte";
   import { openScore } from "./lib/load";
-  import { loadSaveTarget, saveFile } from "./lib/saveTarget.svelte";
+  import { askSaveFile, loadSaveTarget, saveFile } from "./lib/saveTarget.svelte";
   import { flushAllEditors } from "./lib/MmlEditor.svelte";
   import ReferenceBar from "./lib/ReferenceBar.svelte";
   import TapBar from "./lib/TapBar.svelte";
@@ -1892,6 +1892,13 @@
     // 사운드팩 바이트를 읽는 동안에도 작업 중으로 보여 다시 누르지 못하게 한다
     const token = ++wavToken;
     wavProgress = 0;
+    // 저장 창은 누른 직후에만 뜨므로 소리를 만들기 전에 저장할 곳부터 고른다
+    const asked = await askSaveFile(name);
+    if (token !== wavToken) return;
+    if (asked === "cancelled") {
+      wavProgress = undefined;
+      return;
+    }
     let prepared: Awaited<ReturnType<typeof engine.wavRequest>>;
     try {
       prepared = await engine.wavRequest($state.snapshot(song) as Song);
@@ -1920,7 +1927,7 @@
       error = t("ui.wavFailed");
       return;
     }
-    void saveFile(new Uint8Array(result.wav), name);
+    void saveFile(new Uint8Array(result.wav), name, asked);
     const missing = [...new Set(prepared.unresolved.map((u) => instrumentName(u.instrument)))];
     if (missing.length > 0) error = t("ui.wavUnresolved", { list: missing.join(", ") });
   }

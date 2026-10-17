@@ -396,9 +396,10 @@ Importing MIDI does not copy the original exactly. Notes beyond the chord count 
 
 ### Where files are saved
 
-Set this in Settings → **Saving**. By default files are downloaded by the browser (Downloads folder).
+Set this in Settings → **Saving**.
 
-- Chrome and Edge on a PC: **Choose folder** sets a save folder, and every saved file goes there. A file with the same name is overwritten. After the browser restarts, the first save may ask you to allow the folder again.
+- Chrome and Edge on a PC: the default is **Choose folder and name each time**. As when opening a file, a save dialog opens so you pick the folder and file name, and the next save starts in the folder you used last.
+- Chrome and Edge on a PC: pick **Save straight to a set folder** and choose a folder, and every saved file goes there without asking. A file with the same name is overwritten. After the browser restarts, the first save may ask you to allow the folder again. Pick **Downloads folder** to save through browser downloads.
 - iPad and iPhone: with **Save through the share sheet** (on by default), saving opens the share sheet. Use "Save to Files" to pick a folder, or send the file straight to an app such as Google Drive.
 - Other browsers (Firefox and so on) save to the Downloads folder.
 
@@ -432,7 +433,7 @@ The app checks for a new version each time it opens, and if it stays open for a 
 | Sound packs | Add and remove, check and change priority (list order), storage status |
 | Playback | Master volume, Light keys while playing, MIDI keys Velocity → v, Display sync, Instrument volumes |
 | Display | Theme (Follow system · Light · Dark), Accent color, Note look (Rounded corners · Border · Shade by v · Note names when zoomed in), Track colors (By position in score · Hue per score · Saved in file), MML editor text and text size, Roll during playback (Turn pages · Scroll continuously) |
-| Saving | Choose a save folder (Chrome and Edge on a PC), Save through the share sheet (iPad and iPhone) |
+| Saving | Choose each time, a set folder or Downloads (Chrome and Edge on a PC), Save through the share sheet (iPad and iPhone) |
 | Language | Pick the interface language. At first BiNote follows your browser language (English if it is not Korean, English, Japanese, Traditional or Simplified Chinese) and remembers your choice |
 | Shortcuts | Open shortcut settings (Key set: BiNote default / MabiIcco compatible, change keys) |
 
