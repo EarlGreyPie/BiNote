@@ -9,20 +9,37 @@ function end(n: Note): Rat {
   return add(n.start, n.dur);
 }
 
-/** 시작 순으로 놓고, 바로 뒤에 붙은 음이 없는 &는 푼다 */
-function tidy(notes: readonly Note[]): Note[] {
+/**
+ * 시작 순으로 놓고, 바로 뒤에 붙은 음이 없는 &는 푼다.
+ * before(편집 전 음)를 주면, & 사슬 가운데에 있다가 사슬이 끊겨 새로 소리를 내게 된 음은
+ * 그 사슬 첫 음의 v를 받는다 (&로 이은 음은 첫 음 v로 울렸으므로, 적혀 있던 v로 바뀌어 들리지 않게. splitNote와 같은 규칙)
+ */
+function tidy(notes: readonly Note[], before?: readonly Note[]): Note[] {
   const out = [...notes].sort((a, b) => cmp(a.start, b.start));
   for (let i = 0; i < out.length; i++) {
     const n = out[i]!;
     const next = out[i + 1];
     if (n.tie === "next" && (!next || cmp(next.start, end(n)) !== 0)) out[i] = { ...n, tie: "none" };
   }
+  if (!before) return out;
+  // 편집 전 사슬에서 첫 음이 아니던 음 id → 그 사슬 첫 음의 v (&를 풀거나 앞 음을 자를 때 음을 복사하므로 객체가 아니라 id로 찾는다)
+  const headVol = new Map<string, number>();
+  for (const chain of tieChains(before)) for (const n of chain.slice(1)) headVol.set(n.id, chain[0]!.vol);
+  if (headVol.size === 0) return out;
+  for (let i = 0; i < out.length; i++) {
+    const n = out[i]!;
+    const vol = headVol.get(n.id);
+    if (vol === undefined || vol === n.vol) continue;
+    const prev = out[i - 1];
+    const stillTied = prev?.tie === "next" && cmp(end(prev), n.start) === 0;
+    if (!stillTied) out[i] = { ...n, vol };
+  }
   return out;
 }
 
 /** `placed` 자리를 비우고 넣는다. 잘린 앞 음과 짝을 잃은 &는 풀린다 */
 export function placeNote(notes: readonly Note[], placed: Note): Note[] {
-  return tidy(placeRaw(notes, placed));
+  return tidy(placeRaw(notes, placed), notes);
 }
 
 /** placeNote에서 &정리만 뺀 것 (여러 음을 넣는 중간에는 아직 안 넣은 뒤 음 때문에 &를 풀면 안 된다) */
@@ -44,7 +61,7 @@ function placeRaw(notes: readonly Note[], placed: Note): Note[] {
 }
 
 export function removeNotes(notes: readonly Note[], ids: ReadonlySet<string>): Note[] {
-  return tidy(notes.filter((n) => !ids.has(n.id)));
+  return tidy(notes.filter((n) => !ids.has(n.id)), notes);
 }
 
 /** 음을 옮기거나 길이를 바꾼다. 바뀐 자리에 있던 다른 음은 placeNote 규칙으로 정리한다 */
@@ -95,7 +112,7 @@ export function replaceNotes(notes: readonly Note[], changes: ReadonlyMap<string
   let out: Note[] = notes.filter((n) => !changes.has(n.id));
   const placed = [...changes.values()].filter((n): n is Note => n !== null).sort((a, b) => cmp(a.start, b.start));
   for (const n of placed) out = placeRaw(out, n);
-  return tidy(out);
+  return tidy(out, notes);
 }
 
 /** 음 높이를 반음 단위로 옮긴다 (음정 변환). MIDI 범위(0~127)를 벗어나는 음이 하나라도 있으면 undefined */

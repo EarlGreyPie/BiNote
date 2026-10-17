@@ -9,8 +9,6 @@
    * 업데이트 확인은 지금 새 판이 있는지 바로 물어보고, 있으면 받아 둔다. 바꾸기는 새로고침 단추로
    */
   interface Props {
-    /** 열자마자 업데이트를 확인할지 (도움말 메뉴의 업데이트 확인으로 열었을 때) */
-    checkNow?: boolean;
     /** 새로고침 전에 고치던 곡을 보존하는 일 */
     beforeUpdate: () => Promise<void> | void;
     /** 자동 보존이 계속 안 될 때 저장 없이 바꾸기 (묻고 나서) */
@@ -20,7 +18,7 @@
     onclose: () => void;
   }
 
-  let { checkNow = false, beforeUpdate, onreloadanyway, onnotes, onclose }: Props = $props();
+  let { beforeUpdate, onreloadanyway, onnotes, onclose }: Props = $props();
 
   /** 공개 사이트면 이 판을 빌드한 커밋의 소스로, 아니면 저장소 첫 화면으로 */
   const sourceUrl = __MMLCE_BUILD__.published && __MMLCE_BUILD__.commit ? `${REPO_URL}/tree/${__MMLCE_BUILD__.commit}` : REPO_URL;
@@ -28,7 +26,6 @@
   let dialog: HTMLDialogElement;
   $effect(() => {
     dialog.showModal();
-    if (checkNow) void checkForUpdate();
   });
 
   /** 이름 읽는 법: 한국어·일본어 화면에만 붙인다 */

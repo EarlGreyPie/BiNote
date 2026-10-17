@@ -559,6 +559,7 @@ export const zhTW: Partial<Record<MessageKey, string>> = {
   "ui.updateLatest": "目前已是最新版本",
   "ui.changelog": "更新內容",
   "ui.changelogAll": "完整更新紀錄",
+  "ui.currentNotes": "本次更新內容",
   "ui.releaseNotesTitle": "{version} 更新內容",
   "ui.releaseNotesLoading": "正在讀取更新內容…",
   "ui.releaseNotesNone": "無法讀取更新內容。可在下方的完整更新紀錄中查看。",

@@ -160,6 +160,15 @@ describe("splitSong", { timeout: 30_000 }, () => {
     }
   });
 
+  it("마지막 권은 넘어온 짧은 나머지도 버리지 않는다: 빈 권(t만)이 생기거나 곡이 짧아지지 않게 (#97 5차 Codex 점검)", () => {
+    const s = song(["t240 " + "c16d16e16f16".repeat(598) + "c16d16", "r8. " + "c4 ".repeat(598)]);
+    const r = splitSong(s, MOBILE_PROFILE);
+    const last = r.parts[r.parts.length - 1]!;
+    expect(r.parts.length).toBeGreaterThan(1);
+    // 남은 것은 둘째 채널의 넘어온 c16뿐: 버리면 ["t240", ""]가 됐다
+    expect(last.texts.map((t) => t.text)).toEqual(["t240", "c16"]);
+  });
+
   it("모두 쉬는 자리를 먼저 고른다", () => {
     const tracks = [track("a", "c1 r4 c1"), track("b", "e2.r2 e1")];
     expect(cutCount(tracks.map((t) => t.notes), rat(5, 4))).toBe(0);

@@ -377,7 +377,8 @@ function readNotes(
     let id = str(n.id);
     if (!id || usedIds.has(id)) id = freshId(`${trackId}.n${notes.length + 1}`, usedIds);
     usedIds.add(id);
-    notes.push({ id, start, dur, pitch: pitch as number, vol: v, tie: n.tie === "next" ? "next" : "none" });
+    const tabString = Number.isInteger(n.tabString) && (n.tabString as number) >= 1 && (n.tabString as number) <= 12 ? (n.tabString as number) : undefined;
+    notes.push({ id, start, dur, pitch: pitch as number, vol: v, tie: n.tie === "next" ? "next" : "none", ...(tabString ? { tabString } : {}) });
   }
   // 한 트랙은 한 번에 한 음: 시작 순으로 두고 앞 음과 겹치는 음은 뺀다
   notes.sort((a, b) => cmp(a.start, b.start));

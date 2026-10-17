@@ -559,6 +559,7 @@ export const ja: Partial<Record<MessageKey, string>> = {
   "ui.updateLatest": "最新バージョンです",
   "ui.changelog": "更新内容",
   "ui.changelogAll": "すべての更新履歴",
+  "ui.currentNotes": "今回の更新内容",
   "ui.releaseNotesTitle": "{version} の更新内容",
   "ui.releaseNotesLoading": "更新内容を読み込み中…",
   "ui.releaseNotesNone": "更新内容を読み込めませんでした。下のすべての更新履歴で確認できます。",

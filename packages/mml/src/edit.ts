@@ -1,5 +1,6 @@
 import {
   add,
+  carryTabStrings,
   cmp,
   eq,
   sub,
@@ -138,7 +139,8 @@ export function setTrackText(trackId: string, text: string): Command {
       return {
         ...song,
         tempo: normalizeTempo([...removeEach(song.tempo, old.tempo.filter((e) => !stillDeclared(e))), ...now.tempo.filter((e) => !mirror(e))]),
-        tracks: song.tracks.map((t) => (t.id === trackId ? { ...t, notes: now.notes, mml: next } : t)),
+        // 글에는 타브 줄이 없으므로 옛 음의 줄을 시간·높이로 옮겨 받는다
+        tracks: song.tracks.map((t) => (t.id === trackId ? { ...t, notes: carryTabStrings(track.notes, now.notes), mml: next } : t)),
       };
     },
     invert(before) {
@@ -217,7 +219,7 @@ export function compactResult(song: Song, profile?: GameProfile, locked?: Readon
       continue;
     }
     const mml: TrackText = { text: optimizeMml(t.notes, { tempo: placed.get(t.id) ?? [] }).text };
-    const notes = parseTrackText(t.id, mml).notes;
+    const notes = carryTabStrings(t.notes, parseTrackText(t.id, mml).notes);
     // 출력기가 쓸 수 없는 길이(아주 짧은 셋잇단 등)는 버려지므로, 다시 읽은 음이 원래 음과 다르면
     // 곡을 그대로 둔다 (글자 수를 줄이려다 음을 잃지 않게)
     if (!sameSound(t.notes, notes)) return { song, kept: "notes" };
@@ -330,7 +332,7 @@ export function appendSong(other: Song, label = "악보 더하기"): Command {
       }
       const tracks = other.tracks.map((t) => {
         const id = trackId();
-        const notes = t.mml ? parseTrackText(id, t.mml).notes : t.notes.map((n, k) => ({ ...n, id: `${id}.${k + 1}` }));
+        const notes = t.mml ? carryTabStrings(t.notes, parseTrackText(id, t.mml).notes) : t.notes.map((n, k) => ({ ...n, id: `${id}.${k + 1}` }));
         return { ...t, id, playerId: players.get(t.playerId)?.id ?? t.playerId, notes };
       });
       return {

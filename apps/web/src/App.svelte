@@ -188,6 +188,13 @@
   let error = $state("");
   const playback = new Playback(engine);
   let activeTrackId = $state<string | undefined>(undefined);
+  /** 최근에 고른 트랙 (새 것이 뒤). 실행 취소로 고른 트랙이 사라지면 그 전에 보던 트랙으로 돌아간다 */
+  let recentTrackIds: string[] = [];
+  $effect(() => {
+    const id = activeTrackId;
+    if (id === undefined) return;
+    recentTrackIds = [...recentTrackIds.filter((r) => r !== id).slice(-31), id];
+  });
   let orientation = $state<Orientation>("horizontal");
   let division = $state(16);
   /** 새 음 길이 (격자대로 또는 l4·l8. 같은 MML 길이) */
@@ -259,10 +266,10 @@
   const KEYMAP_STORAGE = "mmlce.keymap";
   let keymap = $state.raw<KeymapSettings>(loadStored(KEYMAP_STORAGE, (raw) => parseSettings(parseJson(raw) ?? null)));
   let showKeymap = $state(false);
-  /** BiNote 정보 창. checkNow면 열자마자 업데이트를 확인한다 */
-  let about = $state<{ checkNow: boolean } | undefined>(undefined);
-  /** 받아 둔 새 판의 바뀐 내용 창을 열었는지 */
-  let releaseNotes = $state(false);
+  /** BiNote 정보 창 */
+  let about = $state(false);
+  /** 바뀐 내용 창: 받아 둔 새 판(waiting) 또는 지금 판(current) */
+  let releaseNotes = $state<"waiting" | "current" | undefined>(undefined);
   const bindings = $derived(resolve(keymap));
   let roll = $state<ReturnType<typeof PianoRoll> | undefined>(undefined);
   let openInput: HTMLInputElement;
@@ -398,7 +405,10 @@
       if (change.capo !== undefined) capo = change.capo;
       return;
     }
-    if (history) runIfChanged(setPlayerTab(tabScore, { ...scoreTuning, ...change }, t("ui.tuning")));
+    // 튜닝은 보는 방법이라 실행 취소 기록에 넣지 않는다 (음소거처럼). 되돌리기가 튜닝을 표준으로 돌리지 않게
+    if (!history) return;
+    const next = setPlayerTab(tabScore, { ...scoreTuning, ...change }).apply(history.song);
+    if (next !== history.song) sync(history.amend(next));
   }
 
 
@@ -507,10 +517,14 @@
   });
   const clockNow = $derived(playing ? songSeconds : song && cursor !== undefined ? positionToSeconds(song.tempo, asRat(cursor)) : 0);
 
-  function sync(next: Song) {
+  /** restore: 실행 취소·다시 실행일 때만 true. 사라진 트랙 대신 그 전에 보던 트랙으로 돌아간다 */
+  function sync(next: Song, restore = false) {
     song = next;
-    // 실행 취소로 트랙이 사라지면 남은 트랙을 고른다
-    if (activeTrackId !== undefined && !next.tracks.some((tr) => tr.id === activeTrackId)) activeTrackId = next.tracks[0]?.id;
+    // 고른 트랙이 사라지면: 실행 취소·다시 실행은 그 전에 보던 트랙으로 (새 악보를 되돌리면 첫 악보가 아니라 보던 악보·튜닝으로), 그 밖에는 첫 트랙
+    if (activeTrackId !== undefined && !next.tracks.some((tr) => tr.id === activeTrackId)) {
+      const live = new Set(next.tracks.map((tr) => tr.id));
+      activeTrackId = (restore ? [...recentTrackIds].reverse().find((id) => live.has(id)) : undefined) ?? next.tracks[0]?.id;
+    }
     canUndo = history?.canUndo ?? false;
     canRedo = history?.canRedo ?? false;
   }
@@ -671,11 +685,11 @@
   });
 
   function undo() {
-    if (history) sync(history.undo());
+    if (history) sync(history.undo(), true);
   }
 
   function redo() {
-    if (history) sync(history.redo());
+    if (history) sync(history.redo(), true);
   }
 
   async function onOpen(event: Event) {
@@ -1014,9 +1028,11 @@
     if (track.notes.length > 0 && !confirm(t("ui.removeTrackConfirm", { name: track.name }))) return;
     const s = history.song;
     const index = s.tracks.findIndex((tr) => tr.id === track.id);
+    const wasActive = activeTrackId === track.id;
     const next = history.run(removeTrack(track.id, t("ui.removeTrack")));
     sync(next);
-    if (activeTrackId === track.id) activeTrackId = next.tracks[Math.min(index, next.tracks.length - 1)]?.id;
+    // 고르던 트랙을 지우면 그 자리 이웃 트랙을 고른다 (sync가 첫 트랙으로 바꾸기 전 값으로 판단)
+    if (wasActive) activeTrackId = next.tracks[Math.min(index, next.tracks.length - 1)]?.id;
   }
 
   function appendPasted(other: Song) {
@@ -1816,8 +1832,8 @@
     { label: t("ui.helpGuide"), run: () => window.open(guideUrl(i18n.locale), "_blank", "noopener") },
     { label: t("ui.keymap") + "…", hint: keyOf("view.keymap"), run: () => (showKeymap = true) },
     { separator: true },
-    { label: t("ui.updateCheck") + "…", run: () => (about = { checkNow: true }) },
-    { label: t("ui.aboutTitle") + "…", run: () => (about = { checkNow: false }) },
+    { label: t("ui.currentNotes") + "…", run: () => (releaseNotes = "current") },
+    { label: t("ui.aboutTitle") + "…", run: () => (about = true) },
   ]);
 
   /** 커서(없으면 처음)부터 재생. 반복 구간이 있으면 그 시작부터 끝까지를 끊김 없이 되풀이한다 */
@@ -2316,7 +2332,7 @@
     }}
     onabout={() => {
       settings = undefined;
-      about = { checkNow: false };
+      about = true;
     }}
     initial={settings.section}
     onclose={() => (settings = undefined)}
@@ -2325,16 +2341,19 @@
 
 {#if about}
   <AboutDialog
-    checkNow={about.checkNow}
     {beforeUpdate}
     onreloadanyway={reloadWithoutSaving}
-    onnotes={() => (releaseNotes = true)}
-    onclose={() => (about = undefined)}
+    onnotes={() => (releaseNotes = "waiting")}
+    onclose={() => (about = false)}
   />
 {/if}
 
 {#if releaseNotes}
-  <ReleaseNotesDialog version={pwa.newVersion ?? ""} onclose={() => (releaseNotes = false)} />
+  <ReleaseNotesDialog
+    version={releaseNotes === "current" ? __MMLCE_BUILD__.version : (pwa.newVersion ?? "")}
+    current={releaseNotes === "current"}
+    onclose={() => (releaseNotes = undefined)}
+  />
 {/if}
 
 {#if recoverOpen}
@@ -2783,7 +2802,7 @@
     <span>{t(pwa.updateFailed ? "ui.updateSaveFailed" : "ui.updateReady")}</span>
     <button disabled={pwa.applying} onclick={() => applyUpdate(beforeUpdate)}>{t("ui.updateReload")}</button>
     {#if pwa.updateFailed}<button disabled={pwa.applying} onclick={reloadWithoutSaving}>{t("ui.updateReloadAnyway")}</button>{/if}
-    <button onclick={() => (releaseNotes = true)}>{t("ui.changelog")}</button>
+    <button onclick={() => (releaseNotes = "waiting")}>{t("ui.changelog")}</button>
     <button class="icon" title={t("ui.dismiss")} aria-label={t("ui.dismiss")} onclick={() => (pwa.updateReady = false)}><Icon name="x" /></button>
   </div>
 {/if}

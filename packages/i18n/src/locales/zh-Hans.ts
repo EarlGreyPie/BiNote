@@ -559,6 +559,7 @@ export const zhHans: Partial<Record<MessageKey, string>> = {
   "ui.updateLatest": "当前已是最新版本",
   "ui.changelog": "更新内容",
   "ui.changelogAll": "完整更新记录",
+  "ui.currentNotes": "本次更新内容",
   "ui.releaseNotesTitle": "{version} 更新内容",
   "ui.releaseNotesLoading": "正在读取更新内容…",
   "ui.releaseNotesNone": "无法读取更新内容。可在下方的完整更新记录中查看。",

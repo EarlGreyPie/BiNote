@@ -418,10 +418,11 @@ function render(
   verify = false,
   minCarry = 0,
 ): { texts: { trackId: string; text: string }[]; moved: number; lossy: string[] } {
-  // 앞 권에서 넘어온 음의 남은 부분이 아주 짧으면 다시 치지 않는다 (곡 처음부터 쓰는 권은 넘어온 음이 없다)
+  // 앞 권에서 넘어온 음의 남은 부분이 아주 짧으면 다시 치지 않는다 (곡 처음부터 쓰는 권은 넘어온 음이 없다).
+  // 마지막 권(padEnd가 아님)은 버리지 않는다: 버리면 곡 길이가 줄고, 남은 것이 그것뿐이면 빈 권(t만)이 생긴다
   const shortCarry = (n: PrintableNote, noteEnd: Rat) =>
     n.tie !== "next" && positionToSeconds(tempo, noteEnd) - positionToSeconds(tempo, start) < minCarry - 1e-9;
-  const chunks = tracks.map((notes) => clip(notes, start, end, minCarry > 0 && cmp(start, ZERO) > 0 ? shortCarry : undefined));
+  const chunks = tracks.map((notes) => clip(notes, start, end, minCarry > 0 && padEnd && cmp(start, ZERO) > 0 ? shortCarry : undefined));
   const moves: TempoMove[] = [];
   const lossy: string[] = [];
   const local = tempoIn(tempo, start, end);

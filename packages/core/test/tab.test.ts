@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assignTab, rat, STANDARD_TUNING, type Note } from "../src/index.js";
+import { assignTab, carryTabStrings, rat, STANDARD_TUNING, type Note } from "../src/index.js";
 
 let id = 0;
 const n = (start: number, pitch: number): Note => ({ id: `n${++id}`, start: rat(start, 4), dur: rat(1, 4), pitch, vol: 12, tie: "none" });
@@ -77,5 +77,27 @@ describe("바리톤 튜닝", () => {
     const slid = assignTab([from, to], STANDARD_TUNING, new Map(), new Map([["s2", "s1"]]));
     expect(slid[0]!.notes[0]!.at!.string).toBe(slid[1]!.notes[0]!.at!.string);
     expect(plain[0]!.notes[0]!.at!.string).not.toBe(plain[1]!.notes[0]!.at!.string);
+  });
+
+  it("음에 적힌 줄(tabString)을 지킨다: 내슈빌 바리톤 A줄 6프렛이 C줄 3프렛으로 옮겨 가지 않는다 (beta.11)", () => {
+    const nashville = { ...STANDARD_TUNING, strings: [57, 52, 60, 55, 38, 33] };
+    const three = [0, 1, 2].map((i) => n(i, 63));
+    expect(frets(assignTab(three, nashville))).toEqual(["3:3", "3:3", "3:3"]);
+    expect(frets(assignTab(three.map((x) => ({ ...x, tabString: 1 })), nashville))).toEqual(["1:6", "1:6", "1:6"]);
+  });
+});
+
+describe("타브 줄 옮겨 받기 (carryTabStrings)", () => {
+  const note = (id: string, start: number, len: number, pitch: number, tabString?: number): Note => ({
+    id, start: rat(start, 4), dur: rat(len, 4), pitch, vol: 12, tie: "none", ...(tabString ? { tabString } : {}),
+  });
+
+  it("순서가 아니라 시간과 높이로 맞춘다: 나뉜 음은 둘 다, 합친 음은 시작 음의 줄을 받는다", () => {
+    expect(carryTabStrings([note("a", 0, 2, 63, 1)], [note("x", 0, 1, 63), note("y", 1, 1, 63)]).map((n) => n.tabString)).toEqual([1, 1]);
+    expect(carryTabStrings([note("a", 0, 1, 63, 1), note("b", 1, 1, 63, 3)], [note("x", 0, 2, 63)]).map((n) => n.tabString)).toEqual([1]);
+  });
+
+  it("높이가 다르거나 옛 음이 없는 자리는 받지 않는다", () => {
+    expect(carryTabStrings([note("a", 0, 1, 63, 1)], [note("x", 0, 1, 64), note("y", 1, 1, 63)]).map((n) => n.tabString)).toEqual([undefined, undefined]);
   });
 });

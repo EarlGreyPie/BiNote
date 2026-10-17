@@ -186,6 +186,7 @@ export const en: Partial<Record<MessageKey, string>> = {
   "ui.updateLatest": "You're on the latest version",
   "ui.changelog": "What's new",
   "ui.changelogAll": "Full changelog",
+  "ui.currentNotes": "What's new in this version",
   "ui.releaseNotesTitle": "What's new in {version}",
   "ui.releaseNotesLoading": "Loading what's new…",
   "ui.releaseNotesNone": "Couldn't load what's new. You can read it in the full changelog below.",

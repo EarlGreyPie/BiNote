@@ -473,49 +473,70 @@ describe("트랙 순서·복제·악보 간 이동", () => {
   });
 });
 
-describe("악보 타브 튜닝 (PR #97 점검)", () => {
+describe("악보 타브 튜닝 (기록 밖 상태, beta.11)", () => {
   const base = () => newSong({ playerName: "피아노 1", trackName: "트랙 1" });
   const tabOf = (s: { players: readonly { id: string; tab?: unknown }[] }, id: string) => s.players.find((p) => p.id === id)?.tab;
+  /** 앱처럼 튜닝은 기록 없이 바꾼다 */
+  const tune = (h: History, id: string, tuning: string, capo: number) => h.amend(setPlayerTab(id, { tuning, capo }).apply(h.song));
 
-  it("새 악보에 정한 튜닝은 실행 취소 → 다시 실행 뒤에도 남는다 (재현 A)", () => {
+  it("튜닝을 바꾼 뒤 되돌리기는 앞 편집만 되돌리고 튜닝은 그대로 둔다 (beta.10 제보)", () => {
     const h = new History(base());
-    h.run(addPlayer("lute", "류트 1", "트랙 1"));
-    h.run(setPlayerTab("p2", { tuning: "dropD", capo: 2 }));
+    h.run(addTrack("p1", "트랙 2"));
+    tune(h, "p1", "dropD", 2);
+    h.run(addTrack("p1", "트랙 3"));
     h.undo();
-    expect(tabOf(h.song, "p2")).toBeUndefined();
-    expect(tabOf(h.redo()!, "p2")).toEqual({ tuning: "dropD", capo: 2 });
-    // 악보 추가까지 되돌렸다 다시 해도 같다
-    h.undo();
-    h.undo();
-    h.redo();
-    expect(tabOf(h.redo()!, "p2")).toEqual({ tuning: "dropD", capo: 2 });
+    expect(tabOf(h.song, "p1")).toEqual({ tuning: "dropD", capo: 2 });
+    // 튜닝보다 앞 편집까지 되돌려도 튜닝은 남는다
+    expect(tabOf(h.undo(), "p1")).toEqual({ tuning: "dropD", capo: 2 });
+    expect(h.canUndo).toBe(false);
+    expect(tabOf(h.redo(), "p1")).toEqual({ tuning: "dropD", capo: 2 });
   });
 
-  it("지운 악보와 같은 id로 새로 만든 악보는 튜닝을 물려받지 않는다", () => {
+  it("곡째 되돌리는 명령(악기 바꾸기 등)을 실행 취소해도 지금 튜닝을 지킨다", () => {
+    const h = new History(base());
+    h.run(setPlayerInstrument("p1", "guitar"));
+    tune(h, "p1", "bass4", 0);
+    expect(tabOf(h.undo(), "p1")).toEqual({ tuning: "bass4", capo: 0 });
+    expect(tabOf(h.redo(), "p1")).toEqual({ tuning: "bass4", capo: 0 });
+  });
+
+  it("새 악보에 정한 튜닝은 실행 취소 → 다시 실행 뒤에도 남는다 (#97 점검 재현 A)", () => {
     const h = new History(base());
     h.run(addPlayer("lute", "류트 1", "트랙 1"));
-    h.run(setPlayerTab("p2", { tuning: "bass4", capo: 0 }));
-    const track = h.song.tracks.find((t) => t.playerId === "p2")!;
-    h.run(removeTrack(track.id));
+    tune(h, "p2", "dropD", 2);
+    h.undo();
+    expect(h.song.players.some((p) => p.id === "p2")).toBe(false);
+    expect(tabOf(h.redo(), "p2")).toEqual({ tuning: "dropD", capo: 2 });
+  });
+
+  it("지운 악보와 같은 id로 새로 만든 악보는 튜닝을 물려받지 않고, 되돌리면 옛 악보는 제 튜닝으로 돌아온다", () => {
+    const h = new History(base());
+    h.run(addPlayer("lute", "류트 1", "트랙 1"));
+    tune(h, "p2", "bass4", 0);
+    h.run(removeTrack("t2"));
     const again = h.run(addPlayer("lute", "류트 2", "트랙 1"));
     expect(again.players.find((p) => p.id === "p2")?.name).toBe("류트 2");
     expect(tabOf(again, "p2")).toBeUndefined();
+    tune(h, "p2", "mandolin", 1);
+    h.undo();
+    expect(tabOf(h.undo(), "p2")).toEqual({ tuning: "bass4", capo: 0 });
+    h.redo();
+    expect(tabOf(h.redo(), "p2")).toEqual({ tuning: "mandolin", capo: 1 });
   });
 
-  it("다시 실행한 이름 바꾸기 뒤 바꾼 튜닝이 지우기 취소에서 그대로 돌아온다 (재현 B)", () => {
+  it("다시 실행한 이름 바꾸기 뒤 바꾼 튜닝이 지우기 취소에서 그대로 돌아온다 (#97 점검 재현 B)", () => {
     const h = new History(base());
     h.run(addPlayer("guitar", "기타 1", "트랙 1"));
-    h.run(setPlayerTab("p2", { tuning: "dropD", capo: 2 }));
+    tune(h, "p2", "dropD", 2);
     h.run(renamePlayer("p2", "기타"));
-    // 마지막 트랙을 지우면 악보도 지워진다
     h.run(removeTrack("t2"));
-    expect(h.song.players.some((p) => p.id === "p2")).toBe(false);
     h.undo();
     h.undo();
     h.redo();
-    h.run(setPlayerTab("p2", { tuning: "bass4", capo: 4 }));
-    h.run(removeTrack("t2"));
-    expect(tabOf(h.undo()!, "p2")).toEqual({ tuning: "bass4", capo: 4 });
+    tune(h, "p2", "bass4", 4);
+    h.redo();
+    expect(h.song.players.some((p) => p.id === "p2")).toBe(false);
+    expect(tabOf(h.undo(), "p2")).toEqual({ tuning: "bass4", capo: 4 });
   });
 
   it("같은 값이면 곡을 그대로 둔다", () => {

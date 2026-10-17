@@ -1,4 +1,4 @@
-import type { Song } from "./model.js";
+import type { PlayerTab, Song } from "./model.js";
 
 /**
  * 모든 편집(타이핑, 마우스, MIDI 건반)은 명령 하나가 된다.
@@ -13,6 +13,8 @@ export interface Command {
 interface Entry {
   readonly forward: Command;
   readonly backward: Command;
+  /** 이 단계를 실행 취소해 사라진 악보의 타브 튜닝. 다시 실행해 그 악보가 돌아오면 되살린다 */
+  gone?: Map<string, PlayerTab | undefined>;
 }
 
 /** 실행 취소·다시 실행 스택. 텍스트와 피아노롤이 같은 스택을 쓴다. */
@@ -21,8 +23,20 @@ export class History {
   private redoStack: Entry[] = [];
   /** 트랙 id → 음소거·솔로. 실행 취소로 사라졌다가 다시 실행으로 돌아온 트랙에도 얹는다 */
   private listening = new Map<string, { mute: boolean; solo: boolean }>();
+  /**
+   * 악보 id → 타브 튜닝(Player.tab). 튜닝은 보는 방법이라 기록 밖 상태(amend)다. 실행 취소·다시 실행이 곡째 되돌려도
+   * 지금 튜닝을 다시 얹고, 사라졌다 돌아온 악보에도 마지막 튜닝을 얹는다
+   */
+  private tabs = new Map<string, PlayerTab | undefined>();
 
-  constructor(private current: Song) {}
+  constructor(private current: Song) {
+    this.rememberTabs();
+  }
+
+  /** 지금 곡의 악보 튜닝을 기억한다. 새로 만든 악보(같은 id를 쓰던 지운 악보 포함)는 그 악보 것으로 바뀐다 */
+  private rememberTabs(): void {
+    for (const p of this.current.players) this.tabs.set(p.id, p.tab);
+  }
 
   get song(): Song {
     return this.current;
@@ -44,6 +58,7 @@ export class History {
     for (const t of this.current.tracks) if (!existed.has(t.id)) this.listening.set(t.id, { mute: t.mute, solo: t.solo });
     this.undoStack.push({ forward: command, backward: command.invert(before) });
     this.redoStack = [];
+    this.rememberTabs();
     return this.current;
   }
 
@@ -54,13 +69,23 @@ export class History {
   amend(next: Song): Song {
     for (const t of next.tracks) this.listening.set(t.id, { mute: t.mute, solo: t.solo });
     this.current = next;
+    this.rememberTabs();
     return this.current;
   }
 
   undo(): Song {
     const entry = this.undoStack.pop();
     if (!entry) return this.current;
-    this.current = keepListening(this.current, entry.backward.apply(this.current), this.listening);
+    const next = keepListening(this.current, entry.backward.apply(this.current), this.listening);
+    // 이 단계가 만든 악보는 실행 취소로 사라진다: 그 튜닝은 이 단계에 맡겨 두고, 같은 id의 옛 악보가 돌아오면 그 악보 것을 쓴다
+    const live = new Set(next.players.map((p) => p.id));
+    for (const p of this.current.players) {
+      if (live.has(p.id)) continue;
+      (entry.gone ??= new Map()).set(p.id, this.tabs.get(p.id));
+      this.tabs.delete(p.id);
+    }
+    this.current = keepTabs(next, this.tabs);
+    this.rememberTabs();
     this.redoStack.push(entry);
     return this.current;
   }
@@ -68,7 +93,10 @@ export class History {
   redo(): Song {
     const entry = this.redoStack.pop();
     if (!entry) return this.current;
-    this.current = keepListening(this.current, entry.forward.apply(this.current), this.listening);
+    for (const [id, tab] of entry.gone ?? []) this.tabs.set(id, tab);
+    delete entry.gone;
+    this.current = keepTabs(keepListening(this.current, entry.forward.apply(this.current), this.listening), this.tabs);
+    this.rememberTabs();
     this.undoStack.push(entry);
     return this.current;
   }
@@ -88,6 +116,21 @@ function keepListening(now: Song, next: Song, remembered: ReadonlyMap<string, { 
     return { ...t, mute: cur.mute, solo: cur.solo };
   });
   return changed ? { ...next, tracks } : next;
+}
+
+/** 기억한 타브 튜닝을 악보에 다시 얹는다 (기억이 없는 악보는 그대로) */
+function keepTabs(next: Song, remembered: ReadonlyMap<string, PlayerTab | undefined>): Song {
+  let changed = false;
+  const players = next.players.map((p) => {
+    if (!remembered.has(p.id)) return p;
+    const tab = remembered.get(p.id);
+    if (tab?.tuning === p.tab?.tuning && tab?.capo === p.tab?.capo) return p;
+    changed = true;
+    if (tab) return { ...p, tab };
+    const { tab: _tab, ...rest } = p;
+    return rest;
+  });
+  return changed ? { ...next, players } : next;
 }
 
 /** 곡 전체를 바꿔 끼우는 가장 단순한 명령. 되돌릴 때는 이전 곡으로 바꾼다. */

@@ -32,6 +32,16 @@ describe("writeProject / readProject", () => {
     expect(back.players.map((p) => [p.id, p.splitFrom])).toEqual([["a", undefined], ["b", undefined], ["c", undefined], ["d", undefined], ["e", "a"]]);
   });
 
+  it("타브에서 고른 줄(tabString)은 저장했다 다시 열어도 남고, 1~12 정수가 아니면 버린다", () => {
+    const song = sample();
+    const tracks = song.tracks.map((t, i) => ({ ...t, notes: t.notes.map((x, j) => ({ ...x, tabString: i === 0 && j === 0 ? 1 : 99 })) }));
+    const back = readProject(writeProject({ ...song, tracks })).song;
+    const all = back.tracks.flatMap((t) => t.notes);
+    expect(all.length).toBeGreaterThan(1);
+    expect(back.tracks[0]!.notes[0]!.tabString).toBe(1);
+    expect(all.slice(1).every((x) => x.tabString === undefined)).toBe(true);
+  });
+
   it("악보 타브 튜닝은 카포가 0~24 정수일 때만 읽는다", () => {
     const song = sample();
     const bad = writeProject({ ...song, players: song.players.map((p) => ({ ...p, tab: { tuning: "dropD", capo: 30 } })) });

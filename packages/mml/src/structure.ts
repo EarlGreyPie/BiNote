@@ -444,7 +444,7 @@ export function renamePlayer(playerId: string, name: string, label = "악보 이
   );
 }
 
-/** 악보의 타브 튜닝·카포를 정한다 (실행 취소 한 칸). 같은 값이면 곡을 그대로 돌려준다 */
+/** 악보의 타브 튜닝·카포를 정한다. 같은 값이면 곡을 그대로 돌려준다. 앱은 실행 취소 기록 밖(History.amend)으로 쓴다 */
 export function setPlayerTab(playerId: string, tab: PlayerTab, label = "튜닝"): Command {
   return replaceWith(label, (song) => {
     const player = song.players.find((p) => p.id === playerId);

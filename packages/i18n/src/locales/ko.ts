@@ -557,6 +557,7 @@ export const ko = {
   "ui.updateLatest": "지금 버전이 최신이에요",
   "ui.changelog": "바뀐 내용",
   "ui.changelogAll": "전체 변경 내역",
+  "ui.currentNotes": "이번 업데이트 내역",
   "ui.releaseNotesTitle": "{version}에서 바뀐 내용",
   "ui.releaseNotesLoading": "바뀐 내용을 읽는 중…",
   "ui.releaseNotesNone": "바뀐 내용을 읽지 못했습니다. 아래 전체 변경 내역에서 볼 수 있습니다.",

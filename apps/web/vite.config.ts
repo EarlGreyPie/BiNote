@@ -95,7 +95,8 @@ const build = buildInfo();
 const notes = changelogSection(readFileSync(new URL("../../CHANGELOG.md", import.meta.url), "utf8"), build.version);
 
 export default defineConfig({
-  define: { __MMLCE_BUILD__: JSON.stringify(build) },
+  // 지금 판의 CHANGELOG 절은 ? 메뉴 "이번 업데이트 내역"이 Releases를 못 읽을 때 쓴다
+  define: { __MMLCE_BUILD__: JSON.stringify(build), __MMLCE_NOTES__: JSON.stringify(notes) },
   // GitHub Pages 등 하위 경로에 올려도 되도록 상대 경로로 만든다
   base: "./",
   plugins: [svelte(), precacheList(build, notes)],

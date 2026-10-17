@@ -89,8 +89,6 @@
   const span = $derived((width - LEFT) / pxPerWhole);
   const songEnd = $derived(Math.max(0, ...tracks.flatMap((tr) => tr.notes.map((n) => toFloat(n.start) + toFloat(n.dur)))));
   const timeMax = $derived(Math.max(span, songEnd + span * 0.5));
-  /** 타브에서 넣은 음의 줄 (음 id → 줄). 자동 배정이 이 줄을 먼저 지킨다. 저장하지는 않는다 */
-  let prefer = $state.raw<ReadonlyMap<string, number>>(new Map());
   /**
    * &로 이은 음. 같은 높이면 이어 울림(hold: 뒷자리에 괄호 숫자와 호), 다른 높이면 슬라이드(slide: / \ 선).
    * from은 화면에 숫자로 쓰는 앞 음(같은 높이로 여러 번 이었으면 맨 처음 음)
@@ -123,7 +121,7 @@
   const slides = $derived(new Map(links.flatMap((l) => (l.kind === "slide" ? [[l.to, l.from] as const] : []))));
   /** 음 id → 트랙 id (여러 트랙을 모아 보일 때 숫자에 트랙 색을 칠한다) */
   const trackOf = $derived(new Map(tracks.flatMap((t) => t.notes.map((n) => [n.id, t.id] as const))));
-  const events = $derived(assignTab(tracks.flatMap((t) => struck(t.notes)), tuning, prefer, slides));
+  const events = $derived(assignTab(tracks.flatMap((t) => struck(t.notes)), tuning, new Map(), slides));
 
   /** 타브 커서: 시간(격자에 맞춤)과 줄(1 = 가장 높은 줄) */
   let cursor = $state.raw<{ at: Rat; string: number } | undefined>(undefined);
@@ -138,15 +136,43 @@
     return e?.notes.find((x) => x.at?.string === c.string)?.note;
   }
 
+  /**
+   * 커서 음, 없으면 그 줄에 괄호로 보이는 이어 울리는 음(같은 높이로 &로 이은 뒷음). 타브 배정은 이어 울리는 음을
+   * 빼고 하므로 noteAtCursor로는 못 찾는다. 길이 바꾸기에 쓴다
+   */
+  function lengthNoteAtCursor(): Note | undefined {
+    const direct = noteAtCursor();
+    if (direct || !cursor) return direct;
+    const c = cursor;
+    for (const track of tracks) {
+      const notes = [...track.notes].sort((a, b) => cmp(a.start, b.start));
+      const k = notes.findIndex((n) => cmp(n.start, c.at) === 0);
+      if (k < 0) continue;
+      let j = k;
+      while (j > 0) {
+        const prev = notes[j - 1]!;
+        if (prev.tie !== "next" || prev.pitch !== notes[j]!.pitch || cmp(add(prev.start, prev.dur), notes[j]!.start) !== 0) break;
+        j--;
+      }
+      if (j === k) continue;
+      const head = notes[j]!;
+      const e = events.find((x) => cmp(x.start, head.start) === 0);
+      if (e?.notes.some((x) => x.note.id === head.id && x.at?.string === c.string)) return notes[k];
+    }
+    return undefined;
+  }
+
   function apply(edit: TabEdit, label: string, string?: number) {
     if (edit.full) {
       onfull?.(maxTracks);
       return;
     }
     if (edit.changes.length === 0 && !edit.newTrack) return;
-    if (edit.noteId && string !== undefined) prefer = new Map(prefer).set(edit.noteId, string);
-    if (edit.newTrack) onnewtrack?.(edit.newTrack, label);
-    else onedit?.(edit.changes, label);
+    // 고른 줄은 음에 적는다 (Note.tabString): 곡과 함께 저장되고, 되돌리기·보기 전환·다시 열기에도 남는다
+    const id = edit.noteId;
+    const stamp = (notes: readonly Note[]): Note[] => (id && string !== undefined ? notes.map((n) => (n.id === id && n.tabString !== string ? { ...n, tabString: string } : n)) : [...notes]);
+    if (edit.newTrack) onnewtrack?.({ ...edit.newTrack, notes: stamp(edit.newTrack.notes) }, label);
+    else onedit?.(edit.changes.map((c) => ({ ...c, notes: stamp(c.notes) })), label);
   }
 
   /**
@@ -169,6 +195,8 @@
     }
     apply(edit, "타브 입력", cursor.string);
     onpreview?.(pitch);
+    // 잠근 트랙이면 앱이 곡을 바꾸지 않으므로 커서도 넘기지 않는다
+    if (edit.changes.length > 0 && edit.changes.every((ch) => locked?.has(ch.trackId))) return undefined;
     return replace?.dur ?? dur;
   }
 
@@ -233,13 +261,13 @@
   function changeLength(length: NoteLength) {
     onnotelength?.(length);
     if (length === "grid") return;
-    const note = noteAtCursor();
+    const note = lengthNoteAtCursor();
     if (note) apply(setTabNoteLength(song, note, noteLengthOf(length, division)), "음 길이", cursor?.string);
   }
 
   /** +/− 키: 커서 음(없으면 새 음) 길이를 두 배 / 반으로 (온음표 ~ 64분음표) */
   function stepLength(factor: 2 | 0.5) {
-    const now = noteAtCursor()?.dur ?? noteDur ?? rat(1, division);
+    const now = lengthNoteAtCursor()?.dur ?? noteDur ?? rat(1, division);
     const want = mul(now, factor === 2 ? rat(2) : rat(1, 2));
     const length = NOTE_LENGTHS.find((l) => l !== "grid" && cmp(noteLengthOf(l, division), want) === 0);
     if (length) changeLength(length);

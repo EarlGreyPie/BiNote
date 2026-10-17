@@ -107,3 +107,28 @@ describe("타브 입력", () => {
     expect(assignTab([n], STANDARD_TUNING, new Map([["x", 2]]))[0]!.notes[0]!.at).toEqual({ string: 2, fret: 5 });
   });
 });
+
+describe("타브에서 & 사슬 가운데 음 (beta.11, #98 Codex 점검)", () => {
+  const chained = (): Song => {
+    const s = song();
+    const notes: Note[] = [
+      { id: "e", start: rat(0), dur: rat(1, 4), pitch: 64, vol: 12, tie: "next" },
+      { id: "g", start: rat(1, 4), dur: rat(1, 4), pitch: 67, vol: 2, tie: "next" },
+      { id: "a", start: rat(1, 2), dur: rat(1, 4), pitch: 69, vol: 3, tie: "none" },
+    ];
+    return { ...s, tracks: s.tracks.map((t) => (t.id === "a" ? { ...t, notes } : t)) };
+  };
+  const vols = (notes: readonly Note[]) => notes.map((n) => `${n.id}${n.tie === "next" ? "&" : ""}:${n.vol}`);
+
+  it("가운데 음 길이를 줄이면 뒤 음은 사슬 첫 음 v로 소리 낸다", () => {
+    const s = chained();
+    const g = s.tracks[0]!.notes[1]!;
+    expect(vols(setTabNoteLength(s, g, rat(1, 8)).changes[0]!.notes)).toEqual(["e&:12", "g:2", "a:12"]);
+  });
+
+  it("가운데 음을 지워도 뒤 음은 사슬 첫 음 v를 받는다", () => {
+    const s = chained();
+    expect(vols(removeTabNote(s, s.tracks[0]!.notes[1]!).changes[0]!.notes)).toEqual(["e:12", "a:12"]);
+  });
+});
+

@@ -58,6 +58,8 @@ export interface Note {
   readonly vol: number;
   /** "next"면 & 로 다음 음과 잇는다 */
   readonly tie: "none" | "next";
+  /** 타브에서 고른 줄 (1 = 가장 높은 줄). 타브 자동 배정이 이 줄을 먼저 지킨다. 소리·출력과는 상관없다 */
+  readonly tabString?: number;
 }
 
 /** 출력할 때 존중할 사용자 표기 습관. 비어 있으면 최적화기가 마음대로 고른다. */

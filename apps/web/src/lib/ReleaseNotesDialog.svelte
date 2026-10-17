@@ -12,16 +12,19 @@
   import { fetchRelease, renderNotes, type ReleaseNotes } from "./releaseNotes";
 
   /**
-   * 받아 둔 새 판의 바뀐 내용. 공개 사이트는 GitHub Releases의 그 판 본문을 먼저 읽고,
-   * 못 읽으면 새 판에 든 CHANGELOG 절을 보여 준다. 전체 변경 내역은 아래 링크로
+   * 한 판의 바뀐 내용: 받아 둔 새 판(새 판 안내) 또는 지금 판(? 메뉴 → 이번 업데이트 내역).
+   * 공개 사이트는 GitHub Releases의 그 판 본문을 먼저 읽고, 못 읽으면 그 판의 CHANGELOG 절을 보여 준다.
+   * 전체 변경 내역은 아래 링크로
    */
   interface Props {
-    /** 새 판 번호. 못 읽었으면 "" (그때는 CHANGELOG 절만) */
+    /** 판 번호. 못 읽었으면 "" (그때는 CHANGELOG 절만) */
     version: string;
+    /** 지금 판이면 true: CHANGELOG 절을 앱에 든 것에서 꺼낸다. 아니면 받아 둔 새 서비스 워커에게 묻는다 */
+    current?: boolean;
     onclose: () => void;
   }
 
-  let { version, onclose }: Props = $props();
+  let { version, current = false, onclose }: Props = $props();
 
   let dialog: HTMLDialogElement;
   let notes = $state<ReleaseNotes | null | undefined>(undefined);
@@ -40,7 +43,8 @@
     if (known) return known;
     // 테스트 사이트·개발 서버는 공개 저장소의 판이 아니라 Releases를 읽지 않는다
     const release = v && __MMLCE_BUILD__.published ? await fetchRelease(REPO, v, signal) : null;
-    const result = release ?? (await waitingChangelog().then((text) => (text ? { text } : null)));
+    const fallback = current ? __MMLCE_NOTES__ : await waitingChangelog();
+    const result = release ?? (fallback ? { text: fallback } : null);
     if (release) cache.set(v, release);
     return result;
   }

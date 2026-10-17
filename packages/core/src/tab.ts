@@ -121,7 +121,7 @@ function move(from: number | undefined, to: number | undefined): number {
 const PREFER_PENALTY = 200;
 
 /**
- * 여러 트랙의 음을 모아 타브로 배정한다. prefer는 음 id → 사용자가 타브에서 고른 줄(1부터).
+ * 여러 트랙의 음을 모아 타브로 배정한다. prefer는 음 id → 사용자가 타브에서 고른 줄(1부터). 없으면 음에 적힌 줄(Note.tabString).
  * 고른 줄은 칠 수 있으면 지키고, 다른 음과 부딪히면 그때만 옮긴다.
  * slides는 슬라이드로 닿는 음 id → 출발 음 id. 되도록 출발 음과 같은 줄에 놓는다
  */
@@ -139,7 +139,7 @@ export function assignTab(
   }
   if (groups.length === 0) return [];
 
-  const layers = groups.map((g) => candidates(g.notes.map((n) => n.pitch), tuning, g.notes.map((n) => prefer.get(n.id))));
+  const layers = groups.map((g) => candidates(g.notes.map((n) => n.pitch), tuning, g.notes.map((n) => prefer.get(n.id) ?? n.tabString)));
   // 비터비: 묶음마다 후보별 (누적 비용, 이전 후보)
   let costs = layers[0]!.map((c) => c.cost);
   /** 후보마다 그 경로에서 아직 울릴 수 있는 줄과 끝나는 때. 끝난 음은 묶음을 넘어갈 때 버린다 */
@@ -210,4 +210,30 @@ export function assignTab(
       }),
     };
   });
+}
+
+/**
+ * MML 글을 다시 읽어 음을 바꿔 끼울 때, 옛 음에 적힌 타브 줄(tabString)을 새 음으로 옮긴다.
+ * 글에는 줄 정보가 없어 그대로 두면 다시 읽은 음이 줄을 잃는다. 다시 쓰면 음이 합쳐지거나 나뉘므로 순서가 아니라
+ * 시간과 높이로 맞춘다: 새 음의 시작이 옛 음이 울리는 동안 안에 있고 높이가 같으면 그 줄을 받는다.
+ * 한 트랙은 한 번에 한 음이라 둘 다 시작 순으로 훑는다
+ */
+export function carryTabStrings(old: readonly Note[], next: readonly Note[]): Note[] {
+  if (!old.some((n) => n.tabString !== undefined)) return [...next];
+  const from = [...old].sort((a, b) => cmp(a.start, b.start));
+  const order = next.map((_, i) => i).sort((a, b) => cmp(next[a]!.start, next[b]!.start));
+  const out = [...next];
+  let j = 0;
+  for (const i of order) {
+    const n = next[i]!;
+    while (j < from.length && cmp(add(from[j]!.start, from[j]!.dur), n.start) <= 0) j++;
+    // 같은 자리에 시작하는 음이 여럿이면(겹친 음) 높이가 같은 것을 찾는다
+    for (let k = j; k < from.length && cmp(from[k]!.start, n.start) <= 0; k++) {
+      const o = from[k]!;
+      if (o.pitch !== n.pitch || cmp(add(o.start, o.dur), n.start) <= 0) continue;
+      if (o.tabString !== undefined && n.tabString === undefined) out[i] = { ...n, tabString: o.tabString };
+      break;
+    }
+  }
+  return out;
 }

@@ -264,3 +264,30 @@ describe("appendSong", () => {
     expect(next.players.map((q) => [q.id, q.splitFrom])).toEqual([["p1", undefined], ["p2", undefined], ["p3", "p2"], ["p4", undefined]]);
   });
 });
+
+describe("MML을 다시 읽어도 타브 줄(tabString)이 남는다 (beta.11 Codex 점검)", () => {
+  const strung = (): Song => {
+    const s = base();
+    return { ...s, tracks: s.tracks.map((t) => ({ ...t, notes: t.notes.map((n) => ({ ...n, tabString: 2 })) })) };
+  };
+
+  it("MML 편집기에서 끝에 빈칸만 쳐도 줄을 잃지 않는다", () => {
+    const s = setTrackText("t1", "t120 cde ").apply(strung());
+    expect(s.tracks[0]!.notes.map((n) => n.tabString)).toEqual([2, 2, 2]);
+  });
+
+  it("글을 바꿔 새로 생긴 음은 줄이 없고, 그대로인 음은 줄을 지킨다", () => {
+    const s = setTrackText("t1", "t120 cdg").apply(strung());
+    expect(s.tracks[0]!.notes.map((n) => n.tabString)).toEqual([2, 2, undefined]);
+  });
+
+  it("글자 수 줄이기도 줄을 지킨다", () => {
+    const s = compactSong().apply(strung());
+    expect(s.tracks.flatMap((t) => t.notes.map((n) => n.tabString))).toEqual([2, 2, 2, 2]);
+  });
+
+  it("곡을 더해 붙일 때도 줄을 지킨다", () => {
+    const s = appendSong(strung()).apply(base());
+    expect(s.tracks.slice(2).flatMap((t) => t.notes.map((n) => n.tabString))).toEqual([2, 2, 2, 2]);
+  });
+});

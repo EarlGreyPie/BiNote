@@ -237,3 +237,40 @@ describe("여러 트랙 음량 자리", () => {
     expect(ranks.get("b")?.get("b1")).toBe("bottom");
   });
 });
+
+describe("& 사슬이 끊길 때 뒤 음 v (beta.11, #98 Codex 점검)", () => {
+  // v12 e & g & a 에서 g·a에 적힌 v는 2·3이지만 & 때문에 v12로 울린다
+  const chain = (): Note[] => [
+    { ...note("e", 0, 2, 64, "next"), vol: 12 },
+    { ...note("g", 2, 2, 67, "next"), vol: 2 },
+    { ...note("a", 4, 2, 69), vol: 3 },
+  ];
+  const vols = (notes: Note[]) => notes.map((n) => `${n.id}${n.tie === "next" ? "&" : ""}:${n.vol}`);
+
+  it("피아노롤에서 가운데 음을 줄이면(placeNote/updateNote) 손대지 않은 뒤 음은 사슬 첫 음 v로 소리 낸다", () => {
+    expect(vols(updateNote(chain(), "g", { dur: rat(1, 8) }))).toEqual(["e&:12", "g:2", "a:12"]);
+  });
+
+  it("여러 음을 한꺼번에 줄여도(replaceNotes) 같다", () => {
+    const g = chain()[1]!;
+    expect(vols(replaceNotes(chain(), new Map([["g", { ...g, dur: rat(1, 8) }]])))).toEqual(["e&:12", "g:2", "a:12"]);
+  });
+
+  it("가운데 음을 지우면(removeNotes) 뒤 음이 사슬 첫 음 v를 받는다. 사슬 밖 음은 그대로", () => {
+    const outside = { ...note("z", 8, 2, 72), vol: 5 };
+    expect(vols(removeNotes([...chain(), outside], new Set(["g"])))).toEqual(["e:12", "a:12", "z:5"]);
+  });
+
+  it("앞뒤 음을 함께 지워 &가 풀리며 복사된 음도 사슬 첫 음 v를 받는다 (#100 3차 Codex 점검)", () => {
+    expect(vols(removeNotes(chain(), new Set(["e", "a"])))).toEqual(["g:12"]);
+    expect(vols(replaceNotes(chain(), new Map([["e", null], ["a", null]])))).toEqual(["g:12"]);
+  });
+
+  it("첫 음만 옮겨 잘린 가운데 음도 사슬 첫 음 v를 받는다 (#100 3차 Codex 점검)", () => {
+    expect(vols(updateNote(chain(), "e", { start: rat(3, 8) }))).toEqual(["g:12", "e:12"]);
+  });
+
+  it("사슬이 그대로 이어지면 적힌 v를 바꾸지 않는다", () => {
+    expect(vols(updateNote(chain(), "a", { dur: rat(1, 8) }))).toEqual(["e&:12", "g&:2", "a:3"]);
+  });
+});
