@@ -32,6 +32,16 @@ describe("parseEditorState", () => {
     });
   });
 
+  it("악보별 튜닝은 곡에 있는 악보의 맞는 값만 남긴다", () => {
+    const withPlayers: Song = { ...song, players: [{ id: "p1", name: "", instrument: { canonical: "lute" } }, { id: "p2", name: "", instrument: { canonical: "piano" } }] };
+    const state = parseEditorState(
+      { scoreTunings: { p1: { tuning: "bass4", capo: 0 }, p2: { tuning: "toString", capo: 1 }, gone: { tuning: "dropD", capo: 0 } } },
+      withPlayers,
+    );
+    expect(state).toEqual({ scoreTunings: { p1: { tuning: "bass4", capo: 0 } } });
+    expect(parseEditorState({ scoreTunings: { p2: { tuning: "dropD", capo: 30 } } }, withPlayers)).toEqual({});
+  });
+
   it("없는 트랙·모르는 격자·깨진 맞춤값은 버린다", () => {
     const state = parseEditorState(
       { activeTrackId: "gone", division: 7, viewMode: "staff", tuning: "toString", capo: -1, reference: { name: "a" }, video: { name: "v", high: 1, low: 2 } },

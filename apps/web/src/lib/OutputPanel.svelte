@@ -88,6 +88,7 @@
           <strong>{t("ui.scoreN", { n: row.number })}</strong>
           <span>{instrumentName(row.instrument)}</span>
           <span class="muted">{t("ui.outputTracks", { count: row.tracks.length, max: row.maxChords })}</span>
+          {#if row.silent > 0}<span class="muted" title={t("ui.pasteSilentHint")}>{t("ui.pasteSilent", { count: row.silent })}</span>{/if}
           {#if row.fold > 0}<span class="badge warn" title={t("ui.outputChecksHint")}>{t("ui.outputFold", { count: row.fold })}</span>{/if}
           {#if row.errors > 0}<span class="badge bad" title={t("ui.outputChecksHint")}>{t("ui.outputErrors", { count: row.errors })}</span>{/if}
           {#if row.warnings > 0}<span class="badge warn" title={t("ui.outputChecksHint")}>{t("ui.outputWarnings", { count: row.warnings })}</span>{/if}

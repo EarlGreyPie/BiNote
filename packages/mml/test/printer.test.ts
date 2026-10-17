@@ -49,3 +49,18 @@ describe("printMml", () => {
     expect(printMml(notes).text).toBe("l8ccc");
   });
 });
+
+describe("쉼표 앞의 &", () => {
+  it("게임이 무시하므로 쓰지 않는다 (쉼표 앞, 트랙 끝). 음과 음 사이 &는 그대로", () => {
+    expect(printMml(parseMml("a4&r4a4&").notes).text).toBe(printMml(parseMml("a4r4a4").notes).text);
+    expect(printMml(parseMml("a4&b4").notes).text).toContain("&");
+  });
+
+  it("최적화 출력도 쓰지 않고, 쓴 글은 원래 음과 소리가 같다고 본다", async () => {
+    const { optimizeMml, sameSound } = await import("../src/index.js");
+    const notes = parseMml("a16&r16a16&r16a16&r16a16&r16").notes;
+    const text = optimizeMml(notes).text;
+    expect(text).not.toContain("&");
+    expect(sameSound(parseMml(text).notes, notes)).toBe(true);
+  });
+});

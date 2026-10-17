@@ -1,7 +1,7 @@
 import type { Song } from "@mmlce/core";
 import type { ProjectEditor } from "@mmlce/fileio";
 import { GRID_DIVISIONS } from "./keymap";
-import { TUNINGS, type TuningName } from "./tunings";
+import { TUNINGS, type ScoreTuning, type TuningName } from "./tunings";
 import { NOTE_LENGTHS, type NoteLength } from "./roll";
 
 /**
@@ -39,6 +39,8 @@ export interface EditorState {
   readonly viewMode?: "roll" | "tab";
   readonly tuning?: TuningName;
   readonly capo?: number;
+  /** 악보(연주자) id → 그 악보의 타브 튜닝. 따로 고른 악보만 적고, 없는 악보는 tuning·capo를 쓴다 */
+  readonly scoreTunings?: Readonly<Record<string, ScoreTuning>>;
   readonly reference?: ReferenceFit;
   readonly video?: VideoFit;
   /** 트랙 id → 보기 상태 (숨기거나 잠근 트랙만) */
@@ -49,6 +51,9 @@ type Obj = Record<string, unknown>;
 const isObject = (v: unknown): v is Obj => typeof v === "object" && v !== null && !Array.isArray(v);
 const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 
+const validTuning = (v: unknown): v is TuningName => typeof v === "string" && Object.hasOwn(TUNINGS, v);
+const validCapo = (v: unknown): v is number => Number.isInteger(v) && (v as number) >= 0 && (v as number) <= 24;
+
 /** 파일에 적힌 화면 상태를 검사한다. 모르는 값·맞지 않는 값은 버린다 (곡은 그대로 열린다) */
 export function parseEditorState(raw: ProjectEditor, song: Song): EditorState {
   const out: { -readonly [K in keyof EditorState]: EditorState[K] } = {};
@@ -56,8 +61,16 @@ export function parseEditorState(raw: ProjectEditor, song: Song): EditorState {
   if ((GRID_DIVISIONS as readonly unknown[]).includes(raw.division)) out.division = raw.division as number;
   if ((NOTE_LENGTHS as readonly unknown[]).includes(raw.noteLength)) out.noteLength = raw.noteLength as NoteLength;
   if (raw.viewMode === "roll" || raw.viewMode === "tab") out.viewMode = raw.viewMode;
-  if (typeof raw.tuning === "string" && Object.hasOwn(TUNINGS, raw.tuning)) out.tuning = raw.tuning as TuningName;
-  if (Number.isInteger(raw.capo) && (raw.capo as number) >= 0 && (raw.capo as number) <= 24) out.capo = raw.capo as number;
+  if (validTuning(raw.tuning)) out.tuning = raw.tuning;
+  if (validCapo(raw.capo)) out.capo = raw.capo;
+  if (isObject(raw.scoreTunings)) {
+    const tunings: Record<string, ScoreTuning> = {};
+    for (const p of song.players) {
+      const v = raw.scoreTunings[p.id];
+      if (isObject(v) && validTuning(v.tuning) && validCapo(v.capo)) tunings[p.id] = { tuning: v.tuning, capo: v.capo };
+    }
+    if (Object.keys(tunings).length > 0) out.scoreTunings = tunings;
+  }
   const r = raw.reference;
   if (isObject(r) && typeof r.name === "string" && r.name && finite(r.offsetMs) && finite(r.volume))
     out.reference = { name: r.name, offsetMs: r.offsetMs, volume: Math.min(1.5, Math.max(0, r.volume)) };

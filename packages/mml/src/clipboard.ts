@@ -10,6 +10,8 @@ export function mmlAt(texts: readonly string[]): string {
 
 export interface PlayerScore {
   readonly playerId: string;
+  /** 붙여넣는 글에 더 붙은, 소리 내지 않는 트랙 수 (오르골·축음기. pasteTrackIds) */
+  readonly silent: number;
   /** 연주자 한 명이 한도보다 많은 트랙을 가졌으면 악보를 여러 개로 나눈다 (0부터) */
   readonly index: number;
   readonly trackIds: readonly string[];
@@ -44,15 +46,47 @@ export function scoreChunks(song: Song, maxChords: number | ((playerId: string) 
 }
 
 /**
+ * 악보 하나를 게임에 붙여넣을 때 넣는 채널 (트랙 id, null은 빈 채널). 보통은 그 악보 트랙 그대로다.
+ * 오르골·축음기처럼 악보 하나에 pasteLimit(게임 악보 한도 6)보다 적게 치는 악기는 앞 size채널만 소리 내고 뒤 채널은 치지 않지만,
+ * 악보 길이·템포는 붙여넣은 모든 채널로 정해진다. 그래서 이 악보 트랙으로 소리 칸을 채우고(모자라면 빈 채널),
+ * 그 뒤에 그 연주자의 나머지 트랙을 차례로(맨 끝에서 처음으로 돌아) pasteLimit까지 붙여, 같은 곡을 나눠 치는
+ * 오르골들의 길이·템포가 같게 한다. 소리 칸에 다른 악보 트랙이 들어가면 두 대에서 겹쳐 나므로 넣지 않는다
+ * (6트랙 오르골: 1장 1~6, 2장 4·5·6·1·2·3 / 4트랙: 1장 1~4, 2장 4·빈·빈·1·2·3)
+ */
+export function pasteTrackIds(
+  song: Song,
+  chunk: ScoreChunk,
+  maxChords: number | ((playerId: string) => number),
+  pasteLimit?: number,
+): readonly (string | null)[] {
+  const size = Math.max(1, typeof maxChords === "number" ? maxChords : maxChords(chunk.playerId));
+  const mine = song.tracks.filter((t) => t.playerId === chunk.playerId).map((t) => t.id);
+  if (pasteLimit === undefined || size >= pasteLimit || mine.length <= chunk.trackIds.length || chunk.trackIds.length === 0) return chunk.trackIds;
+  const start = mine.indexOf(chunk.trackIds[0]!);
+  const rest = [...mine.slice(start), ...mine.slice(0, start)].filter((id) => !chunk.trackIds.includes(id));
+  const sounding = [...chunk.trackIds, ...Array<null>(Math.max(0, size - chunk.trackIds.length)).fill(null)];
+  return [...sounding, ...rest].slice(0, Math.max(pasteLimit, chunk.trackIds.length));
+}
+
+/**
  * 채널별 글을 연주자마다 악보 하나로 묶는다 (scoreChunks와 같은 묶음). 글이 없는 트랙은 뺀다
  */
 export function playerScores(
   song: Song,
   texts: readonly { readonly trackId: string; readonly text: string }[],
   maxChords: number | ((playerId: string) => number),
+  /** 게임 악보 하나의 트랙 한도 (profile.maxChordsPerPlayer). 주면 오르골·축음기 악보에 나머지 트랙을 붙인다 (pasteTrackIds) */
+  pasteLimit?: number,
 ): PlayerScore[] {
+  const textOf = (id: string) => texts.find((x) => x.trackId === id);
+  const has = (x: { trackId: string; text: string } | undefined): x is { trackId: string; text: string } => x !== undefined;
   return scoreChunks(song, maxChords).flatMap((chunk) => {
-    const mine = chunk.trackIds.map((id) => texts.find((x) => x.trackId === id)).filter((x): x is { trackId: string; text: string } => x !== undefined);
-    return mine.length === 0 ? [] : [{ ...chunk, trackIds: mine.map((x) => x.trackId), text: mmlAt(mine.map((x) => x.text)) }];
+    const mine = chunk.trackIds.map(textOf).filter(has);
+    if (mine.length === 0) return [];
+    const pasted = pasteTrackIds(song, chunk, maxChords, pasteLimit);
+    if (pasted === chunk.trackIds) return [{ ...chunk, trackIds: mine.map((x) => x.trackId), text: mmlAt(mine.map((x) => x.text)), silent: 0 }];
+    // 소리 칸 자리가 밀리지 않게 글이 없는 트랙·빈 채널도 자리를 지킨다
+    const silent = pasted.filter((id) => id !== null && !chunk.trackIds.includes(id) && textOf(id)).length;
+    return [{ ...chunk, trackIds: mine.map((x) => x.trackId), text: mmlAt(pasted.map((id) => (id === null ? "" : (textOf(id)?.text ?? "")))), silent }];
   });
 }

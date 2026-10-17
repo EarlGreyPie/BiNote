@@ -30,6 +30,31 @@ describe("타브 입력", () => {
     expect(removeTabNote(s1, note).changes[0]!.notes).toEqual([]);
   });
 
+  it("빈 트랙이 없으면 덮어쓰지 않고 트랙을 더해 넣고, 한도면 넣지 않는다", () => {
+    let s = song();
+    const put = (pitch: number) => {
+      const edit = placeTabNote(s, ["a", "b"], "a", rat(0), rat(1, 8), pitch, undefined, undefined, 3);
+      s = { ...s, tracks: s.tracks.map((t) => ({ ...t, notes: edit.changes.find((c) => c.trackId === t.id)?.notes ?? t.notes })) };
+      return edit;
+    };
+    put(64);
+    put(59);
+    const third = put(55);
+    // 앞 두 음은 그대로 남는다 (예전에는 고른 트랙의 64가 지워졌다)
+    expect(s.tracks.map((t) => t.notes.map((n) => n.pitch))).toEqual([[64], [59]]);
+    expect(third.newTrack?.playerId).toBe("p");
+    expect(third.newTrack?.notes.map((n) => n.pitch)).toEqual([55]);
+    expect(third.noteId).toBe(third.newTrack?.notes[0]?.id);
+    expect(third.newTrack?.instrument).toBeUndefined();
+    // 고른 트랙에 악기를 따로 정했으면 새 트랙도 그 악기 (악보 기본 악기로 바뀌지 않게)
+    const guitar = { canonical: "guitar" };
+    const own = { ...s, tracks: s.tracks.map((t) => (t.id === "a" ? { ...t, instrument: guitar } : t)) };
+    expect(placeTabNote(own, ["a", "b"], "a", rat(0), rat(1, 8), 55, undefined, undefined, 3).newTrack?.instrument).toEqual(guitar);
+    // 트랙이 이미 한도(2)면 넣지 않는다
+    const full = placeTabNote(s, ["a", "b"], "a", rat(0), rat(1, 8), 55, undefined, undefined, 2);
+    expect(full).toEqual({ changes: [], noteId: undefined, full: true });
+  });
+
   it("숫자 두 개를 이어 치면 두 자리 프렛", () => {
     expect(fretFromKeys("", "1", 20)).toEqual({ fret: 1, buffer: "1" });
     expect(fretFromKeys("1", "2", 20)).toEqual({ fret: 12, buffer: "" });

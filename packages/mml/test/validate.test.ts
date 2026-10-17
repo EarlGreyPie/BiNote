@@ -53,6 +53,14 @@ describe("곡 검사", () => {
     );
   });
 
+  it("오르골 악보의 다른 악기 트랙, 보통 악보의 축음기 트랙은 경고", () => {
+    const box: Player = { id: "p1", name: "오르골", instrument: { canonical: "music-box" } };
+    const own = (id: string, canonical: string) => ({ ...track(id, "c"), instrument: { canonical } });
+    const codesOf = (s: Song) => validateSong(s, MOBILE_PROFILE).filter((d) => d.code.startsWith("solo")).map((d) => [d.code, d.trackId]);
+    expect(codesOf(song([track("t1", "c"), own("t2", "flute"), own("t3", "music-box")], [box]))).toEqual([["solo-score-own-instrument", "t2"]]);
+    expect(codesOf(song([track("t1", "c"), own("t2", "gramophone"), own("t3", "flute")]))).toEqual([["solo-instrument-track", "t2"]]);
+  });
+
   it("음색 경계(e)를 넘는 &", () => {
     // o4d+(63) → o4e(64): 경계 64를 넘는다. o4e → o4f는 넘지 않는다
     const out = validateSong(song([track("t1", "d+&e e&f")]), MOBILE_PROFILE);

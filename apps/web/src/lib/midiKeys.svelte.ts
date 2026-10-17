@@ -1,4 +1,8 @@
 import { connectMidi } from "./midiInput";
+import { loadStored, saveStored } from "./persist";
+
+/** 건반 세기 → v 사용 여부와, 처음 켤 때 물어봤는지 (이 브라우저에 기억) */
+const VELOCITY_KEY = "mmlce.midiVelocity";
 
 /** 첫 건반부터 이 시간 안에 누른 건반은 화음 하나 */
 const CHORD_WINDOW_MS = 60;
@@ -11,6 +15,8 @@ export interface MidiKeysHandlers {
   chord(chord: { pitches: number[]; velocity: number }): void;
   /** MIDI 건반을 못 쓰는 브라우저 */
   unsupported(): void;
+  /** 처음 켤 때 한 번: 건반 세기를 v로 넣을지 묻는다 (true = 넣기) */
+  askVelocity(): boolean;
 }
 
 /**
@@ -18,8 +24,10 @@ export interface MidiKeysHandlers {
  * 연결하는 동안 끄면 늦게 끝난 연결은 바로 끊고, 끌 때 대기 화음·울리는 음을 모두 정리한다.
  */
 export class MidiKeys {
-  /** 켜져 있으면 연결된 장치 이름과 세기 사용 여부 */
-  status = $state<{ devices: string[]; velocity: boolean } | undefined>(undefined);
+  /** 켜져 있으면 연결된 장치 이름 */
+  status = $state<{ devices: string[] } | undefined>(undefined);
+  /** 건반 세기를 v로 넣을지. 저장 값이 없으면(아직 안 물어봄) undefined */
+  private velocityPref = $state(loadStored(VELOCITY_KEY, (raw) => (raw === "1" ? true : raw === "0" ? false : undefined)));
   private disconnect: (() => void) | undefined;
   /** 연결 세대 */
   private session = 0;
@@ -30,11 +38,12 @@ export class MidiKeys {
   constructor(private readonly on: MidiKeysHandlers) {}
 
   get velocity(): boolean {
-    return this.status?.velocity ?? false;
+    return this.velocityPref ?? false;
   }
 
   setVelocity(velocity: boolean): void {
-    if (this.status) this.status = { ...this.status, velocity };
+    this.velocityPref = velocity;
+    saveStored(VELOCITY_KEY, velocity ? "1" : "0");
   }
 
   /** 켜 두면 건반을 눌러도 악보에 넣지 않는다 (새 판으로 바꾸는 동안) */
@@ -65,9 +74,11 @@ export class MidiKeys {
 
   async toggle(): Promise<void> {
     if (this.status) return this.stop();
+    // 처음 켤 때 한 번만 묻는다. 답은 설정 → 재생에서 언제든 바꿀 수 있다
+    if (this.velocityPref === undefined) this.setVelocity(this.on.askVelocity());
     const session = ++this.session;
     try {
-      this.status = { devices: [], velocity: false };
+      this.status = { devices: [] };
       const disconnect = await connectMidi({
         onNoteOn: (pitch, velocity) => {
           if (session === this.session) this.keyDown(pitch, velocity);

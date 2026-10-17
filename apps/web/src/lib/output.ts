@@ -21,6 +21,8 @@ export interface OutputRow {
   readonly warnings: number;
   /** 출력기로 정확히 못 써서 화면 글을 그대로 넣은 트랙 */
   readonly asIs: readonly string[];
+  /** 붙여넣을 글 뒤에 붙은, 소리 내지 않는 트랙 수 (오르골·축음기 악보 길이·템포 맞추기) */
+  readonly silent: number;
   /** 음을 쪼갤 수 없어 뒤쪽 음 경계로 옮겨 쓴 템포 수 */
   readonly moved: number;
 }
@@ -56,7 +58,7 @@ export function outputRows(
   const byTrack = new Map<string, { level: string; code: string }[]>();
   for (const a of diagnostics.tracks) byTrack.set(a.track.id, [...a.diagnostics]);
   for (const d of diagnostics.song) if (d.trackId) byTrack.get(d.trackId)?.push(d);
-  return gameScores(song, (id) => maxChordsOf(profile, instrumentOf(id))).map((score, k) => {
+  return gameScores(song, (id) => maxChordsOf(profile, instrumentOf(id)), profile.maxChordsPerPlayer).map((score, k) => {
     const list = score.trackIds.flatMap((id) => byTrack.get(id) ?? []).filter((d) => !SHOWN_ELSEWHERE.has(d.code));
     const tracks = score.texts.map(({ trackId, text }) => ({
       trackId,
@@ -77,6 +79,7 @@ export function outputRows(
       errors: list.filter((d) => d.level === "error").length,
       warnings: list.filter((d) => d.level === "warning" && d.code !== "pitch-fold").length,
       asIs: score.asIs,
+      silent: score.pasted.filter((id) => id !== null && !score.trackIds.includes(id)).length,
       moved: score.moved.length,
     };
   });

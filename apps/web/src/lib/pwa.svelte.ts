@@ -78,8 +78,8 @@ export function registerServiceWorker(): void {
   });
 }
 
-/** 서비스 워커에게 자기 판 번호를 묻는다. 답이 없으면 "" */
-function askVersion(sw: ServiceWorker): Promise<string> {
+/** 서비스 워커에게 묻는다 (version: 자기 판 번호, notes: 자기 판의 CHANGELOG 절). 답이 없으면 "" */
+function ask(sw: ServiceWorker, what: "version" | "notes"): Promise<string> {
   return new Promise((resolve) => {
     const channel = new MessageChannel();
     const timer = setTimeout(() => resolve(""), 3000);
@@ -87,8 +87,15 @@ function askVersion(sw: ServiceWorker): Promise<string> {
       clearTimeout(timer);
       resolve(typeof e.data === "string" ? e.data : "");
     };
-    sw.postMessage("version", [channel.port2]);
+    sw.postMessage(what, [channel.port2]);
   });
+}
+
+const askVersion = (sw: ServiceWorker) => ask(sw, "version");
+
+/** 받아 두고 기다리는 새 판의 CHANGELOG 절. 새 판이 없거나 옛 서비스 워커라 답이 없으면 "" */
+export function waitingChangelog(): Promise<string> {
+  return waiting ? ask(waiting, "notes") : Promise.resolve("");
 }
 
 /** 설치 중인 새 워커가 다 받을(installed) 때까지 기다린다. 실패하면(redundant) false */

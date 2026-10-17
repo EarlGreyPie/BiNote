@@ -14,6 +14,9 @@ export class AutosaveTracker<T> {
   private seq = 0;
   private savedSeq = 0;
 
+  /** same: 두 상태가 같은지 (기본은 같은 객체). 곡과 편집 상태처럼 묶은 상태를 값으로 비교할 때 준다 */
+  constructor(readonly same: (a: T, b: T) => boolean = (a, b) => a === b) {}
+
   /** 새 작업을 시작한다. opened는 연 그대로의 상태 (안 고쳤으면 적지 않는다) */
   reset(opened: T | undefined): void {
     this.work++;
@@ -25,7 +28,8 @@ export class AutosaveTracker<T> {
   /** 적을 것이 있나. 적는 중인 상태가 있으면 그것과 비교한다 (그 저장이 끝나면 기록이 그것이 된다) */
   dirty(current: T | undefined): current is T {
     if (current === undefined) return false;
-    return this.saving !== undefined ? current !== this.saving : current !== this.saved;
+    const base = this.saving !== undefined ? this.saving : this.saved;
+    return base === undefined || !this.same(current, base);
   }
 
   /** 저장을 시작한다. 돌려받은 함수를 저장 결과(성공 여부)와 함께 부른다 */
@@ -35,7 +39,7 @@ export class AutosaveTracker<T> {
     this.saving = current;
     return (ok) => {
       if (work !== this.work) return;
-      if (this.saving === current) this.saving = undefined;
+      if (this.saving !== undefined && this.same(this.saving, current)) this.saving = undefined;
       if (ok && seq > this.savedSeq) {
         this.savedSeq = seq;
         this.saved = current;
@@ -63,7 +67,7 @@ export class AutosaveQueue<T> {
   flush(current: T | undefined, prepare: (state: T) => () => Promise<boolean>): Promise<void> {
     if (!this.tracker.dirty(current)) {
       // 적는 중인 상태면 그 저장의 결과를 따른다. 이미 적은 상태면 할 일이 없다
-      return current !== undefined && this.last?.state === current ? this.last.job : Promise.resolve();
+      return current !== undefined && this.last && this.tracker.same(this.last.state, current) ? this.last.job : Promise.resolve();
     }
     const save = prepare(current);
     const done = this.tracker.begin(current);

@@ -31,3 +31,18 @@ describe("playerScores", () => {
     ]);
   });
 });
+
+describe("playerScores 오르골", () => {
+  it("오르골 악보에는 소리 없는 나머지 트랙을 붙이고 그 수를 알려 준다", () => {
+    const box: Player = { id: "p1", name: "오르골", instrument: { canonical: "music-box" } };
+    const tracks = ["a", "b", "c", "d"].map((id) => track(id, "p1"));
+    const song: Song = { ...emptySong({ title: "", author: "", profileId: "mobile" }), players: [box], tracks };
+    const texts = tracks.map((t) => ({ trackId: t.id, text: t.id.toUpperCase() }));
+    expect(playerScores(song, texts, 3, 6).map((s) => [s.trackIds, s.text, s.silent])).toEqual([
+      [["a", "b", "c"], "MML@A,B,C,D;", 1],
+      // 소리 칸(앞 3)에 다른 악보 트랙을 넣지 않는다: 두 대에서 겹쳐 나므로 빈 채널로 둔다
+      [["d"], "MML@D,,,A,B,C;", 3],
+    ]);
+  });
+});
+

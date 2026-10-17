@@ -235,7 +235,7 @@
       </span>
     {/if}
   {:else}
-    <label class="field">
+    <label class="field" title={t("ui.tuningHelp")}>
       <span class="muted">{t("ui.tuning")}</span>
       <select value={tuningName} onchange={(e) => ontuning(e.currentTarget.value as TuningName)}>
         {#each Object.entries(TUNINGS) as [name, info] (name)}<option value={name}>{t(info.key)}</option>{/each}

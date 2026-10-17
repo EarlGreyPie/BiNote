@@ -69,3 +69,19 @@ describe("parseMml", () => {
     for (const n of r.notes) expect(() => add(n.start, n.dur)).not.toThrow();
   });
 });
+
+describe("게임이 보는 채널 길이 (gameEnd)", () => {
+  // 인게임 실측 (t100에서 4분음표 0.6초): 맨 끝 쉼표 하나만 길이에서 빠진다
+  it.each([
+    ["a4r1", rat(1, 4)],
+    ["a4r2r2", rat(3, 4)],
+    ["a4r4a4r1", rat(3, 4)],
+    ["r2r4e4", rat(1)],
+    ["a4", rat(1, 4)],
+    ["a4r1t120", rat(5, 4)],
+    ["a4r1 /* 주석 */ ", rat(1, 4)],
+    ["r1", rat(0)],
+  ])("%s", (text, expected) => {
+    expect(parseMml(text).gameEnd).toEqual(expected);
+  });
+});

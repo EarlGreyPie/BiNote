@@ -81,9 +81,25 @@ describe("splitSong", { timeout: 30_000 }, () => {
     const r = splitSong(s, MOBILE_PROFILE, { window: 0.01 });
     const first = r.parts[0]!;
     expect(r.parts.length).toBeGreaterThan(1);
-    // 첫 권을 다시 읽은 길이 = 자른 자리 − 앞당김
+    // 첫 권을 게임처럼 잰 길이(맨 끝 쉼표 하나는 빠진다) = 자른 자리 − 앞당김
     const read = parseMml(first.texts[0]!.text);
-    expect(read.end).toEqual(add(first.start, { n: first.end.n * first.trim.d - first.trim.n * first.end.d, d: first.end.d * first.trim.d }));
+    expect(read.gameEnd).toEqual(add(first.start, { n: first.end.n * first.trim.d - first.trim.n * first.end.d, d: first.end.d * first.trim.d }));
+  });
+
+  it("한 권 내내 쉬는 악보도 버려질 쉼표를 붙여 권 길이를 지킨다", () => {
+    const melody = "t120 " + "cdefgab>c<".repeat(12);
+    const s: Song = {
+      ...song([melody, "c4"]),
+      players: [piano, { id: "p2", name: "플루트", instrument: { canonical: "flute" } }],
+    };
+    const two: Song = { ...s, tracks: s.tracks.map((t, k) => (k === 0 ? t : { ...t, playerId: "p2" })) };
+    const r = splitSong(two, small, { gapMs: null });
+    expect(r.parts.length).toBeGreaterThan(2);
+    for (const part of r.parts.slice(0, -1)) {
+      const length = (part.end.n / part.end.d) - (part.start.n / part.start.d);
+      const end = parseMml(part.texts[1]!.text).gameEnd;
+      expect(end.n / end.d).toBeCloseTo(length);
+    }
   });
 
   it("앞당김은 자르는 자리 앞 구간의 템포로 잰다", () => {

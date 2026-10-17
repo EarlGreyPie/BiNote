@@ -9,6 +9,7 @@
     toFloat,
     History,
     maxChordsOf,
+    isSoloInstrument,
     barBeatAt,
     measureStart,
     meterAt,
@@ -45,6 +46,7 @@
   import {
     addPlayer,
     addTrack,
+    addTrackWithNotes,
     appendSong,
     compactResult,
     compactSong,
@@ -79,6 +81,7 @@
     scoresMissingTempo,
     setPlayerInstrument,
     setTrackInstrument,
+    type SoloSplit,
     setTrackRole,
     setTracksNotes,
     setTrackNotes,
@@ -134,11 +137,12 @@
   import VoiceDialog, { parseVoicePrefs, VOICE_STORAGE, type VoiceMode, type VoiceOptions, type VoicePreview } from "./lib/VoiceDialog.svelte";
   import TransposeDialog, { type TransposeCheck, type TransposeScope } from "./lib/TransposeDialog.svelte";
   import { Playback } from "./lib/playback.svelte";
-  import { TUNINGS, type TuningName } from "./lib/tunings";
+  import { TUNINGS, type ScoreTuning, type TuningName } from "./lib/tunings";
   import PianoRoll from "./lib/PianoRoll.svelte";
   import TabView from "./lib/TabView.svelte";
   import KeymapDialog from "./lib/KeymapDialog.svelte";
   import AboutDialog from "./lib/AboutDialog.svelte";
+  import ReleaseNotesDialog from "./lib/ReleaseNotesDialog.svelte";
   import SplitPanel from "./lib/SplitPanel.svelte";
   import { setSplitSpread, setSplitThorough, splitPrefs } from "./lib/splitPrefs.svelte";
   import OutputPanel from "./lib/OutputPanel.svelte";
@@ -242,6 +246,8 @@
   let addScoreOpen = $state(false);
   let tuningName = $state<TuningName>("standard");
   let capo = $state(0);
+  /** 악보(연주자)마다 고른 타브 튜닝. 고르지 않은 악보는 tuningName·capo를 쓴다 */
+  let scoreTunings = $state.raw<Readonly<Record<string, ScoreTuning>>>({});
   let unplayable = $state(0);
   /** 배경 영상은 사용자가 고른 로컬 파일만 쓴다 */
   let video = $state<BackgroundVideo | undefined>(undefined);
@@ -254,6 +260,8 @@
   let showKeymap = $state(false);
   /** BiNote 정보 창. checkNow면 열자마자 업데이트를 확인한다 */
   let about = $state<{ checkNow: boolean } | undefined>(undefined);
+  /** 받아 둔 새 판의 바뀐 내용 창을 열었는지 */
+  let releaseNotes = $state(false);
   const bindings = $derived(resolve(keymap));
   let roll = $state<ReturnType<typeof PianoRoll> | undefined>(undefined);
   let openInput: HTMLInputElement;
@@ -370,7 +378,23 @@
     videoName = "";
     videoPlay = false;
   }
-  const tuning = $derived<TabTuning>({ ...STANDARD_TUNING, strings: TUNINGS[tuningName].strings, capo });
+  /** 타브에서 화음 음을 넣다가 트랙을 더할 수 있는 한도 (악기별 게임 한도, 오르골·축음기 3) */
+  const tabMaxTracks = $derived.by(() => {
+    const p = song?.players.find((pl) => pl.id === tabScore);
+    return maxChordsOf(profile, p?.instrument.canonical);
+  });
+  /** 고른 트랙의 악보. 타브 튜닝은 이 악보 것을 보이고 바꾼다 */
+  const tabScore = $derived(song?.tracks.find((t) => t.id === activeTrackId)?.playerId);
+  const scoreTuning = $derived<ScoreTuning>((tabScore !== undefined && Object.hasOwn(scoreTunings, tabScore) ? scoreTunings[tabScore] : undefined) ?? { tuning: tuningName, capo });
+  const tuning = $derived<TabTuning>({ ...STANDARD_TUNING, strings: TUNINGS[scoreTuning.tuning].strings, capo: scoreTuning.capo });
+  function setScoreTuning(change: Partial<ScoreTuning>) {
+    if (tabScore === undefined) {
+      if (change.tuning) tuningName = change.tuning;
+      if (change.capo !== undefined) capo = change.capo;
+      return;
+    }
+    scoreTunings = { ...scoreTunings, [tabScore]: { ...scoreTuning, ...change } };
+  }
 
 
   const profile = $derived(getProfile(song?.meta.profileId ?? "mobile"));
@@ -683,6 +707,9 @@
     if (state.viewMode) viewMode = state.viewMode;
     if (state.tuning) tuningName = state.tuning;
     if (state.capo !== undefined) capo = state.capo;
+    scoreTunings = state.scoreTunings ?? {};
+    // 파일에 적힌 튜닝을 되살린 것은 고친 것이 아니다: 연 그대로의 상태로 다시 잡는다
+    autosaved.reset(autosaveState());
     savedFits = { reference: state.reference, video: state.video };
     trackView = state.trackView ?? {};
     // 같은 원곡이 이미 열려 있으면 맞춤값을 바로 쓴다
@@ -718,6 +745,7 @@
       viewMode,
       tuning: tuningName,
       capo,
+      ...(Object.keys(scoreTunings).length > 0 ? { scoreTunings } : {}),
       ...(ref ? { reference: ref } : {}),
       ...(vid ? { video: vid } : {}),
       ...(Object.keys(trackView).length > 0 ? { trackView } : {}),
@@ -782,7 +810,7 @@
       await save();
       // 저장을 기다리는 사이 반영된 것이 있으면 한 번 더 적는다
       flushAllEditors();
-      if (history && autosaved.dirty(history.song)) await save();
+      if (autosaved.dirty(autosaveState())) await save();
     } catch (e) {
       flushAllEditors();
       if (!savedAsProject()) {
@@ -802,12 +830,22 @@
       });
   }
 
+  /**
+   * 자동 보존이 비교하는 상태: 곡과 타브 튜닝(곡 밖 편집 상태). 튜닝·카포만 바꿔도 다시 적는다.
+   * 트랙 고르기·보기 방식 같은 다른 화면 상태만 바뀐 것으로는 새 기록을 만들지 않는다
+   */
+  type AutosaveState = { readonly song: Song; readonly tabs: string };
+  const tabsKey = $derived(editorStateKey({ tuning: tuningName, capo, scoreTunings }));
+  function autosaveState(current: Song | undefined = history?.song): AutosaveState | undefined {
+    return current ? { song: current, tabs: tabsKey } : undefined;
+  }
+
   // 작업 자동 보존: 곡을 열거나 새로 만들 때마다 새 작업 id. 고친 뒤에만 적는다
   let workId = newWorkId();
   /** 이 작업으로 저장에 성공한 곡 (아직 안 적었으면 연 그대로의 곡). 이것과 같으면 적을 것이 없다.
    *  실행 취소로 연 그대로 돌아와도 이미 적은 기록이 있으면 그 기록을 지금 상태로 고쳐 적는다.
    *  저장이 실패하면 적지 않은 것으로 남아 다음 기회에 다시 적는다 */
-  const autosaved = new AutosaveTracker<Song>();
+  const autosaved = new AutosaveTracker<AutosaveState>((a, b) => a.song === b.song && a.tabs === b.tabs);
   let autosaveTimer: ReturnType<typeof setTimeout> | undefined;
   /** 보낸 순서대로 적고, 실패하면 거부로 알린다 (업데이트 새로고침이 저장 실패를 성공으로 보지 않게) */
   const autosaveQueue = new AutosaveQueue(autosaved);
@@ -829,7 +867,7 @@
   function flushAutosave(): Promise<void> {
     clearTimeout(autosaveTimer);
     autosaveTimer = undefined;
-    return autosaveQueue.flush(history?.song, (current) => {
+    return autosaveQueue.flush(autosaveState(), ({ song: current }) => {
       const record = {
         id: workId,
         savedAt: Date.now(),
@@ -845,7 +883,7 @@
   }
 
   $effect(() => {
-    const now = song;
+    const now = autosaveState(song);
     untrack(() => {
       if (!autosaved.dirty(now)) return;
       clearTimeout(autosaveTimer);
@@ -907,9 +945,10 @@
     flushAllEditors();
     flushAutosave().catch(() => {});
     workId = newWorkId();
-    autosaved.reset(next);
     savedFits = {};
     trackView = {};
+    scoreTunings = {};
+    autosaved.reset(autosaveState(next));
     history = new History(next);
     sync(next);
     activeTrackId = next.tracks[0]?.id;
@@ -1074,6 +1113,7 @@
     previewOff: (pitch) => engine.previewOff(pitch),
     chord: (chord) => placeMidiChord(chord),
     unsupported: () => (error = t("ui.midiKeysUnsupported")),
+    askVelocity: () => confirm(t("ui.midiKeysVelocityAsk")),
   });
   // 화면이 사라질 때도 MIDI 연결·대기 입력·울리는 음을 정리한다
   $effect(() => () => midiKeys.stop());
@@ -1471,7 +1511,8 @@
   }
   // 재생 중 피아노롤 건반에 불 켜기 (기억)
   const LIGHT_KEYS_KEY = "mmlce.lightKeys";
-  let lightKeys = $state(loadStored(LIGHT_KEYS_KEY, (raw) => raw === "1"));
+  // 기본은 켬 (끈 적이 있으면 "0"이 남는다)
+  let lightKeys = $state(loadStored(LIGHT_KEYS_KEY, (raw) => raw !== "0"));
   function toggleLightKeys() {
     lightKeys = !lightKeys;
     saveStored(LIGHT_KEYS_KEY, lightKeys ? "1" : "0");
@@ -2059,9 +2100,9 @@
       const player = history?.song.players.find((p) => p.id === playerId);
       if (!history || !player) return;
       const from = instrumentName(player.instrument.canonical);
-      sync(history.run(setPlayerInstrument(playerId, canonical, { from, to: instrumentName(canonical) }, t("ui.instrument"))));
+      runSoloSplit(setPlayerInstrument(playerId, canonical, { from, to: instrumentName(canonical) }, t("ui.instrument"), soloSplit));
     },
-    trackInstrument: (id, canonical) => history && sync(history.run(setTrackInstrument(id, canonical, t("ui.trackInstrument")))),
+    trackInstrument: (id, canonical) => runSoloSplit(setTrackInstrument(id, canonical, t("ui.trackInstrument"), soloSplit)),
     listen: updateTrack,
     viewOf: (id) => trackView[id] ?? {},
     view: (id, change) => (trackView = withTrackView(trackView, id, change)),
@@ -2137,9 +2178,22 @@
     { label: t("ui.outputMenu"), title: t("ui.outputMenuHelp"), run: openOutput },
   ]);
 
-  /** 트랙 악기 바꾸기 (악보 악기와 같게 고르면 악보 악기를 따른다) */
-  function changeTrackInstrument(track: Track, canonical: string) {
-    if (history) sync(history.run(setTrackInstrument(track.id, canonical, t("ui.trackInstrument"))));
+  /**
+   * 악기 바꾸기에서 게임에서 같은 악보에 둘 수 없는 트랙 악기(오르골·축음기 악보의 다른 악기, 오르골·축음기 트랙)를
+   * 새 악보로 떼어 낼 때 쓴다
+   */
+  const soloSplit: SoloSplit = {
+    solo: (canonical) => isSoloInstrument(profile, canonical),
+    name: (s, canonical) => t("ui.newPlayerName", { instrument: instrumentName(canonical), n: s.players.filter((p) => p.instrument.canonical === canonical).length + 1 }),
+  };
+
+  /** 악기 바꾸기를 실행하고, 트랙을 새 악보로 떼어 냈으면 몇 트랙인지 알린다 */
+  function runSoloSplit(command: Command) {
+    if (!history) return;
+    const owners = new Map(history.song.tracks.map((tr) => [tr.id, tr.playerId]));
+    sync(history.run(command));
+    const moved = history.song.tracks.filter((tr) => owners.has(tr.id) && owners.get(tr.id) !== tr.playerId).length;
+    if (moved > 0) error = t("ui.soloSplitMoved", { n: moved });
   }
 
 </script>
@@ -2234,7 +2288,17 @@
 {/if}
 
 {#if about}
-  <AboutDialog checkNow={about.checkNow} {beforeUpdate} onreloadanyway={reloadWithoutSaving} onclose={() => (about = undefined)} />
+  <AboutDialog
+    checkNow={about.checkNow}
+    {beforeUpdate}
+    onreloadanyway={reloadWithoutSaving}
+    onnotes={() => (releaseNotes = true)}
+    onclose={() => (about = undefined)}
+  />
+{/if}
+
+{#if releaseNotes}
+  <ReleaseNotesDialog version={pwa.newVersion ?? ""} onclose={() => (releaseNotes = false)} />
 {/if}
 
 {#if recoverOpen}
@@ -2344,10 +2408,10 @@
       layer={rollLayer}
       onlayer={setRollLayer}
       compact={narrow}
-      {tuningName}
-      ontuning={(name) => (tuningName = name)}
-      {capo}
-      oncapo={(c) => (capo = c)}
+      tuningName={scoreTuning.tuning}
+      ontuning={(name) => setScoreTuning({ tuning: name })}
+      capo={scoreTuning.capo}
+      oncapo={(c) => setScoreTuning({ capo: c })}
       {showEvents}
       ontoggleevents={() => (showEvents = !showEvents)}
       {orientation}
@@ -2471,6 +2535,13 @@
             const open = changes.filter((c) => editable(c.trackId));
             if (history && open.length > 0) sync(history.run(setTracksNotes(open, label)));
           }}
+          maxTracks={tabMaxTracks}
+          onnewtrack={({ playerId, notes, instrument }, label) => {
+            if (!history) return;
+            const n = history.song.tracks.filter((tr) => tr.playerId === playerId).length + 1;
+            sync(history.run(addTrackWithNotes(playerId, t("ui.newTrackName", { n }), notes, label, instrument)));
+          }}
+          onfull={(limit) => (error = t("ui.tabChordFull", { limit }))}
           onpreview={(pitch) => {
             rollPreview(pitch, true);
             setTimeout(() => rollPreview(pitch, false), 300);
@@ -2535,6 +2606,7 @@
                   spread={split.plan.spread}
                   limit={profile.charLimitPerScore}
                   maxChords={chordsOf}
+                  pasteLimit={profile.maxChordsPerPlayer}
                   fewer={fewer?.song === split.song ? fewer.value : undefined}
                   onfewer={applyFewer}
                   spreadOn={splitPrefs.spread}
@@ -2673,6 +2745,7 @@
     <span>{t(pwa.updateFailed ? "ui.updateSaveFailed" : "ui.updateReady")}</span>
     <button disabled={pwa.applying} onclick={() => applyUpdate(beforeUpdate)}>{t("ui.updateReload")}</button>
     {#if pwa.updateFailed}<button disabled={pwa.applying} onclick={reloadWithoutSaving}>{t("ui.updateReloadAnyway")}</button>{/if}
+    <button onclick={() => (releaseNotes = true)}>{t("ui.changelog")}</button>
     <button class="icon" title={t("ui.dismiss")} aria-label={t("ui.dismiss")} onclick={() => (pwa.updateReady = false)}><Icon name="x" /></button>
   </div>
 {/if}

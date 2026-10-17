@@ -18,6 +18,9 @@ import { audibleTempo } from "./tempo-text.js";
  * 각 권의 시작에서 옥타브·길이·볼륨은 출력기가 기본값부터 다시 쓰고, 그때의 템포를 다시 적는다.
  * 게임은 악보(연주자)마다 따로 붙여넣고 따로 넘기므로, 템포와 권 끝 쉼표는 악보마다 넣는다.
  *
+ * 권 끝 쉼표: 게임은 채널마다 맨 끝 쉼표 하나를 길이에서 빼고, 악보 길이는 가장 긴 채널로 정한다(실측).
+ * 그래서 권 끝을 쉼표로 채울 때는 버려질 쉼표를 하나 더 붙인다 (render 참고).
+ *
  * 권 사이 지연: 악보책은 다음 권으로 넘어갈 때 scoreBookGapMs(실측 1010ms)만큼 늦게 시작한다.
  * 그래서 앞 권을 자르는 자리보다 그만큼 일찍 끝내 박자를 맞추고(trim), 자를 자리는 그 구간에서
  * 울리는 음이 가장 적은 곳으로 고른다. 쉼표가 있으면 잃는 게 없고, 없으면 걸친 음 끝이 짧아진다.
@@ -429,21 +432,28 @@ function render(
       if (verify && !writesExactly(out[k]!.text, chunks[k]!, placed[i] ?? [])) lossy.push(song.tracks[k]!.id);
     });
     if (!padEnd) continue;
-    // 권 길이는 그 악보에서 가장 늦게 끝나는 채널로 정해진다. 끝의 쉼표는 음으로 남지 않으므로, 어느 채널도 권 끝까지
-    // 가지 않으면 가장 짧은 채널 끝에 쉼표를 덧붙여 권 길이를 지킨다 (안 그러면 그 연주자만 다음 권을 일찍 시작한다)
-    const reach = score.map((k, i) => {
+    // 권 길이는 그 악보에서 가장 늦게 끝나는 채널로 정해진다. 게임은 채널마다 맨 끝 쉼표 하나만 길이에서 뺀다
+    // (실측: a4r1 = a4, a4r2r2 = a4r2). 어느 채널도 음으로 권 끝까지 가지 않으면 가장 짧은 채널 끝에 모자란 쉼표와
+    // 버려질 쉼표(THROWAWAY_REST)를 덧붙여 권 길이를 지킨다 (안 그러면 그 연주자만 다음 권을 일찍 시작한다)
+    const noteEnd = score.map((k) => {
       let last: Rat = ZERO;
       for (const n of chunks[k]!) last = max(last, add(n.start, n.dur));
+      return last;
+    });
+    if (noteEnd.some((r) => cmp(r, length) >= 0)) continue;
+    // 마지막 음 뒤 템포 자리를 만든 쉼표는 뒤에 템포가 있어 길이에 들어간다(실측). 모자란 만큼만 채운다
+    const reach = score.map((_, i) => {
+      let last = noteEnd[i]!;
       for (const t of placed[i] ?? []) last = max(last, t.at);
       return last;
     });
-    if (reach.some((r) => cmp(r, length) >= 0)) continue;
     // 쉼표를 붙일 채널은 단순 출력 길이로 고른다. 최적화 출력은 채널마다 단순 출력보다 길지 않으므로,
     // 같은 채널에 붙이면 "단순 출력이 들어가면 최종 출력도 들어간다"가 그대로 성립한다
     let i = 0;
     for (let j = 1; j < simple.length; j++) if (simple[j]!.length < simple[i]!.length) i = j;
     const k = score[i]!;
-    out[k] = { ...out[k]!, text: out[k]!.text + restText(sub(length, reach[i]!)) };
+    const fill = sub(length, reach[i]!);
+    out[k] = { ...out[k]!, text: out[k]!.text + (fill.n > 0 ? restText(fill) : "") + THROWAWAY_REST };
   }
   return { texts: out, moved: moves.length, lossy };
 }
@@ -491,6 +501,11 @@ function tempoIn(tempo: readonly TempoEvent[], start: Rat, end: Rat): TempoEvent
   return current ? [{ at: ZERO, bpm: current.bpm }, ...out] : out;
 }
 
+/**
+ * 권 끝에 덧붙이는 버려질 쉼표. 게임은 채널의 맨 끝 쉼표 하나를 길이에서 빼므로, 지킬 쉼표 뒤에 하나를 더 둔다.
+ * 빠지지 않더라도 어긋남이 가장 작도록 가장 짧은 쉼표로 쓴다
+ */
+export const THROWAWAY_REST = "r64";
 /** 이분 탐색 뒤에 더 훑어볼 후보 수 */
 const LOOK_PAST = 32;
 /** 정확한 최소 권 수를 구할 때 그려 볼 구간 수의 어림 상한 (후보 수² ÷ 권 수) */

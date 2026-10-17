@@ -1,4 +1,4 @@
-import { add, chainSampleEnd, cmp, eq, foldPitch, positionToSeconds, soundingRangeOf, TIE_BEND_LIMIT, trackInstrument, type GameProfile, type Note, type Rat, type Song, type Track } from "@mmlce/core";
+import { add, chainSampleEnd, cmp, eq, foldPitch, isSoloInstrument, positionToSeconds, soundingRangeOf, TIE_BEND_LIMIT, trackInstrument, type GameProfile, type Note, type Rat, type Song, type Track } from "@mmlce/core";
 import { type Diagnostic, type ParseResult } from "./parser.js";
 import { tempoMismatch } from "./tempo-text.js";
 
@@ -73,6 +73,17 @@ export function validateSong(song: Song, profile: GameProfile): SongDiagnostic[]
         params: { count: tracks.length, limit: profile.maxChordsPerPlayer },
         playerId: player.id,
       });
+    }
+
+    // 오르골·축음기는 장식품이 악보의 모든 트랙을 그 악기 하나로 친다. 다른 트랙 악기는 게임에서 그 소리가 나지 않는다
+    for (const track of tracks) {
+      const own = track.instrument?.canonical;
+      if (own === undefined || own === player.instrument.canonical) continue;
+      if (isSoloInstrument(profile, player.instrument.canonical)) {
+        out.push({ level: "warning", code: "solo-score-own-instrument", trackId: track.id, playerId: player.id });
+      } else if (isSoloInstrument(profile, own)) {
+        out.push({ level: "warning", code: "solo-instrument-track", trackId: track.id, playerId: player.id });
+      }
     }
 
     // 범위 밖 음도 게임은 받아 주지만 옥타브째 접어 다른 높이로 낸다 (악기는 트랙마다)

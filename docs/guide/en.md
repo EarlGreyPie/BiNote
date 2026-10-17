@@ -97,7 +97,7 @@ BiNote checks and exports scores to fit the limits of Mabinogi Mobile. The terms
 Game limits:
 
 - **Up to 6 tracks** per score. The first player has 1–3 tracks, and each later player has 1 track (3+1+1+1, 2+1+1+1+1 and 1×6 work; 2+2+2 and 3+3 do not)
-- **Music box and gramophone** take 3 tracks per score. For 6-note chords, split into two 3-track scores and play them at the same time
+- **Music box and gramophone** take 3 tracks per score. For 6-note chords, split into two 3-track scores and play them at the same time (each paste holds all 6 tracks in a different order: the game plays only the first 3, but takes length and tempo from all 6, so the boxes stay in sync). Tracks with their own instrument can't stay in a music box score and move to a new score
 - **2400 characters** per track
 - **Tempo is read separately for each score.** That is why BiNote writes the tempo into every score when you put a song in the game
 - Tempo t32–t255, note length 1–64 (up to one dot), volume v0–v15 (v0 is silent)
@@ -203,7 +203,7 @@ Switch with the Piano roll/Tab button (Alt+T). The tab gathers the tracks of the
 Turn on the keyboard icon in the top bar and connect a MIDI keyboard to use **step input**, one note at a time. Notes go at the play cursor (or the end of the selected track if there is none) with the **New note** length, and the input position moves on by that length. The time you hold a key is not recorded as the length.
 
 - For keys pressed together, the highest note goes into the current track and the rest go, from high to low, into the following tracks of the same score. Notes beyond the remaining tracks are not entered, so check the number of tracks before entering chords.
-- Turn on "Velocity → v" in Settings → Playback to turn key velocity into v.
+- The first time you turn on MIDI keys, BiNote asks once whether to use key velocity as v. You can change it later in Settings → Playback → "Velocity → v".
 
 > We recommend Chrome or Edge on PC. MIDI keyboards do not work in Safari (Mac and iPad) or in other browsers on iPad.
 
@@ -311,7 +311,7 @@ Toolbar ⋯ → **Background video…** (in the piano roll). Put a falling-note 
 ### Useful together
 
 - **Vertical roll**: matches the direction of falling-note videos. Choose Settings → Display → Roll during playback → **Scroll continuously** to get falling notes even without a video.
-- View → **Light keys while playing**: shows the notes being played on the keys.
+- **Light keys while playing** (on by default): shows the notes being played on the keys. Turn it off in the View menu or Settings → Playback.
 - Settings → Playback → **Display sync**: + if the playhead runs ahead of the sound, − if it lags. iPad and Bluetooth earphones may need another 100–300ms.
 
 ---
@@ -427,7 +427,7 @@ The app checks for a new version each time it opens, and if it stays open for a 
 | Section | Items |
 |---|---|
 | Sound packs | Add and remove, check priority (list order), storage status |
-| Playback | Master volume, Display sync, Light keys while playing, MIDI keys Velocity → v |
+| Playback | Master volume, Light keys while playing, MIDI keys Velocity → v, Display sync, Instrument volumes |
 | Display | Theme (Follow system · Light · Dark), Accent color, Note look (Rounded corners · Border · Shade by v · Note names when zoomed in), Track colors (By position in score · Hue per score · Saved in file), MML editor text and text size, Roll during playback (Turn pages · Scroll continuously) |
 | Saving | Choose a save folder (Chrome and Edge on a PC), Save through the share sheet (iPad and iPhone) |
 | Language | Pick the interface language. At first BiNote follows your browser language (English if it is not Korean, English, Japanese, Traditional or Simplified Chinese) and remembers your choice |

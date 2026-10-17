@@ -7,11 +7,24 @@ export function continues(prev: PrintableNote, n: PrintableNote): boolean {
 }
 
 /**
+ * 쉼표 바로 앞이나 트랙 끝의 &는 게임이 무시한다(실측: a4&r4 = a4r4, 길이·시작·세기 같음, 오류 없음).
+ * 바로 뒤에 맞닿은 음이 없는 & 를 풀어 둔 목록을 돌려준다 (정렬된 목록)
+ */
+export function dropDanglingTies<T extends PrintableNote>(notes: readonly T[]): T[] {
+  const sorted = [...notes].sort((a, b) => cmp(a.start, b.start));
+  return sorted.map((n, k) => {
+    if (n.tie !== "next") return n;
+    const next = sorted[k + 1];
+    return next && eq(add(n.start, n.dur), next.start) ? n : { ...n, tie: "none" };
+  });
+}
+
+/**
  * & 뒤의 v는 게임에서 무시된다(실측). 이어진 음의 볼륨을 사슬 첫 음 볼륨으로 맞춘 목록을 돌려준다.
  * 출력기는 & 뒤에 v를 쓰지 않으므로, 출력 전후를 비교할 때 이것으로 맞춘다.
  */
 export function heardVolumes<T extends PrintableNote>(notes: readonly T[]): T[] {
-  const sorted = [...notes].sort((a, b) => cmp(a.start, b.start));
+  const sorted = dropDanglingTies(notes);
   const out: T[] = [];
   for (const n of sorted) {
     const prev = out[out.length - 1];
@@ -23,7 +36,7 @@ export function heardVolumes<T extends PrintableNote>(notes: readonly T[]): T[] 
 /**
  * 같은 높이로 &로 이어진 음을 하나로 합친다. 소리로는 같은 음이다.
  * 출력기는 음 중간의 템포 때문에 c2를 c4&c4로 나눌 수 있으므로, 출력 전후를 비교할 때 쓴다.
- * & 뒤 음의 볼륨은 게임처럼 앞 음 볼륨으로 본다.
+ * & 뒤 음의 볼륨은 게임처럼 앞 음 볼륨으로 본다. 쉼표 앞의 &는 없는 것으로 본다.
  */
 export function mergeTies<T extends PrintableNote>(notes: readonly T[]): PrintableNote[] {
   const out: PrintableNote[] = [];

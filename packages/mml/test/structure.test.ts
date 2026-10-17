@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { History, rat, trackInstrument } from "@mmlce/core";
-import { addPlayer, addTrack, duplicateTrack, duplicateTrackToNewPlayer, moveTrack, moveTrackToNewPlayer, newSong, shiftTrack, trackMoveBlock, planMergeTracks, planMoveNotes, planVoiceByPitch, removeTrack, renamePlayer, renameTrack, setMeter, setPlayerInstrument, setTrackInstrument } from "../src/index.js";
+import { addPlayer, addTrack, addTrackWithNotes, duplicateTrack, duplicateTrackToNewPlayer, moveTrack, moveTrackToNewPlayer, newSong, shiftTrack, trackMoveBlock, planMergeTracks, planMoveNotes, planVoiceByPitch, removeTrack, renamePlayer, renameTrack, setMeter, setPlayerInstrument, setTrackInstrument } from "../src/index.js";
 
 const fresh = () => newSong({ playerName: "피아노", trackName: "트랙 1" });
 
@@ -19,6 +19,19 @@ describe("악보 구성", () => {
     const s = h.run(addTrack("p1", "트랙 2"));
     expect(s.tracks.map((t) => [t.id, t.playerId])).toEqual([["t1", "p1"], ["t3", "p1"], ["t2", "p2"]]);
     expect(s.players[1]!.instrument).toEqual({ canonical: "flute", program: 5 });
+  });
+
+  it("트랙을 더하며 음을 넣고, 실행 취소 한 번에 둘 다 되돌린다", () => {
+    const h = new History(fresh());
+    const note = { id: "x", start: rat(0), dur: rat(1, 8), pitch: 60, vol: 8, tie: "none" as const };
+    const s = h.run(addTrackWithNotes("p1", "트랙 2", [note]));
+    expect(s.tracks.map((t) => [t.id, t.notes.map((n) => n.pitch)])).toEqual([["t1", []], ["t2", [60]]]);
+    expect(h.undo().tracks.map((t) => t.id)).toEqual(["t1"]);
+    // 악기를 주면 새 트랙도 그 악기, 안 주면 악보 악기를 따른다
+    const guitar = { canonical: "guitar" };
+    const g = new History(fresh()).run(addTrackWithNotes("p1", "트랙 2", [note], "트랙 추가", guitar));
+    expect(g.tracks[1]!.instrument).toEqual(guitar);
+    expect(s.tracks[1]!.instrument).toBeUndefined();
   });
 
   it("마지막 트랙을 지우면 연주자도 지우고, 실행 취소로 되돌린다", () => {
@@ -64,6 +77,95 @@ describe("트랙 악기", () => {
     const back = setTrackInstrument("t1", "piano").apply(s);
     expect(back.tracks[0]!.instrument).toBeUndefined();
     expect(trackInstrument(back, back.tracks[0]!).canonical).toBe("piano");
+  });
+});
+
+describe("오르골·축음기 악보의 트랙 악기", () => {
+  const split = {
+    solo: (c: string) => c === "music-box" || c === "gramophone",
+    name: (s: { players: readonly { instrument: { canonical: string } }[] }, c: string) => `${c} ${s.players.filter((p) => p.instrument.canonical === c).length + 1}`,
+  };
+  /** 피아노 악보 6트랙: 1~3 악보 악기, 4 플루트, 5 류트, 6 플루트 */
+  const sixTracks = () => {
+    let s = fresh();
+    for (let i = 2; i <= 6; i++) s = addTrack("p1", `트랙 ${i}`).apply(s);
+    const ids = s.tracks.map((t) => t.id);
+    s = setTrackInstrument(ids[3]!, "flute").apply(s);
+    s = setTrackInstrument(ids[4]!, "lute").apply(s);
+    return { song: setTrackInstrument(ids[5]!, "flute").apply(s), ids };
+  };
+
+  it("악보를 오르골로 바꾸면 다른 악기 트랙은 새 악보 하나로 모이고, 나머지는 오르골에 남는다", () => {
+    const { song, ids } = sixTracks();
+    const s = setPlayerInstrument("p1", "music-box", undefined, "악기", split).apply(song);
+    expect(s.players.map((p) => [p.id, p.name, p.instrument.canonical])).toEqual([
+      ["p1", "피아노", "music-box"],
+      ["p2", "flute 1", "flute"],
+    ]);
+    expect(s.tracks.map((t) => [t.id, t.playerId, t.instrument?.canonical])).toEqual([
+      [ids[0], "p1", undefined],
+      [ids[1], "p1", undefined],
+      [ids[2], "p1", undefined],
+      [ids[3], "p2", undefined],
+      [ids[4], "p2", "lute"],
+      [ids[5], "p2", undefined],
+    ]);
+    // 소리는 그대로: 떼어 낸 트랙은 고른 악기 그대로 친다
+    expect(s.tracks.slice(3).map((t) => trackInstrument(s, t).canonical)).toEqual(["flute", "lute", "flute"]);
+  });
+
+  it("split을 주지 않거나, 다른 악기 트랙이 없거나, 보통 악기로 바꾸면 트랙은 그대로", () => {
+    const { song } = sixTracks();
+    expect(setPlayerInstrument("p1", "music-box").apply(song).tracks).toEqual(song.tracks);
+    expect(setPlayerInstrument("p1", "harp", undefined, "악기", split).apply(song).tracks).toEqual(song.tracks);
+    const plain = setPlayerInstrument("p1", "gramophone", undefined, "악기", split).apply(fresh());
+    expect(plain.players).toHaveLength(1);
+  });
+
+  it("악보 악기와 같은 트랙 악기는 지우고, 다 다른 악기면 오르골 악보는 없어진다", () => {
+    let s = addTrack("p1", "트랙 2").apply(fresh());
+    s = setTrackInstrument("t1", "music-box").apply(s);
+    s = setTrackInstrument("t2", "flute").apply(s);
+    const a = setPlayerInstrument("p1", "music-box", undefined, "악기", split).apply(s);
+    expect(a.tracks.map((t) => [t.id, t.playerId, t.instrument])).toEqual([
+      ["t1", "p1", undefined],
+      ["t2", "p2", undefined],
+    ]);
+    const only = setPlayerInstrument("p1", "music-box", undefined, "악기", split).apply(setTrackInstrument("t1", "flute").apply(fresh()));
+    expect(only.players.map((p) => p.instrument.canonical)).toEqual(["flute"]);
+  });
+
+  it("오르골 악보의 트랙에 다른 악기를 고르면 새 악보로, 보통 악보 트랙에 축음기를 고르면 축음기 악보로", () => {
+    const box = setPlayerInstrument("p1", "music-box").apply(addTrack("p1", "트랙 2").apply(fresh()));
+    const a = setTrackInstrument("t2", "flute", "악기", split).apply(box);
+    expect(a.tracks.map((t) => [t.id, t.playerId])).toEqual([["t1", "p1"], ["t2", "p2"]]);
+    expect(a.players[1]!.instrument.canonical).toBe("flute");
+    const piano = addTrack("p1", "트랙 2").apply(fresh());
+    const b = setTrackInstrument("t2", "gramophone", "악기", split).apply(piano);
+    expect(b.players.map((p) => p.instrument.canonical)).toEqual(["piano", "gramophone"]);
+    expect(b.tracks.map((t) => [t.id, t.playerId, t.instrument])).toEqual([["t1", "p1", undefined], ["t2", "p2", undefined]]);
+    // 보통 악보의 보통 악기 트랙은 그대로 한 악보에 (첫 연주자 + 한 명씩)
+    expect(setTrackInstrument("t2", "flute", "악기", split).apply(piano).players).toHaveLength(1);
+  });
+
+  it("새 악보에 모을 때 팩·번호가 다른 같은 악기는 트랙 악기로 남긴다", () => {
+    let s = addTrack("p1", "트랙 2").apply(addTrack("p1", "트랙 3").apply(fresh()));
+    const ids = s.tracks.map((t) => t.id);
+    s = setTrackInstrument(ids[1]!, "flute").apply(s);
+    s = { ...s, tracks: s.tracks.map((t) => (t.id === ids[2] ? { ...t, instrument: { canonical: "flute", packId: "extra", program: 517 } } : t)) };
+    const a = setPlayerInstrument("p1", "music-box", undefined, "악기", split).apply(s);
+    expect(a.tracks.map((t) => [t.playerId, t.instrument])).toEqual([
+      ["p1", undefined],
+      ["p2", undefined],
+      ["p2", { canonical: "flute", packId: "extra", program: 517 }],
+    ]);
+  });
+
+  it("실행 취소 한 번에 악기와 옮긴 트랙이 함께 돌아온다", () => {
+    const { song } = sixTracks();
+    const h = new History(song);
+    h.run(setPlayerInstrument("p1", "music-box", undefined, "악기", split));
+    expect(h.undo()).toEqual(song);
   });
 });
 

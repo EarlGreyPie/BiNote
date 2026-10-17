@@ -124,6 +124,20 @@
           <span>{t("ui.masterVolume")}</span>
           <input type="range" min="0" max={MASTER_MAX} step="0.05" value={masterVolume} oninput={(e) => onvolume(Number(e.currentTarget.value))} />
         </label>
+        <label class="row" title={t("ui.lightKeysHelp")}>
+          <input type="checkbox" checked={lightKeys} onchange={onlightkeys} />
+          <span>{t("ui.lightKeys")}</span>
+        </label>
+        <label class="row" title={t("ui.midiKeysVelocityHelp")}>
+          <input type="checkbox" checked={midiKeys.velocity} onchange={(e) => midiKeys.setVelocity(e.currentTarget.checked)} />
+          <span>{t("ui.midiKeys")}: {t("ui.midiKeysVelocity")}</span>
+        </label>
+        <label class="row" title={t("ui.syncOffsetHelp")}>
+          <span>{t("ui.syncOffset")}</span>
+          <input class="num wide" type="number" step="10" min="-1000" max="1000" value={syncOffsetMs} onchange={(e) => onsync(Number(e.currentTarget.value) || 0)} />
+          ms
+        </label>
+        <p class="muted help">{t("ui.syncOffsetHelp")}</p>
         <h3 class="sub">{t("ui.instrumentGains")}</h3>
         {#if packs.length === 0}
           <p class="muted help">{t("ui.instrumentGainsNoPack")}</p>
@@ -155,20 +169,6 @@
             </details>
           {/each}
         {/if}
-        <label class="row" title={t("ui.syncOffsetHelp")}>
-          <span>{t("ui.syncOffset")}</span>
-          <input class="num wide" type="number" step="10" min="-1000" max="1000" value={syncOffsetMs} onchange={(e) => onsync(Number(e.currentTarget.value) || 0)} />
-          ms
-        </label>
-        <p class="muted help">{t("ui.syncOffsetHelp")}</p>
-        <label class="row" title={t("ui.lightKeysHelp")}>
-          <input type="checkbox" checked={lightKeys} onchange={onlightkeys} />
-          <span>{t("ui.lightKeys")}</span>
-        </label>
-        <label class="row" title={t("ui.midiKeysVelocityHelp")}>
-          <input type="checkbox" disabled={!midiKeys.status} checked={midiKeys.status?.velocity ?? false} onchange={(e) => midiKeys.setVelocity(e.currentTarget.checked)} />
-          <span>{t("ui.midiKeys")}: {t("ui.midiKeysVelocity")}</span>
-        </label>
       {:else if section === "display"}
         <label class="row">
           <span>{t("ui.colorScheme")}</span>
@@ -296,7 +296,7 @@
     </div>
   </div>
   <p class="about muted">
-    {t("ui.about", { version: __MMLCE_BUILD__.version, commit: __MMLCE_BUILD__.commit || "-", date: new Date(__MMLCE_BUILD__.date).toLocaleString(i18n.locale) })}
+    {t("ui.about", { version: __MMLCE_BUILD__.version, build: __MMLCE_BUILD__.build, commit: __MMLCE_BUILD__.commit || "-" })}
     · {t("ui.aboutCredit")} ·
     <a href={guideUrl(i18n.locale)} target="_blank" rel="noopener">{t("ui.helpGuide")}</a> ·
     <button class="link" onclick={onabout}>{t("ui.aboutTitle")}…</button>

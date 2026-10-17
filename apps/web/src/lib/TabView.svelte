@@ -28,6 +28,12 @@
     noteDur?: Rat;
     /** 타브에서 음을 넣거나 지울 때 (실행 취소 한 칸) */
     onedit?: (changes: TabEdit["changes"], label: string) => void;
+    /** 빈 트랙이 없어 이 악보에 트랙을 더해 음을 넣을 때 (실행 취소 한 칸) */
+    onnewtrack?: (track: NonNullable<TabEdit["newTrack"]>, label: string) => void;
+    /** 악보 트랙이 한도까지 차서 화음 음을 더 넣지 못했을 때 */
+    onfull?: (limit: number) => void;
+    /** 이 악보가 가질 수 있는 트랙 수 (게임 한도) */
+    maxTracks?: number;
     /** 새로 넣는 음의 v (없으면 이어받기). 숫자판에서 바꾼다 */
     volume?: number | undefined;
     volumeRange: { readonly min: number; readonly max: number };
@@ -42,7 +48,7 @@
     melodyIds?: ReadonlySet<string> | undefined;
   }
 
-  let { song, activeTrackId, tuning, playhead, onunplayable, division, noteDur, onedit, onpreview, volume = $bindable(), volumeRange, colors, locked, laneTrackIds, melodyIds }: Props = $props();
+  let { song, activeTrackId, tuning, playhead, onunplayable, division, noteDur, onedit, onnewtrack, onfull, maxTracks = Infinity, onpreview, volume = $bindable(), volumeRange, colors, locked, laneTrackIds, melodyIds }: Props = $props();
 
   // 위쪽에 마디 번호 줄과 변속(템포·박자) 줄을 둔다
   const TOP = 42;
@@ -128,15 +134,27 @@
   }
 
   function apply(edit: TabEdit, label: string, string?: number) {
-    if (edit.changes.length === 0) return;
+    if (edit.full) {
+      onfull?.(maxTracks);
+      return;
+    }
+    if (edit.changes.length === 0 && !edit.newTrack) return;
     if (edit.noteId && string !== undefined) prefer = new Map(prefer).set(edit.noteId, string);
-    onedit?.(edit.changes, label);
+    if (edit.newTrack) onnewtrack?.(edit.newTrack, label);
+    else onedit?.(edit.changes, label);
   }
 
   function enterFret(fret: number) {
-    if (!cursor || !activeTrackId || fret > tuning.maxFret) return;
+    if (!cursor || !activeTrackId || fret > tuning.maxFret || cursor.string > tuning.strings.length) return;
     const pitch = tuning.strings[cursor.string - 1]! + tuning.capo + fret;
-    const edit = placeTabNote(song, tracks.map((t) => t.id), activeTrackId, cursor.at, noteDur ?? rat(1, division), pitch, noteAtCursor(), volume);
+    // 트랙 수 한도는 음소거한 트랙도 센다 (타브에는 안 보여도 악보 자리는 차지한다)
+    const scoreTracks = song.tracks.filter((t) => t.playerId === player).length;
+    const room = Math.max(0, maxTracks - (scoreTracks - tracks.length));
+    const edit = placeTabNote(song, tracks.map((t) => t.id), activeTrackId, cursor.at, noteDur ?? rat(1, division), pitch, noteAtCursor(), volume, room);
+    if (edit.full) {
+      apply(edit, "타브 입력");
+      return;
+    }
     apply(edit, "타브 입력", cursor.string);
     onpreview?.(pitch);
   }
@@ -224,10 +242,36 @@
   let touchPad = $state(false);
   /** 숫자판에서 프렛을 누른 뒤 다음 칸으로 넘어갈지 */
   let padAdvance = $state(true);
+  /** 화음 입력: 켜 두면 프렛을 눌러도 다음 칸으로 넘어가지 않고 줄만 바꿔 같은 칸에 쌓는다 (→로 넘어간다) */
+  let padChord = $state(false);
+
+  const padOpen = $derived(touchPad && cursor !== undefined);
+
+  // 줄 수가 다른 튜닝(베이스 4줄 등)으로 바꾸거나 다른 악보로 옮기면 커서를 마지막 줄 안으로 들인다
+  $effect(() => {
+    const n = tuning.strings.length;
+    if (cursor && cursor.string > n) cursor = { ...cursor, string: n };
+  });
+
+  /** 숫자판을 닫는다. 커서도 같이 지워 지판만 남긴다 (다시 누르면 다시 뜬다) */
+  function closePad() {
+    touchPad = false;
+    cursor = undefined;
+    digits = "";
+  }
+
+  // 숫자판이 지판 칸을 줄이므로, 커서 줄이 칸 밖이면 그 줄이 보이게 지판 칸을 세로로 굴린다
+  $effect(() => {
+    if (!padOpen || !cursor || !wrap) return;
+    const top = TOP + (cursor.string - 1) * gap - fontPx;
+    const bottom = top + fontPx * 2;
+    if (top < wrap.scrollTop) wrap.scrollTop = Math.max(0, top);
+    else if (bottom > wrap.scrollTop + wrap.clientHeight) wrap.scrollTop = bottom - wrap.clientHeight;
+  });
 
   function padFret(fret: number) {
     enterFret(fret);
-    if (padAdvance) moveCursor("right");
+    if (padAdvance && !padChord) moveCursor("right");
   }
 
   function onkeydown(e: KeyboardEvent) {
@@ -248,7 +292,7 @@
     else if (key === "ArrowLeft") moveCursor("left");
     else if (key === "ArrowUp") moveCursor("up");
     else if (key === "ArrowDown") moveCursor("down");
-    else if (key === "Escape") cursor = undefined;
+    else if (key === "Escape") closePad();
     else return;
     // 타브가 처리한 키는 앱 단축키(숫자 = 격자 등)로 넘기지 않는다
     e.preventDefault();
@@ -570,10 +614,10 @@
 
 <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
 <div class="tab" bind:this={host} tabindex="0" role="application" {onkeydown}>
-  <div class="canvas-wrap" bind:this={wrap}>
+  <div class="canvas-wrap" bind:this={wrap} style:min-height={padOpen ? `min(${height}px, 45%)` : undefined}>
     <canvas bind:this={canvas} style:width="{width}px" style:height="{height}px" {onpointerdown} {onpointermove} {onpointerup} onpointercancel={onpointerup}></canvas>
   </div>
-  {#if laneHeight > 0}
+  {#if laneHeight > 0 && !padOpen}
     <!-- 높이 손잡이: 위로 끌면 레인이 커진다 (얇은 띠에서 끌어도 크게 펼쳐진다) -->
     <div
       class="lane-resize"
@@ -602,37 +646,40 @@
       }}
     ></canvas>
   {/if}
-  {#if touchPad && cursor}
-    <!-- 프렛 숫자판: 화면 키보드가 없는 터치 기기에서 타브 입력 -->
+  {#if padOpen}
+    <!-- 프렛 숫자판: 화면 키보드가 없는 터치 기기에서 타브 입력.
+         좁은 화면에서도 지판이 보이게 높이를 줄이고, 닫기는 맨 윗줄 오른쪽에 늘 둔다 -->
     <div class="pad" role="group" aria-label={t("ui.fretPad")}>
+      <div class="pad-top">
+        <div class="moves">
+          <button title={t("ui.fretPadLeft")} onclick={() => moveCursor("left")}><Icon name="chevron-left" /></button>
+          <button title={t("ui.fretPadRight")} onclick={() => moveCursor("right")}><Icon name="chevron-right" /></button>
+          <button title={t("ui.fretPadUp")} onclick={() => moveCursor("up")}><Icon name="chevron-up" /></button>
+          <button title={t("ui.fretPadDown")} onclick={() => moveCursor("down")}><Icon name="chevron-down" /></button>
+          <button title={t("ui.fretPadTieHelp")} onclick={tieAtCursor}>{t("ui.fretPadTie")}</button>
+          <button onclick={deleteAtCursor}>{t("ui.fretPadDelete")}</button>
+          <button class:on={padChord} aria-pressed={padChord} title={t("ui.fretPadChordHelp")} onclick={() => (padChord = !padChord)}>{t("ui.fretPadChord")}</button>
+          <VolumeBox
+            bind:value={volume}
+            min={volumeRange.min}
+            max={volumeRange.max}
+            selected={cursorVolume}
+            onselected={setCursorVolume}
+            large
+          />
+          <label class="advance"><input type="checkbox" bind:checked={padAdvance} /> {t("ui.fretPadAdvance")}</label>
+        </div>
+        <button class="close" title={t("ui.fretPadClose")} aria-label={t("ui.fretPadClose")} onclick={closePad}>×</button>
+      </div>
       <div class="frets">
         {#each Array.from({ length: tuning.maxFret + 1 }, (_, i) => i) as fret (fret)}
           <button onclick={() => padFret(fret)}>{fret}</button>
         {/each}
       </div>
-      <div class="moves">
-        <button title={t("ui.fretPadLeft")} onclick={() => moveCursor("left")}><Icon name="chevron-left" /></button>
-        <button title={t("ui.fretPadRight")} onclick={() => moveCursor("right")}><Icon name="chevron-right" /></button>
-        <button title={t("ui.fretPadUp")} onclick={() => moveCursor("up")}><Icon name="chevron-up" /></button>
-        <button title={t("ui.fretPadDown")} onclick={() => moveCursor("down")}><Icon name="chevron-down" /></button>
-        <button title={t("ui.fretPadTieHelp")} onclick={tieAtCursor}>{t("ui.fretPadTie")}</button>
-        <button onclick={deleteAtCursor}>{t("ui.fretPadDelete")}</button>
-        <VolumeBox
-          bind:value={volume}
-          min={volumeRange.min}
-          max={volumeRange.max}
-          selected={cursorVolume}
-          onselected={setCursorVolume}
-          large
-        />
-        <label><input type="checkbox" bind:checked={padAdvance} /> {t("ui.fretPadAdvance")}</label>
-        <span class="spacer"></span>
-        <button onclick={() => (touchPad = false)}>{t("ui.close")}</button>
-      </div>
     </div>
   {/if}
-  <!-- 시간 스크롤 (휠과 같음)과 확대·축소 -->
-  <div class="tools">
+  <!-- 시간 스크롤 (휠과 같음)과 확대·축소. 숫자판을 띄운 동안은 지판 자리를 위해 숨긴다 -->
+  <div class="tools" hidden={padOpen}>
   <input
     class="scroll"
     type="range"
@@ -726,32 +773,74 @@
     touch-action: pan-y;
   }
   .pad {
-    padding: 6px 8px;
+    /* 남는 높이만 쓰고, 넘치면 숫자판 안에서 굴린다 (지판 칸은 canvas-wrap의 min-height로 지킨다) */
+    flex: 0 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0 8px 6px;
     border-top: 1px solid var(--line);
+    background: var(--panel);
     display: grid;
+    /* 칸이 내용 폭만큼 늘어나 닫기 버튼이 화면 밖으로 밀리지 않게 */
+    grid-template-columns: minmax(0, 1fr);
     gap: 6px;
   }
+  .pad-top {
+    /* 숫자판을 굴려도 이동 버튼과 닫기는 늘 위에 보인다 */
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding-top: 6px;
+    background: var(--panel);
+  }
+  .moves {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    gap: 4px 8px;
+    align-items: center;
+    /* 좁은 화면에서는 줄을 바꾸지 않고 옆으로 민다 (닫기 버튼 자리를 지킨다) */
+    overflow-x: auto;
+    scrollbar-width: none;
+    white-space: nowrap;
+  }
+  .moves > * {
+    flex: none;
+  }
+  .moves button.on {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+  .close {
+    flex: none;
+    min-width: 44px;
+    min-height: 36px;
+    font-size: 20px;
+    line-height: 1;
+  }
+  /* 0~10, 11~20 두 줄: 폰 폭에서도 세 줄 이상 쌓이지 않는다 */
   .frets {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(42px, 1fr));
-    gap: 4px;
+    grid-template-columns: repeat(11, minmax(0, 1fr));
+    gap: 3px;
+    max-width: 760px;
   }
   .frets button,
   .moves button {
-    min-height: 40px;
+    min-height: 34px;
+    padding-inline: 0;
     font-variant-numeric: tabular-nums;
-  }
-  .moves {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px 8px;
-    align-items: center;
   }
   .moves button {
     min-width: 44px;
+    padding-inline: 8px;
   }
-  .spacer {
-    flex: 1;
+  .tools[hidden] {
+    display: none;
   }
   .tools {
     display: flex;

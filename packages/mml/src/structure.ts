@@ -1,4 +1,4 @@
-import { add, cmp, div, emptySong, fitNotes, INSTRUMENTS, tieChains, removeNotes, replaceNotes, meterGrid, rat, sub, ZERO, type Command, type Note, type Player, type Rat, type Song, type Track, type TrackRole } from "@mmlce/core";
+import { add, cmp, div, emptySong, fitNotes, INSTRUMENTS, tieChains, removeNotes, replaceNotes, meterGrid, rat, sub, ZERO, type Command, type InstrumentRef, type Note, type Player, type Rat, type Song, type Track, type TrackRole } from "@mmlce/core";
 
 /** 트랙 색 (3MLE·마비꼬와 비슷한 6색을 차례로) */
 const TRACK_COLORS = ["#4f8cff", "#ff7a59", "#2bb673", "#b061ff", "#f2b705", "#00b8d9"];
@@ -73,14 +73,73 @@ export function addPlayer(canonical: string, playerName: string, trackName: stri
   });
 }
 
-/** 연주자의 악기를 바꾼다 (이름이 악기 이름 그대로였으면 이름도 바꾼다) */
-export function setPlayerInstrument(playerId: string, canonical: string, names?: { from: string; to: string }, label = "악기 바꾸기"): Command {
-  return replaceWith(label, (song) => ({
-    ...song,
-    players: song.players.map((p) =>
-      p.id !== playerId ? p : { ...p, instrument: instrumentRef(canonical), name: names && p.name === names.from ? names.to : p.name },
-    ),
-  }));
+/**
+ * 연주자의 악기를 바꾼다 (이름이 악기 이름 그대로였으면 이름도 바꾼다).
+ * split을 주면 장식품 악기(오르골·축음기)로 바꿀 때 트랙에 따로 정한 악기를 정리한다 (splitSoloTracks)
+ */
+export function setPlayerInstrument(
+  playerId: string,
+  canonical: string,
+  names?: { from: string; to: string },
+  label = "악기 바꾸기",
+  split?: SoloSplit,
+): Command {
+  return replaceWith(label, (song) => {
+    const next = {
+      ...song,
+      players: song.players.map((p) =>
+        p.id !== playerId ? p : { ...p, instrument: instrumentRef(canonical), name: names && p.name === names.from ? names.to : p.name },
+      ),
+    };
+    return split ? splitSoloTracks(next, playerId, split) : next;
+  });
+}
+
+/** 장식품 악기 악보를 정리할 때 쓰는 정보 */
+export interface SoloSplit {
+  /** 연주자가 아니라 장식품이 치는 악기인지 (오르골·축음기. GameProfile.soloInstruments) */
+  readonly solo: (canonical: string) => boolean;
+  /** 떼어 낸 트랙을 담을 새 악보 이름. 그 순간의 곡을 보고 번호를 붙인다 */
+  readonly name: (song: Song, canonical: string) => string;
+}
+
+function withoutInstrument(track: Track): Track {
+  const { instrument: _own, ...rest } = track;
+  return rest;
+}
+
+/**
+ * 장식품 악기(오르골·축음기)는 악보의 모든 트랙을 그 악기 하나로 치고, 연주자 악기처럼 트랙 하나에만 줄 수도 없다.
+ * 그래서 연주자 playerId의 트랙 중 게임에서 그대로 낼 수 없는 트랙 악기를 새 악보로 떼어 낸다.
+ * - 악보 악기가 장식품이면: 악보 악기와 같은 트랙 악기(팩·번호까지 같을 때만)는 지우고, 다른 보통 악기 트랙은 새 악보 하나로 모은다
+ *   (첫 트랙 악기가 새 악보 악기, 나머지는 트랙 악기 그대로 = 게임의 "첫 연주자 + 한 명씩")
+ * - 트랙 악기가 장식품이고 악보 악기와 다르면: 그 악기마다 새 장식품 악보 하나로 모은다
+ * 트랙 순서는 그대로 따라가고, 떼어 낸 트랙이 없으면 곡을 그대로 돌려준다. 트랙이 다 빠진 연주자는 지운다 (moveTrack과 같게)
+ */
+export function splitSoloTracks(song: Song, playerId: string, split: SoloSplit): Song {
+  const owner = song.players.find((p) => p.id === playerId);
+  if (!owner) return song;
+  const ownerSolo = split.solo(owner.instrument.canonical);
+  let next = ownerSolo
+    ? { ...song, tracks: song.tracks.map((t) => (t.playerId === playerId && t.instrument && sameInstrument(t.instrument, owner.instrument) ? withoutInstrument(t) : t)) }
+    : song;
+  // 새 악보 하나에 모을 트랙 묶음: 보통 악기 트랙은 "" 하나로, 장식품 악기 트랙은 그 악기마다
+  const buckets = new Map<string, Track[]>();
+  for (const t of next.tracks) {
+    if (t.playerId !== playerId || !t.instrument || sameInstrument(t.instrument, owner.instrument)) continue;
+    const solo = split.solo(t.instrument.canonical);
+    if (!solo && !ownerSolo) continue;
+    const key = solo ? t.instrument.canonical : "";
+    buckets.set(key, [...(buckets.get(key) ?? []), t]);
+  }
+  for (const list of buckets.values()) {
+    const instrument = list[0]!.instrument!;
+    const id = nextId("p", next.players.map((p) => p.id));
+    next = { ...next, players: [...next.players, { id, name: split.name(next, instrument.canonical), instrument }] };
+    list.forEach((t, i) => (next = moveTrack(t.id, id, i).apply(next)));
+    next = { ...next, tracks: next.tracks.map((t) => (t.playerId === id && t.instrument && sameInstrument(t.instrument, instrument) ? withoutInstrument(t) : t)) };
+  }
+  return next;
 }
 
 /** 연주자 마지막 트랙 뒤에 빈 트랙을 더한다 */
@@ -92,6 +151,34 @@ export function addTrack(playerId: string, trackName: string, label = "트랙 �
     const tracks = [...song.tracks];
     tracks.splice(last + 1, 0, blankTrack(id, playerId, trackName, song.tracks.length));
     return { ...song, tracks };
+  });
+}
+
+/**
+ * 연주자 마지막 트랙 뒤에 트랙을 더하고 음을 넣는다 (실행 취소 한 칸).
+ * 타브에서 화음 음이 들어갈 빈 트랙이 없을 때 쓴다.
+ * instrument를 주면 새 트랙도 그 악기로 정한다 (고른 트랙만 악기를 바꾼 경우)
+ */
+export function addTrackWithNotes(
+  playerId: string,
+  trackName: string,
+  notes: readonly Note[],
+  label = "트랙 추가",
+  instrument?: InstrumentRef,
+): Command {
+  return replaceWith(label, (song) => {
+    const added = addTrack(playerId, trackName).apply(song);
+    const fresh = added.tracks.find((t) => !song.tracks.some((o) => o.id === t.id));
+    if (!fresh) return song;
+    return {
+      ...added,
+      tracks: added.tracks.map((t) => {
+        if (t.id !== fresh.id) return t;
+        // 원문은 음에서 다시 만든다 (setTracksNotes와 같게)
+        const { mml: _mml, ...rest } = t;
+        return { ...rest, notes: [...notes], ...(instrument ? { instrument } : {}) };
+      }),
+    };
   });
 }
 
@@ -290,17 +377,24 @@ export function renamePlayer(playerId: string, name: string, label = "악보 이
   );
 }
 
-/** 트랙 하나만 다른 악기로 (canonical이 없거나 악보 악기와 같으면 악보 악기를 따르게 되돌린다) */
-export function setTrackInstrument(trackId: string, canonical: string | undefined, label = "트랙 악기"): Command {
-  return replaceWith(label, (song) => ({
-    ...song,
-    tracks: song.tracks.map((t) => {
-      if (t.id !== trackId) return t;
-      const player = song.players.find((p) => p.id === t.playerId);
-      const { instrument: _old, ...rest } = t;
-      return canonical === undefined || canonical === player?.instrument.canonical ? rest : { ...rest, instrument: instrumentRef(canonical) };
-    }),
-  }));
+/**
+ * 트랙 하나만 다른 악기로 (canonical이 없거나 악보 악기와 같으면 악보 악기를 따르게 되돌린다).
+ * split을 주면 게임에서 같은 악보에 둘 수 없는 조합(오르골 악보의 다른 악기, 장식품 악기 트랙)은 새 악보로 떼어 낸다
+ */
+export function setTrackInstrument(trackId: string, canonical: string | undefined, label = "트랙 악기", split?: SoloSplit): Command {
+  return replaceWith(label, (song) => {
+    const next = {
+      ...song,
+      tracks: song.tracks.map((t) => {
+        if (t.id !== trackId) return t;
+        const player = song.players.find((p) => p.id === t.playerId);
+        const rest = withoutInstrument(t);
+        return canonical === undefined || canonical === player?.instrument.canonical ? rest : { ...rest, instrument: instrumentRef(canonical) };
+      }),
+    };
+    const playerId = song.tracks.find((t) => t.id === trackId)?.playerId;
+    return split && playerId ? splitSoloTracks(next, playerId, split) : next;
+  });
 }
 
 /** 음 옮기기·트랙 합치기 결과: 바뀐 곡과 옮긴 음·겹쳐서 못 옮긴 음 수 */

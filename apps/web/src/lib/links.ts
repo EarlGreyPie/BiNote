@@ -1,7 +1,9 @@
 import type { Locale } from "@mmlce/i18n";
 
+/** 공개 저장소(소유자/이름). 새 판의 바뀐 내용은 이 저장소의 GitHub Releases에서 읽는다 */
+export const REPO = "EarlGreyPie/BiNote";
 /** 공개 저장소. 정보 화면의 소스 코드·문제 신고 링크가 여기로 간다 (GPL-3.0 소스 제공) */
-export const REPO_URL = "https://github.com/EarlGreyPie/BiNote";
+export const REPO_URL = `https://github.com/${REPO}`;
 /** 판마다 바뀐 내용 */
 export const CHANGELOG_URL = `${REPO_URL}/blob/main/CHANGELOG.md`;
 

@@ -53,6 +53,11 @@ export interface ParseResult {
   readonly diagnostics: Diagnostic[];
   /** 마지막 음·쉼표가 끝나는 위치 */
   readonly end: Rat;
+  /**
+   * 게임이 보는 이 채널의 길이. 게임은 채널의 맨 마지막 명령이 쉼표일 때 그 쉼표 하나만 길이에서 뺀다
+   * (실측: a4r1 = a4, a4r2r2 = a4r2, a4r1t120 = a4r1, 음으로 끝나면 그대로). 악보 길이는 가장 긴 채널로 정해진다
+   */
+  readonly gameEnd: Rat;
 }
 
 const SEMITONE: Readonly<Record<string, number>> = { c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b: 11 };
@@ -128,6 +133,8 @@ export function parseMml(text: string, options: ParseOptions = {}): ParseResult 
 
   // 서로소 음길이(l7·l11·l13 …)가 쌓이면 분수가 안전한 정수 범위를 넘을 수 있다. 예외로 끝내지 않고 진단으로 알린 뒤 거기서 멈춘다
   let statement = 0;
+  /** 마지막으로 읽은 명령(음·쉼표·템포 등)의 시작 위치. 공백과 주석은 세지 않는다 */
+  let lastToken = -1;
   try {
     while (i < src.length) {
       const ch = src[i]!;
@@ -150,6 +157,8 @@ export function parseMml(text: string, options: ParseOptions = {}): ParseResult 
         i = close + 2;
         continue;
       }
+
+      lastToken = from;
 
       if (ch in SEMITONE || ch === "n") {
         i++;
@@ -269,7 +278,11 @@ export function parseMml(text: string, options: ParseOptions = {}): ParseResult 
     while (notes.length > 0 && !fits(notes[notes.length - 1]!)) notes.pop();
   }
 
-  return { notes, rests, values, tempo, diagnostics, end: pos };
+  // 게임은 쉼표가 채널의 맨 마지막 명령일 때만 뺀다. 뒤에 템포 같은 명령이 하나라도 있으면 쉼표가 남는다
+  // (실측: a4r1t120 = a4r1 길이)
+  const lastRest = rests[rests.length - 1];
+  const trailing = lastRest !== undefined && lastRest.span[0] === lastToken;
+  return { notes, rests, values, tempo, diagnostics, end: pos, gameEnd: trailing ? lastRest.start : pos };
 }
 
 function endsAt(note: ParsedNote, pos: Rat): boolean {

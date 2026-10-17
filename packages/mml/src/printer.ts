@@ -1,6 +1,6 @@
 import { add, cmp, eq, fromLength, sub, ZERO, type Rat, type TempoEvent } from "@mmlce/core";
 import type { Diagnostic } from "./parser.js";
-import { continues } from "./compare.js";
+import { continues, dropDanglingTies } from "./compare.js";
 
 /** 출력에 필요한 음 정보. 모델의 Note와 파서의 ParsedNote 둘 다 넘길 수 있다. */
 export interface PrintableNote {
@@ -176,7 +176,8 @@ function printWith(
 ): PrintResult & { counts: Map<number, number> } {
   const counts = new Map<number, number>();
   const diagnostics: Diagnostic[] = [];
-  const sorted = [...notes].sort((a, b) => cmp(a.start, b.start));
+  // 쉼표 앞의 &는 게임이 무시하므로 쓰지 않는다
+  const sorted = dropDanglingTies(notes);
   const tempo = [...(options.tempo ?? [])].sort((a, b) => cmp(a.at, b.at));
   const out: string[] = [];
 

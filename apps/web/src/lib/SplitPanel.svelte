@@ -17,6 +17,8 @@
     limit: number;
     /** 악보 하나에 넣을 수 있는 트랙 수 (profile.maxChordsPerPlayer) */
     maxChords: number | ((playerId: string) => number);
+    /** 게임 악보 하나의 트랙 한도 (profile.maxChordsPerPlayer). 오르골·축음기 악보에 소리 없는 나머지 트랙을 붙인다 */
+    pasteLimit?: number;
     /** 트랙 사이 음을 고르게 옮기면 권이 줄어드는지 (checking: 계산 중) */
     fewer?: FewerBooks | "checking" | undefined;
     /** 고르게 옮기고 다시 나누기·편집 중인 곡에도 적용 (distributeChords에 줄 채널 글자 수) */
@@ -24,7 +26,7 @@
     onclose: () => void;
   }
 
-  let { song, result, spread, spreadOn, thoroughOn, onspread, onthorough, limit, maxChords, fewer, onfewer, onclose }: Props = $props();
+  let { song, result, spread, spreadOn, thoroughOn, onspread, onthorough, limit, maxChords, pasteLimit, fewer, onfewer, onclose }: Props = $props();
   let copied = $state("");
 
   function clock(seconds: number): string {
@@ -51,7 +53,7 @@
   };
 
   /** 게임 붙여넣기 단위: 권마다 연주자별 악보 하나 (MML@트랙1,트랙2,...;) */
-  const scoresOf = (part: SplitResult["parts"][number]) => playerScores(song, part.texts, maxChords);
+  const scoresOf = (part: SplitResult["parts"][number]) => playerScores(song, part.texts, maxChords, pasteLimit);
 </script>
 
 <section class="split">
@@ -101,7 +103,7 @@
         {#each scoresOf(part) as score (`${score.playerId}:${score.index}`)}
           {@const id = `score:${i}:${score.playerId}:${score.index}`}
           {@const name = score.index > 0 ? `${playerName(score.playerId)} (${score.index + 1})` : playerName(score.playerId)}
-          <button class="small" onclick={() => copy(id, score.text)} title={t("ui.copyScoreHint", { count: score.trackIds.length })}>
+          <button class="small" onclick={() => copy(id, score.text)} title={t("ui.copyScoreHint", { count: score.trackIds.length }) + (score.silent > 0 ? `\n${t("ui.pasteSilent", { count: score.silent })}: ${t("ui.pasteSilentHint")}` : "")}>
             {copied === id ? t("ui.copied") : t("ui.copyScore", { name })}
           </button>
         {/each}

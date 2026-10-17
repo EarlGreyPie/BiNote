@@ -10,6 +10,11 @@ export interface GameProfile {
   readonly maxChordsPerPlayer: number;
   /** 악기마다 한 번에 내는 화음 수가 더 적으면 (오르골 3). 악보 하나에 이만큼씩 나눠 담는다 */
   readonly instrumentMaxChords: Readonly<Record<string, number>>;
+  /**
+   * 연주자가 아니라 장식품이 치는 악기 (오르골·축음기). 악보의 모든 트랙을 이 악기 하나로 치므로
+   * 트랙마다 다른 악기를 줄 수 없다
+   */
+  readonly soloInstruments: readonly string[];
   /** 2단계 압축 목표 화음 수 후보 */
   readonly ensembleChordHint: readonly number[];
   readonly tempo: { readonly min: number; readonly max: number };
@@ -110,6 +115,7 @@ export const MOBILE_PROFILE: GameProfile = {
   charLimitPerScore: 2400,
   maxChordsPerPlayer: 6,
   instrumentMaxChords: { "music-box": 3, gramophone: 3 },
+  soloInstruments: ["music-box", "gramophone"],
   ensembleChordHint: [6, 12, 18, 24],
   tempo: { min: 32, max: 255 },
   length: { min: 1, max: 64, dots: 1 },
@@ -220,6 +226,11 @@ export function chainSampleEnd(
 /** 이 악기로 악보 하나에 담는 트랙 수 */
 export function maxChordsOf(profile: GameProfile, instrument: string | undefined): number {
   return (instrument !== undefined ? profile.instrumentMaxChords[instrument] : undefined) ?? profile.maxChordsPerPlayer;
+}
+
+/** 악보 악기가 장식품 악기(오르골·축음기)라 트랙마다 다른 악기를 줄 수 없는지 */
+export function isSoloInstrument(profile: GameProfile, instrument: string | undefined): boolean {
+  return instrument !== undefined && profile.soloInstruments.includes(instrument);
 }
 
 export function getProfile(id: string): GameProfile {

@@ -11,6 +11,17 @@ export const TUNINGS = {
   baritoneA: { key: "ui.tuningBaritoneA", strings: [57, 52, 48, 43, 38, 33] },
   // 부분 내슈빌 바리톤 (A D G C E A, 3·4번 줄만 한 옥타브 위): 팻 메서니 바리톤 편곡 등
   nashvilleBaritone: { key: "ui.tuningNashvilleBaritone", strings: [57, 52, 60, 55, 38, 33] },
+  // 베이스: 4줄 E A D G, 5줄은 아래에 B를 더한다 (기타보다 한 옥타브 낮다)
+  bass4: { key: "ui.tuningBass4", strings: [43, 38, 33, 28] },
+  bass5: { key: "ui.tuningBass5", strings: [43, 38, 33, 28, 23] },
+  // 만돌린: G D A E (바이올린과 같은 5도 간격)
+  mandolin: { key: "ui.tuningMandolin", strings: [76, 69, 62, 55] },
 } as const satisfies Record<string, { key: MessageKey; strings: readonly number[] }>;
 
 export type TuningName = keyof typeof TUNINGS;
+
+/** 악보 하나의 타브 튜닝과 카포 */
+export interface ScoreTuning {
+  readonly tuning: TuningName;
+  readonly capo: number;
+}

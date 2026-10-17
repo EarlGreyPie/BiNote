@@ -68,6 +68,43 @@ describe("AutosaveTracker", () => {
   });
 });
 
+describe("AutosaveTracker (곡 + 튜닝 묶음, PR #89 점검 1번)", () => {
+  type State = { song: object; tabs: string };
+  const same = (a: State, b: State) => a.song === b.song && a.tabs === b.tabs;
+
+  it("곡이 그대로여도 튜닝·카포만 바뀌면 다시 적는다", () => {
+    const a = new AutosaveTracker<State>(same);
+    const song = {};
+    a.reset({ song, tabs: "standard" });
+    a.begin({ song, tabs: "standard" })(true);
+    expect(a.dirty({ song, tabs: "standard" })).toBe(false);
+    expect(a.dirty({ song, tabs: "bass4" })).toBe(true);
+  });
+
+  it("같은 값으로 새로 만든 묶음은 적는 중인 상태와 같다고 본다", async () => {
+    const tracker = new AutosaveTracker<State>(same);
+    const song = {};
+    tracker.reset({ song, tabs: "standard" });
+    const q = new AutosaveQueue(tracker);
+    let writes = 0;
+    let release!: (ok: boolean) => void;
+    const first = q.flush({ song, tabs: "bass4" }, () => () => {
+      writes++;
+      return new Promise<boolean>((r) => (release = r));
+    });
+    // 저장 중에 같은 값의 새 묶음으로 다시 부르면 그 저장을 기다린다 (두 번 적지 않는다)
+    const again = q.flush({ song, tabs: "bass4" }, () => async () => {
+      writes++;
+      return true;
+    });
+    await Promise.resolve();
+    release(true);
+    await Promise.all([first, again]);
+    expect(writes).toBe(1);
+    expect(tracker.dirty({ song, tabs: "bass4" })).toBe(false);
+  });
+});
+
 describe("AutosaveQueue", () => {
   it("저장이 false로 실패하면 거부해 업데이트 새로고침을 막는다 (beta.6 점검 1번)", async () => {
     const tracker = new AutosaveTracker<string>();
