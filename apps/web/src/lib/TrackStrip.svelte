@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Song, Track } from "@mmlce/core";
-  import { instrumentName, t } from "./i18n.svelte";
+  import { instrumentLabel, t } from "./i18n.svelte";
   import Icon from "./Icon.svelte";
   import StructureList from "./StructureList.svelte";
   import TrackMenu from "./TrackMenu.svelte";
@@ -97,7 +97,7 @@
     {#each groups as g (g.number)}
       {@const player = playerOf(g.playerId)}
       {#if g.number === activeGroup}
-        <span class="chip on">{t("ui.scoreN", { n: g.number })} {player ? instrumentName(player.instrument.canonical) : ""}</span>
+        <span class="chip on">{t("ui.scoreN", { n: g.number })} {player ? instrumentLabel(player.instrument) : ""}</span>
         {#each g.trackIds as id, k (id)}
           {@const track = trackOf(id)}
           {#if track}
@@ -125,7 +125,7 @@
         {/each}
       {:else}
         <button class="chip folded" onclick={() => g.trackIds[0] && actions.select(g.trackIds[0])}>
-          {t("ui.scoreN", { n: g.number })} {player ? instrumentName(player.instrument.canonical) : ""} ({g.trackIds.length})
+          {t("ui.scoreN", { n: g.number })} {player ? instrumentLabel(player.instrument) : ""} ({g.trackIds.length})
         </button>
       {/if}
     {/each}

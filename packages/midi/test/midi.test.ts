@@ -464,6 +464,29 @@ describe("songToSmf", () => {
     expect(programs(songToSmf(song, 480, 15, "mabinogi", { canonicalOf })).map((e) => e.value)).toEqual([42, 43]);
   });
 
+  it("트랙에서 고른 팩: canonicalOf에 팩을 넘겨 그 팩의 실제 악기 GM 번호로, 같은 번호라도 팩이 다르면 MIDI 트랙을 나눈다", () => {
+    // #42.3을 한 트랙은 .2 팩(42번 바이올린)으로, 다른 트랙은 자동(.3 팩 42번 냥모니카)으로 듣는다
+    const s = playerSong(["piano"]);
+    const player = { ...s.players[0]!, instrument: { canonical: "mabi:1578", program: 1578 } };
+    const t0 = s.tracks[0]!;
+    const song = {
+      ...s,
+      players: [player],
+      tracks: [
+        { ...t0, instrument: { canonical: "mabi:1578", program: 1066, packId: "pack-2.dls" } },
+        { ...t0, id: "t1", notes: [{ ...t0.notes[0]!, id: "n1", pitch: 64 }] },
+      ],
+    };
+    const canonicalOf = (_instrument: string, _program: number | undefined, pack?: string) => (pack === "pack-2.dls" ? "violin" : "cat-harmonica");
+    expect(programs(songToSmf(song, 480, 15, "gm", { canonicalOf })).map((e) => [e.type, e.value])).toEqual([
+      ["program", 40],
+      ["program", 22],
+    ]);
+    // 팩 하나만 고른 연주자: 그 팩의 실제 악기
+    const one = { ...song, tracks: [song.tracks[0]!] };
+    expect(programs(songToSmf(one, 480, 15, "gm", { canonicalOf })).map((e) => e.value)).toEqual([40]);
+  });
+
   it("같은 악기 연주자는 채널을 함께 써서 16명이 넘어도 다른 악기와 섞이지 않는다", () => {
     // 겹치는 같은 높이가 없게 연주자마다 다른 음
     const s = playerSong([...Array(16).fill("piano"), "flute"]);
@@ -505,5 +528,21 @@ describe("songToSmf", () => {
   it("곡 중간 박자 변화도 쓴다", () => {
     const sigs = songToSmf(playerSong(["piano"])).tracks[0]!.events.filter((e) => e.type === "timeSig");
     expect(sigs.map((e) => [e.tick, "beats" in e ? e.beats : 0])).toEqual([[0, 4], [1920, 3]]);
+  });
+});
+
+describe("드럼을 타악기 한 높이로 바꾼 뒤 합쳐진 음 (지시문 9)", () => {
+  it("높이가 다른 두 드럼 음이 큰북 한 높이로 합쳐지면 merged에 센다", () => {
+    // 120 BPM, 10번 채널(드럼): 35를 0~30틱, 36을 30~60틱. 16분 격자에 맞추면 둘 다 0에서 시작한다
+    const a = analyzeMidi(smf([{ tick: 0, type: "tempo", usPerQuarter: 500_000 }, on(0, 35, 100, 9), off(30, 35, 9), on(30, 36, 100, 9), off(60, 36, 9)]));
+    const drum = a.parts.find((p) => p.drum)!;
+    const r = midiToSong(
+      a,
+      { players: [{ name: "큰북", instrument: { canonical: "bass-drum" }, parts: [drum.id], chords: 1 }], quantize: { grid: 16, triplets: false } },
+      MOBILE_PROFILE,
+    );
+    expect(r.song.tracks.flatMap((t) => t.notes)).toHaveLength(1);
+    expect(r.merged).toBe(1);
+    expect(r.compressed[0]!.dropped).toBe(0);
   });
 });

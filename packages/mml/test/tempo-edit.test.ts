@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { emptySong, History, normalizeTempo, rat, type Song } from "@mmlce/core";
-import { changeTempos, compactSong, fillScoreTempo, keepScoreTempo, moveTempo, parseMml, parseTrackText, scoresMissingTempo, removeTempoAt, setTempoAt, setTempos, setTrackText, tempoInsertOffset, tempoMismatch, trackSource } from "../src/index.js";
+import { emptySong, History, MOBILE_PROFILE, normalizeTempo, rat, type Song } from "@mmlce/core";
+import { changedBpm, changeTempos, changeTemposResult, compactSong, fillScoreTempo, keepScoreTempo, moveTempo, parseMml, parseTrackText, scoresMissingTempo, removeTempoAt, setTempoAt, setTempos, setTrackText, tempoChangeTargets, tempoInsertOffset, tempoMismatch, trackSource } from "../src/index.js";
 import { moveTrackToNewPlayer, setPlayerInstrument, shiftTrack } from "../src/structure.js";
 
 /** 원문들로 곡을 만든다. null이면 원문 없는(음만 있는) 트랙 */
@@ -476,5 +476,47 @@ describe("PR #106 Codex 3차 점검: 끝난 악보의 원문을 늘이지 않기
     const s = changeTempos({ mode: "set", value: 60 }, rat(1, 2)).apply(song);
     expect(texts(s)[0]).toBe("t100c4r1");
     expect(parseMml(texts(s)[0]!).gameEnd).toEqual(parseMml("t100c4r1").gameEnd);
+  });
+});
+
+describe("템포 한꺼번에 바꾸기 점검 (지시문 9)", () => {
+  function scoresOf(...scores: string[][]): Song {
+    const base = songOf(...scores.flat());
+    let k = 0;
+    const owner = scores.flatMap((texts, p) => texts.map(() => `p${p + 1}`));
+    return {
+      ...base,
+      players: scores.map((_, p) => ({ id: `p${p + 1}`, name: "피아노", instrument: { canonical: "piano" as const } })),
+      tracks: base.tracks.map((t) => ({ ...t, playerId: owner[k++]! })),
+    };
+  }
+
+  it("1. 한 악보가 경계 템포를 넣지 못하면 다른 악보가 바뀌어도 그 악보와 까닭을 알려 준다", () => {
+    const song = scoresOf(["t100c4r4", "t100l1n48n50"], ["t100c1d1"]);
+    const { song: next, failed } = changeTemposResult(song, { mode: "set", value: 60 }, rat(1, 2), rat(3, 4));
+    expect(texts(next).slice(0, 2)).toEqual(["t100c4r4", "t100l1n48n50"]);
+    expect(texts(next)[2]).not.toBe("t100c1d1");
+    expect(failed).toEqual([{ score: 0, reasons: ["length", "n-note"] }]);
+    // 명령도 같은 곡을 만든다
+    expect(texts(changeTempos({ mode: "set", value: 60 }, rat(1, 2), rat(3, 4)).apply(song))).toEqual(texts(next));
+  });
+
+  it("2. 모두 이 값으로: 지도 값이 같아도 어긋난 원문 t를 맞춘다", () => {
+    const base = scoresOf(["t90c1"], ["t100c1"]);
+    const song = { ...base, tempo: [{ at: rat(0), bpm: 100 }] };
+    const targets = tempoChangeTargets(song);
+    expect([...targets.bpms].sort((a, b) => a - b)).toEqual([90, 100]);
+    const next = changeTempos({ mode: "set", value: 100 }).apply(song);
+    expect(next).not.toBe(song);
+    expect(texts(next)).toEqual(["t100c1", "t100c1"]);
+  });
+
+  it("3. 겹쳐 쓴 t(t250t100)도 미리보기 목록에 들어가 바뀐 값이 범위를 넘는지 셀 수 있다", () => {
+    const song = songOf("t250t100v9c1");
+    const { bpms } = tempoChangeTargets(song);
+    expect([...bpms].sort((a, b) => a - b)).toEqual([100, 250]);
+    const after = bpms.map((b) => changedBpm(b, { mode: "add", value: 10 }));
+    expect(after.filter((b) => b > MOBILE_PROFILE.tempo.max)).toEqual([260]);
+    expect(texts(changeTempos({ mode: "add", value: 10 }).apply(song))).toEqual(["t260t110v9c1"]);
   });
 });

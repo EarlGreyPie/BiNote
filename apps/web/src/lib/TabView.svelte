@@ -3,12 +3,12 @@
   import { t } from "./i18n.svelte";
   import { Pinch, pinchRatio } from "./pinch";
   import { fretFromKeys, placeTabNote, removeTabNote, setTabNoteLength, tieTabNote, type TabEdit } from "./tabInput";
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { fonts } from "./fonts.svelte";
   import { loadStored, saveStored } from "./persist";
   import VolumeBox from "./VolumeBox.svelte";
   import { lengthLabel } from "./Toolbar.svelte";
-  import { NOTE_LENGTHS, noteLengthOf, type NoteLength } from "./roll";
+  import { NOTE_LENGTHS, noteLengthOf, stepNoteLength, type NoteLength } from "./roll";
   import Icon from "./Icon.svelte";
   import { drawVolumeLane } from "./laneDraw";
   import { LaneGesture } from "./laneGesture.svelte";
@@ -16,6 +16,9 @@
   import { LANE_MAX, LANE_MIN, laneThickness, saveVolumeLane, volumeLane } from "./volumeLane.svelte";
   import type { RollView } from "./roll";
   import { tabTint } from "./tabTint.svelte";
+  import { nextTabAlign, parseTabAlign, type TabAlign } from "./tabAlign";
+  import { inTabEventBand, layoutTabEvents, TAB_EVENT_TEXT, tabEventAt, type TabEventSpot } from "./tabEvents";
+  import { snapNearest, type EventKind, type EventLabel } from "./roll";
 
   interface Props {
     song: Song;
@@ -51,9 +54,15 @@
     /** 음량 레인에 고른 트랙과 같이 그릴 트랙, 멜로디 트랙 (피아노롤과 같다) */
     laneTrackIds?: readonly string[] | undefined;
     melodyIds?: ReadonlySet<string> | undefined;
+    /** 보기 → 타브 숫자판: 켜면 마우스로 지판을 눌러도 프렛 숫자판을 연다 (끄면 터치·펜에서만) */
+    padByMouse?: boolean;
+    /** 위쪽 템포·박자 줄을 두 번 누르거나(터치·펜은 길게) 그 글자를 눌러 템포·박자 창을 연다 (피아노롤 이벤트 줄과 같은 모양) */
+    onevent?: ((request: { label?: EventLabel; kind: EventKind; at: Rat }) => void) | undefined;
+    /** 타브 커서 자리가 바뀔 때 (Alt+B·Alt+M이 그 자리에 넣게). 커서가 없으면 undefined */
+    oncursor?: ((at: Rat | undefined) => void) | undefined;
   }
 
-  let { song, activeTrackId, tuning, playhead, onunplayable, division, noteDur, noteLength, onnotelength, onedit, onnewtrack, onfull, maxTracks = Infinity, onpreview, volume = $bindable(), volumeRange, colors, locked, laneTrackIds, melodyIds }: Props = $props();
+  let { song, activeTrackId, tuning, playhead, onunplayable, division, noteDur, noteLength, onnotelength, onedit, onnewtrack, onfull, maxTracks = Infinity, onpreview, volume = $bindable(), volumeRange, colors, locked, laneTrackIds, melodyIds, padByMouse = false, onevent, oncursor }: Props = $props();
 
   // 위쪽에 마디 번호 줄과 변속(템포·박자) 줄을 둔다
   const TOP = 42;
@@ -69,6 +78,15 @@
   function setGap(next: number) {
     gap = Math.min(44, Math.max(14, Math.round(next)));
     saveStored(GAP_KEY, String(gap));
+  }
+  // 지판 세로 위치(위·가운데·아래). 세로로 긴 화면에서 남는 높이가 있을 때만 쓰인다. 이 브라우저에 기억한다
+  const ALIGN_KEY = "mmlce.tabAlign";
+  let align = $state<TabAlign>(loadStored(ALIGN_KEY, parseTabAlign));
+  const ALIGN_LABEL = { top: "ui.tabAlignTop", middle: "ui.tabAlignMiddle", bottom: "ui.tabAlignBottom" } as const;
+  const ALIGN_ICON = { top: "⤒", middle: "↕", bottom: "⤓" } as const;
+  function cycleAlign() {
+    align = nextTabAlign(align);
+    saveStored(ALIGN_KEY, align);
   }
   /** 가로(시간) 확대·축소. factor > 1이면 확대, 화면 가운데를 기준으로 */
   function zoomTime(factor: number) {
@@ -125,6 +143,12 @@
 
   /** 타브 커서: 시간(격자에 맞춤)과 줄(1 = 가장 높은 줄) */
   let cursor = $state.raw<{ at: Rat; string: number } | undefined>(undefined);
+  // 커서 자리를 앱에 알린다 (Alt+B·Alt+M이 그 자리에 템포·마커를 넣게). 타브를 닫으면 커서도 없다
+  $effect(() => {
+    const at = cursor?.at;
+    untrack(() => oncursor?.(at));
+  });
+  onMount(() => () => oncursor?.(undefined));
   let digits = "";
   let digitsTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -209,7 +233,46 @@
     return [e.clientX - rect.left, e.clientY - rect.top];
   }
 
+  /** 그린 변속 글자 자리 (그릴 때마다 새로). 누를 때 이걸로 찾는다 */
+  let eventSpots: TabEventSpot[] = [];
+  /** 위쪽 템포·박자 줄인지 (글자를 그리는 칸. 첫 줄 숫자 칸과 겹치면 글자 위만. 첫 줄을 누르는 자리는 남긴다) */
+  const inEventBand = (px: number, py: number) => inTabEventBand(eventSpots, px, py, TOP, fontPx);
+  /** 템포 글자 위에 올렸을 때 보이는 안내 */
+  let eventHover = $state<TabEventSpot | undefined>(undefined);
+  /** 터치·펜으로 변속 줄을 길게 누르는 중 */
+  let bandPress: { x: number; x0: number; y0: number; timer: ReturnType<typeof setTimeout> } | undefined;
+  const LONG_PRESS_MS = 500;
+
+  function cancelBandPress() {
+    if (bandPress) clearTimeout(bandPress.timer);
+    bandPress = undefined;
+  }
+
+  /** 변속 줄 px 자리: 글자가 있으면 그 템포·박자를 고치고, 없으면 격자에 맞춘 자리에 새 템포 */
+  function openEventAt(px: number) {
+    if (!onevent) return;
+    const spot = tabEventAt(eventSpots, px);
+    if (spot) {
+      const label: EventLabel = { kind: spot.kind, at: spot.at, text: spot.text, x: spot.left, y: TAB_EVENT_TEXT.top, w: spot.right - spot.left, h: TAB_EVENT_TEXT.bottom - TAB_EVENT_TEXT.top };
+      onevent({ label, kind: spot.kind, at: spot.at });
+      return;
+    }
+    const time = start + (px - LEFT) / pxPerWhole;
+    onevent({ kind: "tempo", at: snapNearest(Math.max(0, time), division) });
+  }
+
+  function ondblclick(e: MouseEvent) {
+    const rect = canvas.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    if (px >= LEFT && inEventBand(px, e.clientY - rect.top)) openEventAt(px);
+  }
+
   function onpointermove(e: PointerEvent) {
+    if (bandPress && Math.hypot(e.clientX - bandPress.x0, e.clientY - bandPress.y0) > 8) cancelBandPress();
+    if (e.pointerType === "mouse") {
+      const [px, py] = point(e);
+      eventHover = onevent && px >= LEFT && inEventBand(px, py) ? tabEventAt(eventSpots, px) : undefined;
+    }
     const f = pinch.move(e, point(e));
     const s = pinchStart;
     if (!f || !s) return;
@@ -219,6 +282,7 @@
   }
 
   function onpointerup(e: PointerEvent) {
+    cancelBandPress();
     pinch.up(e);
   }
 
@@ -234,9 +298,22 @@
     const px = e.clientX - rect.left;
     const py = e.clientY - rect.top;
     if (px < LEFT) return;
+    // 위쪽 템포·박자 줄: 한 번 누르면 아무 일도 없다(지판 커서를 두지 않는다). 터치·펜은 길게 누르면 템포 창
+    if (inEventBand(px, py)) {
+      cancelBandPress();
+      if (e.pointerType === "touch" || e.pointerType === "pen") {
+        const press = { x: px, x0: e.clientX, y0: e.clientY, timer: setTimeout(() => {
+          if (bandPress !== press) return;
+          bandPress = undefined;
+          openEventAt(press.x);
+        }, LONG_PRESS_MS) };
+        bandPress = press;
+      }
+      return;
+    }
     const time = start + (px - LEFT) / pxPerWhole;
     const string = Math.min(tuning.strings.length, Math.max(1, Math.round((py - TOP) / gap) + 1));
-    touchPad = e.pointerType === "touch" || e.pointerType === "pen" || touchPad;
+    touchPad = padByMouse || e.pointerType === "touch" || e.pointerType === "pen" || touchPad;
     cursor = { at: rat(Math.max(0, Math.floor(time * division + 1e-9)), division), string };
     digits = "";
   }
@@ -267,9 +344,7 @@
 
   /** +/− 키: 커서 음(없으면 새 음) 길이를 두 배 / 반으로 (온음표 ~ 64분음표) */
   function stepLength(factor: 2 | 0.5) {
-    const now = lengthNoteAtCursor()?.dur ?? noteDur ?? rat(1, division);
-    const want = mul(now, factor === 2 ? rat(2) : rat(1, 2));
-    const length = NOTE_LENGTHS.find((l) => l !== "grid" && cmp(noteLengthOf(l, division), want) === 0);
+    const length = stepNoteLength(lengthNoteAtCursor()?.dur ?? noteDur ?? rat(1, division), factor);
     if (length) changeLength(length);
   }
 
@@ -323,10 +398,19 @@
     digits = "";
   }
 
+  // 보기 메뉴에서 타브 숫자판을 끄면 열려 있던 숫자판도 닫는다
+  let padByMouseBefore = untrack(() => padByMouse);
+  $effect(() => {
+    const on = padByMouse;
+    if (padByMouseBefore && !on && untrack(() => touchPad)) closePad();
+    padByMouseBefore = on;
+  });
+
   // 숫자판이 지판 칸을 줄이므로, 커서 줄이 칸 밖이면 그 줄이 보이게 지판 칸을 세로로 굴린다
   $effect(() => {
     if (!padOpen || !cursor || !wrap) return;
-    const top = TOP + (cursor.string - 1) * gap - fontPx;
+    // 캔버스 위 여백(지판 위치)도 더한다. 숫자판이 열리면 위에 붙이지만, 바뀌는 동안에도 맞게
+    const top = (canvas?.offsetTop ?? 0) + TOP + (cursor.string - 1) * gap - fontPx;
     const bottom = top + fontPx * 2;
     if (top < wrap.scrollTop) wrap.scrollTop = Math.max(0, top);
     else if (bottom > wrap.scrollTop + wrap.clientHeight) wrap.scrollTop = bottom - wrap.clientHeight;
@@ -525,15 +609,18 @@
       g.fillText(String(gl.bar), x(gl.at) + 3, 12);
     }
 
-    // 변속: 템포·박자가 바뀌는 자리를 위쪽 둘째 줄에 글자로, 타브 전체에 점선으로
+    // 변속: 템포·박자가 바뀌는 자리를 위쪽 둘째 줄에 글자로, 타브 전체에 점선으로.
+    // 글자 자리는 누를 때 찾을 수 있게 남긴다 (같은 자리에 템포와 박자가 함께 바뀌면 옆으로 이어 쓴다)
+    const visible = (at: Rat) => toFloat(at) >= start - 0.01 && toFloat(at) < end;
     const changes = [
-      ...song.tempo.map((e) => ({ at: toFloat(e.at), text: `t${e.bpm}`, color: css("--ev-tempo") })),
-      ...song.timeSig.map((e) => ({ at: toFloat(e.at), text: `${e.beats}/${e.unit}`, color: css("--ev-meter") })),
-    ].filter((e) => e.at >= start - 0.01 && e.at < end);
-    let lastRight = -Infinity;
-    for (const e of changes.sort((a, b) => a.at - b.at)) {
-      const px = x(e.at);
-      g.strokeStyle = e.color;
+      ...song.tempo.filter((e) => visible(e.at)).map((e) => ({ kind: "tempo" as const, at: e.at, text: `t${e.bpm}` })),
+      ...song.timeSig.filter((e) => visible(e.at)).map((e) => ({ kind: "meter" as const, at: e.at, text: `${e.beats}/${e.unit}` })),
+    ];
+    eventSpots = layoutTabEvents(changes, (at) => x(toFloat(at)), (text) => g.measureText(text).width);
+    for (const e of eventSpots) {
+      const px = x(toFloat(e.at));
+      const color = css(e.kind === "tempo" ? "--ev-tempo" : "--ev-meter");
+      g.strokeStyle = color;
       g.lineWidth = 1;
       g.setLineDash([3, 3]);
       g.beginPath();
@@ -541,11 +628,8 @@
       g.lineTo(px + 0.5, y(tuning.strings.length));
       g.stroke();
       g.setLineDash([]);
-      g.fillStyle = e.color;
-      // 같은 자리에 템포와 박자가 함께 바뀌면 옆으로 이어 쓴다
-      const left = Math.max(px + 3, lastRight + 4);
-      g.fillText(e.text, left, 27);
-      lastRight = left + g.measureText(e.text).width;
+      g.fillStyle = color;
+      g.fillText(e.text, e.left, TAB_EVENT_TEXT.baseline);
     }
 
     // 줄과 개방현 이름
@@ -680,8 +764,14 @@
 
 <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
 <div class="tab" bind:this={host} tabindex="0" role="application" {onkeydown}>
-  <div class="canvas-wrap" bind:this={wrap} style:min-height={padOpen ? `min(${height}px, 45%)` : undefined}>
-    <canvas bind:this={canvas} style:width="{width}px" style:height="{height}px" {onpointerdown} {onpointermove} {onpointerup} onpointercancel={onpointerup}></canvas>
+  <!-- 숫자판이 열리면 지판 칸이 줄어드니 위치와 상관없이 위에 붙인다 -->
+  <div class="canvas-wrap" bind:this={wrap} data-align={padOpen ? "top" : align} style:min-height={padOpen ? `min(${height}px, 45%)` : undefined}>
+    <canvas
+      bind:this={canvas}
+      class:event-hover={!!eventHover}
+      title={eventHover ? t(eventHover.kind === "tempo" ? "ui.tabTempoEdit" : "ui.tabMeterEdit") : undefined}
+      {ondblclick}
+      onpointerleave={() => (eventHover = undefined)} style:width="{width}px" style:height="{height}px" {onpointerdown} {onpointermove} {onpointerup} onpointercancel={onpointerup}></canvas>
   </div>
   {#if laneHeight > 0 && !padOpen}
     <!-- 높이 손잡이: 위로 끌면 레인이 커진다 (얇은 띠에서 끌어도 크게 펼쳐진다) -->
@@ -786,6 +876,12 @@
       <button class="small" title={t("ui.zoomInTime")} onclick={() => zoomTime(1.25)}><Icon name="arrows-h" size={14} /><Icon name="plus" size={12} /></button>
       <button class="small" title={t("ui.tabSmaller")} onclick={() => setGap(gap - 3)}>A−</button>
       <button class="small" title={t("ui.tabBigger")} onclick={() => setGap(gap + 3)}>A+</button>
+      <button
+        class="small tab-align"
+        title={t("ui.tabAlign", { now: t(ALIGN_LABEL[align]), next: t(ALIGN_LABEL[nextTabAlign(align)]) })}
+        aria-label={t("ui.tabAlign", { now: t(ALIGN_LABEL[align]), next: t(ALIGN_LABEL[nextTabAlign(align)]) })}
+        onclick={cycleAlign}>{ALIGN_ICON[align]}</button
+      >
     </span>
   </div>
 </div>
@@ -841,6 +937,23 @@
     flex: 1 1 0;
     min-height: 0;
     overflow: auto;
+    /* 지판 위치: 남는 높이가 있을 때만 위 여백으로 옮긴다. justify-content: center는 넘칠 때 위가 잘려 굴려도 안 보이므로 쓰지 않는다 */
+    display: flex;
+    flex-direction: column;
+    /* 캔버스 offsetTop(숫자판 굴리기)을 이 칸 기준으로 */
+    position: relative;
+  }
+  .canvas-wrap > canvas {
+    flex: none;
+  }
+  .canvas-wrap[data-align="middle"] > canvas {
+    margin-block: auto;
+  }
+  .canvas-wrap[data-align="bottom"] > canvas {
+    margin-top: auto;
+  }
+  canvas.event-hover {
+    cursor: pointer;
   }
   canvas {
     display: block;

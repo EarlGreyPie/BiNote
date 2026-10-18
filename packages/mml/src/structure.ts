@@ -31,9 +31,25 @@ function sameInstrument(a: Player["instrument"], b: Player["instrument"]): boole
   return a.canonical === b.canonical && a.packId === b.packId && a.program === b.program;
 }
 
-function instrumentRef(canonical: string): Player["instrument"] {
+/**
+ * 고른 사운드팩에 맞춘 악기 번호 (마비꼬 팩 번호 부분). 팩 목록을 아는 쪽(앱)이 준다.
+ * 받은 ref는 악기·팩이 바뀐 뒤의 값이고, undefined를 돌려주면 번호를 적지 않는다
+ */
+export type ProgramForPack = (ref: InstrumentRef) => number | undefined;
+
+/** packId(고른 팩 파일 이름)를 주면 그 팩을 남기고, programFor로 번호를 그 팩에 맞춘다 */
+function instrumentRef(canonical: string, packId?: string, programFor?: ProgramForPack): Player["instrument"] {
   const program = INSTRUMENTS.find((i) => i.id === canonical)?.program;
-  return program === undefined ? { canonical } : { canonical, program };
+  const base: InstrumentRef = program === undefined ? { canonical } : { canonical, program };
+  if (packId === undefined) return base;
+  return withProgram({ ...base, packId }, programFor);
+}
+
+function withProgram(ref: InstrumentRef, programFor: ProgramForPack | undefined): InstrumentRef {
+  if (!programFor) return ref;
+  const { program: _old, ...rest } = ref;
+  const program = programFor(ref);
+  return program === undefined ? rest : { ...rest, program };
 }
 
 function blankTrack(id: string, playerId: string, name: string, index: number): Track {
@@ -97,12 +113,16 @@ export function setPlayerInstrument(
   names?: { from: string; to: string },
   label = "악기 바꾸기",
   split?: SoloSplit,
+  programFor?: ProgramForPack,
 ): Command {
   return replaceWith(label, (song) => {
     const next = {
       ...song,
       players: song.players.map((p) =>
-        p.id !== playerId ? p : { ...p, instrument: instrumentRef(canonical), name: names && p.name === names.from ? names.to : p.name },
+        p.id !== playerId
+          ? p
+          : // 고른 사운드팩은 악기를 바꿔도 남긴다
+            { ...p, instrument: instrumentRef(canonical, p.instrument.packId, programFor), name: names && p.name === names.from ? names.to : p.name },
       ),
     };
     if (!split) return next;
@@ -455,9 +475,16 @@ export function setPlayerTab(playerId: string, tab: PlayerTab, label = "튜닝")
 
 /**
  * 트랙 하나만 다른 악기로 (canonical이 없거나 악보 악기와 같으면 악보 악기를 따르게 되돌린다).
+ * 트랙이 듣던 사운드팩(고른 팩)은 남긴다. 그 팩이 악보 악기의 팩과 다르면 악보 악기와 같은 악기라도 트랙 악기로 둔다.
  * split을 주면 게임에서 같은 악보에 둘 수 없는 조합(오르골 악보의 다른 악기, 장식품 악기 트랙)은 새 악보로 떼어 낸다
  */
-export function setTrackInstrument(trackId: string, canonical: string | undefined, label = "트랙 악기", split?: SoloSplit): Command {
+export function setTrackInstrument(
+  trackId: string,
+  canonical: string | undefined,
+  label = "트랙 악기",
+  split?: SoloSplit,
+  programFor?: ProgramForPack,
+): Command {
   return replaceWith(label, (song) => {
     const next = {
       ...song,
@@ -465,11 +492,41 @@ export function setTrackInstrument(trackId: string, canonical: string | undefine
         if (t.id !== trackId) return t;
         const player = song.players.find((p) => p.id === t.playerId);
         const rest = withoutInstrument(t);
-        return canonical === undefined || canonical === player?.instrument.canonical ? rest : { ...rest, instrument: instrumentRef(canonical) };
+        const packId = trackInstrument(song, t).packId;
+        if (canonical === undefined || (canonical === player?.instrument.canonical && packId === player.instrument.packId)) return rest;
+        return { ...rest, instrument: instrumentRef(canonical, packId, programFor) };
       }),
     };
     const playerId = song.tracks.find((t) => t.id === trackId)?.playerId;
     return split && playerId ? splitSoloTracks(next, playerId, split) : next;
+  });
+}
+
+/**
+ * 트랙에서 들을 사운드팩을 고른다 (packId: 팩 파일 이름, undefined면 자동). 악기 고르기와 같은 대상에 적용한다:
+ * 트랙 악기가 있으면 그 트랙, 없으면 그 트랙의 악보(연주자) 악기. programFor로 악기 번호의 팩 번호 부분을 맞춘다
+ */
+export function setTrackPack(trackId: string, packId: string | undefined, programFor?: ProgramForPack, label = "사운드팩"): Command {
+  const withPack = (ref: InstrumentRef): InstrumentRef => {
+    const { packId: _old, ...rest } = ref;
+    return withProgram(packId === undefined ? rest : { ...rest, packId }, programFor);
+  };
+  return replaceWith(label, (song) => {
+    const track = song.tracks.find((t) => t.id === trackId);
+    if (!track) return song;
+    if (!track.instrument) {
+      return { ...song, players: song.players.map((p) => (p.id === track.playerId ? { ...p, instrument: withPack(p.instrument) } : p)) };
+    }
+    const player = song.players.find((p) => p.id === track.playerId);
+    const own = withPack(track.instrument);
+    return {
+      ...song,
+      tracks: song.tracks.map((t) => {
+        if (t.id !== trackId) return t;
+        // 악보 악기와 팩·번호까지 같아지면 악보 악기를 따르게 되돌린다
+        return player && sameInstrument(own, player.instrument) ? withoutInstrument(t) : { ...t, instrument: own };
+      }),
+    };
   });
 }
 

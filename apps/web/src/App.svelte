@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { InstrumentGains, SoundPackInfo } from "@mmlce/audio/browser";
+  import { programForPack, type InstrumentGains, type SoundPackInfo } from "@mmlce/audio/browser";
   import {
     add,
     cmp,
@@ -16,7 +16,7 @@
     meterGrid,
     foldPitch,
     rat,
-    scaleNotes,
+    scaleNotesIn,
     transposeNotes,
     DOUBLE,
     HALF,
@@ -80,6 +80,8 @@
     moveTempo,
     setTempos,
     changeTempos,
+    changeTemposResult,
+    tempoChangeTargets,
     type TempoChange,
     fillScoreTempo,
     keepScoreTempo,
@@ -87,6 +89,8 @@
     setPlayerInstrument,
     setPlayerTab,
     setTrackInstrument,
+    setTrackPack,
+    type ProgramForPack,
     type SoloSplit,
     setTrackRole,
     setTracksNotes,
@@ -99,7 +103,7 @@
   import { analyzeSong, noteSpan, spanAt, textTimeline } from "./lib/analysis";
   import { trackSoundingRange, type CanonicalOf } from "./lib/instrumentRange";
   import { Engine, MASTER_MAX } from "./lib/engine";
-  import { diag, i18n, instrumentName, LOCALE_LABELS, setLocale, t } from "./lib/i18n.svelte";
+  import { diag, i18n, instrumentLabel, instrumentName, LOCALE_LABELS, setLocale, t } from "./lib/i18n.svelte";
   import { openScore } from "./lib/load";
   import { asksSaveDialog, loadSaveTarget, saveFile, type SaveOutcome } from "./lib/saveTarget.svelte";
   import { flushAllEditors } from "./lib/MmlEditor.svelte";
@@ -142,6 +146,7 @@
   import StatusBar, { type StatusPanel } from "./lib/StatusBar.svelte";
   import Toolbar, { type RollLayer } from "./lib/Toolbar.svelte";
   import { coarsePointer, mmlPad } from "./lib/mmlPad.svelte";
+  import { parseTabPad, TAB_PAD_KEY } from "./lib/tabPad";
   import VoiceDialog, { parseVoicePrefs, VOICE_STORAGE, type VoiceMode, type VoiceOptions, type VoicePreview } from "./lib/VoiceDialog.svelte";
   import TransposeDialog, { type TransposeCheck, type TransposeScope } from "./lib/TransposeDialog.svelte";
   import { Playback } from "./lib/playback.svelte";
@@ -157,6 +162,7 @@
   import OptimizePreview from "./lib/OptimizePreview.svelte";
   import { outputRows, previewRows, tempoAdvice } from "./lib/output";
   import { placeChord, previousVolume, volumeForVelocity } from "./lib/midiInput";
+  import { fillEditorTracks, oldestEditor, parseEditorCount, parseEditorMax, swapIntoEditors } from "./lib/editors";
   import { melodyTrackIds, peakPolyphony, scoreGroups, soundingAt, trackColors, type ColorScheme } from "./lib/scores";
   import PasteDialog from "./lib/PasteDialog.svelte";
   import MidiDialog from "./lib/MidiDialog.svelte";
@@ -175,7 +181,7 @@
   } from "./lib/keymap";
   import { applyUpdate, checkStorage, pwa, requestPersistentStorage } from "./lib/pwa.svelte";
   import { guideUrl } from "./lib/links";
-  import { VIDEO_DEFAULTS, noteLengthOf, type BackgroundVideo, type EventKind, type EventLabel, type EventRef, type NoteLength, type Orientation, type RollTool } from "./lib/roll";
+  import { VIDEO_DEFAULTS, noteLengthOf, stepNoteLength, type BackgroundVideo, type EventKind, type EventLabel, type EventRef, type NoteLength, type Orientation, type RollTool } from "./lib/roll";
 
 
   const engine = new Engine();
@@ -204,6 +210,12 @@
   let division = $state(16);
   /** 새 음 길이 (격자대로 또는 l4·l8. 같은 MML 길이) */
   let noteLength = $state<NoteLength>("grid");
+  /** 보기 → 타브 숫자판: 마우스로 지판을 눌러도 프렛 숫자판을 연다. 이 브라우저에 기억한다 */
+  let tabPadOn = $state(loadStored(TAB_PAD_KEY, parseTabPad));
+  function toggleTabPad() {
+    tabPadOn = !tabPadOn;
+    saveStored(TAB_PAD_KEY, tabPadOn ? "1" : "0");
+  }
   const newNoteDur = $derived(noteLengthOf(noteLength, division));
   const DIVISIONS = GRID_DIVISIONS;
   let viewMode = $state<"roll" | "tab">("roll");
@@ -429,7 +441,7 @@
    */
   const canonicalOf = $derived.by<CanonicalOf>(() => {
     void packs;
-    return (instrument, program) => engine.canonicalOf(instrument, program);
+    return (instrument, program, pack) => engine.canonicalOf(instrument, program, pack);
   });
   const analysis = $derived(song ? analyzeSong(song, profile, { canonicalOf }) : undefined);
   // 악보 하나에 담는 트랙 수는 악기마다 (오르골 3)
@@ -505,8 +517,8 @@
     const out = new Map<string, readonly [number, number]>();
     const at = markAt;
     if (!song || at === undefined) return out;
-    // 편집기에 열린 트랙만 (고른 트랙 + 편집기 둘 나란히의 아래 트랙)
-    for (const id of [activeTrackId, secondTrackId]) {
+    // 편집기에 열린 트랙만 (고른 트랙 + 아래 편집기들)
+    for (const id of [activeTrackId, ...extraTrackIds]) {
       const tr = song.tracks.find((x) => x.id === id);
       const span = tr ? spanAt(textTimeline(song, tr), at) : undefined;
       if (tr && span) out.set(tr.id, span);
@@ -1231,7 +1243,7 @@
     previewOn: (pitch, velocity) => {
       const track = song?.tracks.find((tr) => tr.id === activeTrackId);
       const inst = song && track ? trackInstrument(song, track) : { canonical: "piano" };
-      engine.previewOn(inst.canonical, inst.program, pitch, velocity, profile).catch(() => {
+      engine.previewOn(inst.canonical, inst.program, pitch, velocity, profile, inst.packId).catch(() => {
         // 오디오를 못 켜도 악보 입력은 이어 간다
       });
     },
@@ -1279,7 +1291,7 @@
     if (!on) return engine.previewOff(pitch);
     const track = song?.tracks.find((tr) => tr.id === activeTrackId);
     const inst = song && track ? trackInstrument(song, track) : { canonical: "piano" };
-    engine.previewOn(inst.canonical, inst.program, pitch, 100, profile).catch(() => {
+    engine.previewOn(inst.canonical, inst.program, pitch, 100, profile, inst.packId).catch(() => {
       // 오디오를 못 켜도 편집은 이어 간다
     });
   }
@@ -1295,10 +1307,12 @@
     const l = request.label;
     eventEdit = l ? { kind: l.kind, at: l.at, existing: true, ...(l.id ? { id: l.id } : {}) } : { kind: request.kind, at: request.at, existing: false };
   }
-  /** 편집 커서(없으면 곡 처음) 자리 템포·마커 창. 그 자리에 템포가 있으면 고치기 */
+  /** 타브 커서 자리 (타브 보기에서 Alt+B·Alt+M이 쓴다). 커서가 없거나 타브가 아니면 undefined */
+  let tabCursor = $state.raw<Rat | undefined>(undefined);
+  /** 편집 커서(타브 보기면 타브 커서 먼저, 없으면 곡 처음) 자리 템포·마커 창. 그 자리에 템포가 있으면 고치기 */
   function openEventAtCursor(kind: EventKind) {
     if (!song) return;
-    const at = editCursor() ?? rat(0);
+    const at = (viewMode === "roll" ? undefined : tabCursor) ?? editCursor() ?? rat(0);
     const existing = kind === "tempo" && song.tempo.some((e) => cmp(e.at, at) === 0);
     if (!showEvents) showEvents = true;
     eventEdit = { kind, at, existing };
@@ -1446,7 +1460,8 @@
     if (!s) return undefined;
     const from = loop ? asRat(loop[0]) : rat(0);
     const to = loop ? asRat(loop[1]) : undefined;
-    const bpms = [bpmAt(s.tempo, from), ...s.tempo.filter((e) => cmp(e.at, from) > 0 && (!to || cmp(e.at, to) < 0)).map((e) => e.bpm)];
+    // 실제로 고칠 지도 템포·원문 t와 같은 목록 (겹쳐 쓴 t도 범위 밖으로 센다)
+    const bpms = tempoChangeTargets(s, from, to).bpms;
     const where = (at: Rat) => {
       const { bar, beat } = barBeatAt(s.timeSig, at);
       return `${bar}:${Number.isInteger(beat) ? beat : beat.toFixed(2)}`;
@@ -1456,7 +1471,14 @@
   function changeAllTempos(change: TempoChange) {
     const target = tempoChangeTarget;
     if (!target) return;
+    const before = history?.song;
+    const failed = before ? changeTemposResult(before, change, target.from, target.to).failed : [];
     runIfChanged(changeTempos(change, target.from, target.to, t("ui.tempoChange")));
+    // 경계 템포를 넣지 못한 악보는 원문을 그대로 두었으니 알려 준다
+    if (failed.length > 0) {
+      const reasons = [...new Set(failed.flatMap((f) => f.reasons))].map((r) => t(r === "n-note" ? "ui.tempoEdgeNNote" : "ui.tempoEdgeLength"));
+      error = t("ui.tempoChangeFailed", { scores: failed.map((f) => f.score + 1).join(", "), reasons: reasons.join(", ") });
+    }
   }
 
   function deletePicked(): boolean {
@@ -1669,34 +1691,71 @@
     pickBackground = !pickBackground;
     saveStored(PICK_BG_KEY, pickBackground ? "1" : "0");
   }
-  // 편집기 둘 나란히: 트랙 패널 편집기를 위아래 둘로. 아래 편집기는 Alt+클릭(또는 메뉴)으로 고른 트랙 (켜짐만 기억)
+  // 편집기 여러 개: 트랙 패널 편집기를 위아래로 1~최대치(설정 → 화면, 기본 4)개. 위는 고른 트랙, 아래 칸은 Alt+클릭(또는 메뉴)으로
+  // 고른 트랙. 편집기 수와 최대치를 이 브라우저에 기억한다 (예전 "편집기 둘 나란히" 켜짐은 처음 한 번 2개로 옮긴다)
+  const EDITOR_COUNT_KEY = "mmlce.editorCount";
+  const EDITOR_MAX_KEY = "mmlce.editorMax";
   const DUAL_KEY = "mmlce.dualEditor";
-  let dualEditor = $state(loadStored(DUAL_KEY, (raw) => raw === "1"));
-  let secondChosen = $state<string | undefined>(undefined);
-  function setDualEditor(on: boolean) {
-    dualEditor = on;
-    saveStored(DUAL_KEY, on ? "1" : "0");
+  /** 최대치를 고를 수 있는 끝: 한 악보 트랙 수 (게임 한도) */
+  const editorLimit = $derived(profile.maxChordsPerPlayer);
+  let editorMax = $state(untrack(() => loadStored(EDITOR_MAX_KEY, (raw) => parseEditorMax(raw, profile.maxChordsPerPlayer))));
+  let editorCountStored = $state(
+    untrack(() => loadStored(EDITOR_COUNT_KEY, (raw) => parseEditorCount(raw, raw === null ? loadStored(DUAL_KEY, (d) => d) : null, editorMax))),
+  );
+  saveStored(EDITOR_COUNT_KEY, String(untrack(() => editorCountStored)));
+  /** 지금 편집기 수 (최대치·한 악보 트랙 수 안) */
+  const editorCount = $derived(Math.max(1, Math.min(editorCountStored, editorMax, editorLimit)));
+  function setEditorCount(n: number) {
+    editorCountStored = Math.max(1, Math.min(n, editorMax, editorLimit));
+    saveStored(EDITOR_COUNT_KEY, String(editorCountStored));
   }
+  /** 설정 → 화면: 편집기 최대치. 지금 편집기 수보다 낮추면 편집기 수도 줄인다 */
+  function setEditorMax(n: number) {
+    editorMax = Math.max(2, Math.min(n, editorLimit));
+    saveStored(EDITOR_MAX_KEY, String(editorMax));
+    if (editorCountStored > editorMax) setEditorCount(editorMax);
+  }
+  /** 아래 칸마다 고른 트랙과 바뀐 차례 (Alt+클릭은 가장 오래 안 바꾼 칸을 바꾼다) */
+  let extraChosen = $state.raw<(string | undefined)[]>([]);
+  let extraStamps = $state.raw<(number | undefined)[]>([]);
+  let extraTick = 0;
+  /** 아래 칸들에 실제로 여는 트랙 (같은 트랙은 두 칸에 열지 않는다) */
+  const extraTrackIds = $derived(song ? fillEditorTracks(song.tracks.map((tr) => tr.id), activeTrackId, extraChosen, editorCount) : []);
   function openSecond(trackId: string) {
-    if (trackId === activeTrackId) return;
-    secondChosen = trackId;
-    setDualEditor(true);
+    if (trackId === activeTrackId || extraTrackIds.includes(trackId)) return;
+    if (editorCount <= 1) {
+      setEditorCount(2);
+      extraChosen = [trackId];
+      extraStamps = [++extraTick];
+      return;
+    }
+    const slot = oldestEditor(extraStamps, Math.max(1, extraTrackIds.length));
+    extraChosen = extraTrackIds.map((id, k) => (k === slot ? trackId : id));
+    extraStamps = extraTrackIds.map((_, k) => (k === slot ? ++extraTick : extraStamps[k]));
   }
-  /** 아래 편집기에 실제로 여는 트랙: 고른 것이 없거나 지워졌거나 위와 같으면 곡에서 고른 트랙 다음 트랙 */
-  const secondTrackId = $derived.by(() => {
-    if (!dualEditor || !song || song.tracks.length < 2) return undefined;
-    if (secondChosen !== activeTrackId && song.tracks.some((tr) => tr.id === secondChosen)) return secondChosen;
-    const i = song.tracks.findIndex((tr) => tr.id === activeTrackId);
-    return song.tracks[(i + 1) % song.tracks.length]?.id;
-  });
-  // 아래 편집기에 연 트랙을 위에서 고르면 둘을 맞바꾼다 (같은 트랙이 두 번 열리지 않게)
+  /** 아래 칸 하나 닫기: 그 칸만 빠지고 편집기 수가 하나 준다 (남은 칸 트랙은 그대로) */
+  function closeExtra(index: number) {
+    extraChosen = extraTrackIds.filter((_, k) => k !== index);
+    extraStamps = extraTrackIds.map((_, k) => extraStamps[k]).filter((_, k) => k !== index);
+    setEditorCount(editorCount - 1);
+  }
+  // 아래 칸에 연 트랙을 위에서 고르면 그 칸에 원래 위 트랙을 넣는다 (같은 트랙이 두 번 열리지 않게)
   let prevActive: string | undefined;
+  let shownExtras: string[] = [];
   $effect(() => {
     const now = activeTrackId;
     untrack(() => {
-      if (now !== undefined && now === secondChosen && prevActive !== undefined) secondChosen = prevActive;
+      const swapped = swapIntoEditors(shownExtras, prevActive, now);
+      if (swapped) {
+        const slot = shownExtras.indexOf(now!);
+        extraChosen = swapped;
+        extraStamps = swapped.map((_, k) => (k === slot ? ++extraTick : extraStamps[k]));
+      }
       prevActive = now;
     });
+  });
+  $effect(() => {
+    shownExtras = extraTrackIds;
   });
 
   /** 새로 넣는 음의 v (피아노롤·타브 같이). undefined = 앞 음 v 이어받기 */
@@ -1795,8 +1854,23 @@
   function scaleSelection(factor: Rat, label: string): boolean {
     const picked = roll?.selection() ?? [];
     if (picked.length === 0) return false;
-    const scaled = new Map(scaleNotes(picked, factor).map((n) => [n.id, n]));
-    return roll?.editSelected((n) => scaled.get(n.id) ?? n, label) ?? false;
+    // 고르지 않은 음은 지우거나 줄이지 않는다: 그 음 앞까지만 늘리고, 늘릴 자리가 없으면 바꾸지 않는다
+    const track = song?.tracks.find((tr) => tr.id === activeTrackId);
+    const scaled = track ? scaleNotesIn(track.notes, picked, factor) : undefined;
+    if (!scaled) {
+      error = t("ui.lengthNoRoom");
+      return false;
+    }
+    const byId = new Map(scaled.map((n) => [n.id, n]));
+    return roll?.editSelected((n) => byId.get(n.id) ?? n, label) ?? false;
+  }
+
+  const hasSelection = () => (roll?.selection().length ?? 0) > 0;
+  /** 고른 음이 없을 때: 새 음 길이를 ×2·½ (타브의 +/−와 같은 규칙. 격자면 격자 한 칸에서, 목록 밖이면 그대로) */
+  function stepNewLength(factor: 2 | 0.5): boolean {
+    const length = stepNoteLength(noteLengthOf(noteLength, division), factor);
+    if (length) noteLength = length;
+    return true;
   }
 
   // 음정 변환: 고른 음·트랙·악보·곡 전체를 반음 단위로 옮긴다
@@ -1937,7 +2011,12 @@
     { label: t("ui.dockBottom"), title: t("ui.dockHelp"), checked: paneDock === "bottom", run: () => setDock("bottom") },
     { label: t("ui.dockRight"), title: t("ui.dockHelp"), checked: paneDock === "right", run: () => setDock("right") },
     { label: t("ui.sideBySide"), title: t("ui.sideBySideHelp"), checked: !bottom && !portrait && sideBySide, disabled: bottom || portrait, run: toggleSideBySide },
-    { label: t("ui.dualEditor"), title: t("ui.dualEditorHelp"), checked: dualEditor, run: () => setDualEditor(!dualEditor) },
+    ...Array.from({ length: Math.min(editorMax, editorLimit) }, (_, k) => ({
+      label: t("ui.editorCount", { n: k + 1 }),
+      title: t("ui.editorCountHelp"),
+      checked: editorCount === k + 1,
+      run: () => setEditorCount(k + 1),
+    })),
     { label: t("ui.verticalRoll"), title: t("ui.verticalRollHelp"), checked: orientation === "vertical", hint: keyOf("view.orientation"), run: () => run("view.orientation") },
     { label: t("ui.events"), title: t("ui.eventsHelp"), checked: showEvents, run: () => (showEvents = !showEvents) },
     { label: t("ui.noteList"), title: t("ui.noteListHelp"), checked: noteListOpen, run: () => (noteListOpen = !noteListOpen) },
@@ -1948,6 +2027,7 @@
     ...COLOR_LABELS.map((c) => ({ label: `${t("ui.colorScheme")}: ${t(c.key)}`, checked: colorScheme === c.id, run: () => setColorScheme(c.id) })),
     { separator: true },
     { label: t("ui.mmlPad"), title: t("ui.mmlPadHelp"), checked: mmlPad.enabled, run: () => (mmlPad.enabled = !mmlPad.enabled) },
+    { label: t("ui.tabPad"), title: t("ui.tabPadHelp"), checked: tabPadOn, disabled: viewMode === "roll", run: toggleTabPad },
     { label: t("ui.keymap") + "…", hint: keyOf("view.keymap"), run: () => (showKeymap = true) },
     { separator: true },
     ...LOCALES.map((l) => ({ label: LOCALE_LABELS[l], checked: i18n.locale === l, run: () => setLocale(l) })),
@@ -1992,6 +2072,7 @@
   async function store(bytes: Uint8Array, name: string): Promise<SaveOutcome> {
     const outcome = await saveFile(bytes, name);
     if (outcome === "rescued") error = t("ui.saveRescued", { name });
+    if (outcome === "retry") error = t("ui.saveRetry");
     return outcome;
   }
 
@@ -2045,7 +2126,7 @@
     // 저장 창은 누른 직후에만 뜨고, 고른 파일을 먼저 비운다. 그래서 다 만든 뒤 저장 단추를 눌러 고르고 곧바로 쓴다
     if (asksSaveDialog()) wavReady = { bytes: new Uint8Array(result.wav), name };
     else void store(new Uint8Array(result.wav), name);
-    const missing = [...new Set(prepared.unresolved.map((u) => instrumentName(u.instrument)))];
+    const missing = [...new Set(prepared.unresolved.map((u) => instrumentLabel({ canonical: u.instrument, program: u.program })))];
     if (missing.length > 0) error = t("ui.wavUnresolved", { list: missing.join(", ") });
   }
   /** 저장 창이 떠 있는 동안 저장 단추를 다시 누르지 못하게 한다 */
@@ -2057,7 +2138,7 @@
     void store(ready.bytes, ready.name)
       .then((outcome) => {
         // 저장 창을 닫았으면 다시 누를 수 있게 남겨 둔다
-        if (outcome !== "cancelled" && wavReady === ready) wavReady = undefined;
+        if (outcome !== "cancelled" && outcome !== "retry" && wavReady === ready) wavReady = undefined;
       })
       .finally(() => (wavSaving = false));
   }
@@ -2129,7 +2210,8 @@
         return tap();
       case "event.tempo":
       case "event.marker":
-        if (!song || viewMode !== "roll") return false;
+        // 타브에서도 된다 (마커는 타브에 그리지 않고 피아노롤 이벤트 줄에서만 보인다)
+        if (!song) return false;
         openEventAtCursor(command === "event.tempo" ? "tempo" : "marker");
         return true;
       case "note.glue":
@@ -2195,9 +2277,9 @@
         return true;
       }
       case "edit.lengthDouble":
-        return viewMode === "roll" && scaleSelection(DOUBLE, t("ui.lengthDouble"));
+        return viewMode === "roll" && (hasSelection() ? scaleSelection(DOUBLE, t("ui.lengthDouble")) : stepNewLength(2));
       case "edit.lengthHalf":
-        return viewMode === "roll" && scaleSelection(HALF, t("ui.lengthHalf"));
+        return viewMode === "roll" && (hasSelection() ? scaleSelection(HALF, t("ui.lengthHalf")) : stepNewLength(0.5));
       case "edit.transpose":
         openTranspose();
         return !!song;
@@ -2268,6 +2350,18 @@
   });
 
   const ownInstrument = (track: Track) => (song ? trackInstrument(song, track).canonical : "piano");
+  /** 트랙의 지금 악기 글 (.2·.3 팩 악기는 하프(24.2)처럼) */
+  const ownInstrumentLabel = (track: Track) => instrumentLabel(song ? trackInstrument(song, track) : { canonical: "piano" });
+  /** 트랙에서 고른 사운드팩 파일 이름 (없으면 자동) */
+  const ownPack = (track: Track) => (song ? trackInstrument(song, track).packId : undefined);
+  /** 트랙 편집기의 팩 고르기 항목: 지금 올린 팩 파일 이름 (같은 이름은 하나만) */
+  const packLabels = $derived([...new Set(packs.map((p) => p.label))]);
+  /** 고른 팩에 맞춘 악기 번호 (마비꼬 팩 번호 부분). 고른 팩이 지금 없으면 번호를 그대로 둔다 */
+  const programFor: ProgramForPack = (ref) => {
+    if (ref.packId === undefined) return programForPack(ref, undefined);
+    const pack = engine.registry.list.find((p) => p.label === ref.packId);
+    return pack ? programForPack(ref, pack) : ref.program;
+  };
 
   const trackActions: TrackActions = {
     select: (id) => (activeTrackId = id),
@@ -2277,9 +2371,10 @@
       const player = history?.song.players.find((p) => p.id === playerId);
       if (!history || !player) return;
       const from = instrumentName(player.instrument.canonical);
-      runSoloSplit(keepScoreTempo(setPlayerInstrument(playerId, canonical, { from, to: instrumentName(canonical) }, t("ui.instrument"), soloSplit)));
+      runSoloSplit(keepScoreTempo(setPlayerInstrument(playerId, canonical, { from, to: instrumentName(canonical) }, t("ui.instrument"), soloSplit, programFor)));
     },
-    trackInstrument: (id, canonical) => runSoloSplit(keepScoreTempo(setTrackInstrument(id, canonical, t("ui.trackInstrument"), soloSplit))),
+    trackInstrument: (id, canonical) => runSoloSplit(keepScoreTempo(setTrackInstrument(id, canonical, t("ui.trackInstrument"), soloSplit, programFor))),
+    trackPack: (id, pack) => history && sync(history.run(setTrackPack(id, pack, programFor, t("ui.trackPack")))),
     listen: updateTrack,
     viewOf: (id) => trackView[id] ?? {},
     view: (id, change) => (trackView = withTrackView(trackView, id, change)),
@@ -2486,6 +2581,9 @@
       settings = undefined;
       about = true;
     }}
+    {editorMax}
+    {editorLimit}
+    oneditormax={setEditorMax}
     initial={settings.section}
     onclose={() => (settings = undefined)}
   />
@@ -2740,6 +2838,9 @@
           laneTrackIds={laneExtra}
           {melodyIds}
           onunplayable={(n) => (unplayable = n)}
+          padByMouse={tabPadOn}
+          onevent={openEvent}
+          oncursor={(at) => (tabCursor = at)}
           onedit={(changes, label) => {
             const open = changes.filter((c) => editable(c.trackId));
             if (history && open.length > 0) sync(history.run(setTracksNotes(open, label)));
@@ -2781,14 +2882,17 @@
           dock={paneDock}
           {portrait}
           trackInstrument={ownInstrument}
+          trackInstrumentLabel={ownInstrumentLabel}
+          trackPack={ownPack}
+          {packLabels}
           actions={trackActions}
           {reveal}
           playing={activeTrackId ? playingSpans.get(activeTrackId) : undefined}
           follow={true}
           moreItems={paneMenu}
-          {secondTrackId}
-          playingSecond={secondTrackId ? playingSpans.get(secondTrackId) : undefined}
-          onclosesecond={() => setDualEditor(false)}
+          {extraTrackIds}
+          playingOf={(id) => playingSpans.get(id)}
+          oncloseextra={closeExtra}
           onedit={editText}
           onundo={undo}
           onredo={redo}
@@ -2931,7 +3035,7 @@
   </div>
   {#if error}<p class="error">{error}</p>{/if}
   {#if playback.unresolved.length > 0}
-    <p class="error">{t("ui.unresolved", { list: [...new Set(playback.unresolved.map((u) => instrumentName(u.instrument)))].join(", ") })}</p>
+    <p class="error">{t("ui.unresolved", { list: [...new Set(playback.unresolved.map((u) => instrumentLabel({ canonical: u.instrument, program: u.program })))].join(", ") })}</p>
   {/if}
   {#if notices.length > 0}
     <ul class="notices">

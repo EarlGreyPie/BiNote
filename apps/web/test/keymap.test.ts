@@ -88,3 +88,31 @@ describe("Alt+숫자 볼륨", () => {
     expect(volumeForDigit(5, false, { min: 0, max: 12 })).toBeUndefined();
   });
 });
+
+describe("피아노롤 +/− 길이 키 (MMLCE 기본)", () => {
+  const mmlce = PRESET_BINDINGS.mmlce;
+  it("=·Shift+=·Num+는 길이 ×2, -·Num-는 ½. Ctrl+]·Ctrl+[는 그대로 첫 키", () => {
+    for (const key of ["=", "Shift+=", "Num+", "Ctrl+]"]) expect(commandFor(mmlce, key)).toBe("edit.lengthDouble");
+    for (const key of ["-", "Num-", "Ctrl+["]) expect(commandFor(mmlce, key)).toBe("edit.lengthHalf");
+    expect(keysOf(mmlce, "edit.lengthDouble")[0]).toBe("Ctrl+]");
+    expect(keysOf(mmlce, "edit.lengthHalf")[0]).toBe("Ctrl+[");
+    expect(keyName(press("Equal"))).toBe("=");
+    expect(keyName(press("Equal", { shift: true }))).toBe("Shift+=");
+    expect(keyName(press("NumpadAdd"))).toBe("Num+");
+    expect(keyName(press("Minus"))).toBe("-");
+    expect(keyName(press("NumpadSubtract"))).toBe("Num-");
+  });
+
+  it("마비꼬 호환은 바뀌지 않고, 새 키는 충돌이 없다", () => {
+    for (const key of ["=", "Shift+=", "Num+", "-", "Num-"]) expect(commandFor(PRESET_BINDINGS.mabiicco, key)).toBeUndefined();
+    expect(conflicts(mmlce)).toEqual([]);
+    // 예전에 이 명령 키를 바꿔 둔 사람의 덮어쓰기는 그대로 따른다
+    const custom = resolve({ preset: "mmlce", overrides: { "edit.lengthDouble": ["Ctrl+D"] } });
+    expect(keysOf(custom, "edit.lengthDouble")).toEqual(["Ctrl+D"]);
+    expect(conflicts(custom)).toEqual([]);
+  });
+
+  it("글 입력 칸에서는 앱 단축키로 가지 않는다", () => {
+    for (const key of ["=", "Shift+=", "Num+", "-", "Num-"]) expect(allowedWhileTyping(key)).toBe(false);
+  });
+});

@@ -112,6 +112,21 @@ describe("곡 검사", () => {
     expect(validateSong(s, MOBILE_PROFILE, { canonicalOf: () => undefined })).toEqual([]);
   });
 
+  it("트랙에서 고른 팩의 악기로 잰다: 같은 번호도 팩마다 다른 악기 (beta.19 점검)", () => {
+    // .2 팩의 42번 = 바이올린, .3 팩의 42번 = 냥모니카. 팩을 고르지 않으면(자동) .3 팩 쪽으로 알아본다고 한다
+    const canonicalOf = (instrument: string, _program: number | undefined, pack?: string) =>
+      instrument !== "mabi:1578" ? undefined : pack === "pack-2.dls" ? "violin" : "cat-harmonica";
+    const numbered: Player = { id: "p1", name: "#42", instrument: { canonical: "mabi:1578", program: 1578 } };
+    const withTrackPack = (packId?: string) =>
+      song([{ ...track("t1", "t120o3c1"), instrument: { canonical: "mabi:1578", program: 1578, ...(packId ? { packId } : {}) } }], [numbered]);
+    // .2 팩을 고른 트랙: 재생처럼 바이올린 음역 그대로(48번 음, 2초)라 안내가 없다. 전에는 냥모니카로 재 접힘·샘플 길이를 안내했다
+    expect(validateSong(withTrackPack("pack-2.dls"), MOBILE_PROFILE, { canonicalOf })).toEqual([]);
+    // 팩을 고르지 않은 트랙은 전과 같다
+    const auto = validateSong(withTrackPack(), MOBILE_PROFILE, { canonicalOf });
+    expect(auto.map((d) => d.code)).toEqual(["pitch-fold", "sample-cut"]);
+    expect(auto[0]!.params?.octaves).toBe(2);
+  });
+
   it("음길이가 너무 복잡해 읽기를 멈춘 글도 곡 검사가 다시 넘치지 않는다", () => {
     const text = "c7c11c13c17c19c23c29c31c37c41c43c47";
     expect(() => validateSong(song([track("t1", text)]), MOBILE_PROFILE)).not.toThrow();

@@ -79,6 +79,18 @@ describe("writeProject / readProject", () => {
     expect(isProjectFileName("곡.mml")).toBe(false);
   });
 
+  it("트랙에서 고른 사운드팩(packId)은 저장했다 다시 열어도 남는다", () => {
+    const song = sample();
+    const picked: Song = {
+      ...song,
+      players: song.players.map((p, i) => (i === 0 ? { ...p, instrument: { ...p.instrument, packId: "pack-a.dls" } } : p)),
+      tracks: song.tracks.map((tr, i) => (i === 1 ? { ...tr, instrument: { canonical: "harp", program: 1048, packId: "pack-b.dls" } } : tr)),
+    };
+    const back = readProject(writeProject(picked)).song;
+    expect(back.players[0]!.instrument.packId).toBe("pack-a.dls");
+    expect(back.tracks[1]!.instrument).toEqual({ canonical: "harp", program: 1048, packId: "pack-b.dls" });
+  });
+
   it("빈 트랙도 왕복한다", () => {
     const song = sample();
     const empty = { ...song, tracks: [{ ...song.tracks[0]!, notes: [] }] };

@@ -1,4 +1,4 @@
-import { instrumentByName, isMabiiccoPack, splitPackProgram } from "@mmlce/core";
+import { INSTRUMENTS, instrumentByName, isMabiiccoPack, mabiiccoPackOf, MABIICCO_PACK_STRIDE, splitPackProgram, type InstrumentRef } from "@mmlce/core";
 
 /** 사운드팩에서 읽은 악기 하나 */
 export interface PackInstrument {
@@ -125,10 +125,40 @@ export class SoundPackRegistry {
     return undefined;
   }
 
+  /** 곡에 저장한 팩 파일 이름 → 지금 올린 팩 중 그 이름인 첫 팩의 id (resolve의 preferPack). 없으면 undefined */
+  idOfLabel(label: string | undefined): string | undefined {
+    return label === undefined ? undefined : this.packs.find((p) => p.label === label)?.id;
+  }
+
   /** 이 팩의 이 악기에 줄 음량 배율 (설정에 없으면 1) */
   gainOf(packId: string, program: number, gains: InstrumentGains): number {
     const pack = this.packs.find((p) => p.id === packId);
     const db = pack ? gains[gainKey(pack.label, program)] : undefined;
     return db ? dbToGain(db) : 1;
   }
+}
+
+/**
+ * 트랙에서 들을 팩을 고를 때 악기 번호의 마비꼬 팩 번호 부분을 맞춘다 (마비꼬로 저장해도 같은 팩으로 들리게).
+ * - 고른 팩이 .2·.3 팩이면 팩 번호 × 512 + 그 팩에서 같은 악기(공통 ID)의 번호. 그 팩에 없으면 번호 그대로
+ * - 그 밖의 팩이나 자동(pack 없음)이면 팩 번호를 뗀다. 공통 표에 번호가 있는 악기는 그 번호
+ * 번호로만 아는 악기(`mabi:번호`)는 공통 ID 안의 번호가 기준(파일에 적혀 있던 악기)이고 program은 고른 팩을 따른다:
+ * 고른 .2·.3 팩에 같은 팩 안 번호가 있으면 그 팩 번호 × 512 + 팩 안 번호 (재생도 그 팩의 그 번호를 쓴다),
+ * 아니면(그 밖의 팩, 자동, 그 번호가 없는 팩) 기준 번호 그대로 (자동으로 되돌리면 원래 번호로 돌아간다)
+ */
+export function programForPack(ref: InstrumentRef, pack: Pick<SoundPackInfo, "label" | "instruments"> | undefined): number | undefined {
+  const numbered = /^mabi:(\d+)$/.exec(ref.canonical);
+  if (numbered) {
+    const original = Number(numbered[1]);
+    const suffix = pack ? mabiiccoPackOf(pack.label) : undefined;
+    const { number } = splitPackProgram(original);
+    return pack && suffix !== undefined && pack.instruments.some((i) => i.program === number) ? suffix * MABIICCO_PACK_STRIDE + number : original;
+  }
+  const suffix = pack ? mabiiccoPackOf(pack.label) : undefined;
+  if (pack && suffix !== undefined) {
+    const preset = pack.instruments.find((i) => i.canonical === ref.canonical);
+    return preset ? suffix * MABIICCO_PACK_STRIDE + preset.program : ref.program;
+  }
+  const table = INSTRUMENTS.find((i) => i.id === ref.canonical)?.program;
+  return table ?? (ref.program === undefined ? undefined : splitPackProgram(ref.program).number);
 }

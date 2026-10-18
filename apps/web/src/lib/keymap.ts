@@ -97,6 +97,9 @@ const MMLCE: Bindings = {
   "view.tab": ["Alt+T"],
   "view.orientation": ["Alt+O"],
   "view.keymap": ["Ctrl+/"],
+  // 타브 보기의 +/−와 같게: 고른 음 길이, 고른 음이 없으면 새 음 길이를 ×2 / ½ (Shift를 눌러 치는 +도)
+  "edit.lengthDouble": ["Ctrl+]", "=", "Shift+=", "Num+"],
+  "edit.lengthHalf": ["Ctrl+[", "-", "Num-"],
   // 숫자 키: 앞쪽은 2의 거듭제곱, 뒤쪽은 셋잇단
   ...grid({ 4: ["1"], 8: ["2"], 16: ["3"], 32: ["4"], 64: ["5"], 12: ["6"], 24: ["7"], 48: ["8"] }),
 };

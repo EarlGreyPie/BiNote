@@ -57,7 +57,8 @@ export const mmlHighlight = ViewPlugin.fromClass(
 export const mmlTheme = EditorView.theme({
   // 글자 크기·글꼴은 설정(화면 모양)에서 고른다
   "&": { fontSize: "var(--mml-font-size, 14px)", background: "transparent" },
-  ".cm-content": { fontFamily: 'var(--mml-font, "D2Coding", ui-monospace, Consolas, monospace)', padding: "4px 0" },
+  // 글 커서는 글자색을 따른다 (CodeMirror 기본은 검정이라 어두운 테마에서 안 보인다)
+  ".cm-content": { fontFamily: 'var(--mml-font, "D2Coding", ui-monospace, Consolas, monospace)', padding: "4px 0", caretColor: "var(--text)" },
   ".cm-scroller": { maxHeight: "9.5em", overflow: "auto" },
   "&.cm-focused": { outline: "1px solid var(--accent)" },
   // 피아노롤에서 고른 음

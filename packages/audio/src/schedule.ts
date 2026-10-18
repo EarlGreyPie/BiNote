@@ -6,6 +6,8 @@ export interface VoiceSlot {
   readonly key: string;
   readonly instrument: string;
   readonly program?: number;
+  /** 트랙에서 고른 사운드팩 파일 이름 (InstrumentRef.packId). 없으면 자동 */
+  readonly pack?: string;
 }
 
 export interface PlaybackEvent {
@@ -43,7 +45,7 @@ export interface ScheduleOptions {
    * 트랙 악기의 실제 공통 ID를 알려 준다(보통 사운드팩 등록부). `mabi:1578`(#42.3)처럼 번호로만 아는 악기도
    * 팩의 프리셋 이름이 냥모니카면 냥모니카 음역·샘플 길이로 그린다. 모르면 undefined
    */
-  readonly canonicalOf?: (instrument: string, program: number | undefined) => string | undefined;
+  readonly canonicalOf?: (instrument: string, program: number | undefined, pack?: string) => string | undefined;
 }
 
 /**
@@ -88,11 +90,17 @@ export function buildSchedule(song: Song, profile: GameProfile, options: Schedul
     if (track.mute || (anySolo && !track.solo)) continue;
     const ref = trackInstrument(song, track);
     // 패치는 원래 ID·번호(1578 등)로 찾고, 음역·샘플 길이는 실제 악기로 정한다
-    const instrument = options.canonicalOf?.(ref.canonical, ref.program) ?? ref.canonical;
+    const instrument = options.canonicalOf?.(ref.canonical, ref.program, ref.packId) ?? ref.canonical;
     const range = soundingRangeOf(profile, instrument);
-    const key = track.id;
+    // 같은 악기라도 고른 팩이 다르면 다른 채널 (트랙마다 채널 하나라 이미 나뉘지만, 키에도 팩을 넣어 둔다)
+    const key = ref.packId === undefined ? track.id : `${track.id}@${ref.packId}`;
     const slot = slots.length;
-    slots.push(ref.program === undefined ? { key, instrument: ref.canonical } : { key, instrument: ref.canonical, program: ref.program });
+    slots.push({
+      key,
+      instrument: ref.canonical,
+      ...(ref.program === undefined ? {} : { program: ref.program }),
+      ...(ref.packId === undefined ? {} : { pack: ref.packId }),
+    });
 
     let previousLegato = false;
     // 다른 음 붙임 사슬: 첫 음을 계속 누른 채 높이만 옮긴다. 게임은 붙인 음의 샘플로 바꿔 타되 샘플 안 위치를

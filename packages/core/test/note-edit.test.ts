@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyVolumes, voiceRanks, clipNotes, rampVolumes, volumeBars, glueNotes, noteAt, noteBefore, pasteClip, placeNote, rat, scaleNotes, removeNotes, splitNote, replaceNotes, toggleTie, transposeNotes, updateNote, type Note } from "../src/index.js";
+import { applyVolumes, voiceRanks, clipNotes, rampVolumes, volumeBars, glueNotes, noteAt, noteBefore, pasteClip, placeNote, rat, scaleNotes, scaleNotesIn, removeNotes, splitNote, replaceNotes, toggleTie, transposeNotes, updateNote, type Note } from "../src/index.js";
 
 const note = (id: string, start: number, dur: number, pitch = 60, tie: Note["tie"] = "none"): Note => ({
   id,
@@ -291,5 +291,31 @@ describe("& 사슬이 끊길 때 뒤 음 v (beta.11, #98 Codex 점검)", () => {
     const changes = new Map([["g", { ...g, start: rat(1), vol: 7 }]]);
     expect(vols(replaceNotes(chain(), changes, new Set(["g"])))).toEqual(["e:12", "a:12", "g:7"]);
     expect(vols(replaceNotes(chain(), changes))).toEqual(["e:12", "a:12", "g:12"]);
+  });
+});
+
+describe("고른 음만 길이 ×2·½ (고르지 않은 음은 지우거나 줄이지 않는다)", () => {
+  const apply = (notes: Note[], ids: string[], factor: ReturnType<typeof rat>) => {
+    const out = scaleNotesIn(notes, notes.filter((n) => ids.includes(n.id)), factor);
+    return out && shape(replaceNotes(notes, new Map(out.map((n) => [n.id, n]))));
+  };
+
+  it("c4d4e4에서 c만 ×2: 바로 뒤에 d가 있어 늘릴 자리가 없다", () => {
+    expect(apply([note("c", 0, 2), note("d", 2, 2), note("e", 4, 2)], ["c"], rat(2))).toBeUndefined();
+  });
+
+  it("c4r4d4에서 c만 ×2: c2가 되고 d는 남는다", () => {
+    expect(apply([note("c", 0, 2), note("d", 4, 2)], ["c"], rat(2))).toEqual(["c:0/1+1/2", "d:1/2+1/4"]);
+  });
+
+  it("여러 음을 골라도 리듬 모양을 지키고, 선택 밖 음과 겹치는 음만 그 앞에서 자른다", () => {
+    // a(0, 4분) · b(3/8, 8분, 고르지 않음) · c(3/4, 8분) → a는 b 앞까지, c는 3/2로
+    expect(apply([note("a", 0, 2), note("b", 3, 1), note("c", 6, 1)], ["a", "c"], rat(2))).toEqual(["a:0/1+3/8", "b:3/8+1/8", "c:3/2+1/4"]);
+  });
+
+  it("½은 그대로 줄이고, 옮겨 간 자리가 고르지 않은 음과 겹치면 하지 않는다", () => {
+    expect(apply([note("c", 0, 2), note("d", 2, 2)], ["c"], rat(1, 2))).toEqual(["c:0/1+1/8", "d:1/4+1/4"]);
+    // a(0)·c(1/2)를 골라 ½ → c가 1/4로 와서 고르지 않은 b(1/4) 자리와 겹친다
+    expect(apply([note("a", 0, 2), note("b", 2, 2), note("c", 4, 2)], ["a", "c"], rat(1, 2))).toBeUndefined();
   });
 });

@@ -18,6 +18,7 @@ import type { WorkletSynthesizer } from "spessasynth_lib";
 import processorUrl from "spessasynth_lib/dist/spessasynth_processor.min.js?url";
 import { computePeaks, type Peaks } from "./waveform";
 import { previewPitch } from "./instrumentRange";
+import { preparePlay } from "./playPlan";
 import type { WavRequest } from "./jobs";
 
 /** CC 0 = 뱅크 선택(MSB) */
@@ -160,14 +161,16 @@ export class Engine {
 
   /**
    * 번호로만 아는 악기(#42.3 등)를 지금 올린 팩의 프리셋 이름으로 알아본다. 음역·샘플 길이를 맞추려고.
-   * 악보 진단·롤 음역도 재생과 같게 이걸 쓴다
+   * 악보 진단·롤 음역도 재생과 같게 이걸 쓴다. pack은 트랙에서 고른 팩 파일 이름 (없거나 지금 없는 팩이면 자동)
    */
-  readonly canonicalOf = (instrument: string, program: number | undefined) => this.registry.resolve(instrument, program)?.canonical;
+  readonly canonicalOf = (instrument: string, program: number | undefined, pack?: string) =>
+    this.registry.resolve(instrument, program, this.registry.idOfLabel(pack))?.canonical;
 
   /** 올린 사운드팩 파일 (WAV 저장 때 워커에서 다시 읽는다) */
   private packFiles = new Map<string, { bank: number; file: File }>();
 
   async addPack(file: File): Promise<SoundPackInfo> {
+    this.packVersion++;
     const synth = await this.ready();
     const id = `${file.name}#${this.registry.nextBank}`;
     const bank = this.registry.nextBank;
@@ -179,15 +182,20 @@ export class Engine {
     const presets = synth.presetList
       .filter((p) => p.bankMSB === bank)
       .map((p) => ({ program: p.program, bankMSB: 0, name: p.name }));
-    return this.registry.add(id, file.name, { presets });
+    const info = this.registry.add(id, file.name, { presets });
+    // 등록부에 실제로 들어간 뒤에도 한 번 더 (그사이 예열을 마친 재생이 새 팩 없이 시작하지 않게)
+    this.packVersion++;
+    return info;
   }
 
   /** 사운드팩 우선순위 바꾸기. 위에 있는 팩이 먼저 쓰인다 */
   setPackOrder(ids: readonly string[]): void {
+    this.packVersion++;
     this.registry.setOrder(ids);
   }
 
   async removePack(id: string): Promise<void> {
+    this.packVersion++;
     this.registry.remove(id);
     this.packFiles.delete(id);
     await this.synth?.soundBankManager.deleteSoundBank(id);
@@ -234,13 +242,26 @@ export class Engine {
     await context.resume();
     if (cold) await waitForClock(context);
     this.warmed = true;
-    const schedule = buildSchedule(song, getProfile(song.meta.profileId), { ...(from ? { from } : {}), canonicalOf: this.canonicalOf });
-    const { patches, unresolved } = assignPatches(schedule, this.registry, this.gains);
-    this.ensureChannels(Math.max(-1, ...patches.map((p) => p.channel)));
+    // 예열을 기다리는 사이 팩 구성이 바뀌면 패치를 다시 정하고, 시작 직전 악기별 음량은 최신 값으로 (preparePlay)
+    let last: Unresolved[] = [];
+    const ready = await preparePlay({
+      plan: () => {
+        const schedule = buildSchedule(song, getProfile(song.meta.profileId), { ...(from ? { from } : {}), canonicalOf: this.canonicalOf });
+        const { patches, unresolved } = assignPatches(schedule, this.registry, this.gains);
+        last = unresolved;
+        this.ensureChannels(Math.max(-1, ...patches.map((p) => p.channel)));
+        this.playingPatches = patches;
+        return { schedule, patches, unresolved };
+      },
+      prepare: ({ schedule, patches }) => this.prepareVoices(schedule, patches),
+      packVersion: () => this.packVersion,
+      // 기다리는 사이 정지나 다른 재생을 눌렀으면 이 재생은 시작하지 않는다
+      cancelled: () => request !== this.playRequest,
+      gainOf: (packId, program) => this.registry.gainOf(packId, program, this.gains),
+    });
+    if (!ready) return last;
+    const { schedule, patches, unresolved } = ready;
     this.playingPatches = patches;
-    await this.prepareVoices(schedule, patches);
-    // 기다리는 사이 정지나 다른 재생을 눌렀으면 이 재생은 시작하지 않는다
-    if (request !== this.playRequest) return unresolved;
     this.player!.start(schedule, patches, { ...(loop ? { loop } : {}), ...(cold ? { delay: COLD_START_DELAY } : {}) });
     this.fromSeconds = from ? positionToSeconds(song.tempo, from) : 0;
     this.startReference();
@@ -249,6 +270,8 @@ export class Engine {
 
   /** 재생 요청 번호. 정지·새 재생마다 늘어, 준비하는 동안 취소된 재생이 뒤늦게 시작하지 않게 한다 */
   private playRequest = 0;
+  /** 팩 구성 세대 번호. 팩을 더하거나 빼거나 순서를 바꿀 때마다 늘어, 예열 중인 재생이 패치를 다시 정하게 한다 */
+  private packVersion = 0;
 
   /** 신스가 이미 준비한 음: 팩/뱅크/프로그램/음높이/세기 */
   private preparedVoices = new Set<string>();
@@ -342,13 +365,20 @@ export class Engine {
   /** 누른 건반 높이 → 음역에 맞춰 접어 보낸 높이 (뗄 때 보낸 높이로 끈다) */
   private previewSent = new Map<number, number>();
 
-  /** profile은 곡의 프로필 (재생과 같은 음역으로 높이를 접는다) */
-  async previewOn(instrument: string, program: number | undefined, pitch: number, velocity: number, profile: GameProfile = getProfile("mobile")): Promise<void> {
+  /** profile은 곡의 프로필 (재생과 같은 음역으로 높이를 접는다). pack은 트랙에서 고른 팩 파일 이름 */
+  async previewOn(
+    instrument: string,
+    program: number | undefined,
+    pitch: number,
+    velocity: number,
+    profile: GameProfile = getProfile("mobile"),
+    pack?: string,
+  ): Promise<void> {
     this.previewHeld.add(pitch);
     const synth = await this.ready();
     await this.context!.resume();
     if (!this.previewHeld.has(pitch)) return;
-    const patch = this.registry.resolve(instrument, program);
+    const patch = this.registry.resolve(instrument, program, this.registry.idOfLabel(pack));
     if (!patch) {
       // 사운드팩이 없거나 그 악기가 없으면 간단한 소리로 높이만 들려준다
       this.fallbackOn(pitch, velocity);

@@ -1,6 +1,6 @@
 import { loadStored, saveStored } from "./persist";
-import { describeDiagnostic, hasKey, LOCALES, matchLocale, translate, type Locale, type MessageKey, type Params } from "@mmlce/i18n";
-import { splitPackProgram } from "@mmlce/core";
+import { describeDiagnostic, LOCALES, matchLocale, translate, type Locale, type MessageKey, type Params } from "@mmlce/i18n";
+import { instrumentLabelIn, instrumentNameIn } from "./instrumentLabel";
 
 const STORAGE_KEY = "mmlce.locale";
 
@@ -50,12 +50,10 @@ export function diag(d: { code: string; params?: Params }): string {
 
 /** 공통 악기 ID를 화면 이름으로. 모르는 ID(mabi:번호 등)는 그대로 보여 준다 */
 export function instrumentName(canonical: string): string {
-  const key = `inst.${canonical}`;
-  if (hasKey(key)) return translate(i18n.locale, key);
-  // 팩마다 번호가 다른 악기(기타 30/40 등)는 번호로 보여 준다
-  // 마비꼬 추가 팩 번호(팩 × 512 + 번호)는 마비꼬 화면과 같이 "번호.팩"으로
-  const numbered = /^mabi:(\d+)$/.exec(canonical);
-  if (!numbered) return canonical;
-  const { pack, number } = splitPackProgram(Number(numbered[1]));
-  return pack > 0 ? `#${number}.${pack}` : `#${number}`;
+  return instrumentNameIn(i18n.locale, canonical);
+}
+
+/** 트랙의 지금 악기 글. .2·.3 팩 악기는 하프(24.2)처럼 팩 번호를 붙인다 (instrumentLabelIn) */
+export function instrumentLabel(ref: { readonly canonical: string; readonly program?: number | undefined }): string {
+  return instrumentLabelIn(i18n.locale, ref);
 }

@@ -71,6 +71,14 @@ export function isMabiiccoPack(pack: number, label: string): boolean {
   return false;
 }
 
+/** 마비꼬가 아는 추가 팩 번호 */
+const MABIICCO_PACKS = [2, 3] as const;
+
+/** 파일 이름으로 알아본 마비꼬 팩 번호(.2·.3). 그 밖의 팩이면 undefined */
+export function mabiiccoPackOf(label: string): number | undefined {
+  return MABIICCO_PACKS.find((pack) => isMabiiccoPack(pack, label));
+}
+
 /**
  * 파일에 적힌 악기 번호로 공통 ID를 찾는다. 번호가 겹치지 않는 악기만.
  * 마비꼬 추가 팩 번호(팩 × 512 + 번호)도 팩 안 번호가 PC 마비노기와 같아서 같은 표로 찾는다

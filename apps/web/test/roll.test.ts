@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { rat } from "@mmlce/core";
 import {
+  stepNoteLength,
   clampPitchView,
   dragKeyLine,
   fitVideoKeys,
@@ -223,5 +224,20 @@ describe("음량 레인", () => {
     // 1/64 = 1.6px 막대: 2px 옆도 잡힌다
     expect(laneBarAt(bars, 0.49, 100)).toBe(bars[1]);
     expect(laneBarAt(bars, 0.4, 100)).toBeUndefined();
+  });
+});
+
+describe("stepNoteLength: +/− 키 길이", () => {
+  it("1/8 → 1/4, 1/4 → 1/8, 64분음표의 ½과 온음표의 ×2는 목록 밖이라 undefined", () => {
+    expect(stepNoteLength(rat(1, 8), 2)).toBe("4");
+    expect(stepNoteLength(rat(1, 4), 0.5)).toBe("8");
+    expect(stepNoteLength(rat(1, 64), 0.5)).toBeUndefined();
+    expect(stepNoteLength(rat(1), 2)).toBeUndefined();
+    expect(stepNoteLength(rat(3, 16), 2)).toBe("4.");
+  });
+
+  it("격자에서 출발하면 격자 한 칸 길이를 바꾼다", () => {
+    expect(stepNoteLength(noteLengthOf("grid", 16), 2)).toBe("8");
+    expect(stepNoteLength(noteLengthOf("grid", 12), 0.5)).toBe("24");
   });
 });

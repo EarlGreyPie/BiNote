@@ -143,6 +143,29 @@ export function scaleNotes(notes: readonly Note[], factor: Rat): Note[] {
   return notes.map((n) => ({ ...n, start: add(origin, mul(sub(n.start, origin), factor)), dur: mul(n.dur, factor) }));
 }
 
+/**
+ * 한 트랙(notes)에서 고른 음(picked)만 길이 factor배 (scaleNotes와 같은 리듬 모양). 고르지 않은 음은 지우거나 줄이지 않는다:
+ * 늘어난 음이 고르지 않은 다음 음과 겹치면 그 음 시작 앞까지만 늘린다 (타브의 길이 바꾸기와 같다).
+ * 바꾼 고른 음만 돌려준다. 바뀌는 것이 없거나(늘릴 자리가 없음) 고른 음이 고르지 않은 음 자리로 옮겨 가 겹치면 undefined
+ */
+export function scaleNotesIn(notes: readonly Note[], picked: readonly Note[], factor: Rat): Note[] | undefined {
+  const ids = new Set(picked.map((n) => n.id));
+  const others = notes.filter((n) => !ids.has(n.id));
+  const out: Note[] = [];
+  for (const n of scaleNotes(picked, factor)) {
+    // 옮겨 간 시작이 고르지 않은 음 안(또는 같은 자리)이면 그 음을 지우게 되므로 하지 않는다
+    if (others.some((o) => cmp(o.start, n.start) <= 0 && cmp(n.start, end(o)) < 0)) return undefined;
+    const next = others.filter((o) => cmp(o.start, n.start) > 0).reduce<Rat | undefined>((m, o) => (m === undefined || cmp(o.start, m) < 0 ? o.start : m), undefined);
+    out.push(next !== undefined && cmp(end(n), next) > 0 ? { ...n, dur: sub(next, n.start) } : n);
+  }
+  const before = new Map(picked.map((n) => [n.id, n]));
+  const changed = out.some((n) => {
+    const b = before.get(n.id)!;
+    return cmp(b.start, n.start) !== 0 || cmp(b.dur, n.dur) !== 0;
+  });
+  return changed ? out : undefined;
+}
+
 /** 복사한 음 묶음: 첫 음 시작을 0으로 옮긴 음들과 원래 시작 위치 */
 export interface NoteClip {
   readonly notes: readonly Note[];

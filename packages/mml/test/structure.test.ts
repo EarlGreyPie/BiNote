@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { History, rat, trackInstrument } from "@mmlce/core";
-import { addPlayer, addTrack, addTrackWithNotes, duplicateTrack, duplicateTrackToNewPlayer, moveTrack, moveTrackToNewPlayer, newSong, shiftTrack, trackMoveBlock, planMergeTracks, planMoveNotes, planVoiceByPitch, removeTrack, renamePlayer, renameTrack, setMeter, setPlayerInstrument, setPlayerTab, setTrackInstrument, blockedSplitBack } from "../src/index.js";
+import { addPlayer, addTrack, addTrackWithNotes, duplicateTrack, duplicateTrackToNewPlayer, moveTrack, moveTrackToNewPlayer, newSong, shiftTrack, trackMoveBlock, planMergeTracks, planMoveNotes, planVoiceByPitch, removeTrack, renamePlayer, renameTrack, setMeter, setPlayerInstrument, setPlayerTab, setTrackInstrument, setTrackPack, blockedSplitBack } from "../src/index.js";
 
 const fresh = () => newSong({ playerName: "피아노", trackName: "트랙 1" });
 
@@ -542,5 +542,51 @@ describe("악보 타브 튜닝 (기록 밖 상태, beta.11)", () => {
   it("같은 값이면 곡을 그대로 둔다", () => {
     const s = setPlayerTab("p1", { tuning: "dropD", capo: 2 }).apply(base());
     expect(setPlayerTab("p1", { tuning: "dropD", capo: 2 }).apply(s)).toBe(s);
+  });
+});
+
+describe("트랙에서 들을 사운드팩 고르기", () => {
+  // 앱이 주는 번호 맞추기 흉내: pack-b.dls는 .2 팩처럼 1000을 더한다
+  const programFor = (ref: { canonical: string; packId?: string; program?: number }) =>
+    ref.packId === "pack-b.dls" ? 1000 + (ref.program ?? 0) % 1000 : (ref.program ?? 0) % 1000;
+
+  it("트랙 악기가 없으면 악보 악기에 팩을 정하고, 실행 취소로 되돌린다", () => {
+    const h = new History(fresh());
+    const before = h.song;
+    const s = h.run(setTrackPack("t1", "pack-b.dls", programFor));
+    expect(s.players[0]!.instrument).toMatchObject({ canonical: "piano", packId: "pack-b.dls" });
+    expect(s.tracks[0]!.instrument).toBeUndefined();
+    expect(h.undo()).toEqual(before);
+    expect(h.redo().players[0]!.instrument.packId).toBe("pack-b.dls");
+  });
+
+  it("트랙 악기가 있으면 그 트랙에만 정하고, 자동으로 돌리면 팩 번호를 뗀다", () => {
+    const h = new History(fresh());
+    h.run(setTrackInstrument("t1", "harp"));
+    const s = h.run(setTrackPack("t1", "pack-b.dls", programFor));
+    expect(s.tracks[0]!.instrument).toEqual({ canonical: "harp", program: 1024, packId: "pack-b.dls" });
+    expect(s.players[0]!.instrument.packId).toBeUndefined();
+    const auto = h.run(setTrackPack("t1", undefined, programFor));
+    expect(auto.tracks[0]!.instrument).toEqual({ canonical: "harp", program: 24 });
+    h.undo();
+    expect(h.undo().tracks[0]!.instrument).toEqual({ canonical: "harp", program: 24 });
+  });
+
+  it("악기를 바꿔도 고른 팩은 남는다", () => {
+    let s = setTrackPack("t1", "pack-b.dls", programFor).apply(fresh());
+    s = setPlayerInstrument("p1", "harp", undefined, "악기", undefined, programFor).apply(s);
+    expect(s.players[0]!.instrument).toEqual({ canonical: "harp", program: 1024, packId: "pack-b.dls" });
+    // 트랙만 다른 악기로 바꿔도 트랙이 듣던 팩을 가져간다
+    s = setTrackInstrument("t1", "lute", "트랙 악기", undefined, programFor).apply(s);
+    expect(s.tracks[0]!.instrument).toMatchObject({ canonical: "lute", packId: "pack-b.dls" });
+    // 악보 악기와 팩까지 같은 악기로 돌리면 악보 악기를 따른다
+    expect(setTrackInstrument("t1", "harp", "트랙 악기", undefined, programFor).apply(s).tracks[0]!.instrument).toBeUndefined();
+  });
+
+  it("악보 악기와 같은 악기라도 팩이 다르면 트랙 악기로 남는다", () => {
+    let s = setTrackInstrument("t1", "harp").apply(fresh());
+    s = setTrackPack("t1", "pack-b.dls", programFor).apply(s);
+    s = setTrackInstrument("t1", "piano", "트랙 악기", undefined, programFor).apply(s);
+    expect(s.tracks[0]!.instrument).toMatchObject({ canonical: "piano", packId: "pack-b.dls" });
   });
 });

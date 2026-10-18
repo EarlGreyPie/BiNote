@@ -1,4 +1,4 @@
-import { cmp, rat, toFloat, type Rat } from "@mmlce/core";
+import { cmp, mul, rat, toFloat, type Rat } from "@mmlce/core";
 
 /**
  * 피아노롤 좌표 계산. 가로는 시간이 오른쪽으로 흐르고 건반이 왼쪽,
@@ -306,6 +306,12 @@ export function noteLengthOf(length: NoteLength, division: number): Rat {
   const dotted = length.endsWith(".");
   const n = Number(dotted ? length.slice(0, -1) : length);
   return dotted ? rat(3, 2 * n) : rat(1, n);
+}
+
+/** +/− 키: 길이 now를 두 배 / 반으로 한 음 길이 (격자 제외 고르기 목록 안, 온음표 ~ 64분음표). 목록에 없으면 undefined */
+export function stepNoteLength(now: Rat, factor: 2 | 0.5): Exclude<NoteLength, "grid"> | undefined {
+  const want = mul(now, factor === 2 ? rat(2) : rat(1, 2));
+  return NOTE_LENGTHS.find((l): l is Exclude<NoteLength, "grid"> => l !== "grid" && cmp(noteLengthOf(l, 1), want) === 0);
 }
 
 /** 이벤트 줄 라벨 종류 */

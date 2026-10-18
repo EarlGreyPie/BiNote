@@ -61,9 +61,10 @@ function end(n: Note): Rat {
 export interface ValidateSongOptions {
   /**
    * 번호로만 아는 악기(추가 사운드팩의 #42.3 등)의 실제 악기를 알려 준다(재생의 buildSchedule과 같은 모양).
+   * pack은 트랙에서 고른 사운드팩(파일 이름, 없으면 자동)이다. 같은 번호도 팩마다 다른 악기일 수 있다.
    * 주면 음역·샘플 길이를 그 악기로 잰다. 모르면 undefined를 돌려주고, 그때는 원래 ID로 잰다
    */
-  readonly canonicalOf?: (instrument: string, program: number | undefined) => string | undefined;
+  readonly canonicalOf?: (instrument: string, program: number | undefined, pack?: string) => string | undefined;
 }
 
 /**
@@ -95,10 +96,10 @@ export function validateSong(song: Song, profile: GameProfile, options: Validate
     }
 
     // 범위 밖 음도 게임은 받아 주지만 옥타브째 접어 다른 높이로 낸다 (악기는 트랙마다).
-    // 재생과 같이 음역·샘플 길이는 실제 악기로 정한다
+    // 재생과 같이 음역·샘플 길이는 트랙에서 고른 팩의 실제 악기로 정한다
     const instrumentOf = (track: Track) => {
       const ref = trackInstrument(song, track);
-      return options.canonicalOf?.(ref.canonical, ref.program) ?? ref.canonical;
+      return options.canonicalOf?.(ref.canonical, ref.program, ref.packId) ?? ref.canonical;
     };
     const rangeOf = (track: Track) => soundingRangeOf(profile, instrumentOf(track));
     for (const track of tracks) {

@@ -22,6 +22,8 @@ export interface SlotPatch {
 export interface Unresolved {
   readonly slot: number;
   readonly instrument: string;
+  /** 소리 지점의 악기 번호 (화면에 .2·.3 팩 번호를 같이 보이려고) */
+  readonly program?: number;
 }
 
 /** 소리 지점마다 채널과 실제 패치를 정한다. 찾지 못한 악기는 따로 알려 준다 */
@@ -33,10 +35,11 @@ export function assignPatches(
   const patches: SlotPatch[] = [];
   const unresolved: Unresolved[] = [];
   schedule.slots.forEach((slot, index) => {
-    const patch = registry.resolve(slot.instrument, slot.program);
+    // 고른 팩(파일 이름)이 지금 없으면 자동처럼 위쪽 팩부터 찾는다
+    const patch = registry.resolve(slot.instrument, slot.program, registry.idOfLabel(slot.pack));
     const channel = CHANNELS[index];
     if (!patch || channel === undefined) {
-      unresolved.push({ slot: index, instrument: slot.instrument });
+      unresolved.push(slot.program === undefined ? { slot: index, instrument: slot.instrument } : { slot: index, instrument: slot.instrument, program: slot.program });
       return;
     }
     const gain = registry.gainOf(patch.packId, patch.program, gains);

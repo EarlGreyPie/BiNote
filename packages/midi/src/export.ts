@@ -5,9 +5,10 @@ import type { Smf, SmfEvent } from "./smf.js";
 export interface SmfExportOptions {
   /**
    * 트랙 악기의 실제 공통 ID를 알려 준다(보통 사운드팩 등록부, 재생과 같은 해석). `mabi:1578`(#42.3)처럼 번호로만 아는
-   * 악기도 올린 팩의 프리셋이 냥모니카면 GM 번호를 냥모니카로 고른다. 모르면 undefined(원래 ID로 고른다)
+   * 악기도 올린 팩의 프리셋이 냥모니카면 GM 번호를 냥모니카로 고른다. pack은 트랙에서 고른 팩 파일 이름(InstrumentRef.packId)으로,
+   * 재생처럼 그 팩을 먼저 본다. 모르면 undefined(원래 ID로 고른다)
    */
-  readonly canonicalOf?: (instrument: string, program: number | undefined) => string | undefined;
+  readonly canonicalOf?: (instrument: string, program: number | undefined, pack?: string) => string | undefined;
 }
 
 /**
@@ -41,7 +42,8 @@ export function songToSmf(
     const byInstrument = new Map<string, { player: typeof player; instrument: InstrumentRef; tracks: Track[] }>();
     for (const track of song.tracks.filter((t) => t.playerId === player.id)) {
       const instrument = trackInstrument(song, track);
-      const key = `${instrument.canonical}#${instrument.program ?? ""}`;
+      // 같은 번호라도 트랙마다 고른 팩이 다르면 다른 악기로 들리므로 따로 낸다
+      const key = `${instrument.canonical}#${instrument.program ?? ""}@${instrument.packId ?? ""}`;
       const unit = byInstrument.get(key) ?? { player, instrument, tracks: [] };
       unit.tracks.push(track);
       byInstrument.set(key, unit);
@@ -50,7 +52,7 @@ export function songToSmf(
   });
   const plans = units.map(({ player, instrument, tracks: own }, _i, all) => {
     // GM 번호·드럼 여부·이름은 실제로 울리는 악기로 정한다. 마비노기 번호는 원래 번호 그대로
-    const canonical = options.canonicalOf?.(instrument.canonical, instrument.program) ?? instrument.canonical;
+    const canonical = options.canonicalOf?.(instrument.canonical, instrument.program, instrument.packId) ?? instrument.canonical;
     const drumKey = programs === "gm" ? GM_DRUM_KEY[canonical] : undefined;
     // 마비노기 번호는 마비꼬 추가 팩 번호(팩 × 512 + 번호)면 팩 안 번호만 쓴다. MIDI 악기 번호는 0~127
     const program = programs === "gm" ? gmProgramOf(canonical) : splitPackProgram(instrument.program ?? 0).number & 0x7f;

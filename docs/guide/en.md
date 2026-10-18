@@ -65,6 +65,8 @@ If you were editing a song, a **Recent work** list appears below the buttons. Yo
 - To add one: Settings (⚙) → Sound packs → Add sound pack, or click "No sound pack" in the status bar
 - If you add several, **packs higher in the list are used first**. The pack you add first goes on top. Use the ▲▼ buttons next to a pack to change the order; the order is kept the next time you open the app.
 - Instruments written only as a MabiIcco number (e.g. `#40.3`) are looked up only in the pack matching their `.2`/`.3` suffix (recognised by file name), regardless of order. Because the same number can be a different instrument in another pack, they are reported as not found instead of borrowing another pack's number. Named instruments such as the harp (`24.2`) use the matching pack first and fall back to the same instrument in another pack.
+- **You can pick the pack each track plays with.** In the track editor header, the pack picker next to the instrument picker (shown when two or more packs are loaded) makes that track (or its score, if the track has no own instrument) play with the chosen pack. The default is **Auto (top pack first)**. If the chosen pack isn't loaded, the top pack is used instead and the picker shows "(missing)" after the pack name. The song keeps the chosen pack name, so adding that pack again plays it with that pack. Picking a `.2`/`.3` pack also puts that pack number into the instrument number when saving for MabiIcco.
+- Instruments whose number carries a `.2`/`.3` pack suffix show it after the name, like **Harp(24.2)**, in the track editor's instrument picker, the score chips in the track strip, and the not-found instrument notice. Base instruments show the name only.
 - Added packs are stored in this browser and loaded automatically next time. Files are never sent to a server.
 - If a pack lacks an instrument, BiNote shows "Instruments not found in any sound pack".
 
@@ -125,7 +127,7 @@ These limits are BiNote's current check values, measured on the Korean server (a
 | File | New score, Open score, Paste MML@, Restore recent work, saving (3MLE, project, MabiIcco, MIDI, WAV), Put in game, Add sound pack, Connect MIDI keyboard |
 | Edit | Undo and Redo, Select all, delete, Cut, Copy, paste, Length ×2 and ½, Transpose, Split / merge tracks |
 | Song | Change time signature, Tap tempo, Clear tempos, Change all tempos, Copy tempo to every score, Add track and Add score, Distribute chords, Merge chords, Shrink MML, Split into score books |
-| View | Piano roll/Tab, Panel below/beside, Side by side, Two editors, Vertical roll, Events, Note list, Light keys while playing, Mark stop position in MML, Track colors, MML keypad, Shortcuts |
+| View | Piano roll/Tab, Panel below/beside, Side by side, Editors, Vertical roll, Events, Note list, Light keys while playing, Mark stop position in MML, Track colors, MML keypad, Tab fret pad, Shortcuts |
 
 ### Track panel
 
@@ -134,7 +136,7 @@ These limits are BiNote's current check values, measured on the Korean server (a
 - Drag the handle on the left to move a track to another score. On touch, long-press a track to open its menu.
 - **MML editor**: edits the MML text of the selected track. Syntax errors and game limit problems are underlined; hover over an underline to see the details.
 - Move the panel with the **Horizontal | Vertical** buttons on the right of the toolbar (left of Layer). **Horizontal** puts it beside the roll (for mouse and touch), **Vertical** puts it below the roll (3MLE style, for keyboard use). This is the same as Panel below/beside in the View menu. Drag the border to resize it.
-- With **Two editors** on, the lower editor opens another track (Alt+click it in the list).
+- View → **Editors** (1–4, maximum set in Settings → Display) stacks several MML editors in the track panel so you can see several tracks' text at once. The top one shows the selected track; a track you Alt+click in the list or track strip opens in the lower editor that was changed longest ago (with one editor, a second one is added). The same track never opens in two editors, and each lower editor closes with its ×.
 
 ### Status bar
 
@@ -198,8 +200,11 @@ Switch with the Piano roll/Tab button (Alt+T). The tab gathers the tracks of the
 - `L`: tie to the note right after with & · `(5)` held · `5/7` slide. If nothing follows, adds the same pitch for the new-note length, tied (an eighth + L rings as a quarter)
 - Chord notes at the same spot go into free tracks of the same score
 - You can choose a tuning (Standard, Drop D, DADGAD, Baritone and more) and a capo
+- Use `A−` / `A+` at the right of the toolbar to change the tab size (string spacing and text), and the **fretboard position** button next to them (⤒ / ↕ / ⤓) to place the fretboard at the top, middle, or bottom of the area when there is spare height. Each click goes top → middle → bottom (middle by default), and the choice is remembered in this browser. While the fret pad is open, the fretboard always sits at the top
 - With several tracks, each number is tinted with its track color and numbers from other tracks are dimmed (turn off in Settings → Display → Track colors on tab numbers)
 - On touch, use the **Fret pad**. Pick the length of new notes in **New note** at the top of the pad (Grid / l4 / l8 / triplets…, the same setting as New note in the toolbar). With "Advance after entering" on, the cursor moves on by that length
+- Turn on View → **Tab fret pad** to open the fret pad when you click the fretboard with a mouse too (when off, only touch and pen open it). The setting is remembered in this browser
+- **Double-click** the tempo/time signature row at the top (long-press on touch or pen) to add a tempo there; on a tempo label it edits that tempo, and on a time signature label it edits the time signature. `Alt+B` works too (at the tab cursor, otherwise the edit cursor or the start of the song)
 
 ### MIDI keys
 
@@ -222,7 +227,7 @@ Turn on File menu → **Connect MIDI keyboard** and connect a MIDI keyboard to u
 | Octave up / down | Shift+↑ / Shift+↓ |
 | Volume up / down | Alt+↑ / Alt+↓, Alt+wheel |
 | Set volume directly | Alt+digit (6–9 → v6–9, 0 → v10, 1–5 → v11–15, Alt+\` → v0, Alt+Shift+0–5 → v0–5) |
-| Length ×2 / ½ | Ctrl+] / Ctrl+[ |
+| Length ×2 / ½ | Ctrl+] / Ctrl+[, + / - (numpad +/− too). With no notes selected, doubles / halves the new-note length (toolbar length picker). Notes you didn't select are never removed; a note is lengthened only up to the next one |
 | Exact length | Type an MML length (8, 8., 16..) or a fraction into the selected-note box in the status bar and press Enter. Fractions are in whole notes, so `1/7` is one seventh of a whole note. Any fraction can be used while editing, but when putting the song in the game it is written as a combination of lengths 1–64 (up to one dot), and you get a warning if it cannot be written exactly |
 | Tie / untie | Alt+L |
 | Split | Scissors tool, or Alt+S at the play cursor |
@@ -265,7 +270,7 @@ Song → Tap tempo. Play the original (or a video) and press the **T** key or [T
 
 ### Cleaning up tempos
 
-- **Change all tempos**: sets every tempo in the song to one value (**All to**), shifts them all up or down (**± BPM**), or scales them by a percentage (**%**). With a loop range set, only the tempos inside it change and the tempo after the range stays as it was. The MML text of every score is updated too, and you are warned before anything leaves the game tempo range (t32–255). One Ctrl+Z undoes it.
+- **Change all tempos**: sets every tempo in the song to one value (**All to**), shifts them all up or down (**± BPM**), or scales them by a percentage (**%**). With a loop range set, only the tempos inside it change and the tempo after the range stays as it was. The MML text of every score is updated too, and you are warned before anything leaves the game tempo range (t32–255). One Ctrl+Z undoes it. If a score has no place to put the range-edge tempo (only spots that would change its end length, or n notes that can't be split), that score's text is left as is and you are told which score it was.
 - **Clear all tempos**: keeps only the tempo at the start of the song. With a loop range set, only the tempos inside it are cleared.
 - **Copy tempo to every score**: writes the song tempo into the MML text of scores that lack it. (Put in game and Split into score books add tempo to every score even without this.)
 - Tempos outside the game range (t32–t255) can be used while editing; Put in game tells you how to convert them (see section 9).
@@ -446,7 +451,7 @@ The app checks for a new version each time it opens, and if it stays open for a 
 |---|---|
 | Sound packs | Add and remove, check and change priority (list order), storage status |
 | Playback | Master volume, Light keys while playing, MIDI keys Velocity → v, Display sync, Instrument volumes |
-| Display | Theme (Follow system · Light · Dark), Accent color, Note look (Rounded corners · Border · Shade by v · Note names when zoomed in), Track colors (By position in score · Hue per score · Saved in file), MML editor text and text size, Roll during playback (Turn pages · Scroll continuously) |
+| Display | Theme (Follow system · Light · Dark), Accent color, Note look (Rounded corners · Border · Shade by v · Note names when zoomed in), Track colors (By position in score · Hue per score · Saved in file), MML editor text and text size, Roll during playback (Turn pages · Scroll continuously), Maximum editors (the most you can pick in View → Editors, 2 up to the tracks in one score, 4 by default) |
 | Saving | Choose each time, a set folder or Downloads (Chrome and Edge on a PC), Save through the share sheet (iPad and iPhone) |
 | Language | Pick the interface language. At first BiNote follows your browser language (English if it is not Korean, English, Japanese, Traditional or Simplified Chinese) and remembers your choice |
 | Shortcuts | Open shortcut settings (Key set: BiNote default / MabiIcco compatible, change keys) |
@@ -476,7 +481,7 @@ While typing in the MML editor, only Ctrl/Alt combinations and F keys work as sh
 | | Ctrl+A | Select all notes in the current track |
 | | Ctrl+C / X / V | Copy / cut / paste |
 | | Delete, Backspace | Delete selected notes |
-| | Ctrl+] / Ctrl+[ | Length ×2 / ½ |
+| | Ctrl+] / Ctrl+[, + / - | Length ×2 / ½ (new-note length when nothing is selected) |
 | | Alt+P | Transpose |
 | Note | Shift+↑ / ↓ | Octave up / down |
 | | Alt+↑ / ↓ | Volume up / down |
@@ -498,7 +503,7 @@ While typing in the MML editor, only Ctrl/Alt combinations and F keys work as sh
 
 ## 14. Using an iPad or phone
 
-- **Panel beside** is the default for touch. In portrait on iPad, the screen is split top and bottom.
+- **Panel beside** is the default for touch. In portrait on iPad (or a tall PC window), the screen is split top and bottom, and **Structure | MML** in the panel header picks which one you see. In MML, switch tracks from the track strip above the editor.
 - To select notes, the **Select tool** is safest (it never adds or moves notes). To delete, use the **Eraser**.
 - **Long-press** a track to open its menu (Move up, Move down, duplicate, move, Open in lower editor).
 - **Long-press** an empty spot in the event rows to add a tempo or marker.

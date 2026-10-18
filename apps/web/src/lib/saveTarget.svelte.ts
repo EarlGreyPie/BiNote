@@ -1,4 +1,5 @@
 import { loadStored, saveStored } from "./persist";
+import { SaveStartup, type SaveMode } from "./saveStartup";
 
 /**
  * 저장 위치. 기본은 브라우저 다운로드(다운로드 폴더)이고,
@@ -34,8 +35,7 @@ export const canPickFolder = secure && typeof picker() === "function";
 /** 저장 창(폴더와 파일 이름 고르기)을 띄울 수 있는 브라우저인지 (PC 크롬·엣지) */
 export const canAskSave = secure && typeof filePicker() === "function";
 
-/** ask: 저장할 때마다 저장 창에서 고른다, folder: 정해 둔 폴더에 바로 쓴다, download: 다운로드 폴더 */
-export type SaveMode = "ask" | "folder" | "download";
+export type { SaveMode };
 
 /** 파일을 공유 창으로 넘길 수 있는지 (iPad·iPhone의 "파일에 저장") */
 export const canShareFiles = (() => {
@@ -59,6 +59,11 @@ export const saveTarget = $state<{ folder: string | undefined; share: boolean; m
 });
 
 let handle: DirHandle | undefined;
+
+/** 시작할 때 예전 폴더 읽기와 저장 방식 고르기·저장의 순서 */
+const startup = new SaveStartup(saveTarget, storedMode);
+/** 저장 전에 예전 폴더 읽기를 기다리는 최대 시간. 저장 창은 누른 직후 몇 초 안에만 뜬다 */
+const LOAD_WAIT_MS = 1000;
 
 const DB_NAME = "mmlce-save";
 const STORE = "folder";
@@ -90,27 +95,22 @@ async function store(value: DirHandle | undefined): Promise<DirHandle | undefine
   }
 }
 
-/** 시작할 때 기억해 둔 폴더를 읽어 둔다 (저장 때 바로 권한을 물을 수 있게) */
-export async function loadSaveTarget(): Promise<void> {
-  if (!canPickFolder) return;
-  try {
+/**
+ * 시작할 때 기억해 둔 폴더를 읽어 둔다 (저장 때 바로 권한을 물을 수 있게).
+ * 저장 창이 생기기 전에 폴더를 정해 둔 사람은 그대로 그 폴더에 저장한다. 읽는 사이 설정에서 방식을 바꿨으면 그 선택을 따른다
+ */
+export function loadSaveTarget(): Promise<void> {
+  if (!canPickFolder) return Promise.resolve();
+  return startup.load(async () => {
     handle = await store(undefined);
     saveTarget.folder = handle?.name;
-    // 저장 창이 생기기 전에 폴더를 정해 둔 사람은 그대로 그 폴더에 저장한다.
-    // 읽는 사이 설정에서 방식을 바꿨으면 그 선택을 따른다
-    if (storedMode === undefined && !modeChosen && handle) saveTarget.mode = "folder";
-  } catch {
-    // 저장소를 못 쓰면 다운로드로 저장한다
-  }
+    return !!handle;
+  });
 }
 
-/** 이번 창에서 사용자가 저장 방식을 골랐는지 (시작할 때 예전 폴더 설정으로 덮지 않게) */
-let modeChosen = false;
-
-/** 저장 방식을 바꾼다 */
+/** 저장 방식을 바꾼다 (시작할 때 예전 폴더 설정으로 덮지 않는다) */
 export function setSaveMode(mode: SaveMode): void {
-  modeChosen = true;
-  saveTarget.mode = mode;
+  startup.choose(mode);
   saveStored(MODE_KEY, mode);
 }
 
@@ -214,15 +214,18 @@ async function shareFile(bytes: Uint8Array, name: string): Promise<"shared" | "c
 /**
  * 저장한 결과. written: 고른 폴더에 썼다, shared: 공유 창에서 보냈다 (둘 다 저장을 확인한 것),
  * cancelled: 저장 창·공유 창을 닫았다, downloaded: 다운로드를 시작했다 (끝났는지는 알 수 없다),
- * rescued: 저장 창에서 고른 파일에 쓰지 못해 다운로드로 저장했다 (브라우저가 고른 파일을 먼저 비우므로 그 파일은 비었을 수 있다)
+ * rescued: 저장 창에서 고른 파일에 쓰지 못해 다운로드로 저장했다 (브라우저가 고른 파일을 먼저 비우므로 그 파일은 비었을 수 있다),
+ * retry: 시작할 때 예전 폴더를 아직 읽는 중이라 저장하지 않았다 (잠시 뒤 다시 저장하게 알린다)
  */
-export type SaveOutcome = "written" | "shared" | "cancelled" | "downloaded" | "rescued";
+export type SaveOutcome = "written" | "shared" | "cancelled" | "downloaded" | "rescued" | "retry";
 
 /**
  * 고른 저장 위치에 파일을 저장한다. 안 되면 다운로드로 저장한다.
  * 저장 창을 띄울 수 있으므로 단추나 단축키를 누른 직후에 부른다.
  */
 export async function saveFile(bytes: Uint8Array, name: string): Promise<SaveOutcome> {
+  // 시작 직후면 예전 폴더 읽기가 끝나기를 기다린 뒤 방식을 고른다 (읽기 전 기본값 ask로 저장 창이 뜨지 않게)
+  if (!(await startup.ready(LOAD_WAIT_MS))) return "retry";
   const chosen = await askSaveFile(name);
   if (chosen === "cancelled") return "cancelled";
   if (chosen) {

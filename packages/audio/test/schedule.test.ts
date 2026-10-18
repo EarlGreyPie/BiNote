@@ -143,3 +143,17 @@ describe("velocityForVolume", () => {
     expect(known.slots[0]).toMatchObject({ instrument: `mabi:${3 * 512 + 42}`, program: 3 * 512 + 42 });
   });
 });
+
+describe("buildSchedule: 트랙에서 고른 사운드팩", () => {
+  it("고른 팩 이름을 소리 지점에 싣고 키에도 넣는다. canonicalOf에도 같은 팩을 넘긴다", () => {
+    const base = song([{ notes: [n("a", [0, 1], [1, 4], 60)] }, { notes: [n("b", [0, 1], [1, 4], 60)] }]);
+    const picked: Song = { ...base, tracks: base.tracks.map((t, i) => (i === 1 ? { ...t, instrument: { canonical: "piano", program: 21, packId: "pack-b.dls" } } : t)) };
+    const asked: (string | undefined)[] = [];
+    const s = buildSchedule(picked, MOBILE_PROFILE, { canonicalOf: (_i, _p, pack) => (asked.push(pack), undefined) });
+    expect(s.slots).toEqual([
+      { key: "t1", instrument: "piano", program: 21 },
+      { key: "t2@pack-b.dls", instrument: "piano", program: 21, pack: "pack-b.dls" },
+    ]);
+    expect(asked).toEqual([undefined, "pack-b.dls"]);
+  });
+});

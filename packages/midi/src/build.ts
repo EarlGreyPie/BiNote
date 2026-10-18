@@ -56,7 +56,10 @@ export interface ImportResult {
   readonly song: Song;
   readonly grid: number;
   readonly tripletBeats: number;
-  /** 칸에 맞추며 같은 자리의 같은 음이 되어 하나로 합쳐진 음 수 */
+  /**
+   * 같은 자리의 같은 음이 되어 하나로 합쳐진 음 수. 칸에 맞추며 모인 음과,
+   * 연주자 악기로 바꾼 뒤(드럼의 여러 높이를 타악기 한 높이로 등) 모인 음을 함께 센다
+   */
   readonly merged: number;
   /** 계획의 연주자(plan 순번)별로 압축에서 뺀 음 수와 끝을 자른 음 수 */
   readonly compressed: readonly { readonly plan: number; readonly player: string; readonly dropped: number; readonly shortened: number; readonly filled: number; readonly merged: number }[];
@@ -221,8 +224,11 @@ function groupByPart(notes: readonly GridNote[]): Map<string, GridNote[]> {
 
 const drumKindOf = (pp: PlayerPlan) => (pp.instrument.canonical === "bass-drum" || pp.instrument.canonical === "cymbal" ? pp.instrument.canonical : undefined);
 
-/** 연주자에게 모을 음. 드럼 파트는 이 연주자의 타악기에 해당하는 음만 골라 정해진 높이로 친다 */
-function playerNotes(pp: PlayerPlan, byPart: ReadonlyMap<string, GridNote[]>, partOf: ReadonlyMap<string, MidiPart>, profile: GameProfile): GridNote[] {
+/**
+ * 연주자에게 모을 음. 드럼 파트는 이 연주자의 타악기에 해당하는 음만 골라 정해진 높이로 친다.
+ * merged: 그렇게 바꾼 뒤 같은 자리의 같은 음이 되어 하나로 합쳐진 음 수 (tidy는 같은 자리 음만 빼고, 겹친 음은 끝만 자른다)
+ */
+function playerNotes(pp: PlayerPlan, byPart: ReadonlyMap<string, GridNote[]>, partOf: ReadonlyMap<string, MidiPart>, profile: GameProfile): { notes: GridNote[]; merged: number } {
   const drumKind = drumKindOf(pp);
   const notes: GridNote[] = [];
   for (const id of pp.parts) {
@@ -232,7 +238,8 @@ function playerNotes(pp: PlayerPlan, byPart: ReadonlyMap<string, GridNote[]>, pa
       notes.push(...list.filter((n) => drumInstrument(n.pitch) === drumKind).map((n) => ({ ...n, pitch: profile.percussionPitch })));
     } else notes.push(...list);
   }
-  return tidy(notes.map((n) => ({ ...n, part: drumKind ? "drum" : n.part })));
+  const out = tidy(notes.map((n) => ({ ...n, part: drumKind ? "drum" : n.part })));
+  return { notes: out, merged: notes.length - out.length };
 }
 
 function compressOptions(pp: PlayerPlan, partOf: ReadonlyMap<string, MidiPart>) {
@@ -273,6 +280,8 @@ function assemble(
   let unmappedDrums = 0;
   const countedDrums = new Set<string>();
 
+  // 연주자 악기로 바꾼 뒤 합쳐진 음 (드럼 높이를 타악기 한 높이로 바꾼 뒤 등)
+  let instrumentMerged = 0;
   plan.players.forEach((pp, planIndex) => {
     const drumKind = drumKindOf(pp);
     for (const id of pp.parts) {
@@ -280,7 +289,8 @@ function assemble(
       countedDrums.add(id);
       unmappedDrums += (byPart.get(id) ?? []).filter((n) => drumInstrument(n.pitch) === undefined).length;
     }
-    const notes = playerNotes(pp, byPart, partOf, profile);
+    const { notes, merged: mergedHere } = playerNotes(pp, byPart, partOf, profile);
+    instrumentMerged += mergedHere;
     if (notes.length === 0) return;
 
     const hands = handsOf(pp.parts.map((id) => partOf.get(id)).filter((p): p is MidiPart => !!p && !p.drum));
@@ -382,7 +392,7 @@ function assemble(
     players,
     tracks,
   };
-  return { song, grid: q.grid, tripletBeats: q.tripletBeats, merged: q.merged, compressed, unmappedDrums };
+  return { song, grid: q.grid, tripletBeats: q.tripletBeats, merged: q.merged + instrumentMerged, compressed, unmappedDrums };
 }
 
 /** 파트가 둘 이상이면 평균 음높이가 가장 높은 파트를 오른손, 나머지를 왼손으로 본다 */

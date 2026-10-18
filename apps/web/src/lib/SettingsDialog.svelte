@@ -44,6 +44,10 @@
     onkeymap: () => void;
     /** BiNote 정보 창 열기 (업데이트 확인·링크) */
     onabout: () => void;
+    /** 보기 메뉴에서 고를 수 있는 MML 편집기 수의 끝과 고를 수 있는 끝(한 악보 트랙 수) */
+    editorMax: number;
+    editorLimit: number;
+    oneditormax: (n: number) => void;
     /** 처음 열 항목 (사운드팩 없음 표시를 눌러 열었으면 사운드팩) */
     initial?: Section;
     onclose: () => void;
@@ -73,6 +77,9 @@
     onappearance,
     onkeymap,
     onabout,
+    editorMax,
+    editorLimit,
+    oneditormax,
     initial = "packs",
     onclose,
   }: Props = $props();
@@ -191,6 +198,13 @@
           </select>
         </label>
         <p class="muted help">{t("ui.rollFlowHelp")}</p>
+        <label class="row" title={t("ui.editorMaxHelp")}>
+          <span>{t("ui.editorMax")}</span>
+          <select value={editorMax} onchange={(e) => oneditormax(Number(e.currentTarget.value))}>
+            {#each Array.from({ length: Math.max(1, editorLimit - 1) }, (_, k) => k + 2) as n (n)}<option value={n}>{n}</option>{/each}
+          </select>
+        </label>
+        <p class="muted help">{t("ui.editorMaxHelp")}</p>
         <label class="row" title={t("ui.tabTrackTintHelp")}>
           <input type="checkbox" checked={tabTint.on} onchange={(e) => setTabTint(e.currentTarget.checked)} />
           <span>{t("ui.tabTrackTint")}</span>

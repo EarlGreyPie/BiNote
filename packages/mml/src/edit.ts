@@ -650,36 +650,98 @@ export function changedBpm(bpm: number, change: TempoChange): number {
   return Math.min(999, Math.max(1, Math.round(raw)));
 }
 
-/**
- * 구간 [from, to)의 템포를 한꺼번에 바꾼다 (to가 없으면 곡 끝까지). 원문의 t는 구간 안에 적힌 것만 같은 규칙으로 고친다.
- * 구간 처음(바꾼 값)·끝(원래 값)에서 빠르기가 실제로 달라질 때만 그 자리에 템포를 새로 넣고 (그 뒤에 음이 있을 때),
- * 악보마다 그 자리에 그 빠르기가 울리지 않으면 원문에 t를 끼운다 (insertEdge). 원문은 버리지 않는다. 실행 취소 한 칸
- */
-export function changeTempos(change: TempoChange, from: Rat = ZERO, to?: Rat, label = "템포 한꺼번에 바꾸기"): Command {
+/** 템포 한꺼번에 바꾸기가 고칠 대상. 미리보기와 실제 수정이 같은 목록을 쓴다 */
+export interface TempoChangeTargets {
+  /**
+   * 바뀔 템포 값 (구간 처음 자리 템포, 구간 안 지도 템포, 구간 안 원문의 t를 자리·값이 같은 것끼리 하나로).
+   * 같은 자리에 겹쳐 쓴 t(t250t100)도 따로 센다
+   */
+  readonly bpms: readonly number[];
+  /** 원문에서 고칠 수 있는 t (트랙 id → 구간 안 t). 문법 오류가 있는 원문은 손대지 않으므로 없다 */
+  readonly tokens: ReadonlyMap<string, readonly TempoToken[]>;
+}
+
+export function tempoChangeTargets(song: Song, from: Rat = ZERO, to?: Rat): TempoChangeTargets {
   const inside = (at: Rat) => cmp(at, from) >= 0 && (to === undefined || cmp(at, to) < 0);
-  return songCommand(label, (song) => {
-    if (to !== undefined && cmp(to, from) <= 0) return song;
-    const before = normalizeTempo(song.tempo);
-    const bpmAt = (at: Rat) => before.filter((e) => cmp(e.at, at) <= 0).at(-1)?.bpm ?? DEFAULT_BPM;
-    const map: TempoEvent[] = before.map((e) => (inside(e.at) ? { at: e.at, bpm: changedBpm(e.bpm, change) } : e));
-    const end = song.tracks.reduce<Rat>((m, t) => t.notes.reduce((mm, n) => (cmp(add(n.start, n.dur), mm) > 0 ? add(n.start, n.dur) : mm), m), ZERO);
-    // 새로 만드는 구간 경계 템포: 그 자리 앞뒤 빠르기가 달라지고 그 뒤에 음이 있을 때만
-    const edges: TempoEvent[] = [];
-    const edgeAt = (at: Rat, bpm: number) => {
-      if (cmp(end, at) > 0 && !before.some((e) => eq(e.at, at)) && changedBpm(bpmAt(at), change) !== bpmAt(at)) edges.push({ at, bpm });
-    };
-    edgeAt(from, changedBpm(bpmAt(from), change));
-    if (to !== undefined) edgeAt(to, bpmAt(to));
-    map.push(...edges);
-    const tempo = normalizeTempo(map);
-    if (sameTempo(tempo, before)) return song;
-    const tracks = song.tracks.map((t) => {
-      const hits = (t.mml ? surgicalSource(t.mml)?.tokens : undefined)?.filter((h) => inside(h.at) && changedBpm(h.bpm, change) !== h.bpm) ?? [];
-      if (!t.mml || hits.length === 0) return t;
-      return { ...t, mml: { ...t.mml, text: spliceText(t.mml.text, hits.map((h) => ({ span: h.span, text: `t${changedBpm(h.bpm, change)}` }))) } };
-    });
-    return edges.reduce<Song>((out, e) => songScores(out).reduce<Song>((next, ids) => insertEdge(next, ids, e), out), { ...song, tempo, tracks });
+  const map = normalizeTempo(song.tempo);
+  const startBpm = map.filter((e) => cmp(e.at, from) <= 0).at(-1)?.bpm ?? DEFAULT_BPM;
+  const tokens = new Map<string, TempoToken[]>();
+  for (const t of song.tracks) {
+    const hits = (t.mml ? surgicalSource(t.mml)?.tokens : undefined)?.filter((h) => inside(h.at)) ?? [];
+    if (hits.length > 0) tokens.set(t.id, hits);
+  }
+  const seen = new Set<string>();
+  const bpms: number[] = [];
+  const push = (at: Rat, bpm: number) => {
+    const key = `${at.n}/${at.d}@${bpm}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    bpms.push(bpm);
+  };
+  push(from, startBpm);
+  for (const e of map) if (cmp(e.at, from) > 0 && inside(e.at)) push(e.at, e.bpm);
+  for (const list of tokens.values()) for (const h of list) push(h.at, h.bpm);
+  return { bpms, tokens };
+}
+
+/** 구간 경계 템포를 원문에 넣지 못한 까닭: 게임 길이가 바뀌는 자리뿐이라 거절 / 나눌 수 없는 n 음표 */
+export type TempoEdgeFailure = "length" | "n-note";
+
+/** 템포 한꺼번에 바꾸기 결과: 바뀐 곡과, 경계 템포를 넣지 못해 원문을 그대로 둔 악보 (songScores 순서, 0부터) */
+export interface TempoChangeResult {
+  readonly song: Song;
+  readonly failed: readonly { readonly score: number; readonly reasons: readonly TempoEdgeFailure[] }[];
+}
+
+/**
+ * 구간 [from, to)의 템포를 한꺼번에 바꾼다 (to가 없으면 곡 끝까지). 원문의 t는 구간 안에 적힌 것만 같은 규칙으로 고친다
+ * (tempoChangeTargets의 목록. 지도 값은 그대로여도 원문 t가 바뀌면 고친다).
+ * 구간 처음(바꾼 값)·끝(원래 값)에서 빠르기가 실제로 달라질 때만 그 자리에 템포를 새로 넣고 (그 뒤에 음이 있을 때),
+ * 악보마다 그 자리에 그 빠르기가 울리지 않으면 원문에 t를 끼운다 (insertEdge). 원문은 버리지 않는다.
+ * 끼우지 못한 악보는 원문을 그대로 두고 failed로 알린다
+ */
+export function changeTemposResult(song: Song, change: TempoChange, from: Rat = ZERO, to?: Rat): TempoChangeResult {
+  const unchanged = { song, failed: [] };
+  const inside = (at: Rat) => cmp(at, from) >= 0 && (to === undefined || cmp(at, to) < 0);
+  if (to !== undefined && cmp(to, from) <= 0) return unchanged;
+  const before = normalizeTempo(song.tempo);
+  const bpmAt = (at: Rat) => before.filter((e) => cmp(e.at, at) <= 0).at(-1)?.bpm ?? DEFAULT_BPM;
+  const map: TempoEvent[] = before.map((e) => (inside(e.at) ? { at: e.at, bpm: changedBpm(e.bpm, change) } : e));
+  const end = song.tracks.reduce<Rat>((m, t) => t.notes.reduce((mm, n) => (cmp(add(n.start, n.dur), mm) > 0 ? add(n.start, n.dur) : mm), m), ZERO);
+  // 새로 만드는 구간 경계 템포: 그 자리 앞뒤 빠르기가 달라지고 그 뒤에 음이 있을 때만
+  const edges: TempoEvent[] = [];
+  const edgeAt = (at: Rat, bpm: number) => {
+    if (cmp(end, at) > 0 && !before.some((e) => eq(e.at, at)) && changedBpm(bpmAt(at), change) !== bpmAt(at)) edges.push({ at, bpm });
+  };
+  edgeAt(from, changedBpm(bpmAt(from), change));
+  if (to !== undefined) edgeAt(to, bpmAt(to));
+  map.push(...edges);
+  const tempo = normalizeTempo(map);
+  const { tokens } = tempoChangeTargets(song, from, to);
+  let textChanged = false;
+  const tracks = song.tracks.map((t) => {
+    const hits = (tokens.get(t.id) ?? []).filter((h) => changedBpm(h.bpm, change) !== h.bpm);
+    if (!t.mml || hits.length === 0) return t;
+    textChanged = true;
+    return { ...t, mml: { ...t.mml, text: spliceText(t.mml.text, hits.map((h) => ({ span: h.span, text: `t${changedBpm(h.bpm, change)}` }))) } };
   });
+  if (sameTempo(tempo, before) && !textChanged) return unchanged;
+  const failures = new Map<number, Set<TempoEdgeFailure>>();
+  const next = edges.reduce<Song>(
+    (out, e) =>
+      songScores(out).reduce<Song>((acc, ids, score) => {
+        const done = insertEdge(acc, ids, e);
+        if (done.failed) failures.set(score, new Set([...(failures.get(score) ?? []), ...done.failed]));
+        return done.song;
+      }, out),
+    { ...song, tempo, tracks },
+  );
+  return { song: next, failed: [...failures].sort(([a], [b]) => a - b).map(([score, reasons]) => ({ score, reasons: [...reasons] })) };
+}
+
+/** changeTemposResult를 실행 취소 한 칸 명령으로 (넣지 못한 악보는 changeTemposResult로 미리 알아본다) */
+export function changeTempos(change: TempoChange, from: Rat = ZERO, to?: Rat, label = "템포 한꺼번에 바꾸기"): Command {
+  return songCommand(label, (song) => changeTemposResult(song, change, from, to).song);
 }
 
 /**
@@ -688,27 +750,35 @@ export function changeTempos(change: TempoChange, from: Rat = ZERO, to?: Rat, la
  * 아니면 원문 하나에 t를 끼운다: 그 자리에서 시작하는 음·쉼표 앞, 없으면 그 자리에 걸친 쉼표를 둘로 나눠 사이에,
  * 그래도 없으면 걸친 음을 &로 나눠 사이에 (원문을 버려 다시 쓰지 않으므로 쉼표·손으로 쓴 모양·잠근 트랙이 남는다)
  */
-function insertEdge(song: Song, ids: readonly string[], e: TempoEvent): Song {
+function insertEdge(song: Song, ids: readonly string[], e: TempoEvent): { song: Song; failed?: readonly TempoEdgeFailure[] } {
   const tracks = ids.map((id) => song.tracks.find((t) => t.id === id)!);
   // 이미 끝난 악보에는 그 뒤 템포가 필요 없다 (출력기도 악보 길이 뒤 템포는 쓰지 않는다: score-end.ts)
-  if (cmp(e.at, scoreEnd(tracks)) >= 0) return song;
+  if (cmp(e.at, scoreEnd(tracks)) >= 0) return { song };
   const generated = scoreTempo(song, ids).generated;
   const heard = [
     ...tracks.flatMap((t) => (t.mml ? tempoTokens(t.mml) : [])),
     ...tracks.flatMap((t) => generated.get(t.id) ?? []),
   ].filter((k) => cmp(k.at, e.at) <= 0);
   const last = heard.reduce<Rat | undefined>((m, k) => (m === undefined || cmp(k.at, m) > 0 ? k.at : m), undefined);
-  if (last !== undefined && heard.filter((k) => eq(k.at, last)).every((k) => k.bpm === e.bpm)) return song;
+  if (last !== undefined && heard.filter((k) => eq(k.at, last)).every((k) => k.bpm === e.bpm)) return { song };
   const t = `t${e.bpm}`;
   const sources = tracks
     .map((track) => ({ track, mml: track.mml, src: track.mml ? surgicalSource(track.mml) : undefined }))
     .filter((c): c is { track: Track; mml: TrackText; src: NonNullable<ReturnType<typeof surgicalSource>> } => c.mml !== undefined && c.src !== undefined)
     .sort((a, b) => Number(b.src.tokens.length > 0) - Number(a.src.tokens.length > 0));
+  // 끼울 원문이 없으면(원문 없는 트랙뿐) 출력기가 템포를 쓴다
+  if (sources.length === 0) return { song };
+  // 끼우지 못했을 때 알릴 까닭 (길이가 바뀌어 거절한 자리가 있었는지, 나눌 수 없는 n 음표에 걸렸는지)
+  let lengthRefused = false;
+  let nNote = false;
   // 음을 나누면 트랙 음도 새 글에서 다시 읽는다 (& 잇기가 하나 늘 뿐 소리는 같다. 타브 줄은 옮겨 받는다)
   // 게임 길이가 달라지는 수술(마지막 쉼표 뒤에 t를 붙이거나 마지막 쉼표를 나누기)은 하지 않는다
   const write = (id: string, mml: TrackText, span: readonly [number, number], text: string, renote = false): Song | undefined => {
     const next = { ...mml, text: spliceText(mml.text, [{ span, text }]) };
-    if (!eq(textEnd(next), textEnd(mml))) return undefined;
+    if (!eq(textEnd(next), textEnd(mml))) {
+      lengthRefused = true;
+      return undefined;
+    }
     return {
       ...song,
       tracks: song.tracks.map((tr) => {
@@ -721,7 +791,7 @@ function insertEdge(song: Song, ids: readonly string[], e: TempoEvent): Song {
     const local = localAt(mml, e.at);
     const offset = local && tempoInsertOffset(mml.text, src.parsed, local);
     const done = offset !== undefined && offset !== null ? write(track.id, mml, [offset, offset], t) : undefined;
-    if (done) return done;
+    if (done) return { song: done };
   }
   const within = (x: { start: Rat; dur: Rat }, at: Rat) => cmp(x.start, at) < 0 && cmp(add(x.start, x.dur), at) > 0;
   for (const { track, mml, src } of sources) {
@@ -731,7 +801,7 @@ function insertEdge(song: Song, ids: readonly string[], e: TempoEvent): Song {
     const a = lengthPieces(sub(local, rest.start));
     const b = lengthPieces(sub(add(rest.start, rest.dur), local));
     const done = a && b ? write(track.id, mml, rest.span, [...a.map((l) => `r${l}`), t, ...b.map((l) => `r${l}`)].join("")) : undefined;
-    if (done) return done;
+    if (done) return { song: done };
   }
   for (const { track, mml, src } of sources) {
     const local = localAt(mml, e.at);
@@ -739,12 +809,15 @@ function insertEdge(song: Song, ids: readonly string[], e: TempoEvent): Song {
     if (!local || !note) continue;
     // n 음표는 길이를 붙일 수 없어 나누지 않는다
     const pitch = /^[a-g][+#-]*/i.exec(mml.text.slice(note.span[0], note.span[1]))?.[0];
+    if (!pitch) nNote = true;
     const a = lengthPieces(sub(local, note.start));
     const b = lengthPieces(sub(add(note.start, note.dur), local));
     const done = pitch && a && b ? write(track.id, mml, note.span, `${a.map((l) => pitch + l).join("&")}&${t}${b.map((l) => pitch + l).join("&")}`, true) : undefined;
-    if (done) return done;
+    if (done) return { song: done };
   }
-  return song;
+  // 끼울 자리를 하나도 못 찾은 경우도 길이가 바뀌는 자리뿐이었던 것으로 본다
+  const failed: TempoEdgeFailure[] = [...(lengthRefused || !nNote ? ["length" as const] : []), ...(nNote ? ["n-note" as const] : [])];
+  return { song, failed };
 }
 
 /**

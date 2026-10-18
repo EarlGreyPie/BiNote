@@ -8,6 +8,8 @@ export interface TrackActions {
   renamePlayer(playerId: string, name: string): void;
   playerInstrument(playerId: string, canonical: string): void;
   trackInstrument(trackId: string, canonical: string): void;
+  /** 트랙에서 들을 사운드팩 (파일 이름, undefined면 자동). 악기 고르기와 같은 대상(트랙 악기 또는 악보 악기)에 적용 */
+  trackPack(trackId: string, pack: string | undefined): void;
   /** 끄기·솔로 (듣는 방법이라 실행 취소에 안 들어간다) */
   listen(trackId: string, change: { mute?: boolean; solo?: boolean }): void;
   /** 눈(롤에서 숨김)·잠금(편집 막기). 실행 취소에 안 들어간다 */

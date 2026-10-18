@@ -24,6 +24,10 @@ export interface Marker {
  */
 export interface InstrumentRef {
   readonly canonical: string;
+  /**
+   * 이 악기를 들을 사운드팩의 파일 이름 (트랙 편집기에서 고른 팩). 없으면 자동(설정의 위쪽 팩부터).
+   * 그 이름의 팩이 지금 올라와 있지 않으면 자동처럼 찾되, 값은 지우지 않아 팩을 다시 올리면 그대로 쓴다
+   */
   readonly packId?: string;
   readonly program?: number;
 }
