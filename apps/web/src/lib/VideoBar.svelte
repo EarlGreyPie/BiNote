@@ -10,9 +10,23 @@
     onremove: () => void;
     /** 롤을 영상 건반 범위에 맞춰 옮기고 확대한다 */
     onfitroll: () => void;
+    /** 속도 맞추기(자동 재기). 못 재면 직접 재기로 넘어간다 */
+    onmatchspeed: () => void;
+    /** 직접 재기 시작·0.5초 앞으로·그만두기 */
+    onpickspeed: () => void;
+    onpickforward: () => void;
+    onpickcancel: () => void;
+    /** 직접 재기 단계 (PianoRoll speedStep) */
+    speedStep: 0 | 1 | 2 | 3;
+    /** 속도 재기 결과·안내 한 줄 */
+    speedNote: string;
+    /** 곡 안에서 템포가 바뀐다 (그 뒤는 다시 맞춰야 한다) */
+    tempoChanges: boolean;
   }
 
-  let { video = $bindable(), playing = $bindable(), onremove, onfitroll }: Props = $props();
+  let { video = $bindable(), playing = $bindable(), onremove, onfitroll, onmatchspeed, onpickspeed, onpickforward, onpickcancel, speedStep, speedNote, tempoChanges }: Props = $props();
+  /** 화면 채우기 (없으면 켬) */
+  const fill = $derived(video.fill !== false);
 
   function setFit(fit: boolean) {
     video = { ...video, fit };
@@ -56,6 +70,39 @@
     <label title={t("ui.videoHandlesHint")}><input type="checkbox" checked={!!video.handles} onchange={(e) => (video = { ...video, handles: e.currentTarget.checked })} /> {t("ui.videoHandles")}</label>
     <button class="small" onclick={onfitroll} title={t("ui.videoFitRollHint")}>{t("ui.videoFitRoll")}</button>
     <label>{t("ui.videoKeyLine")} <input type="range" min="0" max="1" step="0.005" bind:value={video.keyLine} /></label>
-    <label>{t("ui.videoStretch")} <input type="number" min="0.1" max="10" step="0.05" bind:value={video.stretch} /></label>
+    <label title={t("ui.videoFillHint")}><input type="checkbox" checked={fill} onchange={(e) => (video = { ...video, fill: e.currentTarget.checked })} /> {t("ui.videoFill")}</label>
+    <!-- 화면 채우기를 켜면 계산한 값을 보이기만 한다 -->
+    <label title={fill ? t("ui.videoFillHint") : undefined}>
+      {t("ui.videoStretch")}
+      {#if fill}
+        <input type="number" value={Math.round(video.stretch * 100) / 100} disabled />
+      {:else}
+        <input type="number" min="0.1" max="10" step="0.05" bind:value={video.stretch} />
+      {/if}
+    </label>
   {/if}
 </div>
+{#if video.fit}
+  <div class="video-bar">
+    {#if speedStep === 0}
+      <button class="small" onclick={onmatchspeed} title={t("ui.videoSpeedHint")}>{t("ui.videoSpeed")}</button>
+      <button class="small" onclick={onpickspeed} title={t("ui.videoSpeedPickHint")}>{t("ui.videoSpeedPick")}</button>
+    {:else}
+      <span class="note">{t(speedStep === 1 ? "ui.videoSpeedStep1" : speedStep === 2 ? "ui.videoSpeedStep2" : "ui.videoSpeedStep3")}</span>
+      {#if speedStep === 2}<button class="small" onclick={onpickforward}>{t("ui.videoSpeedForward")}</button>{/if}
+      <button class="small" onclick={onpickcancel}>{t("ui.cancel")}</button>
+    {/if}
+    {#if speedNote}<span class="note">{speedNote}</span>{/if}
+    {#if tempoChanges && video.speed}<span class="note warn">{t("ui.videoSpeedTempo")}</span>{/if}
+  </div>
+{/if}
+
+<style>
+  .note {
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .note.warn {
+    color: var(--ev-marker);
+  }
+</style>

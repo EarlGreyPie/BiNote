@@ -56,3 +56,27 @@ export function revealStart(at: number, end: number, start: number, span: number
   const next = followStart(at, end, start, span, timeMax);
   return cursorVisible(at, next, span) ? next : Math.max(0, at);
 }
+
+/**
+ * 커서 줄의 세로 영역 [top, bottom)(지판 칸 안 px)이 세로로 보이게 할 새 scrollTop. 이미 보이면 그대로.
+ * 위로 벗어나면 그 줄 위가 맨 위에, 아래로 벗어나면 그 줄 아래가 맨 아래에 오게 한다 (타브를 크게 해 지판이 칸보다 클 때)
+ */
+export function revealRowScroll(top: number, bottom: number, scrollTop: number, viewHeight: number): number {
+  if (!(viewHeight > 0)) return scrollTop;
+  if (top < scrollTop) return Math.max(0, top);
+  if (bottom > scrollTop + viewHeight) return Math.max(0, bottom - viewHeight);
+  return scrollTop;
+}
+
+/** 편집 때문에 커서 쪽으로 화면을 옮긴 뒤 재생선 따라가기를 쉬는 시간(ms) */
+export const PLAYHEAD_FOLLOW_HOLD_MS = 1500;
+
+/**
+ * 재생선 따라가기: 재생선이 화면 [start, start + span) 밖(오른쪽은 90%)이면 재생선이 왼쪽 10%에 오게 할 새 start, 아니면 undefined.
+ * 편집 직전에 커서를 보이려고 화면을 옮겼으면 holdUntil(ms)까지 쉰다 (옮긴 화면을 곧바로 재생선 쪽으로 되돌리지 않게)
+ */
+export function followPlayhead(playhead: number, start: number, span: number, now: number, holdUntil: number): number | undefined {
+  if (now < holdUntil || !(span > 0)) return undefined;
+  if (playhead < start || playhead > start + span * 0.9) return Math.max(0, playhead - span * 0.1);
+  return undefined;
+}

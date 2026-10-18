@@ -101,3 +101,19 @@ describe("타브 줄 옮겨 받기 (carryTabStrings)", () => {
     expect(carryTabStrings([note("a", 0, 1, 63, 1)], [note("x", 0, 1, 64), note("y", 1, 1, 63)]).map((n) => n.tabString)).toEqual([undefined, undefined]);
   });
 });
+
+describe("타브에서 고른 줄은 칠 수 있으면 지킨다 (두 자리 프렛 화음 입력)", () => {
+  const n = (id: string, pitch: number, tabString?: number): Note => ({ id, start: rat(0), dur: rat(1, 4), pitch, vol: 8, tie: "none", ...(tabString !== undefined ? { tabString } : {}) });
+  const at = (events: ReturnType<typeof assignTab>, id: string) => events[0]!.notes.find((x) => x.note.id === id)!.at;
+
+  it("E15(1번 줄)와 B1(2번 줄)을 같은 자리에 쳤으면 손을 넓게 벌려도 B1은 2번 줄 1프렛", () => {
+    const events = assignTab([n("e", 79, 1), n("b", 60, 2)], STANDARD_TUNING);
+    expect(at(events, "e")).toEqual({ string: 1, fret: 15 });
+    expect(at(events, "b")).toEqual({ string: 2, fret: 1 });
+  });
+
+  it("고른 줄이 없으면 전처럼 손 벌림이 적은 자리 (E15와 C4는 A줄 15)", () => {
+    const events = assignTab([n("e", 79), n("c", 60)], STANDARD_TUNING);
+    expect(at(events, "c")).toEqual({ string: 5, fret: 15 });
+  });
+});

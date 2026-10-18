@@ -158,6 +158,7 @@
   const PACK_FILES = ".dls,.sf2,.sf3";
   import Menu, { type MenuItem } from "./lib/Menu.svelte";
   import MmlKeyPad from "./lib/MmlKeyPad.svelte";
+  import MasterVolume from "./lib/MasterVolume.svelte";
   import AddScoreDialog from "./lib/AddScoreDialog.svelte";
   import HelpPopover from "./lib/HelpPopover.svelte";
   import Icon from "./lib/Icon.svelte";
@@ -186,7 +187,7 @@
   import OutputPanel from "./lib/OutputPanel.svelte";
   import OptimizePreview from "./lib/OptimizePreview.svelte";
   import { outputRows, previewRows, tempoAdvice } from "./lib/output";
-  import { placeChord, previousVolume, volumeForVelocity } from "./lib/midiInput";
+  import { notesEnd, placeChord, previousVolume, volumeForVelocity } from "./lib/midiInput";
   import { fillEditorTracks, oldestEditor, parseEditorCount, parseEditorMax, swapIntoEditors } from "./lib/editors";
   import { melodyTrackIds, peakPolyphony, scoreGroups, soundingAt, trackColors, type ColorScheme } from "./lib/scores";
   import PasteDialog from "./lib/PasteDialog.svelte";
@@ -210,7 +211,7 @@
   import { meterEditAt, meterTarget } from "./lib/meterTarget";
   import { dotFactor, toggleDot } from "./lib/dotLength";
   import { tabArpPick } from "./lib/arpeggioOptions";
-  import { VIDEO_DEFAULTS, lengthsFor, noteLengthOf, stepNoteLength, type BackgroundVideo, type EventKind, type EventLabel, type EventRef, type NoteLength, type Orientation, type RollTool } from "./lib/roll";
+  import { VIDEO_DEFAULTS, tempoChanges, lengthsFor, noteLengthOf, stepNoteLength, type BackgroundVideo, type EventKind, type EventLabel, type EventRef, type NoteLength, type Orientation, type RollTool } from "./lib/roll";
 
 
   const engine = new Engine();
@@ -322,6 +323,20 @@
   let videoName = $state("");
   /** 곡 없이 배경 영상만 재생 중. 곡을 재생하면 곡 시계로 넘어간다 */
   let videoPlay = $state(false);
+  /** 영상 속도 직접 재기 단계 (PianoRoll과 묶음) */
+  let speedStep = $state<0 | 1 | 2 | 3>(0);
+  /** 영상 속도 재기 결과 한 줄 */
+  let speedNote = $state("");
+  /** 속도 맞추기: 자동으로 재고, 못 재면 직접 재기로 넘어간다 */
+  async function matchVideoSpeed() {
+    speedNote = t("ui.videoSpeedMeasuring");
+    const ok = (await roll?.measureVideoSpeed()) ?? false;
+    if (ok && video?.speed) speedNote = t("ui.videoSpeedDone", { speed: Math.round(video.speed) });
+    else {
+      speedNote = t("ui.videoSpeedAutoFailed");
+      roll?.startSpeedPick();
+    }
+  }
 
   const KEYMAP_STORAGE = "mmlce.keymap";
   let keymap = $state.raw<KeymapSettings>(loadStored(KEYMAP_STORAGE, (raw) => parseSettings(parseJson(raw) ?? null)));
@@ -367,7 +382,8 @@
     // 프로젝트에 맞춰 둔 같은 이름 영상이면 그 맞춤값을 쓴다
     const saved = savedFits.video?.name === file.name ? savedFits.video : undefined;
     // 맞춤 설정은 영상을 바꿔도 이어 쓴다 (같은 채널 영상을 여러 개 찍을 때)
-    const keep = saved ?? (video ? { fit: video.fit, low: video.low, high: video.high, keyLine: video.keyLine, stretch: video.stretch } : VIDEO_DEFAULTS);
+    const keep: VideoFit | typeof VIDEO_DEFAULTS | Omit<VideoFit, "name" | "opacity" | "offset"> =
+      saved ?? (video ? { fit: video.fit, low: video.low, high: video.high, keyLine: video.keyLine, stretch: video.stretch, ...(video.fill === false ? { fill: false } : {}), ...(video.speed ? { speed: video.speed } : {}) } : VIDEO_DEFAULTS);
     video = {
       url: URL.createObjectURL(file),
       opacity: saved?.opacity ?? video?.opacity ?? 0.5,
@@ -378,8 +394,11 @@
       high: keep.high,
       keyLine: keep.keyLine,
       stretch: keep.stretch,
+      ...("fill" in keep && keep.fill === false ? { fill: false } : {}),
+      ...("speed" in keep && keep.speed ? { speed: keep.speed } : {}),
     };
     videoName = file.name;
+    speedNote = "";
   }
 
   /** 프로젝트·지난 작업에 적혀 있던 원곡·영상 맞춤값. 같은 이름 파일을 불러오면 쓴다 */
@@ -945,7 +964,7 @@
       : savedFits.reference;
     const vid: VideoFit | undefined =
       video && videoName
-        ? { name: videoName, opacity: video.opacity, offset: video.offset, fit: video.fit, low: video.low, high: video.high, keyLine: video.keyLine, stretch: video.stretch }
+        ? { name: videoName, opacity: video.opacity, offset: video.offset, fit: video.fit, low: video.low, high: video.high, keyLine: video.keyLine, stretch: video.stretch, ...(video.fill === false ? { fill: false } : {}), ...(video.speed ? { speed: video.speed } : {}) }
         : savedFits.video;
     return {
       ...(activeTrackId ? { activeTrackId } : {}),
@@ -1440,8 +1459,7 @@
     const active = s.tracks.find((tr) => tr.id === activeTrackId);
     if (!active) return;
     // 커서가 없으면 고른 트랙의 마지막 음 뒤
-    const lastEnd = active.notes.reduce((m, n) => Math.max(m, n.start.n / n.start.d + n.dur.n / n.dur.d), 0);
-    const at = editCursor() ?? asRat(lastEnd);
+    const at = editCursor() ?? notesEnd(active.notes);
     const dur = newNoteDur;
     const useVelocity = midiKeys.velocity;
     const changes = placeChord(s, groups, activeTrackId, at, dur, chord, (notes, where, vel) =>
@@ -1477,6 +1495,15 @@
 
   /** 타브 커서 자리 (타브 보기에서 Alt+B·Alt+M과 박자 바꾸기가 쓴다). 커서가 없거나 타브가 아니면 undefined */
   let tabCursor = $state.raw<Rat | undefined>(undefined);
+  /**
+   * 앱 명령(템포·마커·박자·아르페지오·편집 커서에서 재생)이 타브 커서 자리를 쓸 때는 이것만 부른다:
+   * 타브 보기면 커서 칸을 먼저 화면에 보이게 하고(타브의 편집 전 규칙과 같다) 타브 커서를 돌려준다. 타브가 아니면 undefined
+   */
+  function tabCursorForCommand(): Rat | undefined {
+    if (viewMode !== "tab") return undefined;
+    if (tabCursor) tab?.revealCursor();
+    return tabCursor;
+  }
   // 박자: 타브 보기면 타브 커서가 든 마디부터, 아니면 재생 커서가 든 마디부터, 둘 다 없으면 곡 처음부터 바꾼다
   const meterPos = $derived(song ? meterTarget(song.timeSig, viewMode, tabCursor, cursor === undefined ? undefined : editCursor()) : rat(0));
   const meterHere = $derived(song ? meterAt(song.timeSig, meterPos) : { at: rat(0), beats: 4, unit: 4 });
@@ -1492,7 +1519,7 @@
   /** 편집 커서(타브 보기면 타브 커서 먼저, 없으면 곡 처음) 자리 템포·마커 창. 그 자리에 템포가 있으면 고치기 */
   function openEventAtCursor(kind: EventKind) {
     if (!song) return;
-    const at = (viewMode === "roll" ? undefined : tabCursor) ?? editCursor() ?? rat(0);
+    const at = tabCursorForCommand() ?? editCursor() ?? rat(0);
     const existing = kind === "tempo" && song.tempo.some((e) => cmp(e.at, at) === 0);
     if (!showEvents) showEvents = true;
     eventEdit = { kind, at, existing };
@@ -1673,7 +1700,9 @@
 
   function changeMeter(beats: number, unit: number) {
     if (!history || !Number.isInteger(beats) || beats < 1 || beats > 32) return;
-    sync(history.run(setMeter(meterPos, beats, unit, t("ui.meter"))));
+    // 박자를 바꿀 자리: meterPos와 같은 규칙이고, 타브 커서를 쓰면 그 칸을 먼저 보인다
+    const pos = song ? meterTarget(song.timeSig, viewMode, tabCursorForCommand(), cursor === undefined ? undefined : editCursor()) : meterPos;
+    sync(history.run(setMeter(pos, beats, unit, t("ui.meter"))));
   }
 
   /** 음 목록 (보기 메뉴): 고른 트랙의 음을 키보드·화면 낭독기로 찾아 고르는 길 */
@@ -2002,7 +2031,8 @@
   function openArpeggio() {
     if (!song || !canArpeggio) return;
     if (viewMode === "tab") {
-      if (tabArp) arpeggio = { ...tabArp, ...(selectedNotes.length === 0 ? { source: "together" as const } : {}) };
+      const pick = song ? tabArpPick(song, activeTrackId, tabCursorForCommand(), selectedNotes) : undefined;
+      if (pick) arpeggio = { ...pick, ...(selectedNotes.length === 0 ? { source: "together" as const } : {}) };
       return;
     }
     if (activeTrackId) arpeggio = { trackId: activeTrackId, picked: selectedNotes };
@@ -2011,6 +2041,8 @@
     const target = arpeggio;
     const track = target && history?.song.tracks.find((tr) => tr.id === target.trackId);
     if (!history || !track) return;
+    // 타브 커서 자리로 연 아르페지오면 넣기 전에 그 칸을 보인다
+    if (target.source === "together" && selectedNotes.length === 0) tabCursorForCommand();
     // 잠근 트랙을 바꾸는 결과는 넣지 않는다 (계산에서 이미 빼지만, 다른 편집 명령과 같게 적용 직전에도 막는다)
     if (!result.changes.every((c) => editable(c.trackId))) return;
     sync(history.run(setNotesAndAddTracks(track.playerId, result.changes, result.newTracks, (n) => t("ui.newTrackName", { n }), t("ui.arpeggio"))));
@@ -2521,8 +2553,9 @@
         return true;
       case "play.fromEditCursor": {
         // 재생 위치를 편집 커서로 (타브는 타브 커서. 피아노롤은 편집 커서가 곧 재생 위치라 할 일이 없다)
-        if (viewMode !== "tab" || !tabCursor) return false;
-        setCursor(tabCursor);
+        const at = tabCursorForCommand();
+        if (!at) return false;
+        setCursor(at);
         if (playing) void play();
         return true;
       }
@@ -3007,10 +3040,7 @@
     </button>
     <span class="clock" title={t("ui.clockHelp")}>{clock(clockNow)} / {clock(totalSeconds)}</span>
     {#if tempoNow !== undefined}<span class="clock tempo" title={t("ui.tempoNowHelp")}>t{tempoNow}</span>{/if}
-    <label class="volume" title={t("ui.masterVolume")}>
-      <Icon name="volume" />
-      <input type="range" min="0" max={MASTER_MAX} step="0.05" value={masterVolume} oninput={(e) => setMasterVolume(Number(e.currentTarget.value))} />
-    </label>
+    <MasterVolume value={masterVolume} max={MASTER_MAX} title={t("ui.masterVolume")} onchange={setMasterVolume} />
   </div>
   <span class="spacer"></span>
   <Menu icon="help" title={t("ui.helpTitle")} align="right" items={helpMenu} />
@@ -3087,7 +3117,19 @@
       />
     {/if}
     {#if viewMode === "roll" && video}
-      <VideoBar bind:video bind:playing={videoPlay} onremove={removeVideo} onfitroll={() => roll?.fitVideo()} />
+      <VideoBar
+        bind:video
+        bind:playing={videoPlay}
+        onremove={removeVideo}
+        onfitroll={() => roll?.fitVideo()}
+        onmatchspeed={matchVideoSpeed}
+        onpickspeed={() => ((speedNote = ""), roll?.startSpeedPick())}
+        onpickforward={() => roll?.speedPickForward()}
+        onpickcancel={() => roll?.cancelSpeedPick()}
+        {speedStep}
+        {speedNote}
+        tempoChanges={!!song && tempoChanges(song.tempo)}
+      />
     {/if}
   </div>
 {:else}
@@ -3130,6 +3172,8 @@
           onpreview={rollPreview}
           bind:video
           bind:videoPlay
+          bind:speedStep
+          onspeedpicked={(speed) => (speedNote = speed ? t("ui.videoSpeedDone", { speed: Math.round(speed) }) : t("ui.videoSpeedBad"))}
           {pitchRange}
           look={appearance.note}
           {themeKey}
@@ -3169,6 +3213,8 @@
       {:else}
         <TabView
           {song}
+          wave={showWave && reference && referencePeaks ? { peaks: referencePeaks, offset: reference.offsetMs / 1000 } : undefined}
+          onwaveoffset={(sec) => setReferenceOffset(Math.round(sec * 1000))}
           octaveKey={(e) => {
             const c = commandFor(bindings, keyName(e) ?? "");
             return c === "note.octaveUp" || c === "note.octaveDown";

@@ -84,3 +84,20 @@ describe("editorStateKey", () => {
     );
   });
 });
+
+describe("영상 화면 채우기·잰 속도 (지시서 26)", () => {
+  const song = emptySong({ title: "", author: "", profileId: "mobile" });
+  const video = { name: "v.mp4", opacity: 0.5, offset: 0, fit: true, low: 21, high: 108, keyLine: 0.85, stretch: 2 };
+  it("끈 화면 채우기와 잰 속도를 되살린다", () => {
+    const state = parseEditorState({ video: { ...video, fill: false, speed: 120 } }, song);
+    expect(state.video).toMatchObject({ fill: false, speed: 120 });
+  });
+  it("적지 않았으면 (옛 파일) 채우기 켬·속도 없음으로 읽는다", () => {
+    const state = parseEditorState({ video }, song);
+    expect(state.video?.fill).toBeUndefined();
+    expect(state.video?.speed).toBeUndefined();
+  });
+  it("잘못된 속도는 버린다", () => {
+    expect(parseEditorState({ video: { ...video, speed: -3 } }, song).video?.speed).toBeUndefined();
+  });
+});

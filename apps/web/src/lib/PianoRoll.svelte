@@ -26,6 +26,7 @@
   } from "@mmlce/core";
   import { onMount, untrack } from "svelte";
   import Icon from "./Icon.svelte";
+  import { volumeLabels } from "./volumeLabels.svelte";
   import { fonts } from "./fonts.svelte";
   import { noteClipboard } from "./noteClipboard.svelte";
   import { rollFlow } from "./rollFlow.svelte";
@@ -39,9 +40,13 @@
   import { LANE_MAX, LANE_MIN, laneThickness, saveVolumeLane, volumeLane } from "./volumeLane.svelte";
   import { laneItems, type LaneTrack } from "./volumeLaneEdit";
   import { LaneGesture } from "./laneGesture.svelte";
+  import { fallShift, fallSpeed, SPEED_FRAME_GAP, SPEED_FRAME_WIDTH, SPEED_PICK_GAP, speedPickLost, speedPickPress, toGray } from "./videoSpeed";
   import {
+    bpmAt,
     clampPitchView,
     dragKeyLine,
+    fillStretch,
+    matchRollZoom,
     fitVideoKeys,
     fromScreen,
     keyAt,
@@ -102,6 +107,10 @@
     video?: BackgroundVideo | undefined;
     /** 곡 없이 영상만 재생 중 (음이 없어도 영상을 보며 찍을 때). 영상이 끝나면 false로 돌아온다 */
     videoPlay?: boolean;
+    /** 영상 속도 직접 재기 단계: 0 아님, 1 첫 점 누르기, 2 "0.5초 앞으로" 누르기, 3 같은 음 다시 누르기 */
+    speedStep?: 0 | 1 | 2 | 3;
+    /** 직접 재기가 끝났을 때: 잰 속도(원본 영상 px/초), 두 점이 맞지 않으면 undefined */
+    onspeedpicked?: ((speed: number | undefined) => void) | undefined;
     /** 원곡 파형 (마디 줄 아래 띠). offset = 원곡 어긋남(초, 원곡이 늦으면 양수) */
     wave?: { readonly peaks: Peaks; readonly offset: number } | undefined;
     /** 음 모양 */
@@ -167,7 +176,7 @@
     onclearlane?: () => void;
   }
 
-  let { cursor, loop, oncursor, onloop, song: fullSong, activeTrackId, orientation, division, playhead, onnotes, onselecttrack, onpicknote, onpreview, onseek, showEvents = false, video = $bindable(), videoPlay = $bindable(false), pitchRange = [12, 119], wave, look, themeKey = "", seconds, colors, tool = "pen", noteDur, volume, onvolume, lightKeys = false, canonicalOf, memory, onmemory, work, visibleTrackIds, selectMove = false, locked, pickOthers = true, onevent, oneventmove, onalignbar, onwaveoffset, pickedEvent, onpickevent, ontempowheel, laneTrackIds, melodyIds, onvolumes, onclearlane }: Props =
+  let { cursor, loop, oncursor, onloop, song: fullSong, activeTrackId, orientation, division, playhead, onnotes, onselecttrack, onpicknote, onpreview, onseek, showEvents = false, video = $bindable(), videoPlay = $bindable(false), speedStep = $bindable(0), onspeedpicked, pitchRange = [12, 119], wave, look, themeKey = "", seconds, colors, tool = "pen", noteDur, volume, onvolume, lightKeys = false, canonicalOf, memory, onmemory, work, visibleTrackIds, selectMove = false, locked, pickOthers = true, onevent, oneventmove, onalignbar, onwaveoffset, pickedEvent, onpickevent, ontempowheel, laneTrackIds, melodyIds, onvolumes, onclearlane }: Props =
     $props();
 
   /** 레이어: 고른 트랙이 든 보기만 그리고 다루는 곡 (나머지 트랙은 롤에서 보이지도 눌리지도 않는다) */
@@ -388,6 +397,153 @@
     if (handleDrag?.id === e.pointerId) handleDrag = undefined;
   }
 
+  // 화면 채우기: 건반 윗선부터 영상 위 끝까지가 롤 시간 축의 보이는 길이 전체를 덮게 시간 늘이기를 자동으로 정한다.
+  // 롤 크기·방향·건반 맞춤 범위가 바뀌면 다시 계산한다 (늘이기 칸은 이 값을 보여 준다)
+  $effect(() => {
+    if (!video?.fit || video.fill === false || !videoSize) return;
+    const stretch = fillStretch(view, video, videoSize[0], videoSize[1]);
+    if (Math.abs(stretch - video.stretch) > 1e-6) untrack(() => video && (video = { ...video, stretch }));
+  });
+
+  /** 롤 가로 확대 한도 (휠·핀치와 같다) */
+  const clampZoom = (z: number) => Math.min(2000, Math.max(5, z));
+
+  // 속도 맞추기: 잰 영상 속도(원본 px/초) × 시간 축 배율 = 화면에서 떨어지는 속도가 롤의 px/초가 되게 롤 가로 확대를 둔다.
+  // 롤 크기(건반 칸)나 늘이기 배율이 바뀌면 다시 맞춘다 (가로 확대·화면 자리가 바뀐 것으로는 돌지 않는다). 템포는 지금 화면 시작 자리의 것
+  $effect(() => {
+    if (!video?.fit || !video.speed || !videoSize) return;
+    const keys = Math.max(1, video.high + 1 - video.low);
+    const time = ((keys * pxPerKey) / videoSize[0]) * video.stretch;
+    const speed = video.speed;
+    untrack(() => {
+      const zoom = clampZoom(matchRollZoom(speed * time, bpmAt(song.tempo, start)));
+      if (Math.abs(zoom - pxPerWhole) > 1e-6) pxPerWhole = zoom;
+    });
+  });
+
+  /**
+   * 영상을 seconds초로 옮기고 그 프레임이 준비될 때까지 기다린다 (오래 걸리면 그냥 넘어간다).
+   * 실제로 보이는 프레임의 시각을 돌려준다: 옮긴 시각은 프레임 사이일 수 있어(30fps면 0.25초 = 7.5프레임)
+   * 브라우저가 알려 주면(requestVideoFrameCallback) 그 프레임 시각, 아니면 옮긴 시각
+   */
+  function seekVideo(el: HTMLVideoElement, seconds: number): Promise<number> {
+    const want = Math.max(0, seconds);
+    return new Promise((resolve) => {
+      let shown: number | undefined;
+      const frames = el as HTMLVideoElement & { requestVideoFrameCallback?: (cb: (now: number, meta: { mediaTime: number }) => void) => number };
+      const done = () => {
+        clearTimeout(timer);
+        el.removeEventListener("seeked", onseeked);
+        resolve(shown ?? want);
+      };
+      // 프레임 시각을 기다리되, 안 오면 seeked 뒤 잠깐만 기다린다
+      const onseeked = () => {
+        if (!frames.requestVideoFrameCallback || shown !== undefined) done();
+        else setTimeout(done, 300);
+      };
+      const timer = setTimeout(done, 2000);
+      frames.requestVideoFrameCallback?.((_, meta) => {
+        shown = meta.mediaTime;
+        done();
+      });
+      el.addEventListener("seeked", onseeked);
+      el.currentTime = want;
+    });
+  }
+
+  /**
+   * 속도 맞추기(자동): 멈춘 영상의 지금 프레임과 SPEED_FRAME_GAP초 뒤 프레임을 줄인 회색조로 그려, 건반 윗선 위쪽 구간이
+   * 몇 px 내려왔는지 상호상관으로 찾는다. 찾으면 영상 설정에 속도를 적고(롤 확대는 위 효과가 맞춘다) true.
+   * 움직임이 없거나 상관이 낮으면 false (직접 재기로 넘어간다). 다 재면 원래 장면으로 되돌린다
+   */
+  export async function measureVideoSpeed(): Promise<boolean> {
+    const el = videoEl;
+    if (!el || !video?.fit || !videoSize || seconds !== undefined) return false;
+    videoPlay = false;
+    const [vw, vh] = videoSize;
+    const w = SPEED_FRAME_WIDTH;
+    const h = Math.max(8, Math.round((w * vh) / vw));
+    const rows = Math.max(4, Math.floor(h * video.keyLine));
+    const c = document.createElement("canvas");
+    c.width = w;
+    c.height = h;
+    const g = c.getContext("2d", { willReadFrequently: true });
+    if (!g) return false;
+    const grab = () => {
+      g.drawImage(el, 0, 0, w, h);
+      return toGray(g.getImageData(0, 0, w, rows).data, w, rows);
+    };
+    const t0 = el.currentTime;
+    try {
+      if (!el.paused) el.pause();
+      // 두 프레임 모두 옮긴 뒤 그 프레임 시각을 받아, 실제 두 프레임 사이 시간으로 나눈다
+      const at0 = await seekVideo(el, t0);
+      const a = grab();
+      const at1 = await seekVideo(el, t0 + SPEED_FRAME_GAP);
+      const b = grab();
+      const found = fallShift(a, b, w, rows);
+      if (!found || !video || !(at1 > at0)) return false;
+      video = { ...video, speed: fallSpeed(found.shift, vw / w, at1 - at0) };
+      return true;
+    } catch {
+      return false;
+    } finally {
+      await seekVideo(el, t0);
+    }
+  }
+
+  /** 직접 재기: 누른 화면 자리를 영상 원본의 세로 좌표(px, 위가 0)로 */
+  function videoYAt(e: PointerEvent): number | undefined {
+    if (!video || !videoSize) return undefined;
+    const m = videoMatrix(view, video, videoSize[0], videoSize[1]);
+    const rect = canvas.getBoundingClientRect();
+    if (orientation === "horizontal") return m[2] === 0 ? undefined : (e.clientX - rect.left - m[4]) / m[2];
+    return m[3] === 0 ? undefined : (e.clientY - rect.top - m[5]) / m[3];
+  }
+  /** 직접 재기를 시작한 화면 자리(끝나면 되돌린다)와 그때의 영상, 첫 점 */
+  let pickFrom: { start: number; url: string; y?: number } | undefined;
+  /** 직접 재기 시작: 멈춘 화면에서 영상 속 한 음의 앞 끝을 누른다 */
+  export function startSpeedPick() {
+    if (!video?.fit || !videoSize) return;
+    // 하던 편집 동작(끌기·고르기 상자 등)은 끝내고 재기로 들어간다
+    cancelGesture();
+    videoPlay = false;
+    pickFrom = { start, url: video.url };
+    speedStep = 1;
+  }
+  // 재는 중에 영상을 지우거나 다른 영상으로 바꾸거나 건반 맞춤을 끄면 재기를 그만둔다 (한 곳에서 지킨다).
+  // 그러지 않으면 단계가 남아 롤 누르기가 계속 재기로만 가고, 취소 단추도 영상 칸과 함께 사라진다
+  $effect(() => {
+    if (speedPickLost(speedStep, pickFrom?.url, video)) untrack(() => cancelSpeedPick());
+  });
+  /** 직접 재기: 영상(과 롤)을 0.5초 앞으로 */
+  export function speedPickForward() {
+    if (speedStep !== 2) return;
+    start = Math.max(0, secondsToWhole(song.tempo, positionToSeconds(song.tempo, rat(Math.round(start * 960), 960)) + SPEED_PICK_GAP));
+    speedStep = 3;
+  }
+  export function cancelSpeedPick() {
+    if (pickFrom) start = pickFrom.start;
+    pickFrom = undefined;
+    speedStep = 0;
+  }
+  /** 직접 재기 중 롤을 누름: 첫 점, 0.5초 뒤 같은 음의 점 ("0.5초 앞으로"를 기다리는 동안의 누름은 아무것도 하지 않는다) */
+  function speedPickDown(e: PointerEvent) {
+    if (!pickFrom) return;
+    const r = speedPickPress(speedStep, pickFrom.y, videoYAt(e));
+    if (r.done) {
+      cancelSpeedPick();
+      const speed = r.done.speed;
+      if (speed !== undefined && video) video = { ...video, speed };
+      onspeedpicked?.(speed);
+      return;
+    }
+    if (r.step !== speedStep) {
+      pickFrom = { ...pickFrom, ...(r.firstY !== undefined ? { y: r.firstY } : {}) };
+      speedStep = r.step;
+    }
+  }
+
   /** 건반 맞춤이 켜져 있고 영상 크기를 알면 원래 크기 + 행렬로 깐다 */
   const videoStyle = $derived.by(() => {
     if (!video?.fit || !videoSize) return undefined;
@@ -567,6 +723,7 @@
       eventDrag: eventPress?.live && eventPress.label && movable(eventPress.label) ? { label: eventPress.label, to: eventPress.to } : undefined,
       lightKeys,
       canonicalOf,
+      volumeLabels: volumeLabels.mode,
       lane: laneReserved > 0 ? { ...lane.draw(laneList), label: t("ui.laneName") } : undefined,
       css: cssVar,
     });
@@ -753,6 +910,12 @@
   function onpointerdown(e: PointerEvent) {
     // 펜·터치: 길게 누르거나 끌 때 브라우저가 글자 고르기·복사를 하지 않게
     if (e.pointerType !== "mouse") e.preventDefault();
+    // 영상 속도 직접 재기 중이면 누른 자리는 음을 찍지 않고 재기에 쓴다
+    // 재는 중이면 어느 단계든 보통 편집(음 넣기·고르기)으로 가지 않는다
+    if (speedStep !== 0) {
+      speedPickDown(e);
+      return;
+    }
     if (pinch.down(e, canvasPoint(e))) {
       cancelGesture();
       pinchStart = { pxPerWhole, pxPerKey, start, edgePitch };

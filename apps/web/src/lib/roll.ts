@@ -1,4 +1,4 @@
-import { cmp, defaultLengthLimit, isGameLength, mul, rat, toFloat, type LengthLimit, type Rat } from "@mmlce/core";
+import { cmp, DEFAULT_BPM, defaultLengthLimit, isGameLength, mul, normalizeTempo, rat, toFloat, type LengthLimit, type Rat, type TempoEvent } from "@mmlce/core";
 
 /**
  * 피아노롤 좌표 계산. 가로는 시간이 오른쪽으로 흐르고 건반이 왼쪽,
@@ -147,10 +147,63 @@ export interface BackgroundVideo {
   readonly stretch: number;
   /** 롤 위에 맞춤 손잡이(왼쪽 끝·오른쪽 끝·건반 윗선)를 보인다 */
   readonly handles?: boolean;
+  /**
+   * 화면 채우기: stretch를 자동으로 정해 건반 윗선부터 영상 위 끝까지가 롤 시간 축의 보이는 길이 전체를 덮게 한다 (fillStretch).
+   * 없으면 켬. 끄면 stretch(시간 늘이기)를 직접 정한다
+   */
+  readonly fill?: boolean;
+  /** 잰 영상 속 음이 떨어지는 속도 (원본 영상 px/초). 있으면 롤 가로 확대를 이 속도에 맞춘다 (matchRollZoom) */
+  readonly speed?: number;
 }
 
 /** 88건반 떨어지는 음 영상에 흔한 값 */
-export const VIDEO_DEFAULTS = { fit: true, low: 21, high: 108, keyLine: 0.85, stretch: 1 } as const;
+export const VIDEO_DEFAULTS = { fit: true, low: 21, high: 108, keyLine: 0.85, stretch: 1, fill: true } as const;
+
+/** 시간 늘이기(stretch)로 쓸 수 있는 범위 */
+export const STRETCH_MIN = 0.1;
+export const STRETCH_MAX = 10;
+
+/**
+ * 화면 채우기: 건반 윗선부터 영상 위 끝까지(영상 높이 × keyLine)가 롤 시간 축의 보이는 길이 전체
+ * (가로 롤: 건반 띠 오른쪽 끝 ~ 롤 오른쪽 끝, 세로 롤: 건반 띠 위 ~ 롤 위 끝)를 덮게 하는 stretch.
+ * 영상의 건반 쪽 끝은 그대로 건반 선에 붙고 위쪽만 늘어난다. STRETCH_MIN ~ STRETCH_MAX로 자른다
+ */
+export function fillStretch(v: RollView, video: Pick<BackgroundVideo, "low" | "high" | "keyLine">, videoWidth: number, videoHeight: number): number {
+  const keys = Math.max(1, video.high + 1 - video.low);
+  const along = (keys * v.pxPerKey) / Math.max(1, videoWidth);
+  const above = video.keyLine * videoHeight * along;
+  if (!(above > 0)) return STRETCH_MAX;
+  return Math.min(STRETCH_MAX, Math.max(STRETCH_MIN, axes(v).time / above));
+}
+
+/** 영상 원본 px → 롤 화면 px의 시간 축 배율 (videoMatrix의 time) */
+export function videoTimeScale(v: RollView, video: Pick<BackgroundVideo, "low" | "high" | "stretch">, videoWidth: number): number {
+  const keys = Math.max(1, video.high + 1 - video.low);
+  return ((keys * v.pxPerKey) / Math.max(1, videoWidth)) * video.stretch;
+}
+
+/**
+ * 롤 가로 확대(온음표 하나의 px). 화면에서 영상 속 음이 떨어지는 속도(화면 px/초)가 롤의 px/초가 되게:
+ * 온음표 하나 = 240 / bpm초이므로 pxPerWhole = 화면 px/초 × 240 / bpm
+ */
+export function matchRollZoom(screenPxPerSec: number, bpm: number): number {
+  return (screenPxPerSec * 240) / Math.max(1e-6, bpm);
+}
+
+/** 곡 위치(온음표 단위)의 템포 (bpm) */
+export function bpmAt(tempo: readonly TempoEvent[], whole: number): number {
+  let bpm = DEFAULT_BPM;
+  for (const e of normalizeTempo(tempo)) {
+    if (toFloat(e.at) > whole) break;
+    bpm = e.bpm;
+  }
+  return bpm;
+}
+
+/** 곡 안에서 템포가 바뀌는지 (영상 속도 맞추기는 한 템포로만 맞는다) */
+export function tempoChanges(tempo: readonly TempoEvent[]): boolean {
+  return new Set(normalizeTempo(tempo).map((e) => e.bpm)).size > 1;
+}
 
 /**
  * 영상 픽셀(가로 = 음, 세로 = 시간, 아래가 건반)을 롤 화면으로 옮기는 CSS matrix.

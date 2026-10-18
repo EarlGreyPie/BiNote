@@ -289,18 +289,6 @@ input[type="range"] {
 .topbar .menu-button.on {
   background: color-mix(in srgb, var(--accent) 18%, transparent);
 }
-.topbar .volume {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-.topbar .volume input {
-  width: 90px;
-}
-/* 음량은 재생 묶음 안, 템포 옆에 둔다 */
-.playgroup .volume {
-  margin-left: 4px;
-}
 .playgroup {
   display: flex;
   align-items: center;
@@ -636,8 +624,5 @@ input[type="range"] {
   }
   .work.empty {
     display: grid;
-  }
-  .topbar .volume {
-    display: none;
   }
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { assignTab, emptySong, rat, STANDARD_TUNING, type Note, type Song } from "@mmlce/core";
-import { fretFromKeys, placeTabNote, removeTabNote, setTabNoteLength, tieTabNote } from "../src/lib/tabInput";
+import { fretFromKeys, placeTabNote, typeFretDigit, type DigitNote, removeTabNote, setTabNoteLength, tieTabNote } from "../src/lib/tabInput";
 
 function song(): Song {
   const base = emptySong({ title: "", author: "", profileId: "mobile" });
@@ -132,3 +132,82 @@ describe("타브에서 & 사슬 가운데 음 (beta.11, #98 Codex 점검)", () =
   });
 });
 
+
+describe("두 자리 프렛으로 화음을 줄마다 넣기 (E♭maj7 15·15·15·13)", () => {
+  /** TabView의 숫자 키 흐름을 그대로 따라 한다: 숫자 버퍼, 첫 숫자 음 기억, 커서 줄 음 찾기, 고른 줄 적기 */
+  function typer(maxTracks = 3) {
+    const base = emptySong({ title: "", author: "", profileId: "mobile" });
+    const track = (id: string) => ({ id, playerId: "p", name: id, color: "", role: "free" as const, mute: false, solo: false, notes: [] as Note[], spelling: {} });
+    let s: Song = { ...base, players: [{ id: "p", name: "", instrument: { canonical: "folk-guitar" } }], tracks: [track("t1"), track("t2"), track("t3")] };
+    let digits = "";
+    let memo: DigitNote | undefined;
+    let full = false;
+    let n = 0;
+    const key = (string: number, digit: string, waited = false) => {
+      if (waited) digits = "";
+      const cursor = { at: rat(0), string };
+      const { fret, buffer, replaceId } = typeFretDigit(digits, memo, digit, cursor, STANDARD_TUNING.maxFret);
+      digits = buffer;
+      const all = s.tracks.flatMap((t) => t.notes);
+      const onString = assignTab(all, STANDARD_TUNING)[0]?.notes.find((x) => x.at?.string === string)?.note;
+      const replace = (replaceId ? all.find((x) => x.id === replaceId) : undefined) ?? onString;
+      const pitch = STANDARD_TUNING.strings[string - 1]! + fret;
+      const edit = placeTabNote(s, s.tracks.map((t) => t.id), "t1", rat(0), rat(1, 4), pitch, replace, undefined, maxTracks);
+      if (edit.full) {
+        full = true;
+        return;
+      }
+      // 같은 밀리초에 만든 음 id가 겹치지 않게 시험에서만 새 id를 붙인다
+      const fresh = (notes: readonly Note[]) => notes.map((x) => (x.id === edit.noteId && !replace ? { ...x, id: `k${++n}` } : x));
+      const id = replace ? edit.noteId : `k${n + 1}`;
+      const stamp = (notes: readonly Note[]) => fresh(notes).map((x) => (x.id === id ? { ...x, tabString: string } : x));
+      if (edit.newTrack) s = { ...s, tracks: [...s.tracks, { ...track(`t${s.tracks.length + 1}`), notes: stamp(edit.newTrack.notes) }] };
+      else s = { ...s, tracks: s.tracks.map((t) => ({ ...t, notes: stamp(edit.changes.find((c) => c.trackId === t.id)?.notes ?? t.notes) })) };
+      memo = id ? { id, at: cursor.at, string } : undefined;
+    };
+    const pitches = () => s.tracks.map((t) => `${t.id}:[${t.notes.map((x) => x.pitch).join(",")}]`).join(" ");
+    const strings = () => assignTab(s.tracks.flatMap((t) => t.notes), STANDARD_TUNING)[0]!.notes.map((x) => `${x.note.pitch}→${x.at?.string}:${x.at?.fret}`).sort();
+    return { key, pitches, strings, isFull: () => full };
+  }
+
+  it("친 줄과 트랙에 그대로 들어가고 음이 하나 더 생기지 않는다", () => {
+    const t = typer();
+    t.key(1, "1"); t.key(1, "5");
+    t.key(2, "1"); t.key(2, "5");
+    // 전에는 여기서 t1:[79] t2:[60] t3:[74], 60은 5번 줄 15로 밀려 보였다
+    expect(t.pitches()).toBe("t1:[79] t2:[74] t3:[]");
+    t.key(3, "1"); t.key(3, "5");
+    expect(t.pitches()).toBe("t1:[79] t2:[74] t3:[70]");
+    expect(t.strings()).toEqual(["70→3:15", "74→2:15", "79→1:15"]);
+    // D줄 13(63)은 넷째 음: 트랙 한도 3이면 넣지 않고 알린다 (지금 규칙 그대로)
+    t.key(4, "1");
+    expect(t.isFull()).toBe(true);
+    expect(t.pitches()).toBe("t1:[79] t2:[74] t3:[70]");
+  });
+
+  it("한도 안이면 넷째 음은 트랙을 더해 D줄 13", () => {
+    const t = typer(4);
+    for (const s of [1, 2, 3]) {
+      t.key(s, "1");
+      t.key(s, "5");
+    }
+    t.key(4, "1"); t.key(4, "3");
+    expect(t.pitches()).toBe("t1:[79] t2:[74] t3:[70] t4:[63]");
+    expect(t.strings()).toContain("63→4:13");
+  });
+
+  it("버퍼 시간이 지나 둘째 숫자가 따로 오면 그 줄 음을 5프렛으로 바꾼다", () => {
+    const t = typer();
+    t.key(2, "1");
+    t.key(2, "5", true);
+    expect(t.pitches()).toBe("t1:[64] t2:[] t3:[]");
+    expect(t.strings()).toEqual(["64→2:5"]);
+  });
+
+  it("두 자리 사이 커서를 옮기면 기억을 버리고 새 자리에 5", () => {
+    const t = typer();
+    t.key(2, "1");
+    t.key(3, "5");
+    expect(t.strings()).toEqual(["60→2:1", "60→3:5"]);
+  });
+});

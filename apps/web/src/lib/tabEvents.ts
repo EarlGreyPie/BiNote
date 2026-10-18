@@ -1,4 +1,5 @@
 import { cmp, type Rat } from "@mmlce/core";
+import { WAVE_SIZE } from "./waveDraw";
 
 /** 타브 변속 줄 글자 종류 (피아노롤 이벤트 줄과 같다) */
 export type TabEventKind = "tempo" | "meter" | "marker";
@@ -11,8 +12,17 @@ export interface TabEventItem {
   readonly id?: string;
 }
 
-/** 타브 위쪽 둘째 줄의 변속 글자 하나: 종류, 원래 곡 위치(분수), 글자, 그린 가로 범위(px), 마커 id */
+/** 변속 줄의 칸: 0 = 위 칸(템포), 1 = 아래 칸(박자·마커). 피아노롤 이벤트 줄과 같은 순서 */
+export type TabEventRow = 0 | 1;
+
+/** 글자 종류가 놓이는 칸 */
+export function tabEventRowOf(kind: TabEventKind): TabEventRow {
+  return kind === "tempo" ? 0 : 1;
+}
+
+/** 타브 위쪽 변속 줄의 글자 하나: 종류, 원래 곡 위치(분수), 글자, 칸, 그린 가로 범위(px), 마커 id */
 export interface TabEventSpot extends TabEventItem {
+  readonly row: TabEventRow;
   readonly left: number;
   readonly right: number;
 }
@@ -27,8 +37,9 @@ export function tabMarkerText(label: string): string {
 }
 
 /**
- * 템포·박자·마커 글자를 놓을 자리. 바뀌는 자리(xOf) 조금 오른쪽에 쓰고, 같은 자리에 여럿이 함께 있어
- * 앞 글자와 겹치면 옆으로 이어 쓴다. 위치는 원래 분수 그대로 들고 있는다 (누를 때 실수로 되돌려 찾지 않게)
+ * 템포·박자·마커 글자를 놓을 자리. 템포는 위 칸, 박자·마커는 아래 칸에 바뀌는 자리(xOf) 조금 오른쪽에 쓰고,
+ * 같은 칸에서 앞 글자와 겹치면 옆으로 이어 쓴다 (칸이 다르면 같은 자리라도 위아래로 놓여 밀지 않는다).
+ * 위치는 원래 분수 그대로 들고 있는다 (누를 때 실수로 되돌려 찾지 않게)
  */
 export function layoutTabEvents(
   items: readonly TabEventItem[],
@@ -36,27 +47,22 @@ export function layoutTabEvents(
   widthOf: (text: string) => number,
 ): TabEventSpot[] {
   const spots: TabEventSpot[] = [];
-  let lastRight = -Infinity;
+  const lastRight = [-Infinity, -Infinity];
   for (const e of [...items].sort((a, b) => cmp(a.at, b.at))) {
-    const left = Math.max(xOf(e.at) + 3, lastRight + 4);
+    const row = tabEventRowOf(e.kind);
+    const left = Math.max(xOf(e.at) + 3, lastRight[row]! + 4);
     const right = left + widthOf(e.text);
-    spots.push({ ...e, left, right });
-    lastRight = right;
+    spots.push({ ...e, row, left, right });
+    lastRight[row] = right;
   }
   return spots;
 }
 
-/** 가로 x(px)에 그린 글자 (글자 양옆 2px까지). 없으면 undefined */
-export function tabEventAt(spots: readonly TabEventSpot[], x: number): TabEventSpot | undefined {
-  return spots.find((s) => x >= s.left - 2 && x <= s.right + 2);
+/** row 칸의 가로 x(px)에 그린 글자 (글자 양옆 2px까지). 없으면 undefined */
+export function tabEventAt(spots: readonly TabEventSpot[], x: number, row: TabEventRow): TabEventSpot | undefined {
+  return spots.find((s) => s.row === row && x >= s.left - 2 && x <= s.right + 2);
 }
 
-/**
- * 변속 글자 칸 (캔버스 세로 px). 줄 간격(타브 크기)과 상관없이 늘 이 자리에 그린다:
- * top은 글자 칸 위(창 위치 기준), baseline은 글자 기준선, bottom은 기준선 아래 글자 끝.
- * 누르는 범위는 top보다 조금 위(마디 번호 줄 아래)부터 bottom 앞까지다
- */
-export const TAB_EVENT_TEXT = { top: 22, baseline: 33, bottom: 37 } as const;
 /**
  * 맨 위 마디 번호 줄(눈금자) 높이(px). 피아노롤 눈금자처럼 누르면 재생 위치, 끌면 반복 구간.
  * 변속 줄은 이 아래부터다
@@ -64,16 +70,39 @@ export const TAB_EVENT_TEXT = { top: 22, baseline: 33, bottom: 37 } as const;
 export const TAB_RULER = 20;
 /** 마디 번호 글자 기준선 */
 export const TAB_RULER_BASELINE = 14;
-const BAND_TOP = TAB_RULER;
+/** 변속 줄 한 칸 높이(px). 위 칸 템포, 아래 칸 박자·마커 */
+export const TAB_EVENT_ROW_H = 15;
 
 /**
- * 누른 자리(px, py)가 변속 줄 쪽인지 (아니면 지판 쪽). 첫 줄(firstLine) 프렛 숫자는 위로 fontPx 가까이 올라오므로,
- * 타브를 크게 해 그 칸과 겹치는 자리는 글자가 있는 곳만 변속 쪽으로 보내고 빈 곳은 첫 줄을 누르게 남긴다
+ * row 칸의 글자 자리 (캔버스 세로 px). 줄 간격(타브 크기)과 상관없이 늘 이 자리에 그린다:
+ * top은 글자 칸 위(창 위치 기준), baseline은 글자 기준선, bottom은 기준선 아래 글자 끝.
+ * 위 칸을 누르는 범위는 top보다 조금 위(마디 번호 줄 아래)부터 아래 칸 top 앞까지, 아래 칸은 그다음부터 bottom 앞까지다
  */
+export function tabEventText(row: TabEventRow): { readonly top: number; readonly baseline: number; readonly bottom: number } {
+  const d = row * TAB_EVENT_ROW_H;
+  return { top: 22 + d, baseline: 33 + d, bottom: 37 + d };
+}
+
+/** 변속 줄 아래 끝 (아래 칸 글자 끝) */
+export const TAB_EVENT_BOTTOM = tabEventText(1).bottom;
+/** 첫 줄(1번 줄) 선의 세로 자리: 변속 줄 아래에 첫 줄 숫자(위로 올라오는 글자)가 들어갈 틈을 둔다 */
+export const TAB_TOP = TAB_EVENT_BOTTOM + 11;
+
+/**
+ * 누른 자리(px, py)가 변속 줄의 몇째 칸인지 (undefined = 마디 번호 줄이나 지판 쪽). 첫 줄(firstLine) 프렛 숫자는
+ * 위로 fontPx 가까이 올라오므로, 타브를 크게 해 그 숫자와 겹치는 자리는 그 칸에 글자가 있는 곳만 변속 쪽으로 보내고
+ * 빈 곳은 첫 줄을 누르게 남긴다
+ */
+export function tabEventRow(spots: readonly TabEventSpot[], px: number, py: number, firstLine: number, fontPx: number): TabEventRow | undefined {
+  if (py < TAB_RULER || py >= TAB_EVENT_BOTTOM) return undefined;
+  const row: TabEventRow = py < tabEventText(1).top ? 0 : 1;
+  if (py < firstLine - fontPx) return row;
+  return tabEventAt(spots, px, row) !== undefined ? row : undefined;
+}
+
+/** 누른 자리(px, py)가 변속 줄 쪽인지 (아니면 지판 쪽). 규칙은 tabEventRow */
 export function inTabEventBand(spots: readonly TabEventSpot[], px: number, py: number, firstLine: number, fontPx: number): boolean {
-  if (py < BAND_TOP || py >= TAB_EVENT_TEXT.bottom) return false;
-  if (py < firstLine - fontPx) return true;
-  return tabEventAt(spots, px) !== undefined;
+  return tabEventRow(spots, px, py, firstLine, fontPx) !== undefined;
 }
 
 /**
@@ -93,13 +122,36 @@ export function fretCenter(x: number, width: number): number {
   return fretBoxLeft(x) + 2 + width / 2;
 }
 
-/** 누른 칸: 마디 번호 줄(재생 위치·반복 구간) / 변속 줄(템포·박자·마커) / 지판 */
-export type TabZone = "ruler" | "event" | "fret";
+/** 원곡 파형 띠 위쪽 끝 (변속 줄 두 칸 바로 아래). 띠 높이는 피아노롤과 같은 WAVE_SIZE */
+export const TAB_WAVE_TOP = TAB_EVENT_BOTTOM;
 
-/** 누른 자리(px, py)가 어느 칸인지. 변속 줄과 첫 줄 프렛 숫자가 겹치는 자리는 inTabEventBand 규칙(글자 위만 변속 쪽) */
-export function tabZone(spots: readonly TabEventSpot[], px: number, py: number, firstLine: number, fontPx: number): TabZone {
+/** 첫 줄 자리. 파형 띠를 보이면 띠 높이만큼 아래 */
+export function tabTop(wave: boolean): number {
+  return TAB_TOP + (wave ? WAVE_SIZE : 0);
+}
+
+/** 누른 칸: 마디 번호 줄(재생 위치·반복 구간) / 변속 위 칸(템포) / 변속 아래 칸(박자·마커) / 원곡 파형 띠 / 지판 */
+export type TabZone = "ruler" | "tempo" | "meter" | "wave" | "fret";
+
+/**
+ * 누른 자리(px, py)가 어느 칸인지. 변속 줄과 첫 줄 프렛 숫자가 겹치는 자리는 tabEventRow 규칙(글자 위만 변속 쪽).
+ * 파형 띠(wave일 때만)는 변속 줄 아래 [TAB_WAVE_TOP, + WAVE_SIZE). 타브를 크게 해 첫 줄 숫자가 띠까지 올라오면 그 자리는 첫 줄을 누르게 남긴다
+ */
+export function tabZone(spots: readonly TabEventSpot[], px: number, py: number, firstLine: number, fontPx: number, wave = false): TabZone {
   if (py < TAB_RULER) return "ruler";
-  return inTabEventBand(spots, px, py, firstLine, fontPx) ? "event" : "fret";
+  const row = tabEventRow(spots, px, py, firstLine, fontPx);
+  if (row !== undefined) return row === 0 ? "tempo" : "meter";
+  if (wave && py >= TAB_WAVE_TOP && py < TAB_WAVE_TOP + WAVE_SIZE && py < firstLine - fontPx) return "wave";
+  return "fret";
+}
+
+/**
+ * 변속 줄 row 칸의 x를 두 번 눌렀을 때(터치는 길게) 할 일: 그 칸의 글자 위면 그것을 고치고,
+ * 빈 곳이면 위 칸은 새 템포, 아래 칸은 새 마커 (피아노롤 이벤트 줄과 같다. 박자는 박자 글자나 도구줄 박자 칸으로 바꾼다)
+ */
+export function tabEventAction(spots: readonly TabEventSpot[], px: number, row: TabEventRow): { readonly edit: TabEventSpot } | { readonly add: "tempo" | "marker" } {
+  const spot = tabEventAt(spots, px, row);
+  return spot ? { edit: spot } : { add: row === 0 ? "tempo" : "marker" };
 }
 
 /** 마디 번호 줄에서 누른 자리 a부터 뗀 자리 b까지 (둘 다 격자에 맞춘 시간): 재생 위치·지우기·반복 구간 */

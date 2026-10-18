@@ -1,4 +1,4 @@
-import { add, noteBefore, placeNote, type GameProfile, type Note, type Rat, type Song } from "@mmlce/core";
+import { add, cmp, noteBefore, placeNote, rat, type GameProfile, type Note, type Rat, type Song } from "@mmlce/core";
 import type { ScoreGroup } from "./scores";
 
 /**
@@ -62,6 +62,19 @@ export function placeChord(
 /** 이 트랙에서 넣을 자리의 기본 v (세기를 쓰지 않을 때): 앞 음 v, 없으면 8 */
 export function previousVolume(notes: readonly Note[], at: Rat): number {
   return noteBefore(notes, at)?.vol ?? 8;
+}
+
+/**
+ * 음들 가운데 가장 늦게 끝나는 자리 (음이 없으면 0). 분수 그대로 더하고 견주어, 1/7 같은 길이도 반올림하지 않는다.
+ * 커서 없이 MIDI 건반으로 넣을 때 "고른 트랙의 마지막 음 뒤" 자리로 쓴다 (MML 글 끝의 쉼표는 보지 않는다)
+ */
+export function notesEnd(notes: readonly Note[]): Rat {
+  let end: Rat = rat(0);
+  for (const n of notes) {
+    const e = add(n.start, n.dur);
+    if (cmp(e, end) > 0) end = e;
+  }
+  return end;
 }
 
 /** 다음 입력 자리 */

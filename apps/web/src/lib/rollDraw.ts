@@ -1,8 +1,10 @@
 import { DEFAULT_APPEARANCE, type NoteLook } from "./appearance";
 import { chainVolumes } from "./scores";
 import { drawVolumeLane, type LaneDraw } from "./laneDraw";
-import { peakRange, wholeToSecondsFn, type Peaks } from "./waveform";
+import { type Peaks } from "./waveform";
+import { drawWaveStrip, noteStarts } from "./waveDraw";
 import { trackSoundingRange, type CanonicalOf } from "./instrumentRange";
+import { labelFits, volumeLabelNotes, type VolumeLabelMode } from "./volumeLabels";
 import {
   add,
   cmp,
@@ -71,6 +73,8 @@ export interface RollDrawOptions {
   readonly lightKeys?: boolean;
   /** 번호로만 아는 악기의 실제 악기 (접힘 표식을 재생과 같은 음역으로) */
   readonly canonicalOf?: CanonicalOf | undefined;
+  /** 음표 볼륨 숫자 (설정 → 화면). 고르는 트랙 음 옆에 v12처럼 쓴다. 없으면 끔 */
+  readonly volumeLabels?: VolumeLabelMode | undefined;
   /** CSS 변수 값 (테마 색) */
   readonly css: (name: string) => string;
 }
@@ -287,47 +291,69 @@ export function drawRoll(canvas: HTMLCanvasElement, o: RollDrawOptions): void {
   }
   g.globalAlpha = 1;
 
-  /** 원곡 파형 띠: 시간 축 한 픽셀마다 그 사이 원곡의 가장 낮은·높은 값을 막대로 */
+  // 음표 볼륨 숫자: 고르는 트랙 음을 다 그린 뒤(고른 음 고리 위)에. 가로 롤은 음 시작 위쪽 바깥, 세로 롤은 음 시작(아래 끝) 오른쪽 바깥.
+  // 음을 그리는 영역 밖(마디 번호·이벤트 줄·파형 띠·건반·음량 레인)으로 넘어가지 않게 자른다
+  const labelMode = o.volumeLabels ?? "off";
+  const activeTrack = activeId ? s.tracks.find((t) => t.id === activeId) : undefined;
+  if (labelMode !== "off" && activeTrack && (!horizontal || v.pxPerKey >= 8)) {
+    let notes: readonly Note[] = activeTrack.notes;
+    if (o.dragNotes.length > 0) {
+      const dragged = new Set(o.dragNotes.map((n) => n.id));
+      notes = [...notes.filter((n) => !dragged.has(n.id)), ...o.dragNotes];
+    }
+    const labels = volumeLabelNotes(notes, labelMode, from, to);
+    const laneSize = v.lane ?? 0;
+    g.save();
+    g.beginPath();
+    if (horizontal) g.rect(v.keyboard, o.ruler, v.width - v.keyboard, v.height - o.ruler - laneSize);
+    else g.rect(o.ruler, 0, v.width - o.ruler - laneSize, v.height - v.keyboard);
+    g.clip();
+    g.font = '10px "D2Coding", ui-monospace, monospace';
+    g.textAlign = "left";
+    const panel = o.css("--panel");
+    const text = o.css("--text");
+    /** 앞 숫자가 차지한 시간 축 끝 (가로 롤은 x, 세로 롤은 위로 가는 거리) */
+    let prevEnd: number | undefined;
+    const ordered = notes.filter((n) => labels.has(n.id)).sort((a, b) => cmp(a.start, b.start));
+    for (const n of ordered) {
+      if (n.pitch < low || n.pitch > high) continue;
+      const label = `v${labels.get(n.id)}`;
+      const w = g.measureText(label).width;
+      const r = noteRect(v, toFloat(n.start), toFloat(n.dur), n.pitch);
+      // 글자 상자 (바탕 포함): 가로 롤은 음 칸 위 한 줄, 세로 롤은 음 칸 오른쪽에 아래 끝을 맞춘다
+      const box = horizontal ? { x: r.x, y: r.y - 11, w: w + 2, h: 11 } : { x: r.x + r.w + 1, y: r.y + r.h - 11, w: w + 2, h: 11 };
+      const along = horizontal ? box.x : v.height - (box.y + box.h);
+      if (!labelFits(prevEnd, along)) continue;
+      prevEnd = along + (horizontal ? box.w : box.h);
+      g.globalAlpha = 0.8;
+      g.fillStyle = panel;
+      g.fillRect(box.x, box.y, box.w, box.h);
+      g.globalAlpha = 1;
+      g.fillStyle = text;
+      g.fillText(label, box.x + 1, box.y + 9);
+    }
+    g.restore();
+  }
+
+  /** 원곡 파형 띠 (타브와 같은 그리기). 들리는 트랙(뮤트 빼고, 솔로가 있으면 솔로만)의 음 시작 자리를 눈금으로 */
   function drawWave(c: CanvasRenderingContext2D, w: NonNullable<RollDrawOptions["wave"]>) {
-    const seconds = wholeToSecondsFn(s.tempo);
-    const axis = horizontal ? v.width - v.keyboard : v.height - v.keyboard;
-    const mid = w.at + w.size / 2;
-    // 원곡에서 가장 큰 소리가 띠 끝에 닿게 (조용하게 녹음한 원곡도 보이게)
-    const half = (w.size / 2 - 1) / Math.max(1e-3, w.peaks.peak);
-    c.fillStyle = o.css("--line");
-    if (horizontal) c.fillRect(v.keyboard, w.at + w.size - 1, axis, 1);
-    else c.fillRect(w.at + w.size - 1, 0, 1, axis);
-    c.fillStyle = o.css("--accent");
-    c.globalAlpha = 0.75;
-    for (let px = 0; px < axis; px++) {
-      const t0 = v.start + px / v.pxPerWhole;
-      const r = peakRange(w.peaks, seconds(t0) + w.offset, seconds(t0 + 1 / v.pxPerWhole) + w.offset);
-      if (!r) continue;
-      const a = mid - r[1] * half;
-      const len = Math.max(1, (r[1] - r[0]) * half);
-      // 가로 롤은 시간이 오른쪽, 세로 롤은 위로 흐른다
-      if (horizontal) c.fillRect(v.keyboard + px, a, 1, len);
-      else c.fillRect(a, v.height - v.keyboard - px - 1, len, 1);
-    }
-    // 내 곡 음이 시작하는 자리를 띠 아래쪽 눈금으로 (원곡 박과 한 줄에서 견주게). 들리는 트랙만, 여러 음이 같이 시작하면 길게
     const solo = s.tracks.some((t) => t.solo);
-    const starts = new Map<number, number>();
-    for (const t of s.tracks) {
-      if (t.mute || (solo && !t.solo)) continue;
-      for (const n of t.notes) {
-        const at = toFloat(n.start);
-        if (at >= from && at <= to) starts.set(at, (starts.get(at) ?? 0) + 1);
-      }
-    }
-    c.fillStyle = o.css("--text");
-    c.globalAlpha = 0.6;
-    for (const [at, count] of starts) {
-      const p = timeToScreen(v, at);
-      const len = count >= 3 ? 9 : 6;
-      if (horizontal) c.fillRect(p, w.at + w.size - 1 - len, 1, len);
-      else c.fillRect(w.at + w.size - 1 - len, p, len, 1);
-    }
-    c.globalAlpha = 1;
+    drawWaveStrip(c, {
+      peaks: w.peaks,
+      offset: w.offset,
+      tempo: s.tempo,
+      start: v.start,
+      pxPerWhole: v.pxPerWhole,
+      // 가로 롤은 건반 오른쪽부터, 세로 롤은 위(0)부터 건반 위까지
+      axisStart: horizontal ? v.keyboard : 0,
+      length: horizontal ? v.width - v.keyboard : v.height - v.keyboard,
+      at: w.at,
+      size: w.size,
+      horizontal,
+      starts: noteStarts(s.tracks.filter((t) => !t.mute && (!solo || t.solo)), from, to),
+      screenOf: (at) => timeToScreen(v, at),
+      css: o.css,
+    });
   }
 
   // 마디 번호 줄 (누르면 그 자리로). 이벤트를 켜면 그 아래에 템포·박자·마커

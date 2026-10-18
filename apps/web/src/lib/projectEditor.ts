@@ -23,6 +23,10 @@ export interface VideoFit {
   readonly high: number;
   readonly keyLine: number;
   readonly stretch: number;
+  /** 화면 채우기 (없으면 켬). 끈 것만 적는다 */
+  readonly fill?: boolean;
+  /** 잰 영상 속 음이 떨어지는 속도 (원본 영상 px/초) */
+  readonly speed?: number;
 }
 
 /** 트랙 보기 상태: 롤에서 숨김(눈), 편집 막기(잠금). 실행 취소 기록 밖이다 */
@@ -98,6 +102,8 @@ export function parseEditorState(raw: ProjectEditor, song: Song): EditorState {
       high: v.high,
       keyLine: Math.min(1, Math.max(0, v.keyLine)),
       stretch: v.stretch,
+      ...(v.fill === false ? { fill: false } : {}),
+      ...(finite(v.speed) && v.speed > 0 ? { speed: v.speed } : {}),
     };
   if (isObject(raw.trackView)) {
     const views: Record<string, TrackViewState> = {};

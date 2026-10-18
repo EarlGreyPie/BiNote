@@ -138,3 +138,30 @@ export function fretFromKeys(buffer: string, digit: string, maxFret: number): { 
   const fret = Number(digit);
   return { fret, buffer: fret * 10 <= maxFret ? digit : "" };
 }
+
+/** 두 자리 프렛을 치는 중 첫 숫자로 만든(또는 바꾼) 음: 그 음 id와 친 자리·줄 */
+export interface DigitNote {
+  readonly id: string;
+  readonly at: Rat;
+  readonly string: number;
+}
+
+/**
+ * 숫자 키 하나(fretFromKeys와 같은 규칙)와, 두 자리가 되면 바꿀 음 id. 두 자리는 첫 숫자로 만든 그 음(memo)을 바꾼다:
+ * 커서 줄에서 다시 찾으면, 첫 숫자 음이 화음 배정으로 다른 줄에 그려졌을 때 못 찾아 음이 하나 더 생긴다.
+ * 커서 자리·줄이 첫 숫자 때와 같을 때만 쓰고, 아니면(커서를 옮겼으면) 그 기억은 쓰지 않는다
+ */
+export function typeFretDigit(
+  buffer: string,
+  memo: DigitNote | undefined,
+  digit: string,
+  cursor: { readonly at: Rat; readonly string: number },
+  maxFret: number,
+): { fret: number; buffer: string; replaceId: string | undefined } {
+  const same = !!memo && cmp(memo.at, cursor.at) === 0 && memo.string === cursor.string;
+  // 첫 숫자 뒤 커서를 옮겼으면 앞 숫자와 잇지 않는다 (새 자리의 한 자리 숫자)
+  const kept = memo && !same ? "" : buffer;
+  const next = fretFromKeys(kept, digit, maxFret);
+  const joined = kept !== "" && next.fret === Number(kept + digit);
+  return { ...next, replaceId: joined && same ? memo!.id : undefined };
+}

@@ -117,8 +117,12 @@ function move(from: number | undefined, to: number | undefined): number {
   return Math.max(0, d - 2) * 4 + d * 0.5;
 }
 
-/** 사용자가 고른 줄을 벗어나는 비용. 칠 수 없는 음(1000)보다 작고 손 이동보다는 크다 */
-const PREFER_PENALTY = 200;
+/**
+ * 사용자가 고른 줄을 벗어나는 비용. 타브에서 그 줄에 친 것은 사용자의 뜻이므로 칠 수 있으면 지킨다:
+ * 가장 큰 손 벌림 비용(20프렛 지판에서 1~20프렛, (19 − COMFORT_SPAN) × 50 + 19 × 2 + 손 자리 ≈ 800)보다 크고,
+ * 칠 수 없는 음(1000)보다는 작다
+ */
+const PREFER_PENALTY = 900;
 
 /**
  * 여러 트랙의 음을 모아 타브로 배정한다. prefer는 음 id → 사용자가 타브에서 고른 줄(1부터). 없으면 음에 적힌 줄(Note.tabString).

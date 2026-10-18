@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { rat, toFloat } from "@mmlce/core";
-import { cursorVisible, firstVisibleCell, followStart, parseFollowCursor, revealStart } from "../src/lib/tabFollow";
+import { cursorVisible, firstVisibleCell, followPlayhead, followStart, parseFollowCursor, PLAYHEAD_FOLLOW_HOLD_MS, revealRowScroll, revealStart } from "../src/lib/tabFollow";
 
 // 보이는 폭 4 (온음표), 화면 [10, 14)
 describe("커서 따라가기", () => {
@@ -88,5 +88,37 @@ describe("편집 전에 커서 칸을 화면에 보이게 하기", () => {
     // timeMax에 막혀도 안 보이면 커서 시작을 왼쪽 끝에 (보이는 것이 먼저)
     const far = revealStart(40, 40.25, 0, 4, 18);
     expect(cursorVisible(40, far, 4)).toBe(true);
+  });
+});
+
+describe("커서 줄 세로 보이기 (지시서 27)", () => {
+  // 줄 간격 30, 글자 20, 첫 줄 81: n번째 줄 영역은 [81 + (n-1)*30 - 20, + 40)
+  const row = (n: number) => 81 + (n - 1) * 30 - 20;
+  it("보이면 그대로", () => {
+    expect(revealRowScroll(row(1), row(1) + 40, 0, 200)).toBe(0);
+  });
+  it("아래로 벗어나면 그 줄 아래가 맨 아래에", () => {
+    // 6번째 줄 [211, 251)이 높이 200인 칸 아래로 나감
+    expect(revealRowScroll(row(6), row(6) + 40, 0, 200)).toBe(51);
+  });
+  it("위로 벗어나면 그 줄 위가 맨 위에 (0 아래로는 안 간다)", () => {
+    expect(revealRowScroll(row(2), row(2) + 40, 150, 200)).toBe(91);
+    expect(revealRowScroll(-5, 15, 50, 200)).toBe(0);
+  });
+  it("칸 높이를 모르면 그대로", () => {
+    expect(revealRowScroll(row(6), row(6) + 40, 7, 0)).toBe(7);
+  });
+});
+
+describe("재생선 따라가기와 편집 직후 쉬기 (지시서 27)", () => {
+  it("재생선이 화면 밖이면 왼쪽 10%에 오게 넘긴다", () => {
+    expect(followPlayhead(5, 0, 4, 1000, 0)).toBeCloseTo(4.6);
+    expect(followPlayhead(1, 0, 4, 1000, 0)).toBeUndefined();
+  });
+  it("편집으로 커서 쪽으로 옮긴 직후(쉬는 시간 안)에는 넘기지 않는다", () => {
+    const hold = 1000 + PLAYHEAD_FOLLOW_HOLD_MS;
+    expect(followPlayhead(5, 10, 4, 1200, hold)).toBeUndefined();
+    // 쉬는 시간이 지나면 다시 따라간다
+    expect(followPlayhead(5, 10, 4, hold, hold)).toBeCloseTo(4.6);
   });
 });

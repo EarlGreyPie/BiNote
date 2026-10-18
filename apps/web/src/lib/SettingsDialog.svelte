@@ -6,6 +6,8 @@
   import { MASTER_MAX } from "./engine";
   import { pwa } from "./pwa.svelte";
   import { setTabTint, tabTint } from "./tabTint.svelte";
+  import { setVolumeLabels, volumeLabels } from "./volumeLabels.svelte";
+  import type { VolumeLabelMode } from "./volumeLabels";
   import { rollFlow, setRollFlow, type RollFlow } from "./rollFlow.svelte";
   import { chordPrefs, setMidiMerge } from "./chordPrefs.svelte";
   import { setSplitSpread, splitPrefs } from "./splitPrefs.svelte";
@@ -242,6 +244,15 @@
             {/each}
           </span>
         </div>
+        <label class="row" title={t("ui.volumeLabelsHelp")}>
+          <span>{t("ui.volumeLabels")}</span>
+          <select value={volumeLabels.mode} onchange={(e) => setVolumeLabels(e.currentTarget.value as VolumeLabelMode)}>
+            <option value="off">{t("ui.volumeLabels.off")}</option>
+            <option value="changes">{t("ui.volumeLabels.changes")}</option>
+            <option value="all">{t("ui.volumeLabels.all")}</option>
+          </select>
+        </label>
+        <p class="muted help">{t("ui.volumeLabelsHelp")}</p>
         <div class="row">
           <span>{t("ui.editorFont")}</span>
           <span class="checks">
