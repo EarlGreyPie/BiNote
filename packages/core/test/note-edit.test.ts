@@ -273,4 +273,23 @@ describe("& 사슬이 끊길 때 뒤 음 v (beta.11, #98 Codex 점검)", () => {
   it("사슬이 그대로 이어지면 적힌 v를 바꾸지 않는다", () => {
     expect(vols(updateNote(chain(), "a", { dur: rat(1, 8) }))).toEqual(["e&:12", "g&:2", "a:3"]);
   });
+
+  it("옮기면서 vol을 함께 주면(updateNote) 사슬 첫 음 v 대신 준 vol이 남는다", () => {
+    expect(vols(updateNote(chain(), "g", { start: rat(1), vol: 7 }))).toEqual(["e:12", "a:12", "g:7"]);
+  });
+
+  it("vol을 원래와 같은 값으로 줘도 명시한 것으로 보고 사슬 보정을 하지 않는다", () => {
+    expect(vols(updateNote(chain(), "g", { start: rat(1), vol: 2 }))).toEqual(["e:12", "a:12", "g:2"]);
+  });
+
+  it("vol 없이 start만 바꾸면 사슬 첫 음 v를 받는다", () => {
+    expect(vols(updateNote(chain(), "g", { start: rat(1) }))).toEqual(["e:12", "a:12", "g:12"]);
+  });
+
+  it("replaceNotes는 명시 목록에 든 음만 준 vol을 지킨다", () => {
+    const g = chain()[1]!;
+    const changes = new Map([["g", { ...g, start: rat(1), vol: 7 }]]);
+    expect(vols(replaceNotes(chain(), changes, new Set(["g"])))).toEqual(["e:12", "a:12", "g:7"]);
+    expect(vols(replaceNotes(chain(), changes))).toEqual(["e:12", "a:12", "g:12"]);
+  });
 });

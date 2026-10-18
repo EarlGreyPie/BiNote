@@ -41,9 +41,16 @@ export function attenuateChords(
     list.push(n);
     byStart.set(key, list);
   }
-  for (const group of byStart.values()) {
+  // 화음 자리를 앞에서부터 훑으며 그 자리에 울리는 음만 들고 간다 (곡 전체를 자리마다 다시 보지 않게)
+  const sorted = notes.map((n) => ({ n, end: add(n.start, n.dur) })).sort((a, b) => cmp(a.n.start, b.n.start));
+  const groups = [...byStart.values()].sort((a, b) => cmp(a[0]!.start, b[0]!.start));
+  let active: typeof sorted = [];
+  let next = 0;
+  for (const group of groups) {
     const at = group[0]!.start;
-    const sounding = notes.filter((n) => cmp(n.start, at) <= 0 && cmp(add(n.start, n.dur), at) > 0).map((n) => n.pitch);
+    while (next < sorted.length && cmp(sorted[next]!.n.start, at) <= 0) active.push(sorted[next++]!);
+    active = active.filter((x) => cmp(x.end, at) > 0);
+    const sounding = active.map((x) => x.n.pitch);
     const split = gapSplit(sounding, 60);
     const handOf = (n: GridNote): Hand => hands?.get(n.part) ?? (n.pitch >= split ? "right" : "left");
     for (const hand of ["right", "left"] as const) {

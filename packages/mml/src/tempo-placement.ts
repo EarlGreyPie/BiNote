@@ -3,6 +3,7 @@ import { scoreChunks } from "./clipboard.js";
 import { parseMml } from "./parser.js";
 import { canWriteExactly, type PrintableNote } from "./printer.js";
 import { audibleTempo } from "./tempo-text.js";
+import { scoreEnd, tempoBefore } from "./score-end.js";
 
 /** 음을 쪼갤 수 없어 다른 자리(뒤쪽 가장 가까운 음 경계)로 옮겨 쓴 템포 */
 export interface TempoMove {
@@ -76,6 +77,11 @@ export function placeTempo(
   return out;
 }
 
+/** 이 채널(시작 순)이 그 자리에 템포를 음을 쪼개거나 옮기지 않고 정확히 쓸 수 있는지 */
+export function canPlaceTempoAt(notes: readonly PrintableNote[], at: Rat): boolean {
+  return rankAt(notes, at).rank <= 3;
+}
+
 /** 이 채널에 템포를 쓰기 좋은 정도 (작을수록 좋다). 4면 snap(뒤쪽 가장 가까운 음 경계)으로 옮겨야 하고, 5면 옮길 곳도 없다 */
 function rankAt(notes: readonly PrintableNote[], at: Rat): { rank: number; snap?: Rat } {
   let prevEnd: Rat = { n: 0, d: 1 };
@@ -118,11 +124,15 @@ export function placeTempoByScore(
   fixed?: ReadonlySet<string>,
   /** 주면 어느 채널에도 쓰지 않은 템포를 적는다 (뒤 음 경계로 옮겨 쓴 것은 moved, 여기에는 넣지 않는다) */
   dropped?: TempoEvent[],
+  /** 트랙마다 지킬 길이 (음을 옮기기 전 길이 등). 없으면 지금 트랙 길이 (score-end.ts) */
+  ends?: ReadonlyMap<string, Rat>,
 ): Map<string, TempoEvent[]> {
   const out = new Map<string, TempoEvent[]>();
-  const all = audibleTempo(song.tempo);
+  const songTempo = audibleTempo(song.tempo);
   for (const ids of scoreTrackIds(song, maxChords)) {
     const tracks = ids.map((id) => song.tracks.find((t) => t.id === id)!);
+    // 악보가 끝난 뒤 템포는 그 악보에 쓰지 않는다
+    const all = tempoBefore(songTempo, scoreEnd(tracks, ends));
     const open = fixed ? tracks.filter((t) => !fixed.has(t.id)) : tracks;
     if (open.length === 0) continue;
     // 잠근 트랙 글에 이미 적힌 템포 (같은 자리·같은 빠르기)는 이 악보에 있는 것으로 친다

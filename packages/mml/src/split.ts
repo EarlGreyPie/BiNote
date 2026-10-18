@@ -6,6 +6,7 @@ import { placeTempo, type TempoMove } from "./tempo-placement.js";
 import { parseMml } from "./parser.js";
 import { sameSound } from "./compare.js";
 import { audibleTempo } from "./tempo-text.js";
+import { bpmBefore, padScore, scoreEnd } from "./score-end.js";
 
 /**
  * 악보책 나누기 (설계 8장). 채널 하나라도 글자 수 한도를 넘으면 곡을 여러 권으로 나눈다.
@@ -20,6 +21,9 @@ import { audibleTempo } from "./tempo-text.js";
  *
  * 권 끝 쉼표: 게임은 채널마다 맨 끝 쉼표 하나를 길이에서 빼고, 악보 길이는 가장 긴 채널로 정한다(실측).
  * 그래서 권 끝을 쉼표로 채울 때는 버려질 쉼표를 하나 더 붙인다 (render 참고).
+ * 곡 끝: 악보마다 원래 길이(원문 끝 쉼표 포함, score-end.ts)까지 쓰고, 그 길이 뒤 템포는 쓰지 않는다.
+ * 마지막 권에는 음이 꼭 들어가게 자른다 (끝 쉼표만 남은 빈 권을 만들지 않는다). `r1 t120`처럼 뒤에 명령이 있는
+ * 끝 쉼표는 게임이 길이에 넣으므로 마지막 권 끝에 그대로 남긴다.
  *
  * 권 사이 지연: 악보책은 다음 권으로 넘어갈 때 scoreBookGapMs(실측 1010ms)만큼 늦게 시작한다.
  * 그래서 앞 권을 자르는 자리보다 그만큼 일찍 끝내 박자를 맞추고(trim), 자를 자리는 그 구간에서
@@ -78,11 +82,13 @@ export function splitSong(song: Song, profile: GameProfile, options: SplitOption
   const tempo = audibleTempo(song.tempo);
   const scores = scoreIndexes(song, options.maxChords ?? ((id) => maxChordsOf(profile, song.players.find((p) => p.id === id)?.instrument.canonical)));
 
-  let songEnd: Rat = ZERO;
-  for (const notes of tracks) for (const n of notes) songEnd = max(songEnd, add(n.start, n.dur));
-  for (const t of tempo) songEnd = max(songEnd, t.at);
+  // 악보마다 길이 (원문 끝 쉼표 포함). 곡 끝은 가장 긴 악보 끝이다
+  const ends = scores.map((score) => scoreEnd(score.map((k) => song.tracks[k]!)));
+  let lastNote: Rat = ZERO;
+  for (const notes of tracks) for (const n of notes) lastNote = max(lastNote, add(n.start, n.dur));
+  const songEnd = ends.reduce(max, lastNote);
 
-  const whole = render(song, scores, tracks, tempo, ZERO, songEnd, false, false, true);
+  const whole = render(song, scores, ends, tracks, tempo, ZERO, songEnd, false, false, true);
   if (whole.texts.every((t) => t.text.length <= limit)) {
     return { parts: [{ start: ZERO, end: songEnd, texts: whole.texts, cut: 0, trim: ZERO, moved: whole.moved, lossy: whole.lossy }], needed: false };
   }
@@ -96,14 +102,15 @@ export function splitSong(song: Song, profile: GameProfile, options: SplitOption
       keys.set(`${end.n}/${end.d}`, end);
     }
   }
-  const candidates = [...keys.values()].filter((r) => cmp(r, ZERO) > 0 && cmp(r, songEnd) < 0).sort(cmp);
+  // 마지막 음 끝에서는 자르지 않는다 (그 뒤는 끝 쉼표뿐이라 빈 권이 된다)
+  const candidates = [...keys.values()].filter((r) => cmp(r, ZERO) > 0 && cmp(r, lastNote) < 0).sort(cmp);
   const markers = song.markers.map((m) => m.at);
 
   /** [start, end)를 한 권으로 쓴 결과. 끝이 곡 끝이 아니면 다음 권 지연만큼 앞당겨 끝내고, 그 길이를 끝 쉼표로 채운다 */
   const part = (start: Rat, end: Rat, quick = false, verify = false) => {
     const trim = cmp(end, songEnd) < 0 ? gapAt(tempo, end, gapMs, start) : ZERO;
     const until = sub(end, trim);
-    return { trim, until, ...render(song, scores, tracks, tempo, start, until, quick, cmp(end, songEnd) < 0, verify, minCarry) };
+    return { trim, until, ...render(song, scores, ends, tracks, tempo, start, until, quick, cmp(end, songEnd) < 0, verify, minCarry) };
   };
   // 실제로 내보낼 글(앞당김·끝 쉼표 포함)로 한도를 검사한다. 단순 출력이 들어가면 최적화 출력도 들어간다.
   // 같은 구간을 여러 번 묻게 되므로(최소 권 수 계산 + 자리 고르기) 결과를 기억해 둔다
@@ -409,6 +416,7 @@ function gapAt(tempo: readonly TempoEvent[], at: Rat, gapMs: number | null | und
 function render(
   song: Song,
   scores: readonly (readonly number[])[],
+  ends: readonly Rat[],
   tracks: readonly (readonly PrintableNote[])[],
   tempo: readonly TempoEvent[],
   start: Rat,
@@ -425,23 +433,33 @@ function render(
   const chunks = tracks.map((notes) => clip(notes, start, end, minCarry > 0 && padEnd && cmp(start, ZERO) > 0 ? shortCarry : undefined));
   const moves: TempoMove[] = [];
   const lossy: string[] = [];
-  const local = tempoIn(tempo, start, end);
   const out = song.tracks.map((t) => ({ trackId: t.id, text: "" }));
   const length = sub(end, start);
+  const placedBy: (readonly (readonly TempoEvent[])[])[] = [];
   // 악보마다 따로: 게임은 악보 하나씩 붙여넣으므로 템포를 악보마다 넣어야 그 연주자가 그 빠르기로 친다
-  for (const score of scores) {
+  for (const [s, score] of scores.entries()) {
+    // 마지막 권(padEnd가 아님)은 그 악보 길이까지만 쓴다: 악보가 끝난 뒤 템포는 넣지 않는다.
+    // 이미 끝난 악보는 그때 템포 하나만 적는다 (지금까지처럼 빈 악보로 두지 않는다)
+    const until = padEnd ? end : max(start, min(end, ends[s]!));
+    const local = tempoIn(tempo, start, until);
     const placed = placeTempo(
       score.map((k) => chunks[k]!),
       local,
       moves,
     );
+    placedBy[s] = placed;
     const simple = score.map((k, i) => printMml(chunks[k]!, { tempo: placed[i] ?? [] }).text);
     score.forEach((k, i) => {
       out[k] = { trackId: song.tracks[k]!.id, text: quick ? simple[i]! : optimizeMml(chunks[k]!, { tempo: placed[i] ?? [] }).text };
-      // 내보낼 글을 다시 읽어 음과 템포 자리가 그대로인지 본다 (출력기가 못 쓰는 길이는 버려진다)
-      if (verify && !writesExactly(out[k]!.text, chunks[k]!, placed[i] ?? [])) lossy.push(song.tracks[k]!.id);
     });
-    if (!padEnd) continue;
+    const bookEnd = sub(until, start);
+    if (!padEnd) {
+      // 마지막 권: 원래 끝 쉼표까지 (모자라면 쉼표와 그 자리 빠르기 템포 하나를 붙인다. 뒤에 명령이 있는 쉼표는 길이에 든다)
+      const padded = padScore(score.map((k) => out[k]!.text), bookEnd, bpmBefore(tempo, until));
+      score.forEach((k, i) => (out[k] = { ...out[k]!, text: padded[i]! }));
+      if (verify) check(score, placed, bookEnd);
+      continue;
+    }
     // 권 길이는 그 악보에서 가장 늦게 끝나는 채널로 정해진다. 게임은 채널마다 맨 끝 쉼표 하나만 길이에서 뺀다
     // (실측: a4r1 = a4, a4r2r2 = a4r2). 어느 채널도 음으로 권 끝까지 가지 않으면 가장 짧은 채널 끝에 모자란 쉼표와
     // 버려질 쉼표(THROWAWAY_REST)를 덧붙여 권 길이를 지킨다 (안 그러면 그 연주자만 다음 권을 일찍 시작한다)
@@ -465,15 +483,28 @@ function render(
     const fill = sub(length, reach[i]!);
     out[k] = { ...out[k]!, text: out[k]!.text + (fill.n > 0 ? restText(fill) : "") + THROWAWAY_REST };
   }
+  // padEnd 권은 쉼표를 다 붙인 뒤 검사한다 (위 반복에서 continue로 건너뛰는 악보도 있다)
+  if (verify && padEnd) for (const [s, score] of scores.entries()) check(score, placedBy[s] ?? [], length);
   return { texts: out, moved: moves.length, lossy };
+
+  /**
+   * 내보낼 글을 다시 읽어 음과 템포 자리가 그대로인지 본다 (출력기가 못 쓰는 길이는 버려진다).
+   * 악보 길이도 본다: 게임 길이(맨 끝 쉼표 뺀)가 권 길이와 다르면 그 악보의 다음 권이나 곡 끝이 어긋난다
+   */
+  function check(score: readonly number[], placed: readonly (readonly TempoEvent[])[], bookEnd: Rat) {
+    const parsed = score.map((k) => parseMml(out[k]!.text));
+    const gameEnd = parsed.reduce<Rat>((m, p) => max(m, p.gameEnd), ZERO);
+    score.forEach((k, i) => {
+      if (!eq(gameEnd, bookEnd) || !writesExactly(parsed[i]!, chunks[k]!, placed[i] ?? [], bookEnd)) lossy.push(song.tracks[k]!.id);
+    });
+  }
 }
 
-/** 글을 다시 읽으면 음과 템포가 notes·tempo와 같은지 */
-function writesExactly(text: string, notes: readonly PrintableNote[], tempo: readonly TempoEvent[]): boolean {
-  const parsed = parseMml(text);
+/** 다시 읽은 글의 음과 템포(권 길이 앞, 끝을 지키려고 붙인 템포는 빼고)가 notes·tempo와 같은지 */
+function writesExactly(parsed: ReturnType<typeof parseMml>, notes: readonly PrintableNote[], tempo: readonly TempoEvent[], bookEnd: Rat): boolean {
   if (!sameSound(parsed.notes, notes)) return false;
-  const a = normalizeTempo(parsed.tempo);
-  const b = normalizeTempo(tempo);
+  const a = normalizeTempo(parsed.tempo.filter((e) => cmp(e.at, bookEnd) < 0));
+  const b = normalizeTempo(tempo.filter((e) => cmp(e.at, bookEnd) < 0));
   return a.length === b.length && a.every((e, i) => e.bpm === b[i]!.bpm && eq(e.at, b[i]!.at));
 }
 

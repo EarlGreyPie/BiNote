@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { emptySong, History, normalizeTempo, rat, type Song } from "@mmlce/core";
-import { compactSong, fillScoreTempo, keepScoreTempo, moveTempo, parseMml, parseTrackText, scoresMissingTempo, removeTempoAt, setTempoAt, setTempos, setTrackText, tempoInsertOffset, tempoMismatch, trackSource } from "../src/index.js";
+import { changeTempos, compactSong, fillScoreTempo, keepScoreTempo, moveTempo, parseMml, parseTrackText, scoresMissingTempo, removeTempoAt, setTempoAt, setTempos, setTrackText, tempoInsertOffset, tempoMismatch, trackSource } from "../src/index.js";
 import { moveTrackToNewPlayer, setPlayerInstrument, shiftTrack } from "../src/structure.js";
 
 /** 원문들로 곡을 만든다. null이면 원문 없는(음만 있는) 트랙 */
@@ -260,7 +260,8 @@ describe("공개 전 재점검: 옮겨 적은 템포와 원문", () => {
     expect(scoresMissingTempo(removed)).toEqual([]);
     h.undo();
     const moved = h.run(moveTempo(rat(1, 32), rat(1, 16)));
-    expect(bpms(moved)).toEqual([150, 90, 100]);
+    // t100을 옮긴 1/16은 악보 2가 끝난 자리라 그 악보에는 쓰지 않는다 (악보가 끝난 뒤 템포는 쓰지 않는다)
+    expect(bpms(moved)).toEqual([150, 90]);
     expect(scoresMissingTempo(moved)).toEqual([]);
   });
 
@@ -333,5 +334,147 @@ describe("beta.8 점검: 옮긴 트랙의 악보 템포 (PR #91)", () => {
     const next = keepScoreTempo(shiftTrack("t4", -1)).apply(s);
     expect(scoresMissingTempo(next)).toEqual([]);
     expect(mirrored(next)).toBe(true);
+  });
+});
+
+describe("템포 한꺼번에 바꾸기", () => {
+  it("곡 전체를 %로 바꾸면 지도와 모든 원문의 t가 함께 바뀐다", () => {
+    const s = changeTempos({ mode: "scale", value: 150 }).apply(songOf("t100 c2 t80 c2", "t100 r2 t80 e2"));
+    expect(texts(s)).toEqual(["t150 c2 t120 c2", "t150 r2 t120 e2"]);
+    expect(s.tempo).toEqual([{ at: rat(0), bpm: 150 }, { at: rat(1, 2), bpm: 120 }]);
+    expect(mirrored(s)).toBe(true);
+  });
+
+  it("모두 한 값으로 바꾸고 ±BPM은 반올림한 정수, 1~999 안", () => {
+    const s = changeTempos({ mode: "set", value: 90 }).apply(songOf("t100 c2 t80 c2"));
+    expect(texts(s)).toEqual(["t90 c2 t90 c2"]);
+    const low = changeTempos({ mode: "add", value: -200 }).apply(songOf("t100 c2"));
+    expect(low.tempo).toEqual([{ at: rat(0), bpm: 1 }]);
+  });
+
+  it("템포가 하나도 없던 곡은 곡 처음에 바꾼 템포를 넣는다 (기본 t120)", () => {
+    const s = changeTempos({ mode: "add", value: 10 }).apply(songOf("c2 d2"));
+    expect(s.tempo).toEqual([{ at: rat(0), bpm: 130 }]);
+    expect(mirrored(s)).toBe(true);
+  });
+
+  it("구간만 바꾸면 구간 처음에 바꾼 템포, 끝에 원래 템포를 넣고 밖은 그대로 둔다", () => {
+    const s = changeTempos({ mode: "set", value: 60 }, rat(1, 4), rat(3, 4)).apply(songOf("t100 c4 d4 e4 f4"));
+    expect(s.tempo).toEqual([{ at: rat(0), bpm: 100 }, { at: rat(1, 4), bpm: 60 }, { at: rat(3, 4), bpm: 100 }]);
+    expect(texts(s)).toEqual(["t100 c4 t60d4 e4 t100f4"]);
+    expect(mirrored(s)).toBe(true);
+  });
+
+  it("구간 안 t만 고치고 구간 끝 뒤에 음이 없으면 끝 템포를 넣지 않는다", () => {
+    const s = changeTempos({ mode: "add", value: 20 }, rat(1, 2), rat(1)).apply(songOf("t100 c2 t80 c2"));
+    expect(texts(s)).toEqual(["t100 c2 t100 c2"]);
+    expect(s.tempo).toEqual([{ at: rat(0), bpm: 100 }, { at: rat(1, 2), bpm: 100 }]);
+  });
+
+  it("실행 취소 한 칸으로 되돌린다", () => {
+    const h = new History(songOf("t100 c2 t80 c2"));
+    h.run(changeTempos({ mode: "scale", value: 50 }));
+    expect(texts(h.song)).toEqual(["t50 c2 t40 c2"]);
+    h.undo();
+    expect(texts(h.song)).toEqual(["t100 c2 t80 c2"]);
+  });
+
+  it("바뀌는 게 없으면 곡을 그대로 돌려준다", () => {
+    const song = songOf("t100 c2");
+    expect(changeTempos({ mode: "scale", value: 100 }).apply(song)).toBe(song);
+  });
+});
+
+describe("PR #106 Codex 점검: 구간 경계 템포", () => {
+  /** 원문마다 다른 악보(연주자)인 곡 */
+  function scoresOf(...texts: string[]): Song {
+    const base = songOf(...texts);
+    return {
+      ...base,
+      players: texts.map((_, k) => ({ id: `p${k + 1}`, name: "피아노", instrument: { canonical: "piano" as const } })),
+      tracks: base.tracks.map((t, k) => ({ ...t, playerId: `p${k + 1}` })),
+    };
+  }
+
+  it("구간 끝 뒤에 같은 값 t가 있어도 끝 자리에 원래 템포를 적는다", () => {
+    const s = changeTempos({ mode: "set", value: 60 }, rat(1, 4), rat(1, 2)).apply(scoresOf("t100 c4 t80 d4 e4 f4 g1", "t100 c4 t80 d4 e4 t80 f4 g1"));
+    expect(s.tempo).toEqual([{ at: rat(0), bpm: 100 }, { at: rat(1, 4), bpm: 60 }, { at: rat(1, 2), bpm: 80 }, { at: rat(3, 4), bpm: 80 }]);
+    for (const t of s.tracks) expect(parseMml(t.mml!.text).tempo).toContainEqual({ at: rat(1, 2), bpm: 80 });
+    expect(texts(s)[1]).toBe("t100 c4 t60 d4 t80e4 t80 f4 g1");
+    expect(mirrored(s)).toBe(true);
+  });
+
+  it("구간 처음 뒤에 바꾼 값과 같은 t가 생겨도 처음 자리에 바꾼 템포를 적는다", () => {
+    const s = changeTempos({ mode: "set", value: 60 }, rat(1, 4), rat(3, 4)).apply(songOf("t100 c4 d4 t80 e4 f4 g1"));
+    expect(s.tempo).toEqual([{ at: rat(0), bpm: 100 }, { at: rat(1, 4), bpm: 60 }, { at: rat(1, 2), bpm: 60 }, { at: rat(3, 4), bpm: 80 }]);
+    const tempo = parseMml(s.tracks[0]!.mml!.text).tempo;
+    expect(tempo).toContainEqual({ at: rat(1, 4), bpm: 60 });
+    expect(tempo).toContainEqual({ at: rat(3, 4), bpm: 80 });
+    expect(mirrored(s)).toBe(true);
+  });
+});
+
+describe("PR #106 Codex 재점검: 원문을 버리지 않는 구간 경계", () => {
+  it("빠르기가 그대로인 경계에는 t를 넣지 않고 끝 쉼표도 남긴다", () => {
+    const song = songOf("t100c2d4t80e4r4r4");
+    const s = changeTempos({ mode: "set", value: 100 }, rat(1, 4), rat(1)).apply(song);
+    expect(texts(s)).toEqual(["t100c2d4t100e4r4r4"]);
+    expect(parseMml(s.tracks[0]!.mml!.text).end).toEqual(parseMml(song.tracks[0]!.mml!.text).end);
+    expect(mirrored(s)).toBe(true);
+  });
+
+  it("한 악보 여러 트랙에서 경계 자리에 음 경계가 없으면 음을 &로 나눠 t를 적는다", () => {
+    const song = songOf("t100c1d1", "t100e2t80f2g1");
+    const s = changeTempos({ mode: "set", value: 60 }, rat(1, 4), rat(3, 4)).apply(song);
+    for (const t of s.tracks) expect(t.mml).toBeDefined();
+    const tempo = s.tracks.flatMap((t) => parseMml(t.mml!.text).tempo);
+    expect(tempo).toContainEqual({ at: rat(1, 4), bpm: 60 });
+    expect(tempo).toContainEqual({ at: rat(3, 4), bpm: 80 });
+    expect(texts(s)).toEqual(["t100c4&t60c2&t80c4d1", "t100e2t60f2g1"]);
+    // 음은 그대로 (나눈 음은 &로 이어진다)
+    expect(s.tracks.map((t) => parseTrackText(t.id, t.mml!).notes.length)).toEqual(song.tracks.map((t) => parseTrackText(t.id, t.mml!).notes.length + (t.id === "t1" ? 2 : 0)));
+    expect(s.tracks[0]!.notes).toEqual(parseTrackText("t1", s.tracks[0]!.mml!).notes);
+    expect(mirrored(s)).toBe(true);
+  });
+
+  it("경계에 걸친 쉼표는 둘로 나눠 사이에 적는다", () => {
+    const s = changeTempos({ mode: "set", value: 60 }, rat(1, 4)).apply(songOf("t100 r2 c2"));
+    expect(texts(s)).toEqual(["t100 r4t60r4 c2"]);
+  });
+
+  it("원문 없는 트랙이 있는 악보도 경계 뒤 같은 값 t를 경계로 보지 않는다", () => {
+    const base = songOf("t100 c4 t80 d4 e4 t80 f4 g1", { text: "r2 g2", notesOnly: true });
+    const s = changeTempos({ mode: "set", value: 60 }, rat(1, 4), rat(1, 2)).apply(base);
+    expect(parseMml(s.tracks[0]!.mml!.text).tempo).toContainEqual({ at: rat(1, 2), bpm: 80 });
+    expect(mirrored(s)).toBe(true);
+  });
+
+  it("음이 모두 끝난 뒤 구간만 바꾸면 경계를 만들지 않는다", () => {
+    const song = songOf("t100c1");
+    expect(changeTempos({ mode: "set", value: 60 }, rat(2), rat(3)).apply(song)).toBe(song);
+  });
+});
+
+describe("PR #106 Codex 3차 점검: 끝난 악보의 원문을 늘이지 않기", () => {
+  function scoresOf(...texts: string[]): Song {
+    const base = songOf(...texts);
+    return {
+      ...base,
+      players: texts.map((_, k) => ({ id: `p${k + 1}`, name: "피아노", instrument: { canonical: "piano" as const } })),
+      tracks: base.tracks.map((t, k) => ({ ...t, playerId: `p${k + 1}` })),
+    };
+  }
+
+  it("먼저 끝난 악보의 원문은 늘이지 않고, 끝 쉼표가 있는 악보의 원문은 그대로 둔다", () => {
+    const s = changeTempos({ mode: "set", value: 60 }, rat(1, 2)).apply(scoresOf("t100c4", "t100d2e2r4r4"));
+    expect(texts(s)).toEqual(["t100c4", "t100d2t60e2r4r4"]);
+    expect(tempoMismatch(s)).toBe(false);
+  });
+
+  it("마지막 쉼표를 나눠 게임 길이를 늘리지 않는다", () => {
+    const song = scoresOf("t100c4r1", "t100e1f1");
+    const s = changeTempos({ mode: "set", value: 60 }, rat(1, 2)).apply(song);
+    expect(texts(s)[0]).toBe("t100c4r1");
+    expect(parseMml(texts(s)[0]!).gameEnd).toEqual(parseMml("t100c4r1").gameEnd);
   });
 });

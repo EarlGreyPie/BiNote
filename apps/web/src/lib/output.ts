@@ -127,7 +127,9 @@ export function previewRows(before: Song, after: Song, limit: number): PreviewRo
     const track = song.tracks.find((t) => t.id === id);
     return track ? trackSource(song, track).text.length : 0;
   };
-  return after.tracks
+  // 화음 병합으로 지운 트랙은 0자로 보인다
+  const gone = before.tracks.filter((t) => !after.tracks.some((x) => x.id === t.id));
+  return [...after.tracks, ...gone]
     .map((t) => ({ trackId: t.id, name: t.name, before: length(before, t.id), after: length(after, t.id) }))
     .filter((r) => r.before !== r.after || r.after > limit);
 }

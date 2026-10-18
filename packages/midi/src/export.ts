@@ -2,6 +2,14 @@ import { add, cmp, splitPackProgram, toFloat, trackInstrument, type InstrumentRe
 import { GM_DRUM_KEY, gmProgramOf } from "./gm.js";
 import type { Smf, SmfEvent } from "./smf.js";
 
+export interface SmfExportOptions {
+  /**
+   * 트랙 악기의 실제 공통 ID를 알려 준다(보통 사운드팩 등록부, 재생과 같은 해석). `mabi:1578`(#42.3)처럼 번호로만 아는
+   * 악기도 올린 팩의 프리셋이 냥모니카면 GM 번호를 냥모니카로 고른다. 모르면 undefined(원래 ID로 고른다)
+   */
+  readonly canonicalOf?: (instrument: string, program: number | undefined) => string | undefined;
+}
+
 /**
  * 곡을 MIDI로 (내보내기). 연주자마다 MIDI 트랙 하나, 볼륨 v는 세기로 바꾼다(v×127/15, DLS 기본 곡선과 같음).
  * 같은 음 &는 한 음으로 합친다(다른 음 &의 슬라이드는 MIDI에 없어 따로 친 음이 된다).
@@ -12,8 +20,15 @@ import type { Smf, SmfEvent } from "./smf.js";
  * - mabinogi: 마비노기 악기 번호 그대로 (마비노기 번호로 만든 사운드팩용)
  * 같은 악기 연주자는 채널을 함께 써서 연주자가 16명을 넘어도 다른 악기와 섞이지 않는다.
  * 다만 같은 높이 음이 겹치면 어느 음을 끄는지 구별할 수 없으므로 그 연주자는 다른 채널로 보낸다.
+ * 음 높이는 악보에 적힌 그대로 쓴다(게임처럼 음역 밖 음을 접지 않는다).
  */
-export function songToSmf(song: Song, ppq = 480, volumeMax = 15, programs: "gm" | "mabinogi" = "gm"): Smf {
+export function songToSmf(
+  song: Song,
+  ppq = 480,
+  volumeMax = 15,
+  programs: "gm" | "mabinogi" = "gm",
+  options: SmfExportOptions = {},
+): Smf {
   const tick = (at: { n: number; d: number }) => Math.round(toFloat(at) * ppq * 4);
   const conductor: SmfEvent[] = song.tempo.map((t) => ({ tick: tick(t.at), type: "tempo", usPerQuarter: Math.round(60_000_000 / t.bpm) }));
   // 곡 중간 박자 변화도 함께 쓴다
@@ -34,7 +49,8 @@ export function songToSmf(song: Song, ppq = 480, volumeMax = 15, programs: "gm" 
     return [...byInstrument.values()];
   });
   const plans = units.map(({ player, instrument, tracks: own }, _i, all) => {
-    const canonical = instrument.canonical;
+    // GM 번호·드럼 여부·이름은 실제로 울리는 악기로 정한다. 마비노기 번호는 원래 번호 그대로
+    const canonical = options.canonicalOf?.(instrument.canonical, instrument.program) ?? instrument.canonical;
     const drumKey = programs === "gm" ? GM_DRUM_KEY[canonical] : undefined;
     // 마비노기 번호는 마비꼬 추가 팩 번호(팩 × 512 + 번호)면 팩 안 번호만 쓴다. MIDI 악기 번호는 0~127
     const program = programs === "gm" ? gmProgramOf(canonical) : splitPackProgram(instrument.program ?? 0).number & 0x7f;

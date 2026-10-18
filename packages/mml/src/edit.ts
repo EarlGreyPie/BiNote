@@ -5,6 +5,7 @@ import {
   eq,
   sub,
   ZERO,
+  DEFAULT_BPM,
   normalizeTempo,
   getProfile,
   PROFILES,
@@ -19,9 +20,13 @@ import {
 } from "@mmlce/core";
 import { parseMml, type ParseResult } from "./parser.js";
 import { optimizeMml } from "./optimizer.js";
+import { lengthPieces } from "./printer.js";
+import { bpmBefore, padScore, scoreEnd, tempoBefore, textEnd, trackEnd } from "./score-end.js";
 import { placeTempo, placeTempoByScore, scoreTrackIds, type TempoMove } from "./tempo-placement.js";
 import { chordsPerScore } from "./clipboard.js";
 import { distributeChords } from "./distribute.js";
+import { mergeChords, type MergeResult } from "./merge.js";
+import { gameTimeline } from "./game-timeline.js";
 import { sameSound } from "./compare.js";
 import { audibleTempo, localAt, spliceText, surgicalSource, sameTempo, tempoInsertOffset, tempoTokens, type TempoToken } from "./tempo-text.js";
 
@@ -59,7 +64,9 @@ function inWindow(token: { readonly at: Rat; readonly bpm: number }, w: TempoWin
 function scoreTempo(song: Song, ids: readonly string[]): { generated: Map<string, TempoEvent[]>; missing: TempoEvent[] } {
   const tracks = ids.map((id) => song.tracks.find((t) => t.id === id)!);
   const declared = tracks.flatMap((t) => (t.mml ? tempoTokens(t.mml) : []));
-  const open = tempoWindows(song.tempo).filter((w) => !declared.some((d) => inWindow(d, w)));
+  // 악보가 끝난 뒤 템포는 그 악보에 쓰지 않는다 (score-end.ts)
+  const end = scoreEnd(tracks);
+  const open = tempoWindows(song.tempo).filter((w) => cmp(w.event.at, end) < 0 && !declared.some((d) => inWindow(d, w)));
   const free = tracks.filter((t) => !t.mml);
   const generated = new Map<string, TempoEvent[]>();
   if (free.length === 0) return { generated, missing: open.map((w) => w.event) };
@@ -106,6 +113,37 @@ export function parseTrackText(trackId: string, source: TrackText): ParsedTrackT
   return { parsed, notes, tempo: parsed.tempo.map((t) => ({ at: shift(t.at), bpm: t.bpm })) };
 }
 
+/**
+ * 곡 전체에서 음 id가 겹치지 않게 한다. 다시 읽은 트랙은 "트랙 id.순번"을 받는데, 다른 트랙으로 옮겨 간 음
+ * (높이 순 나누기·화음 병합 등)이 옛 id를 그대로 갖고 있으면 겹친다. 겹치는 음(뒤에 나온 것)만 새 id를 준다
+ */
+export function uniqueNoteIds(tracks: readonly Track[]): Track[] {
+  const seen = new Set<string>();
+  const all = new Set(tracks.flatMap((t) => t.notes.map((n) => n.id)));
+  let counter = 0;
+  const fresh = (trackId: string) => {
+    let id: string;
+    do id = `${trackId}.u${++counter}`;
+    while (all.has(id));
+    all.add(id);
+    return id;
+  };
+  return tracks.map((t) => {
+    let changed = false;
+    const notes = t.notes.map((n) => {
+      if (!seen.has(n.id)) {
+        seen.add(n.id);
+        return n;
+      }
+      changed = true;
+      const id = fresh(t.id);
+      seen.add(id);
+      return { ...n, id };
+    });
+    return changed ? { ...t, notes } : t;
+  });
+}
+
 /** 템포 목록에서 지울 것들을 하나씩만 뺀다 (같은 위치·같은 빠르기가 여러 트랙에 있을 수 있음) */
 function removeEach(from: readonly TempoEvent[], remove: readonly TempoEvent[]): TempoEvent[] {
   const out = [...from];
@@ -140,7 +178,7 @@ export function setTrackText(trackId: string, text: string): Command {
         ...song,
         tempo: normalizeTempo([...removeEach(song.tempo, old.tempo.filter((e) => !stillDeclared(e))), ...now.tempo.filter((e) => !mirror(e))]),
         // 글에는 타브 줄이 없으므로 옛 음의 줄을 시간·높이로 옮겨 받는다
-        tracks: song.tracks.map((t) => (t.id === trackId ? { ...t, notes: carryTabStrings(track.notes, now.notes), mml: next } : t)),
+        tracks: uniqueNoteIds(song.tracks.map((t) => (t.id === trackId ? { ...t, notes: carryTabStrings(track.notes, now.notes), mml: next } : t))),
       };
     },
     invert(before) {
@@ -203,12 +241,12 @@ export type CompactResult =
  * 사용자가 쓴 원문 표기는 바뀐다. locked에 든 트랙(잠근 트랙)은 그대로 두고 템포도 맡기지 않는다.
  * 다시 쓴 뒤 음이 달라지거나, 어느 채널에도 쓸 수 없는 템포가 있거나, 다시 읽은 악보 템포가 곡 템포와 다르면 곡을 그대로 둔다
  */
-export function compactResult(song: Song, profile?: GameProfile, locked?: ReadonlySet<string>): CompactResult {
+export function compactResult(song: Song, profile?: GameProfile, locked?: ReadonlySet<string>, ends?: ReadonlyMap<string, Rat>): CompactResult {
   // 잠근 트랙에는 템포를 맡기지 않는다 (그 글은 다시 쓰지 않으므로 맡기면 템포가 악보에서 사라진다)
   const dropped: TempoEvent[] = [];
   const moved = new Map<string, TempoMove[]>();
   const chords = profile ? chordsPerScore(song, profile) : songChordsPerScore(song);
-  const placed = placeTempoByScore(song, chords, moved, locked, dropped);
+  const placed = placeTempoByScore(song, chords, moved, locked, dropped, ends);
   // 어느 채널에도 쓸 수 없는 템포가 있으면 (잠근 트랙만 경계가 맞는 등) 그대로 둔다. 뒤 음 경계로 옮겨 쓴 템포는 출력과 같으므로 괜찮다
   if (dropped.length > 0) return { song, kept: "tempo" };
   const tracks: Track[] = [];
@@ -225,6 +263,18 @@ export function compactResult(song: Song, profile?: GameProfile, locked?: Readon
     if (!sameSound(t.notes, notes)) return { song, kept: "notes" };
     tracks.push({ ...t, notes, mml });
   }
+  // 원문 끝 쉼표가 사라져 악보가 짧아지지 않게 악보 길이를 지킨다 (score-end.ts). 쉼표와 그 자리 템포만 붙으므로 음은 그대로
+  const scoreEnds = new Map<string, Rat>();
+  for (const ids of scoreTrackIds(song, chords)) {
+    const end = scoreEnd(ids.map((id) => song.tracks.find((x) => x.id === id)!), ends);
+    ids.forEach((id) => scoreEnds.set(id, end));
+    const at = ids.map((id) => tracks.findIndex((x) => x.id === id));
+    const padded = padScore(at.map((k) => tracks[k]!.mml?.text ?? ""), end, bpmBefore(song.tempo, end), ids.map((id) => !locked?.has(id)));
+    at.forEach((k, i) => {
+      const t = tracks[k]!;
+      if (t.mml && padded[i] !== t.mml.text) tracks[k] = { ...t, mml: { text: padded[i]! } };
+    });
+  }
   // 악보마다 글에 적힌 들리는 템포가 곡 템포(뒤 음 경계로 옮겨 쓴 것은 옮긴 자리)와 같은지 다시 읽어 본다.
   // 출력기가 아주 짧은 쉼표를 빼면 두 템포가 한 자리에 겹쳐 앞 템포가 들리지 않을 수 있다
   const map = audibleTempo(song.tempo);
@@ -237,9 +287,11 @@ export function compactResult(song: Song, profile?: GameProfile, locked?: Readon
     });
     if (unchanged) continue;
     const moves = moved.get(ids[0]!) ?? [];
+    // 악보가 끝난 뒤 템포는 쓰지 않았고, 길이를 지키려고 끝에 붙인 템포는 보지 않는다
+    const end = scoreEnds.get(ids[0]!) ?? ZERO;
     const expected = audibleTempo(
       normalizeTempo(
-        map.map((e) => {
+        tempoBefore(map, end).map((e) => {
           const move = moves.find((m) => eq(m.from, e.at) && m.bpm === e.bpm);
           return move ? { at: move.to, bpm: e.bpm } : e;
         }),
@@ -249,7 +301,7 @@ export function compactResult(song: Song, profile?: GameProfile, locked?: Readon
       normalizeTempo(
         ids.flatMap((id) => {
           const t = tracks.find((x) => x.id === id);
-          return t?.mml ? parseTrackText(t.id, t.mml).tempo : [];
+          return t?.mml ? tempoBefore(parseTrackText(t.id, t.mml).tempo, end) : [];
         }),
       ),
     );
@@ -260,7 +312,7 @@ export function compactResult(song: Song, profile?: GameProfile, locked?: Readon
       ...song,
       // 채널마다 같은 템포가 적혀 있던 것은 하나로 합치고, 들리지 않는 같은 빠르기 템포는 쓰지 않으므로 지도에서도 뺀다
       tempo: audibleTempo(song.tempo),
-      tracks,
+      tracks: uniqueNoteIds(tracks),
     },
   };
 }
@@ -294,10 +346,64 @@ function restoreSong(song: Song): Command {
 export function distributeSong(profile: GameProfile, label = "화음 분산", limit?: number, locked?: ReadonlySet<string>): Command {
   return {
     label,
+    // 음을 옮긴 트랙은 원문이 지워지므로, 옮기기 전 트랙 길이(원문 끝 쉼표 포함)를 지킬 길이로 넘긴다
     apply: (song) =>
-      compactSong(profile, label, locked).apply(
+      compactResult(
         distributeChords(song, profile, { ...(limit === undefined ? {} : { limit }), ...(locked ? { locked } : {}) }).song,
-      ),
+        profile,
+        locked,
+        new Map(song.tracks.map((t) => [t.id, trackEnd(t)])),
+      ).song,
+    invert: (before) => restoreSong(before),
+  };
+}
+
+/**
+ * 화음 병합 결과. 드문 트랙의 음을 같은 악기의 쉬는 트랙으로 옮기고, 음을 모두 보낸 트랙은 지운 뒤
+ * 모든 트랙을 최적화 출력기로 다시 쓴다 (화음 분산과 같다). 잠근 트랙은 음도 글도 그대로 둔다.
+ *
+ * 받아들이는 기준은 하나: 게임에 붙여넣을 최종 출력을 악보마다 다시 읽은 결과(gameTimeline)가
+ * 병합 전과 같아야 한다 (같은 악보 안에서 음이 어느 트랙으로 갔는지만 다르고, 악보 나뉨·템포·끝·시작·길이·높이·볼륨·&가 같음).
+ * 비운 트랙을 지워 악보 나뉨이 바뀌면 빈 트랙으로 남겨 다시 본다.
+ * 연주자마다 따로 병합해 보고 같은 연주자만 받아들인다. 병합 안의 다른 검사(겹침·도약·글자 수·템포 자리)는
+ * 이 검사에서 떨어질 이동을 미리 거르는 것일 뿐이다
+ */
+export function mergeResult(song: Song, profile: GameProfile, locked?: ReadonlySet<string>): MergeResult {
+  const players = [...new Set(song.tracks.filter((t) => !locked?.has(t.id)).map((t) => t.playerId))].filter(
+    (id) => song.tracks.filter((t) => t.playerId === id && !locked?.has(t.id)).length > 1,
+  );
+  if (players.length === 0) return { song, moved: 0, removed: [] };
+  let current = song;
+  let moved = 0;
+  const removed: string[] = [];
+  for (const id of players) {
+    const options = { ...(locked ? { locked } : {}), players: new Set([id]) };
+    // 악보는 연주자마다 따로 쓰므로 그 연주자 악보만 비교하면 된다
+    const before = gameTimeline(song, profile, id);
+    let merged = mergeChords(current, profile, options);
+    if (merged.moved === 0) continue;
+    if (gameTimeline(merged.song, profile, id) !== before) {
+      // 비운 트랙을 지우면 뒤 트랙이 앞 악보로 당겨져 악보 나뉨이 바뀐다. 빈 트랙으로 남겨 다시 본다
+      if (merged.removed.length === 0) continue;
+      merged = mergeChords(current, profile, { ...options, keepEmpty: true });
+      if (merged.moved === 0 || gameTimeline(merged.song, profile, id) !== before) continue;
+    }
+    current = merged.song;
+    moved += merged.moved;
+    removed.push(...merged.removed);
+  }
+  if (moved === 0) return { song, moved: 0, removed: [] };
+  const compact = compactResult(current, profile, locked);
+  // 다시 쓴 곡 전체의 최종 출력도 한 번 더 본다
+  if (compact.kept || gameTimeline(compact.song, profile) !== gameTimeline(song, profile)) return { song, moved: 0, removed: [] };
+  return { song: compact.song, moved, removed };
+}
+
+/** 화음 병합 명령 (mergeResult). 실행 취소하면 병합 전 곡으로 돌아간다 */
+export function mergeSong(profile: GameProfile, label = "화음 병합", locked?: ReadonlySet<string>): Command {
+  return {
+    label,
+    apply: (song) => mergeResult(song, profile, locked).song,
     invert: (before) => restoreSong(before),
   };
 }
@@ -533,6 +639,112 @@ export function setTempos(set: readonly TempoEvent[], remove: readonly Rat[], la
     for (const e of set) next = withTempo(next, e.at, e.bpm);
     return next;
   });
+}
+
+/** 템포 한꺼번에 바꾸기: 모두 한 값으로 · ±BPM · % */
+export type TempoChange = { readonly mode: "set" | "add" | "scale"; readonly value: number };
+
+/** 바꾼 템포 (정수, 1~999) */
+export function changedBpm(bpm: number, change: TempoChange): number {
+  const raw = change.mode === "set" ? change.value : change.mode === "add" ? bpm + change.value : (bpm * change.value) / 100;
+  return Math.min(999, Math.max(1, Math.round(raw)));
+}
+
+/**
+ * 구간 [from, to)의 템포를 한꺼번에 바꾼다 (to가 없으면 곡 끝까지). 원문의 t는 구간 안에 적힌 것만 같은 규칙으로 고친다.
+ * 구간 처음(바꾼 값)·끝(원래 값)에서 빠르기가 실제로 달라질 때만 그 자리에 템포를 새로 넣고 (그 뒤에 음이 있을 때),
+ * 악보마다 그 자리에 그 빠르기가 울리지 않으면 원문에 t를 끼운다 (insertEdge). 원문은 버리지 않는다. 실행 취소 한 칸
+ */
+export function changeTempos(change: TempoChange, from: Rat = ZERO, to?: Rat, label = "템포 한꺼번에 바꾸기"): Command {
+  const inside = (at: Rat) => cmp(at, from) >= 0 && (to === undefined || cmp(at, to) < 0);
+  return songCommand(label, (song) => {
+    if (to !== undefined && cmp(to, from) <= 0) return song;
+    const before = normalizeTempo(song.tempo);
+    const bpmAt = (at: Rat) => before.filter((e) => cmp(e.at, at) <= 0).at(-1)?.bpm ?? DEFAULT_BPM;
+    const map: TempoEvent[] = before.map((e) => (inside(e.at) ? { at: e.at, bpm: changedBpm(e.bpm, change) } : e));
+    const end = song.tracks.reduce<Rat>((m, t) => t.notes.reduce((mm, n) => (cmp(add(n.start, n.dur), mm) > 0 ? add(n.start, n.dur) : mm), m), ZERO);
+    // 새로 만드는 구간 경계 템포: 그 자리 앞뒤 빠르기가 달라지고 그 뒤에 음이 있을 때만
+    const edges: TempoEvent[] = [];
+    const edgeAt = (at: Rat, bpm: number) => {
+      if (cmp(end, at) > 0 && !before.some((e) => eq(e.at, at)) && changedBpm(bpmAt(at), change) !== bpmAt(at)) edges.push({ at, bpm });
+    };
+    edgeAt(from, changedBpm(bpmAt(from), change));
+    if (to !== undefined) edgeAt(to, bpmAt(to));
+    map.push(...edges);
+    const tempo = normalizeTempo(map);
+    if (sameTempo(tempo, before)) return song;
+    const tracks = song.tracks.map((t) => {
+      const hits = (t.mml ? surgicalSource(t.mml)?.tokens : undefined)?.filter((h) => inside(h.at) && changedBpm(h.bpm, change) !== h.bpm) ?? [];
+      if (!t.mml || hits.length === 0) return t;
+      return { ...t, mml: { ...t.mml, text: spliceText(t.mml.text, hits.map((h) => ({ span: h.span, text: `t${changedBpm(h.bpm, change)}` }))) } };
+    });
+    return edges.reduce<Song>((out, e) => songScores(out).reduce<Song>((next, ids) => insertEdge(next, ids, e), out), { ...song, tempo, tracks });
+  });
+}
+
+/**
+ * 악보 하나에서 e.at에 e.bpm이 울리게 한다. 그 자리까지 그 악보 글(원문 t와 출력기가 원문 없는 트랙에 쓸 t)의
+ * 마지막 템포가 이미 e.bpm이면 그대로 둔다. 뒤에 같은 값 t가 있어도 그 자리를 채운 것으로 보지 않는다.
+ * 아니면 원문 하나에 t를 끼운다: 그 자리에서 시작하는 음·쉼표 앞, 없으면 그 자리에 걸친 쉼표를 둘로 나눠 사이에,
+ * 그래도 없으면 걸친 음을 &로 나눠 사이에 (원문을 버려 다시 쓰지 않으므로 쉼표·손으로 쓴 모양·잠근 트랙이 남는다)
+ */
+function insertEdge(song: Song, ids: readonly string[], e: TempoEvent): Song {
+  const tracks = ids.map((id) => song.tracks.find((t) => t.id === id)!);
+  // 이미 끝난 악보에는 그 뒤 템포가 필요 없다 (출력기도 악보 길이 뒤 템포는 쓰지 않는다: score-end.ts)
+  if (cmp(e.at, scoreEnd(tracks)) >= 0) return song;
+  const generated = scoreTempo(song, ids).generated;
+  const heard = [
+    ...tracks.flatMap((t) => (t.mml ? tempoTokens(t.mml) : [])),
+    ...tracks.flatMap((t) => generated.get(t.id) ?? []),
+  ].filter((k) => cmp(k.at, e.at) <= 0);
+  const last = heard.reduce<Rat | undefined>((m, k) => (m === undefined || cmp(k.at, m) > 0 ? k.at : m), undefined);
+  if (last !== undefined && heard.filter((k) => eq(k.at, last)).every((k) => k.bpm === e.bpm)) return song;
+  const t = `t${e.bpm}`;
+  const sources = tracks
+    .map((track) => ({ track, mml: track.mml, src: track.mml ? surgicalSource(track.mml) : undefined }))
+    .filter((c): c is { track: Track; mml: TrackText; src: NonNullable<ReturnType<typeof surgicalSource>> } => c.mml !== undefined && c.src !== undefined)
+    .sort((a, b) => Number(b.src.tokens.length > 0) - Number(a.src.tokens.length > 0));
+  // 음을 나누면 트랙 음도 새 글에서 다시 읽는다 (& 잇기가 하나 늘 뿐 소리는 같다. 타브 줄은 옮겨 받는다)
+  // 게임 길이가 달라지는 수술(마지막 쉼표 뒤에 t를 붙이거나 마지막 쉼표를 나누기)은 하지 않는다
+  const write = (id: string, mml: TrackText, span: readonly [number, number], text: string, renote = false): Song | undefined => {
+    const next = { ...mml, text: spliceText(mml.text, [{ span, text }]) };
+    if (!eq(textEnd(next), textEnd(mml))) return undefined;
+    return {
+      ...song,
+      tracks: song.tracks.map((tr) => {
+        if (tr.id !== id) return tr;
+        return renote ? { ...tr, notes: carryTabStrings(tr.notes, parseTrackText(id, next).notes), mml: next } : { ...tr, mml: next };
+      }),
+    };
+  };
+  for (const { track, mml, src } of sources) {
+    const local = localAt(mml, e.at);
+    const offset = local && tempoInsertOffset(mml.text, src.parsed, local);
+    const done = offset !== undefined && offset !== null ? write(track.id, mml, [offset, offset], t) : undefined;
+    if (done) return done;
+  }
+  const within = (x: { start: Rat; dur: Rat }, at: Rat) => cmp(x.start, at) < 0 && cmp(add(x.start, x.dur), at) > 0;
+  for (const { track, mml, src } of sources) {
+    const local = localAt(mml, e.at);
+    const rest = local && src.parsed.rests.find((r) => within(r, local));
+    if (!local || !rest) continue;
+    const a = lengthPieces(sub(local, rest.start));
+    const b = lengthPieces(sub(add(rest.start, rest.dur), local));
+    const done = a && b ? write(track.id, mml, rest.span, [...a.map((l) => `r${l}`), t, ...b.map((l) => `r${l}`)].join("")) : undefined;
+    if (done) return done;
+  }
+  for (const { track, mml, src } of sources) {
+    const local = localAt(mml, e.at);
+    const note = local && src.parsed.notes.find((n) => within(n, local));
+    if (!local || !note) continue;
+    // n 음표는 길이를 붙일 수 없어 나누지 않는다
+    const pitch = /^[a-g][+#-]*/i.exec(mml.text.slice(note.span[0], note.span[1]))?.[0];
+    const a = lengthPieces(sub(local, note.start));
+    const b = lengthPieces(sub(add(note.start, note.dur), local));
+    const done = pitch && a && b ? write(track.id, mml, note.span, `${a.map((l) => pitch + l).join("&")}&${t}${b.map((l) => pitch + l).join("&")}`, true) : undefined;
+    if (done) return done;
+  }
+  return song;
 }
 
 /**

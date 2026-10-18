@@ -2,6 +2,7 @@ import { DEFAULT_APPEARANCE, type NoteLook } from "./appearance";
 import { chainVolumes } from "./scores";
 import { drawVolumeLane, type LaneDraw } from "./laneDraw";
 import { peakRange, wholeToSecondsFn, type Peaks } from "./waveform";
+import { trackSoundingRange, type CanonicalOf } from "./instrumentRange";
 import {
   add,
   cmp,
@@ -9,9 +10,7 @@ import {
   gridLines,
   MOBILE_PROFILE,
   PROFILES,
-  soundingRangeOf,
   toFloat,
-  trackInstrument,
   type Note,
   type Song,
 } from "@mmlce/core";
@@ -70,6 +69,8 @@ export interface RollDrawOptions {
   readonly lane?: LaneDraw | undefined;
   /** 재생 중 지금 울리는 음의 건반에 트랙 색 불 켜기 */
   readonly lightKeys?: boolean;
+  /** 번호로만 아는 악기의 실제 악기 (접힘 표식을 재생과 같은 음역으로) */
+  readonly canonicalOf?: CanonicalOf | undefined;
   /** CSS 변수 값 (테마 색) */
   readonly css: (name: string) => string;
 }
@@ -177,7 +178,7 @@ export function drawRoll(canvas: HTMLCanvasElement, o: RollDrawOptions): void {
   };
   const tracks = [...s.tracks].sort((a, b) => Number(a.id === activeId) - Number(b.id === activeId));
   for (const track of tracks) {
-    const range = soundingRangeOf(profile, trackInstrument(s, track).canonical);
+    const range = trackSoundingRange(profile, s, track, o.canonicalOf);
     const isActive = track.id === activeId;
     let notes: readonly Note[] = track.notes;
     if (isActive && o.dragNotes.length > 0) {

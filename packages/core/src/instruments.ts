@@ -52,13 +52,22 @@ export function splitPackProgram(program: number): { pack: number; number: numbe
 }
 
 /**
+ * .2 팩 이름. 앞뒤에 영문자가 붙으면 다른 낱말로 본다(밑줄·숫자·기호는 경계로 본다).
+ * 앞쪽 경계는 lookbehind 대신 (?:^|[^a-z])로 잡는다. 옛 사파리(16.4 미만)는 lookbehind 정규식이 있으면 스크립트를 읽지 못한다
+ */
+const MABIICCO_PACK2_NAME = /(?:^|[^a-z])fur(?:y|ika)(?![a-z])/i;
+/** .3 팩 이름. 두 낱말 사이에 공백·밑줄·하이픈이 없거나 여러 개여도 같다 */
+const MABIICCO_PACK3_NAME = /(?:^|[^a-z])harmonic[\s_-]*muse(?![a-z])/i;
+
+/**
  * 마비꼬 팩 번호(.2·.3)가 가리키는 사운드팩을 파일 이름으로 알아본다.
  * .2는 원본 팩과 그걸 고친 팩 이름을 모두 받는다. .2 팩 파일 이름에도 .3 팩 이름이 들어 있으므로 .3에서는 뺀다.
+ * 팩 이름 앞뒤에 영문자가 붙은 이름(비슷한 다른 낱말)은 맞지 않는 것으로 본다.
  * 모르는 팩 번호면 false
  */
 export function isMabiiccoPack(pack: number, label: string): boolean {
-  if (pack === 2) return /fur(y|ika)/i.test(label);
-  if (pack === 3) return /harmonic\s*muse/i.test(label) && !/fur(y|ika)/i.test(label);
+  if (pack === 2) return MABIICCO_PACK2_NAME.test(label);
+  if (pack === 3) return MABIICCO_PACK3_NAME.test(label) && !MABIICCO_PACK2_NAME.test(label);
   return false;
 }
 

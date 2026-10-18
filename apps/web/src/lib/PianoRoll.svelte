@@ -29,6 +29,7 @@
   import { rollFlow } from "./rollFlow.svelte";
   import { t } from "./i18n.svelte";
   import { drawRoll } from "./rollDraw";
+  import type { CanonicalOf } from "./instrumentRange";
   import { Pinch, pinchRatio, type PinchFrame } from "./pinch";
   import { wholeToSecondsFn, type Peaks } from "./waveform";
   import type { NoteLook } from "./appearance";
@@ -121,6 +122,8 @@
     onvolume?: (delta: number) => void;
     /** 재생 중 울리는 건반에 불 켜기 */
     lightKeys?: boolean;
+    /** 번호로만 아는 악기의 실제 악기 (올린 팩이 바뀌면 새 함수를 넘겨 다시 그린다) */
+    canonicalOf?: CanonicalOf | undefined;
     /** 롤에 그릴 트랙 id. 없으면 곡의 모든 트랙. 고른 트랙은 항상 그린다 */
     visibleTrackIds?: readonly string[] | undefined;
     /** 고르기 도구에서 음을 끌어 옮길 수 있는지 (자물쇠 풀림). 길이 바꾸기·음 넣기는 여전히 안 한다 */
@@ -154,7 +157,7 @@
     onclearlane?: () => void;
   }
 
-  let { cursor, loop, oncursor, onloop, song: fullSong, activeTrackId, orientation, division, playhead, onnotes, onselecttrack, onpicknote, onpreview, onseek, showEvents = false, video = $bindable(), videoPlay = $bindable(false), pitchRange = [12, 119], wave, look, themeKey = "", seconds, colors, tool = "pen", noteDur, volume, onvolume, lightKeys = false, visibleTrackIds, selectMove = false, locked, pickOthers = true, onevent, oneventmove, onalignbar, onwaveoffset, pickedEvent, onpickevent, ontempowheel, laneTrackIds, melodyIds, onvolumes, onclearlane }: Props =
+  let { cursor, loop, oncursor, onloop, song: fullSong, activeTrackId, orientation, division, playhead, onnotes, onselecttrack, onpicknote, onpreview, onseek, showEvents = false, video = $bindable(), videoPlay = $bindable(false), pitchRange = [12, 119], wave, look, themeKey = "", seconds, colors, tool = "pen", noteDur, volume, onvolume, lightKeys = false, canonicalOf, visibleTrackIds, selectMove = false, locked, pickOthers = true, onevent, oneventmove, onalignbar, onwaveoffset, pickedEvent, onpickevent, ontempowheel, laneTrackIds, melodyIds, onvolumes, onclearlane }: Props =
     $props();
 
   /** 레이어: 고른 트랙이 든 보기만 그리고 다루는 곡 (나머지 트랙은 롤에서 보이지도 눌리지도 않는다) */
@@ -521,6 +524,7 @@
       pickedEvent,
       eventDrag: eventPress?.live && eventPress.label && movable(eventPress.label) ? { label: eventPress.label, to: eventPress.to } : undefined,
       lightKeys,
+      canonicalOf,
       lane: laneReserved > 0 ? { ...lane.draw(laneList), label: t("ui.laneName") } : undefined,
       css: cssVar,
     });

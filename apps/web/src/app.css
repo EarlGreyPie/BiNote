@@ -297,6 +297,10 @@ input[type="range"] {
 .topbar .volume input {
   width: 90px;
 }
+/* 음량은 재생 묶음 안, 템포 옆에 둔다 */
+.playgroup .volume {
+  margin-left: 4px;
+}
 .playgroup {
   display: flex;
   align-items: center;
@@ -373,6 +377,11 @@ input[type="range"] {
 }
 .seg button + button {
   border-left: none;
+}
+.seg.dock button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 .seg button.on {
   background: var(--accent);

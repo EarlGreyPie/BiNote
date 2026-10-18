@@ -48,7 +48,7 @@
     onfit: () => void;
     onzoom: (axis: "time" | "pitch", factor: number) => void;
     layer: RollLayer;
-    /** 좁은 화면(세로·1300px 이하): 도구줄을 한 줄로 쓰려고 일부를 ⋯ 메뉴로 넘긴다 */
+    /** 좁은 화면(세로·1700px 이하): 도구줄을 한 줄로 쓰려고 일부를 ⋯ 메뉴로 넘긴다 */
     compact: boolean;
     tuningName: TuningName;
     capo: number;
@@ -68,6 +68,10 @@
     oncapo: (capo: number) => void;
     ontoggleevents: () => void;
     ontoggleorientation: () => void;
+    /** 트랙 패널 자리: 옆(가로) / 아래(세로). 세로 화면에서는 늘 아래라 단추를 숨긴다 */
+    dock: "right" | "bottom";
+    canDock: boolean;
+    ondock: (dock: "right" | "bottom") => void;
     ontoggleside: () => void;
   }
 
@@ -110,6 +114,9 @@
     oncapo,
     ontoggleevents,
     ontoggleorientation,
+    dock,
+    canDock,
+    ondock,
     ontoggleside,
   }: Props = $props();
 
@@ -143,6 +150,19 @@
     ...(viewMode === "roll" ? [{ label: t("ui.video") + "…", run: () => videoInput.click() }] : []),
   ]);
 </script>
+
+{#snippet dockSwitch()}
+  {#if canDock}
+    <span class="seg dock" role="group" title={t("ui.dockSwitchHelp")} aria-label={t("ui.dockSwitch")}>
+      <button class:on={dock === "right"} aria-pressed={dock === "right"} title={t("ui.dockSideHelp")} onclick={() => ondock("right")}>
+        <Icon name="panel-right" size={14} />{t("ui.dockSide")}
+      </button>
+      <button class:on={dock === "bottom"} aria-pressed={dock === "bottom"} title={t("ui.dockStackHelp")} onclick={() => ondock("bottom")}>
+        <Icon name="panel-bottom" size={14} />{t("ui.dockStack")}
+      </button>
+    </span>
+  {/if}
+{/snippet}
 
 <div class="toolbar" class:compact role="toolbar">
   <span class="seg">
@@ -228,6 +248,7 @@
       </span>
     {/if}
     <span class="spacer"></span>
+    {@render dockSwitch()}
     {#if !compact}
       <span class="field" title={t("ui.layerHelp")}>
         <span class="muted">{t("ui.layer")}</span>
@@ -265,6 +286,7 @@
     </label>
     <VolumeBox bind:value={inputVolume} min={volumeMin} max={volumeMax} selected={undefined} />
     <span class="spacer"></span>
+    {@render dockSwitch()}
   {/if}
   <Menu icon="ellipsis" title={t("ui.more")} align="right" items={moreMenu} />
   <input type="file" accept={mediaAccept("audio/*,video/*")} onchange={onreference} hidden bind:this={referenceInput} />

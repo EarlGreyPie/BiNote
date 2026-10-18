@@ -13,10 +13,11 @@ import {
   limiterWorkletSource,
   PeakLimiter,
 } from "@mmlce/audio/browser";
-import { getProfile, positionToSeconds, type Rat, type Song } from "@mmlce/core";
+import { getProfile, positionToSeconds, type GameProfile, type Rat, type Song } from "@mmlce/core";
 import type { WorkletSynthesizer } from "spessasynth_lib";
 import processorUrl from "spessasynth_lib/dist/spessasynth_processor.min.js?url";
 import { computePeaks, type Peaks } from "./waveform";
+import { previewPitch } from "./instrumentRange";
 import type { WavRequest } from "./jobs";
 
 /** CC 0 = 뱅크 선택(MSB) */
@@ -35,6 +36,9 @@ export const MASTER_MAX = 4;
 
 /** 오디오가 막 깨어났을 때 첫 음 앞에 두는 여유(초). 그동안 신스가 악기 샘플을 준비한다 */
 const COLD_START_DELAY = 0.4;
+
+/** CC 120 = 소리 모두 끄기 (끝소리 없이) */
+const ALL_SOUND_OFF = 120;
 
 /** 오디오 시계가 실제로 흐르기 시작할 때까지 기다린다 (최대 1초) */
 async function waitForClock(context: AudioContext): Promise<void> {
@@ -154,8 +158,11 @@ export class Engine {
     return synth;
   }
 
-  /** 번호로만 아는 악기(#42.3 등)를 지금 올린 팩의 프리셋 이름으로 알아본다. 음역·샘플 길이를 맞추려고 */
-  private canonicalOf = (instrument: string, program: number | undefined) => this.registry.resolve(instrument, program)?.canonical;
+  /**
+   * 번호로만 아는 악기(#42.3 등)를 지금 올린 팩의 프리셋 이름으로 알아본다. 음역·샘플 길이를 맞추려고.
+   * 악보 진단·롤 음역도 재생과 같게 이걸 쓴다
+   */
+  readonly canonicalOf = (instrument: string, program: number | undefined) => this.registry.resolve(instrument, program)?.canonical;
 
   /** 올린 사운드팩 파일 (WAV 저장 때 워커에서 다시 읽는다) */
   private packFiles = new Map<string, { bank: number; file: File }>();
@@ -166,6 +173,8 @@ export class Engine {
     const bank = this.registry.nextBank;
     this.packFiles.set(id, { bank, file });
     await synth.soundBankManager.addSoundBank(await file.arrayBuffer(), id, bank);
+    // 팩을 바꾸면 신스가 준비해 둔 음을 비운다
+    this.preparedVoices.clear();
     // 팩마다 뱅크를 밀어 올렸으므로, 이 팩의 프리셋은 그 뱅크 번호로 보인다
     const presets = synth.presetList
       .filter((p) => p.bankMSB === bank)
@@ -182,6 +191,7 @@ export class Engine {
     this.registry.remove(id);
     this.packFiles.delete(id);
     await this.synth?.soundBankManager.deleteSoundBank(id);
+    this.preparedVoices.clear();
   }
 
   get playing(): boolean {
@@ -216,6 +226,7 @@ export class Engine {
   /** 재생을 시작하고, 사운드팩에서 찾지 못한 악기를 돌려준다 */
   /** loop: 반복할 길이(초). 주면 시작 자리부터 그 길이를 끊김 없이 되풀이한다 */
   async play(song: Song, from?: Rat, loop?: number): Promise<Unresolved[]> {
+    const request = ++this.playRequest;
     await this.ready();
     const context = this.context!;
     // 오디오가 쉬고 있다 깨어나면(첫 재생, 아이패드가 재운 뒤) 첫 음이 늦게 나므로 시계가 실제로 돌기를 기다리고 조금 늦게 시작한다
@@ -227,10 +238,62 @@ export class Engine {
     const { patches, unresolved } = assignPatches(schedule, this.registry, this.gains);
     this.ensureChannels(Math.max(-1, ...patches.map((p) => p.channel)));
     this.playingPatches = patches;
+    await this.prepareVoices(schedule, patches);
+    // 기다리는 사이 정지나 다른 재생을 눌렀으면 이 재생은 시작하지 않는다
+    if (request !== this.playRequest) return unresolved;
     this.player!.start(schedule, patches, { ...(loop ? { loop } : {}), ...(cold ? { delay: COLD_START_DELAY } : {}) });
     this.fromSeconds = from ? positionToSeconds(song.tempo, from) : 0;
     this.startReference();
     return unresolved;
+  }
+
+  /** 재생 요청 번호. 정지·새 재생마다 늘어, 준비하는 동안 취소된 재생이 뒤늦게 시작하지 않게 한다 */
+  private playRequest = 0;
+
+  /** 신스가 이미 준비한 음: 팩/뱅크/프로그램/음높이/세기 */
+  private preparedVoices = new Set<string>();
+
+  /**
+   * 곡에 쓰이는 음을 재생 전에 신스에 미리 준비시킨다. 신스는 어떤 음(악기·높이·세기)을 처음 칠 때
+   * 샘플을 풀고 음 설정을 계산하는데, 그 일이 소리를 만드는 오디오 스레드에서 일어나 재생 중에 처음 나오는
+   * 음마다 수 ms씩 걸린다. 느린 PC에서는 그동안 소리를 제때 못 만들어 살짝 끊겼다 (WAV 저장은 미리 그리므로 괜찮았다).
+   * 미리듣기 채널을 소리 없이(음량 0) 두고 그 음들을 한 번씩 쳤다가 바로 끈다. 준비는 팩을 바꾸기 전까지 남는다
+   */
+  private async prepareVoices(schedule: ReturnType<typeof buildSchedule>, patches: readonly SlotPatch[]): Promise<void> {
+    const synth = this.synth!;
+    const context = this.context!;
+    const bySlot = new Map(patches.map((p) => [p.slot, p]));
+    const todo = new Map<string, { patch: SlotPatch; note: number; velocity: number }>();
+    for (const e of schedule.events) {
+      if (e.type !== "on") continue;
+      const patch = bySlot.get(e.slot);
+      if (!patch) continue;
+      const key = `${patch.packId}/${patch.bank}/${patch.program}/${e.note}/${e.velocity}`;
+      if (!this.preparedVoices.has(key)) todo.set(key, { patch, note: e.note, velocity: e.velocity });
+    }
+    if (todo.size === 0) return;
+    const ch = Engine.PREVIEW_CHANNEL;
+    this.ensureChannels(ch);
+    synth.midiChannels[ch]?.setSystemParameter("gain", 0);
+    let program = "";
+    for (const [key, { patch, note, velocity }] of todo) {
+      const p = `${patch.bank}/${patch.program}`;
+      if (p !== program) {
+        synth.controllerChange(ch, ALL_SOUND_OFF, 0);
+        synth.controllerChange(ch, BANK_SELECT, patch.bank);
+        synth.programChange(ch, patch.program);
+        program = p;
+      }
+      synth.noteOn(ch, note, velocity);
+      synth.controllerChange(ch, ALL_SOUND_OFF, 0);
+      this.preparedVoices.add(key);
+    }
+    // 미리듣기는 다음에 누를 때 악기와 음량을 다시 정한다
+    this.previewKey = "";
+    // 준비가 끝나야 오디오 시계가 다시 흐른다. 그 뒤에 시작해야 첫 음들이 늦게 몰려 나오지 않는다
+    const t0 = context.currentTime;
+    const until = performance.now() + 3000;
+    while (context.currentTime < t0 + 0.02 && performance.now() < until) await new Promise((r) => setTimeout(r, 10));
   }
 
   /**
@@ -264,6 +327,7 @@ export class Engine {
   }
 
   stop(): void {
+    this.playRequest++;
     this.player?.stop();
     this.stopReference();
   }
@@ -275,8 +339,11 @@ export class Engine {
   /** 건반을 누르는 동안 그 악기 소리를 낸다 (사운드팩에 없으면 조용히) */
   /** 미리듣기로 누르고 있는 건반. 오디오를 켜는 동안 떼면 늦게 소리 내지 않는다 */
   private previewHeld = new Set<number>();
+  /** 누른 건반 높이 → 음역에 맞춰 접어 보낸 높이 (뗄 때 보낸 높이로 끈다) */
+  private previewSent = new Map<number, number>();
 
-  async previewOn(instrument: string, program: number | undefined, pitch: number, velocity: number): Promise<void> {
+  /** profile은 곡의 프로필 (재생과 같은 음역으로 높이를 접는다) */
+  async previewOn(instrument: string, program: number | undefined, pitch: number, velocity: number, profile: GameProfile = getProfile("mobile")): Promise<void> {
     this.previewHeld.add(pitch);
     const synth = await this.ready();
     await this.context!.resume();
@@ -296,12 +363,18 @@ export class Engine {
       synth.midiChannels[ch]?.setSystemParameter("gain", this.registry.gainOf(patch.packId, patch.program, this.gains));
       this.previewKey = key;
     }
-    synth.noteOn(ch, pitch, velocity);
+    // 재생과 같이 실제 악기 음역으로 옥타브째 접는다 (번호로만 아는 악기도 알아본 악기로)
+    const sent = previewPitch(profile, patch.canonical ?? instrument, pitch);
+    this.previewSent.set(pitch, sent);
+    synth.noteOn(ch, sent, velocity);
   }
 
   previewOff(pitch: number): void {
     this.previewHeld.delete(pitch);
-    this.synth?.noteOff(Engine.PREVIEW_CHANNEL, pitch);
+    const sent = this.previewSent.get(pitch) ?? pitch;
+    this.previewSent.delete(pitch);
+    // 다른 건반이 같은 높이로 접혀 아직 울리면 끄지 않는다
+    if (![...this.previewSent.values()].includes(sent)) this.synth?.noteOff(Engine.PREVIEW_CHANNEL, sent);
     this.fallbackOff(pitch);
   }
 

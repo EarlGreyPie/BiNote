@@ -17,7 +17,6 @@
     foldPitch,
     rat,
     scaleNotes,
-    soundingRangeOf,
     transposeNotes,
     DOUBLE,
     HALF,
@@ -53,6 +52,8 @@
     deleteTime,
     distributeChords,
     distributeSong,
+    mergeResult,
+    mergeSong,
     insertTime,
     newSong,
     applyPlan,
@@ -78,6 +79,8 @@
     removeTempoAt,
     moveTempo,
     setTempos,
+    changeTempos,
+    type TempoChange,
     fillScoreTempo,
     keepScoreTempo,
     scoresMissingTempo,
@@ -94,10 +97,11 @@
     type FewerBooks,
   } from "@mmlce/mml";
   import { analyzeSong, noteSpan, spanAt, textTimeline } from "./lib/analysis";
+  import { trackSoundingRange, type CanonicalOf } from "./lib/instrumentRange";
   import { Engine, MASTER_MAX } from "./lib/engine";
   import { diag, i18n, instrumentName, LOCALE_LABELS, setLocale, t } from "./lib/i18n.svelte";
   import { openScore } from "./lib/load";
-  import { askSaveFile, loadSaveTarget, saveFile } from "./lib/saveTarget.svelte";
+  import { asksSaveDialog, loadSaveTarget, saveFile, type SaveOutcome } from "./lib/saveTarget.svelte";
   import { flushAllEditors } from "./lib/MmlEditor.svelte";
   import ReferenceBar from "./lib/ReferenceBar.svelte";
   import TapBar from "./lib/TapBar.svelte";
@@ -133,6 +137,7 @@
   import Icon from "./lib/Icon.svelte";
   import MeterDialog from "./lib/MeterDialog.svelte";
   import EventDialog from "./lib/EventDialog.svelte";
+  import TempoChangeDialog from "./lib/TempoChangeDialog.svelte";
   import SettingsDialog from "./lib/SettingsDialog.svelte";
   import StatusBar, { type StatusPanel } from "./lib/StatusBar.svelte";
   import Toolbar, { type RollLayer } from "./lib/Toolbar.svelte";
@@ -243,7 +248,7 @@
     return () => portraitQuery?.removeEventListener("change", onchange);
   });
   // 도구줄이 한 줄에 안 들어가는 폭(아이패드 가로 포함)에서는 일부를 ⋯ 메뉴로 넘긴다
-  const compactQuery = typeof matchMedia === "undefined" ? undefined : matchMedia("(max-width: 1300px), (max-aspect-ratio: 1/1)");
+  const compactQuery = typeof matchMedia === "undefined" ? undefined : matchMedia("(max-width: 1700px), (max-aspect-ratio: 1/1)");
   let narrow = $state(compactQuery?.matches ?? false);
   $effect(() => {
     const onchange = () => (narrow = compactQuery?.matches ?? false);
@@ -418,7 +423,15 @@
     Math.max(12, (profile.octave.min + 1) * 12),
     Math.min(119, (profile.octave.max + 1) * 12 + 11),
   ]);
-  const analysis = $derived(song ? analyzeSong(song, profile) : undefined);
+  /**
+   * 번호로만 아는 악기(추가 사운드팩의 #42.3 등)의 실제 악기. 재생과 같은 해석으로 진단·롤 음역을 정한다.
+   * 올린 팩에 따라 달라지므로 팩 목록이 바뀌면 새 함수가 되어 진단과 롤을 다시 계산한다
+   */
+  const canonicalOf = $derived.by<CanonicalOf>(() => {
+    void packs;
+    return (instrument, program) => engine.canonicalOf(instrument, program);
+  });
+  const analysis = $derived(song ? analyzeSong(song, profile, { canonicalOf }) : undefined);
   // 악보 하나에 담는 트랙 수는 악기마다 (오르골 3)
   const chordsOf = $derived((playerId: string) => maxChordsOf(profile, song?.players.find((p) => p.id === playerId)?.instrument.canonical));
   const groups = $derived(song ? scoreGroups(song, chordsOf) : []);
@@ -563,6 +576,8 @@
   let splitToken = 0;
   /** WAV로 저장하는 중이면 진행률 (0~1). 그리기는 Web Worker에서 한다 */
   let wavProgress = $state<number | undefined>(undefined);
+  /** 다 만들었지만 아직 저장하지 않은 WAV. 저장 창은 누른 직후에만 뜨므로 저장 단추를 눌러 저장한다 */
+  let wavReady = $state<{ bytes: Uint8Array; name: string } | undefined>(undefined);
   const wavRunner = wavJob();
   /** WAV 저장 요청 번호. 취소하거나 새로 시작하면 바뀌어, 앞 요청의 늦은 진행률·결과를 버린다 */
   let wavToken = 0;
@@ -579,8 +594,26 @@
     return analyzeSong(s, profile).tracks.reduce((sum, tr) => sum + tr.text.length, 0);
   }
 
-  /** 글자 수 줄이기·화음 분산 미리보기. 적용하면 같은 명령을 실행 취소 한 칸으로 넣는다 */
-  let optimizing = $state.raw<{ kind: "compact" | "distribute"; before: Song; after: Song; moved: number; kept?: "notes" | "tempo" } | undefined>(undefined);
+  /**
+   * 글자 수 줄이기·화음 분산·화음 병합 미리보기. 적용하면 같은 명령을 실행 취소 한 칸으로 넣는다.
+   * 화음 분산: addTo = 분산 전에 빈 트랙을 하나씩 더할 연주자, over = 그래도 넘치는 연주자(트랙을 더해 볼 수 있는)
+   */
+  let optimizing = $state.raw<
+    | {
+        kind: "compact" | "distribute" | "merge";
+        before: Song;
+        after: Song;
+        moved: number;
+        removed?: number;
+        kept?: "notes" | "tempo";
+        addTo?: readonly string[];
+        over?: readonly string[];
+        /** over 중 트랙을 더하면 악보가 하나 더 생기는(같이 칠 사람이 느는) 연주자 수 */
+        newScores?: number;
+        stillOver?: number;
+      }
+    | undefined
+  >(undefined);
 
   function compact() {
     if (!song) return;
@@ -588,17 +621,68 @@
     optimizing = { kind: "compact", before: song, after: r.song, moved: 0, ...(r.kept ? { kept: r.kept } : {}) };
   }
 
-  function distribute() {
+  /** 연주자마다 마지막 트랙 뒤에 빈 트랙을 하나씩 더한다 */
+  function withTracks(s: Song, playerIds: readonly string[]): Song {
+    return playerIds.reduce((next, id) => {
+      const n = next.tracks.filter((tr) => tr.playerId === id).length + 1;
+      return addTrack(id, t("ui.newTrackName", { n })).apply(next);
+    }, s);
+  }
+
+  function distribute(addTo: readonly string[] = []) {
     if (!song) return;
+    const base = withTracks(song, addTo);
     // 잠근 트랙은 음을 빼지도 넣지도 않고, 글도 다시 쓰지 않는다
-    const spread = distributeChords(song, profile, { locked: lockedIds });
-    optimizing = { kind: "distribute", before: song, after: compactSong(profile, undefined, lockedIds).apply(spread.song), moved: spread.moved };
+    const spread = distributeChords(base, profile, { locked: lockedIds });
+    // 그래도 넘치는 트랙의 연주자. 트랙에 악기를 따로 정한 트랙은 새 트랙과 악기가 달라 옮길 수 없으니 뺀다
+    const over = [
+      ...new Set(
+        spread.over
+          .map((id) => base.tracks.find((tr) => tr.id === id))
+          .filter((tr): tr is Track => !!tr && !tr.instrument && !lockedIds.has(tr.id))
+          .map((tr) => tr.playerId),
+      ),
+    ];
+    // 트랙 수가 화음 수의 배수면 트랙을 더할 때 악보가 하나 더 생긴다 (게임에서 같이 칠 사람이 한 명 는다)
+    const newScores = over.filter((id) => base.tracks.filter((tr) => tr.playerId === id).length % chordsOf(id) === 0).length;
+    optimizing = {
+      kind: "distribute",
+      before: song,
+      after: compactSong(profile, undefined, lockedIds).apply(spread.song),
+      moved: spread.moved,
+      addTo,
+      over,
+      newScores,
+      stillOver: spread.over.length,
+    };
+  }
+
+  /** 빈 트랙을 더한 뒤 화음 분산하는 명령 (실행 취소 한 칸) */
+  function addAndDistribute(addTo: readonly string[]): Command {
+    const spread = distributeSong(profile, t("ui.distribute"), undefined, lockedIds);
+    const restore = (before: Song): Command => ({ label: t("ui.distribute"), apply: () => before, invert: (s) => restore(s) });
+    return { label: t("ui.distribute"), apply: (s) => spread.apply(withTracks(s, addTo)), invert: restore };
+  }
+
+  /** 화음 병합: 드문 트랙의 음을 같은 악기의 쉬는 트랙으로 옮기고, 비게 된 트랙은 지운다 */
+  function merge() {
+    if (!song) return;
+    const merged = mergeResult(song, profile, lockedIds);
+    optimizing = { kind: "merge", before: song, after: merged.song, moved: merged.moved, removed: merged.removed.length };
   }
 
   function applyOptimize() {
     if (!history || !song || !optimizing || optimizing.before !== song) return;
     const before = totalChars(song);
-    const next = history.run(optimizing.kind === "compact" ? compactSong(profile, undefined, lockedIds) : distributeSong(profile, undefined, undefined, lockedIds));
+    const next = history.run(
+      optimizing.kind === "compact"
+        ? compactSong(profile, undefined, lockedIds)
+        : optimizing.kind === "merge"
+          ? mergeSong(profile, t("ui.merge"), lockedIds)
+          : optimizing.addTo?.length
+            ? addAndDistribute(optimizing.addTo)
+            : distributeSong(profile, undefined, undefined, lockedIds),
+    );
     sync(next);
     flash(t("ui.compactDone", { before, after: totalChars(next) }));
   }
@@ -785,9 +869,11 @@
     flushAllEditors();
     const current = history?.song ?? song;
     const editor = editorState();
-    void saveFile(new TextEncoder().encode(writeProject(current, { editor: { ...editor }, app: APP_VERSION })), `${baseName()}${PROJECT_EXTENSION}`).then((outcome) => {
+    void store(new TextEncoder().encode(writeProject(current, { editor: { ...editor }, app: APP_VERSION })), `${baseName()}${PROJECT_EXTENSION}`).then((outcome) => {
       // 폴더에 썼거나 공유 창에서 보냈으면 저장을 확인한 것: 자동 보존이 안 돼도 이 곡·편집 상태로는 새 판으로 바꿀 수 있다
       if (outcome === "written" || outcome === "shared") projectSaved = { song: current, editor: editorStateKey(editor) };
+      // 쓰지 못해 다운로드로 물러났으면 전에 확인한 저장도 믿지 않는다 (저장 창에서 고른 그 파일은 이미 비었을 수 있다)
+      else if (outcome === "downloaded" || outcome === "rescued") projectSaved = undefined;
     });
     notices = [];
     offerUtf8 = false;
@@ -1145,7 +1231,7 @@
     previewOn: (pitch, velocity) => {
       const track = song?.tracks.find((tr) => tr.id === activeTrackId);
       const inst = song && track ? trackInstrument(song, track) : { canonical: "piano" };
-      engine.previewOn(inst.canonical, inst.program, pitch, velocity).catch(() => {
+      engine.previewOn(inst.canonical, inst.program, pitch, velocity, profile).catch(() => {
         // 오디오를 못 켜도 악보 입력은 이어 간다
       });
     },
@@ -1193,7 +1279,7 @@
     if (!on) return engine.previewOff(pitch);
     const track = song?.tracks.find((tr) => tr.id === activeTrackId);
     const inst = song && track ? trackInstrument(song, track) : { canonical: "piano" };
-    engine.previewOn(inst.canonical, inst.program, pitch, 100).catch(() => {
+    engine.previewOn(inst.canonical, inst.program, pitch, 100, profile).catch(() => {
       // 오디오를 못 켜도 편집은 이어 간다
     });
   }
@@ -1351,6 +1437,26 @@
   function clearTempos() {
     if (tempoClearTargets.length === 0) return;
     runIfChanged(setTempos([], tempoClearTargets, t("ui.tempoClear")));
+  }
+
+  /** 템포 한꺼번에 바꾸기: 반복 구간이 있으면 그 안, 없으면 곡 전체 (실행 취소 한 칸) */
+  let tempoChangeOpen = $state(false);
+  const tempoChangeTarget = $derived.by(() => {
+    const s = song;
+    if (!s) return undefined;
+    const from = loop ? asRat(loop[0]) : rat(0);
+    const to = loop ? asRat(loop[1]) : undefined;
+    const bpms = [bpmAt(s.tempo, from), ...s.tempo.filter((e) => cmp(e.at, from) > 0 && (!to || cmp(e.at, to) < 0)).map((e) => e.bpm)];
+    const where = (at: Rat) => {
+      const { bar, beat } = barBeatAt(s.timeSig, at);
+      return `${bar}:${Number.isInteger(beat) ? beat : beat.toFixed(2)}`;
+    };
+    return { from, to, bpms, scope: to ? t("ui.tempoChangeRange", { from: where(from), to: where(to) }) : t("ui.tempoChangeSong") };
+  });
+  function changeAllTempos(change: TempoChange) {
+    const target = tempoChangeTarget;
+    if (!target) return;
+    runIfChanged(changeTempos(change, target.from, target.to, t("ui.tempoChange")));
   }
 
   function deletePicked(): boolean {
@@ -1626,6 +1732,7 @@
     { label: t("ui.outputMenu"), title: t("ui.outputMenuHelp"), disabled: !song, run: openOutput },
     { separator: true },
     { label: t("ui.addPack"), run: () => packInput.click() },
+    { label: t("ui.midiKeysConnect"), title: t("ui.midiKeysHelp"), checked: !!midiKeys.status, run: () => void midiKeys.toggle() },
   ]);
 
   const editMenu: MenuItem[] = $derived([
@@ -1662,6 +1769,12 @@
       run: clearTempos,
     },
     {
+      label: (loop ? t("ui.tempoChangeLoop") : t("ui.tempoChange")) + "…",
+      title: t("ui.tempoChangeHelp"),
+      disabled: !song,
+      run: () => (tempoChangeOpen = true),
+    },
+    {
       label: t("ui.tempoFillScores") + ` (${tempoMissing})`,
       title: t("ui.tempoFillScoresHelp"),
       disabled: tempoMissing === 0,
@@ -1671,7 +1784,8 @@
     { label: t("ui.addTrackMenu"), title: t("ui.addTrackHelp"), disabled: !activePlayer, run: addTrackToPlayer },
     { label: t("ui.addScoreMenu"), title: t("ui.addPlayerHelp"), disabled: !song, run: () => (addScoreOpen = true) },
     { separator: true },
-    { label: t("ui.distribute") + "…", title: t("ui.distributeHelp"), disabled: !song, run: distribute },
+    { label: t("ui.distribute") + "…", title: t("ui.distributeHelp"), disabled: !song, run: () => distribute() },
+    { label: t("ui.merge") + "…", title: t("ui.mergeHelp"), disabled: !song, run: merge },
     { label: t("ui.compact") + "…", title: t("ui.compactHelp"), disabled: !song, run: compact },
     { label: t("ui.split") + "…", disabled: !song || splitting, run: runSplit },
     { label: t("ui.outputMenu"), title: t("ui.outputMenuHelp"), disabled: !song, run: openOutput },
@@ -1719,7 +1833,7 @@
       const moved = transposeNotes(notes, semitones);
       if (!moved) invalid = true;
       else if (song) {
-        const range = soundingRangeOf(profile, trackInstrument(song, track).canonical);
+        const range = trackSoundingRange(profile, song, track, canonicalOf);
         folded += moved.filter((n) => foldPitch(n.pitch, range) !== n.pitch).length;
       }
     }
@@ -1874,6 +1988,13 @@
     }
   }
 
+  /** 파일을 저장한다. 저장 창에서 고른 파일에 쓰지 못해 다운로드로 저장했으면 알린다 */
+  async function store(bytes: Uint8Array, name: string): Promise<SaveOutcome> {
+    const outcome = await saveFile(bytes, name);
+    if (outcome === "rescued") error = t("ui.saveRescued", { name });
+    return outcome;
+  }
+
   function baseName(): string {
     return fileName.replace(/\.[^.]+$/, "") || "mmlce";
   }
@@ -1881,7 +2002,7 @@
   function save3mle(encoding: "cp949" | "utf-8" = "cp949") {
     if (!song) return;
     const result = encode3mle(song, { encoding });
-    void saveFile(result.bytes, `${baseName()}.mml`);
+    void store(result.bytes, `${baseName()}.mml`);
     notices = result.diagnostics;
     offerUtf8 = result.unencodable.length > 0;
   }
@@ -1892,13 +2013,7 @@
     // 사운드팩 바이트를 읽는 동안에도 작업 중으로 보여 다시 누르지 못하게 한다
     const token = ++wavToken;
     wavProgress = 0;
-    // 저장 창은 누른 직후에만 뜨므로 소리를 만들기 전에 저장할 곳부터 고른다
-    const asked = await askSaveFile(name);
-    if (token !== wavToken) return;
-    if (asked === "cancelled") {
-      wavProgress = undefined;
-      return;
-    }
+    wavReady = undefined;
     let prepared: Awaited<ReturnType<typeof engine.wavRequest>>;
     try {
       prepared = await engine.wavRequest($state.snapshot(song) as Song);
@@ -1927,9 +2042,24 @@
       error = t("ui.wavFailed");
       return;
     }
-    void saveFile(new Uint8Array(result.wav), name, asked);
+    // 저장 창은 누른 직후에만 뜨고, 고른 파일을 먼저 비운다. 그래서 다 만든 뒤 저장 단추를 눌러 고르고 곧바로 쓴다
+    if (asksSaveDialog()) wavReady = { bytes: new Uint8Array(result.wav), name };
+    else void store(new Uint8Array(result.wav), name);
     const missing = [...new Set(prepared.unresolved.map((u) => instrumentName(u.instrument)))];
     if (missing.length > 0) error = t("ui.wavUnresolved", { list: missing.join(", ") });
+  }
+  /** 저장 창이 떠 있는 동안 저장 단추를 다시 누르지 못하게 한다 */
+  let wavSaving = $state(false);
+  function saveReadyWav() {
+    const ready = wavReady;
+    if (!ready || wavSaving) return;
+    wavSaving = true;
+    void store(ready.bytes, ready.name)
+      .then((outcome) => {
+        // 저장 창을 닫았으면 다시 누를 수 있게 남겨 둔다
+        if (outcome !== "cancelled" && wavReady === ready) wavReady = undefined;
+      })
+      .finally(() => (wavSaving = false));
   }
   function cancelWav() {
     wavToken++;
@@ -1939,13 +2069,14 @@
 
   function saveMidi() {
     if (!song) return;
-    void saveFile(writeSmf(songToSmf(song, 480, profile.volume.max)), `${baseName()}.mid`);
+    // 번호로만 적힌 추가 팩 악기는 재생처럼 올린 팩에서 찾은 실제 악기의 GM 번호로 낸다
+    void store(writeSmf(songToSmf(song, 480, profile.volume.max, "gm", { canonicalOf: engine.canonicalOf })), `${baseName()}.mid`);
   }
 
   function saveMmi() {
     if (!song) return;
     const result = writeMmi(song);
-    void saveFile(new TextEncoder().encode(result.text), `${baseName()}.mmi`);
+    void store(new TextEncoder().encode(result.text), `${baseName()}.mmi`);
     notices = result.diagnostics;
     offerUtf8 = false;
   }
@@ -2223,7 +2354,8 @@
     { label: t("ui.addTrackMenu"), title: t("ui.addTrackHelp"), disabled: !activePlayer, run: addTrackToPlayer },
     { label: t("ui.addScoreMenu"), title: t("ui.addPlayerHelp"), run: () => (addScoreOpen = true) },
     { separator: true },
-    { label: t("ui.distribute") + "…", title: t("ui.distributeHelp"), run: distribute },
+    { label: t("ui.distribute") + "…", title: t("ui.distributeHelp"), run: () => distribute() },
+    { label: t("ui.merge") + "…", title: t("ui.mergeHelp"), run: merge },
     { label: t("ui.compact") + "…", title: t("ui.compactHelp"), run: compact },
     { label: t("ui.split") + "…", disabled: splitting, run: runSplit },
     { label: t("ui.outputMenu"), title: t("ui.outputMenuHelp"), run: openOutput },
@@ -2395,6 +2527,16 @@
     onclose={() => (eventEdit = undefined)}
   />
 {/if}
+{#if tempoChangeOpen && tempoChangeTarget}
+  <TempoChangeDialog
+    scope={tempoChangeTarget.scope}
+    bpms={tempoChangeTarget.bpms}
+    tempoRange={profile.tempo}
+    loop={tempoChangeTarget.to !== undefined}
+    onapply={changeAllTempos}
+    onclose={() => (tempoChangeOpen = false)}
+  />
+{/if}
 {#if meterOpen}
   <MeterDialog beats={meterHere.beats} unit={meterHere.unit} onapply={changeMeter} onclose={() => (meterOpen = false)} />
 {/if}
@@ -2431,26 +2573,12 @@
     </button>
     <span class="clock" title={t("ui.clockHelp")}>{clock(clockNow)} / {clock(totalSeconds)}</span>
     {#if tempoNow !== undefined}<span class="clock tempo" title={t("ui.tempoNowHelp")}>t{tempoNow}</span>{/if}
+    <label class="volume" title={t("ui.masterVolume")}>
+      <Icon name="volume" />
+      <input type="range" min="0" max={MASTER_MAX} step="0.05" value={masterVolume} oninput={(e) => setMasterVolume(Number(e.currentTarget.value))} />
+    </label>
   </div>
   <span class="spacer"></span>
-  <label class="volume" title={t("ui.masterVolume")}>
-    <Icon name="volume" />
-    <input type="range" min="0" max={MASTER_MAX} step="0.05" value={masterVolume} oninput={(e) => setMasterVolume(Number(e.currentTarget.value))} />
-  </label>
-  <span class="divider"></span>
-  <button class="icon" class:on={!!midiKeys.status} title={t("ui.midiKeysHelp")} aria-label={t("ui.midiKeys")} onclick={() => midiKeys.toggle()}>
-    <Icon name="piano" />
-  </button>
-  {#if !portrait}
-    <button
-      class="icon"
-      title={paneDock === "bottom" ? t("ui.dockToRight") : t("ui.dockToBottom")}
-      aria-label={t("ui.dockHelp")}
-      onclick={() => setDock(paneDock === "bottom" ? "right" : "bottom")}
-    >
-      <Icon name={paneDock === "bottom" ? "panel-bottom" : "panel-right"} />
-    </button>
-  {/if}
   <Menu icon="help" title={t("ui.helpTitle")} align="right" items={helpMenu} />
   <button class="icon" title={t("ui.settings")} aria-label={t("ui.settings")} onclick={() => (settings = { section: "packs" })}><Icon name="settings" /></button>
 </header>
@@ -2491,6 +2619,9 @@
       ontoggleevents={() => (showEvents = !showEvents)}
       {orientation}
       ontoggleorientation={() => run("view.orientation")}
+      dock={paneDock}
+      canDock={!portrait}
+      ondock={setDock}
       {sideBySide}
       canSide={!bottom && !portrait}
       ontoggleside={toggleSideBySide}
@@ -2576,6 +2707,7 @@
           volume={inputVolume}
           onvolume={nudgeVolume}
           {lightKeys}
+          {canonicalOf}
           visibleTrackIds={rollTracks}
           locked={lockedIds}
           pickOthers={pickBackground}
@@ -2710,7 +2842,7 @@
     </div>
   {/if}
   <!-- 오래 걸리는 일(악보책 나누기·WAV 저장)의 진행과 취소. 워커에서 돌아 그동안에도 편집할 수 있다 -->
-  {#if splitProgress !== undefined || wavProgress !== undefined}
+  {#if splitProgress !== undefined || wavProgress !== undefined || wavReady}
     <div class="job-toast" role="status">
       {#if splitProgress !== undefined}
         <div class="job">
@@ -2726,6 +2858,13 @@
           <button class="small" onclick={cancelWav}>{t("ui.cancel")}</button>
         </div>
       {/if}
+      {#if wavReady}
+        <div class="job">
+          <span>{t("ui.wavReady")}</span>
+          <button class="small" disabled={wavSaving} onclick={saveReadyWav}>{t("ui.wavSave")}…</button>
+          <button class="small" onclick={() => (wavReady = undefined)}>{t("ui.wavDiscard")}</button>
+        </div>
+      {/if}
     </div>
   {/if}
 </main>
@@ -2733,19 +2872,36 @@
 {#if optimizing}
   {@const o = optimizing}
   {@const kept = o.kind === "compact" ? o.after === o.before : o.moved === 0}
+  {@const addable = o.kind === "distribute" && (o.over?.length ?? 0) > 0}
   <OptimizePreview
-    title={t(o.kind === "compact" ? "ui.previewCompactTitle" : "ui.previewDistributeTitle")}
+    title={t(o.kind === "compact" ? "ui.previewCompactTitle" : o.kind === "merge" ? "ui.previewMergeTitle" : "ui.previewDistributeTitle")}
     summary={o.kind === "compact"
       ? kept
         ? t(o.kept === "tempo" ? "ui.compactKeptTempo" : "ui.compactKept")
         : t("ui.previewCompactSummary")
-      : kept
-        ? t("ui.previewDistributeNone")
-        : t("ui.previewDistributeSummary", { moved: o.moved })}
+      : o.kind === "merge"
+        ? kept
+          ? t("ui.previewMergeNone")
+          : t("ui.previewMergeSummary", { moved: o.moved, removed: o.removed ?? 0 })
+        : kept
+          ? t("ui.previewDistributeNone")
+          : t("ui.previewDistributeSummary", { moved: o.moved })}
     rows={kept ? [] : previewRows(o.before, o.after, profile.charLimitPerScore)}
     limit={profile.charLimitPerScore}
     blocked={kept}
     where={scoreLabel}
+    stillOver={o.stillOver}
+    addTrack={addable
+      ? {
+          added: o.addTo?.length ?? 0,
+          newScores: o.newScores ?? 0,
+          onadd: () => distribute([...(o.addTo ?? []), ...(o.over ?? [])]),
+          onsplit: () => {
+            optimizing = undefined;
+            void runSplit();
+          },
+        }
+      : undefined}
     onapply={applyOptimize}
     onclose={() => (optimizing = undefined)}
   />
@@ -2761,7 +2917,7 @@
       setCursor(at);
       roll?.reveal(toFloat(at));
     }}
-    ondistribute={distribute}
+    ondistribute={() => distribute()}
     onsplit={runSplit}
     onclose={() => (outputOpen = false)}
   />
@@ -2797,7 +2953,7 @@
     <NoteInfo
       notes={selectedNotes}
       timeSig={song.timeSig}
-      range={soundingRangeOf(profile, trackInstrument(song, activeTrack).canonical)}
+      range={trackSoundingRange(profile, song, activeTrack, canonicalOf)}
       onlength={(dur) => roll?.editSelected((n) => ({ ...n, dur }), t("ui.noteInfoLength"))}
     />
   {/if}

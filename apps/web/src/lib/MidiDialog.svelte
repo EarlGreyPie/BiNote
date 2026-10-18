@@ -14,6 +14,7 @@
   import type { MessageKey } from "@mmlce/i18n";
   import { optimizeMml } from "@mmlce/mml";
   import { instrumentName, t } from "./i18n.svelte";
+  import { chordPrefs, setMidiMerge } from "./chordPrefs.svelte";
 
   interface Props {
     analysis: MidiAnalysis;
@@ -71,10 +72,15 @@
   );
   let grid = $state<number | "auto">("auto");
   let triplets = $state(true);
+  let straighten = $state(false);
   let fill = $state(true);
 
   $effect(() => {
     dialog.showModal();
+  });
+  // 셋잇단을 끄면 곧게 맞추기도 푼다 (셋잇단 박이 없으니 할 일이 없다)
+  $effect(() => {
+    if (!triplets) straighten = false;
   });
 
   function validChords(n: unknown): number {
@@ -95,8 +101,9 @@
         dropFirst: p.dropFirst,
         ...(p.protect ? { protect: [p.protect] } : {}),
       })),
-      quantize: { grid, triplets },
+      quantize: { grid, triplets, straighten: triplets && straighten },
       fill,
+      merge: chordPrefs.merge,
     };
   }
 
@@ -156,7 +163,9 @@
       </select>
     </label>
     <label><input type="checkbox" bind:checked={triplets} /> {t("ui.midiTriplets")}</label>
+    <label title={t("ui.midiStraightenHelp")}><input type="checkbox" bind:checked={straighten} disabled={!triplets} /> {t("ui.midiStraighten")}</label>
     <label title={t("ui.midiFillHelp")}><input type="checkbox" bind:checked={fill} /> {t("ui.midiFill")}</label>
+    <label title={t("ui.mergeHelp")}><input type="checkbox" checked={chordPrefs.merge} onchange={(e) => setMidiMerge(e.currentTarget.checked)} /> {t("ui.merge")}</label>
   </section>
 
   <h3>{t("ui.midiParts")}</h3>
@@ -246,6 +255,9 @@
             {#if result && (result.dropped > 0 || result.filled > 0)}
               <span class="muted">{t("ui.midiDropped", { dropped: result.dropped, filled: result.filled })}</span>
             {/if}
+            {#if result && result.merged > 0}
+              <span class="muted">{t("ui.midiMerged", { count: result.merged })}</span>
+            {/if}
             {#if partsOf(p.key).length === 0 && !DRUMS.has(p.canonical)}
               <button class="small" onclick={() => (players = players.filter((_, i) => i !== k))}>{t("ui.remove")}</button>
             {/if}
@@ -264,6 +276,7 @@
         {t("ui.midiMaxChars", { count: preview.maxChars, limit: profile.charLimitPerScore })}
       </span>
       {#if preview.result.unmappedDrums > 0}<span class="warn">{t("ui.midiUnmappedDrums", { count: preview.result.unmappedDrums })}</span>{/if}
+      {#if preview.result.merged > 0}<span class="warn">{t("ui.midiCollapsed", { count: preview.result.merged })}</span>{/if}
     {/if}
     <span class="spacer"></span>
     <button onclick={finish} disabled={!preview}>{t("ui.midiDoImport")}</button>

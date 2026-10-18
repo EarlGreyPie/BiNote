@@ -82,6 +82,12 @@ export function restText(dur: Rat, maxLength = 64, maxDots = 1): string {
     .join("");
 }
 
+/** 이 길이를 음길이 숫자(점 포함) 토막들로. 정확히 쓸 수 없으면 undefined (&로 이어 쓸 때) */
+export function lengthPieces(dur: Rat, maxLength = 64, maxDots = 1): string[] | undefined {
+  const split = splitDuration(dur, pieceTable(maxLength, maxDots));
+  return split.rest.n === 0 && split.pieces.length > 0 ? split.pieces.map((p) => `${p.length}${".".repeat(p.dots)}`) : undefined;
+}
+
 export function canWriteExactly(dur: Rat, maxLength = 64, maxDots = 1): boolean {
   return dur.n === 0 || splitDuration(dur, pieceTable(maxLength, maxDots)).rest.n === 0;
 }

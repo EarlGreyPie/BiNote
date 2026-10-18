@@ -112,8 +112,8 @@ These limits are BiNote's current check values, measured on the Korean server (a
 ## 3. A tour of the screen
 
 ```
-┌ Top bar: File · Edit · Song · View · Undo · Play · Volume · MIDI keys · Panel · Help (?) · Settings ┐
-├ Toolbar: Piano roll/Tab · Tools · Grid · New note · Input v · Layer · Zoom · ⋯                 ┤
+┌ Top bar: File · Edit · Song · View · Undo · Play · Volume · Help (?) · Settings ┐
+├ Toolbar: Piano roll/Tab · Tools · Grid · New note · Input v · Horizontal|Vertical (panel) · Layer · Zoom · ⋯                 ┤
 ├ Work area: Piano roll (or Tab)  │  Track panel (structure list + MML editor)                  ┤
 └ Status bar: Selected track · Characters · Checks · Sound packs · Help                           ┘
 ```
@@ -122,9 +122,9 @@ These limits are BiNote's current check values, measured on the Korean server (a
 
 | Menu | Contents |
 |---|---|
-| File | New score, Open score, Paste MML@, Restore recent work, saving (3MLE, project, MabiIcco, MIDI, WAV), Put in game, Add sound pack |
+| File | New score, Open score, Paste MML@, Restore recent work, saving (3MLE, project, MabiIcco, MIDI, WAV), Put in game, Add sound pack, Connect MIDI keyboard |
 | Edit | Undo and Redo, Select all, delete, Cut, Copy, paste, Length ×2 and ½, Transpose, Split / merge tracks |
-| Song | Change time signature, Tap tempo, Clear tempos, Copy tempo to every score, Add track and Add score, Distribute chords, Shrink MML, Split into score books |
+| Song | Change time signature, Tap tempo, Clear tempos, Change all tempos, Copy tempo to every score, Add track and Add score, Distribute chords, Merge chords, Shrink MML, Split into score books |
 | View | Piano roll/Tab, Panel below/beside, Side by side, Two editors, Vertical roll, Events, Note list, Light keys while playing, Mark stop position in MML, Track colors, MML keypad, Shortcuts |
 
 ### Track panel
@@ -133,7 +133,7 @@ These limits are BiNote's current check values, measured on the Korean server (a
 - Double-click a name to rename it (Enter to confirm, Esc to cancel).
 - Drag the handle on the left to move a track to another score. On touch, long-press a track to open its menu.
 - **MML editor**: edits the MML text of the selected track. Syntax errors and game limit problems are underlined; hover over an underline to see the details.
-- You can put the panel **below** the roll (3MLE style, for keyboard use) or **beside** it (for mouse and touch). Drag the border to resize it.
+- Move the panel with the **Horizontal | Vertical** buttons on the right of the toolbar (left of Layer). **Horizontal** puts it beside the roll (for mouse and touch), **Vertical** puts it below the roll (3MLE style, for keyboard use). This is the same as Panel below/beside in the View menu. Drag the border to resize it.
 - With **Two editors** on, the lower editor opens another track (Alt+click it in the list).
 
 ### Status bar
@@ -203,7 +203,7 @@ Switch with the Piano roll/Tab button (Alt+T). The tab gathers the tracks of the
 
 ### MIDI keys
 
-Turn on the keyboard icon in the top bar and connect a MIDI keyboard to use **step input**, one note at a time. Notes go at the play cursor (or the end of the selected track if there is none) with the **New note** length, and the input position moves on by that length. The time you hold a key is not recorded as the length.
+Turn on File menu → **Connect MIDI keyboard** and connect a MIDI keyboard to use **step input**, one note at a time. Notes go at the play cursor (or the end of the selected track if there is none) with the **New note** length, and the input position moves on by that length. The time you hold a key is not recorded as the length.
 
 - For keys pressed together, the highest note goes into the current track and the rest go, from high to low, into the following tracks of the same score. Notes beyond the remaining tracks are not entered, so check the number of tracks before entering chords.
 - The first time you turn on MIDI keys, BiNote asks once whether to use key velocity as v. You can change it later in Settings → Playback → "Velocity → v".
@@ -265,6 +265,7 @@ Song → Tap tempo. Play the original (or a video) and press the **T** key or [T
 
 ### Cleaning up tempos
 
+- **Change all tempos**: sets every tempo in the song to one value (**All to**), shifts them all up or down (**± BPM**), or scales them by a percentage (**%**). With a loop range set, only the tempos inside it change and the tempo after the range stays as it was. The MML text of every score is updated too, and you are warned before anything leaves the game tempo range (t32–255). One Ctrl+Z undoes it.
 - **Clear all tempos**: keeps only the tempo at the start of the song. With a loop range set, only the tempos inside it are cleared.
 - **Copy tempo to every score**: writes the song tempo into the MML text of scores that lack it. (Put in game and Split into score books add tempo to every score even without this.)
 - Tempos outside the game range (t32–t255) can be used while editing; Put in game tells you how to convert them (see section 9).
@@ -343,7 +344,7 @@ If it is faster than t255, BiNote shows how to shorten the note lengths in that 
 
 Try these in order.
 
-1. **Distribute chords**: moves notes from tracks over the limit into free tracks of the same player. They stay on the same instrument, so the notes are kept as they are. (When the score has several tracks of the same instrument.)
+1. **Distribute chords**: moves notes from tracks over the limit into free tracks of the same player. They stay on the same instrument, so the notes are kept as they are. (When the score has several tracks of the same instrument.) If tracks are still over the limit after distributing, **Add a track and distribute again** in the preview adds one empty track to the same score. If the score's tracks are already full, adding a track creates one more score for the same instrument (one more person plays in game), so use Split into score books to play it alone.
 2. **Shrink MML**: rewrites the MML of every track shorter while keeping each note's pitch, start and length. Your own spaces, line breaks and comments are lost. If shrinking would drop notes, nothing is changed and you are told.
 3. **Split into score books**: cuts all tracks at the same point into several books.
    - **Distribute chords before splitting** (on by default): before splitting, moves notes between tracks of the same instrument to even out channel lengths. If every channel then fits the limit, no split is needed; if it saves books, the split uses the moved result. The song you are editing stays as it is; "Apply to song" moves the notes in the song too (undo with Ctrl+Z). When off, only the book split runs, and a "N → M books" hint appears if moving notes would help.
@@ -353,6 +354,18 @@ Try these in order.
    - Each book ends early by the delay before the next one starts (about 1 second) to keep the beat. Notes in that stretch can be shortened or dropped. Check "notes cut at the end" and the length warnings in the result, and listen around the book boundaries before using it.
 
 For Distribute chords and Shrink MML, check the character counts before and after in the **preview**, then apply. Applied changes can be undone with Ctrl+Z. Split into score books does not change the original song; it only makes the output for each book. Use the per-score copy buttons in each book.
+
+### Merge chords
+
+When you import MIDI, notes from moments where the chord briefly grows can leave tracks with only a few scattered notes. Song menu → **Merge chords** moves those notes into a track of the same score and instrument that is resting at that moment, and removes tracks that end up empty (if the song has more than one score and removing a track would pull later tracks into an earlier score, the empty track is kept instead). The sound stays the same and no note is dropped or shortened.
+
+- Notes that overlap other tracks have nowhere to go and stay where they are.
+- A note is not put into a track whose neighbouring notes are more than a perfect fifth away (so the line doesn't jump), or where it would become tied with &.
+- Notes are not moved if the receiving track would newly go over the character limit. When a track can't be emptied and only some notes move, they move only if the total character count doesn't grow, so quieter fragments with a different v may stay.
+- Locked tracks, and tracks that differ in mute, solo or channel volume, are left alone.
+- Check the character counts before and after in the preview, then apply. Undo with Ctrl+Z.
+
+In Settings → **Chords** you choose Merge chords when importing MIDI (on by default) and Distribute chords before splitting into score books (on by default).
 
 ### Song checks
 
@@ -376,8 +389,9 @@ Choosing a .mid file with Open score opens the **Import MIDI** window.
    - Middle first (keep outer, default) · Bottom first · Top first · Soft notes first · Short notes first
    - Hand to drop first (Both hands evenly · Right-hand chords first · Left-hand chords first), Protect melody
 4. **Grid** (Auto or manual) and **Keep triplets**
-5. **Fill empty channels**: puts chord notes dropped by compression back into resting channels. If this goes over the character limit, the added notes are removed first.
-6. Check the summary at the bottom (dropped notes, notes put back, longest channel's character count) and click **Import**.
+5. **Merge chords** (on by default): moves notes from moments where the chord briefly grows into a resting track of the same instrument, so they don't end up in a track of their own (see Merge chords in section 9). Runs before Fill empty channels.
+6. **Fill empty channels**: puts chord notes dropped by compression back into resting channels. If this goes over the character limit, the added notes are removed first.
+7. Check the summary at the bottom (dropped notes, notes put back, merged notes, longest channel's character count) and click **Import**.
 
 Importing MIDI does not copy the original exactly. Notes beyond the chord count are dropped, and note lengths are adjusted to the grid. Listen after importing and fix what needs fixing.
 
@@ -390,7 +404,7 @@ Importing MIDI does not copy the original exactly. Notes beyond the chord count 
 | **Project .mme** | Save project (Ctrl+S) | **Recommended for keeping your work and moving it to another device.** Keeps fractional positions, track structure and editor state (older .mmlce files also open) |
 | 3MLE .mml | Save as 3MLE (Ctrl+Alt+S) | To open in 3MLE. The default is CP949, and characters it lacks become ?, so save as UTF-8 if needed |
 | MabiIcco .mmi | Save as MabiIcco (Ctrl+Shift+S) | To open in MabiIcco. You are told about notes that do not fit its grid (96 per quarter note) |
-| MIDI .mid | Save as MIDI | For DAWs and similar. Instruments become GM programs, and bass drum and cymbal go on the drum channel. Notes of different pitches tied with `&` are saved as separate notes in MIDI |
+| MIDI .mid | Save as MIDI | For DAWs and similar. Instruments become GM programs, and bass drum and cymbal go on the drum channel. Extra soundpack instruments written only as a number (#42.3 etc.) get the GM program of the instrument found in the loaded pack, and pitches stay as written. Notes of different pitches tied with `&` are saved as separate notes in MIDI |
 | WAV | Save as WAV | Renders the whole song with the current sound packs into an audio file (mute and solo as heard). Needs a sound pack |
 | MML@ text | Put in game | For pasting into the game |
 
@@ -398,7 +412,7 @@ Importing MIDI does not copy the original exactly. Notes beyond the chord count 
 
 Set this in Settings → **Saving**.
 
-- Chrome and Edge on a PC: the default is **Choose folder and name each time**. As when opening a file, a save dialog opens so you pick the folder and file name, and the next save starts in the folder you used last.
+- Chrome and Edge on a PC: the default is **Choose folder and name each time**. As when opening a file, a save dialog opens so you pick the folder and file name, and the next save starts in the folder you used last. For a WAV, press the **Save** button that appears once it is rendered.
 - Chrome and Edge on a PC: pick **Save straight to a set folder** and choose a folder, and every saved file goes there without asking. A file with the same name is overwritten. After the browser restarts, the first save may ask you to allow the folder again. Pick **Downloads folder** to save through browser downloads.
 - iPad and iPhone: with **Save through the share sheet** (on by default), saving opens the share sheet. Use "Save to Files" to pick a folder, or send the file straight to an app such as Google Drive.
 - Other browsers (Firefox and so on) save to the Downloads folder.

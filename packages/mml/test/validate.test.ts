@@ -99,6 +99,19 @@ describe("곡 검사", () => {
     expect(cut("t120o4e1&d1")).toEqual([["t1.1", 3.9]]);
   });
 
+  it("번호로만 아는 악기는 알려 준 실제 악기의 음역·샘플 길이로 잰다", () => {
+    // 추가 사운드팩의 #42.3(mabi:1578)이 올린 팩에서 냥모니카로 알아봐지는 경우
+    const numbered: Player = { id: "p1", name: "#42.3", instrument: { canonical: "mabi:1578" } };
+    const s = song([track("t1", "t120o3c1")], [numbered]);
+    const canonicalOf = (instrument: string) => (instrument === "mabi:1578" ? "cat-harmonica" : undefined);
+    const out = validateSong(s, MOBILE_PROFILE, { canonicalOf });
+    expect(out.map((d) => d.code)).toEqual(["pitch-fold", "sample-cut"]);
+    expect(out[0]!.params?.octaves).toBe(2);
+    // 알려 주지 않으면(팩이 없거나 해석 못 함) 전과 같이 기본 음역으로 잰다
+    expect(validateSong(s, MOBILE_PROFILE)).toEqual([]);
+    expect(validateSong(s, MOBILE_PROFILE, { canonicalOf: () => undefined })).toEqual([]);
+  });
+
   it("음길이가 너무 복잡해 읽기를 멈춘 글도 곡 검사가 다시 넘치지 않는다", () => {
     const text = "c7c11c13c17c19c23c29c31c37c41c43c47";
     expect(() => validateSong(song([track("t1", text)]), MOBILE_PROFILE)).not.toThrow();

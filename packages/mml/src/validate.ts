@@ -58,10 +58,18 @@ function end(n: Note): Rat {
   return add(n.start, n.dur);
 }
 
+export interface ValidateSongOptions {
+  /**
+   * 번호로만 아는 악기(추가 사운드팩의 #42.3 등)의 실제 악기를 알려 준다(재생의 buildSchedule과 같은 모양).
+   * 주면 음역·샘플 길이를 그 악기로 잰다. 모르면 undefined를 돌려주고, 그때는 원래 ID로 잰다
+   */
+  readonly canonicalOf?: (instrument: string, program: number | undefined) => string | undefined;
+}
+
 /**
  * 곡 전체 검사: 연주자별 채널 수, 악기 범위 밖이라 접혀 나는 음, 음색 경계를 넘는 &, 같은 연주자 트랙끼리 같은 음 겹침.
  */
-export function validateSong(song: Song, profile: GameProfile): SongDiagnostic[] {
+export function validateSong(song: Song, profile: GameProfile, options: ValidateSongOptions = {}): SongDiagnostic[] {
   const out: SongDiagnostic[] = [];
 
   for (const player of song.players) {
@@ -86,8 +94,12 @@ export function validateSong(song: Song, profile: GameProfile): SongDiagnostic[]
       }
     }
 
-    // 범위 밖 음도 게임은 받아 주지만 옥타브째 접어 다른 높이로 낸다 (악기는 트랙마다)
-    const instrumentOf = (track: Track) => trackInstrument(song, track).canonical;
+    // 범위 밖 음도 게임은 받아 주지만 옥타브째 접어 다른 높이로 낸다 (악기는 트랙마다).
+    // 재생과 같이 음역·샘플 길이는 실제 악기로 정한다
+    const instrumentOf = (track: Track) => {
+      const ref = trackInstrument(song, track);
+      return options.canonicalOf?.(ref.canonical, ref.program) ?? ref.canonical;
+    };
     const rangeOf = (track: Track) => soundingRangeOf(profile, instrumentOf(track));
     for (const track of tracks) {
       const range = rangeOf(track);

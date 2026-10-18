@@ -1,5 +1,5 @@
 import { emptySong, trackInstrument, ZERO, type Player, type Song, type TempoEvent, type Track } from "@mmlce/core";
-import { optimizeMml, placeTempoByScore, songChordsPerScore, type TempoMove } from "@mmlce/mml";
+import { bpmBefore, optimizeMml, padScore, placeTempoByScore, scoreEnd, scoreTrackIds, songChordsPerScore, type TempoMove } from "@mmlce/mml";
 import { encodeCp949 } from "./cp949.js";
 import { channelToTrack, idMaker, instrumentFromProgram, mergeTempo, type ChannelTempo, verbatimTexts, type FileDiagnostic } from "./common.js";
 
@@ -158,14 +158,24 @@ export function write3mle(song: Song, options: Write3mleOptions = {}): { text: s
     diagnostics.push({ level: "warning", code: "instrument-no-program", params: { instrument: inst.canonical, program: fallback }, span: [0, 0], where: track.name });
     return fallback;
   };
-  song.tracks.forEach((track, index) => {
-    const player = song.players.find((p) => p.id === track.playerId);
-    let body = verbatim?.[index]?.replace(/\r?\n/g, "\r\n");
-    if (body === undefined) {
-      const printed = optimizeMml(track.notes, { tempo: placed[index] ?? [] });
-      for (const d of printed.diagnostics) diagnostics.push({ ...d, where: track.name });
-      body = printed.text;
+  const bodies = song.tracks.map((track, index) => {
+    const body = verbatim?.[index]?.replace(/\r?\n/g, "\r\n");
+    if (body !== undefined) return body;
+    const printed = optimizeMml(track.notes, { tempo: placed[index] ?? [] });
+    for (const d of printed.diagnostics) diagnostics.push({ ...d, where: track.name });
+    return printed.text;
+  });
+  // 출력기로 다시 쓴 글은 원문 끝 쉼표가 사라지므로, 악보마다 원래 길이까지 채운다 (게임에 넣을 글과 같게)
+  if (!verbatim) {
+    for (const ids of scoreTrackIds(song, songChordsPerScore(song))) {
+      const ks = ids.map((id) => song.tracks.findIndex((t) => t.id === id)).filter((k) => k >= 0);
+      const end = scoreEnd(ks.map((k) => song.tracks[k]!));
+      const padded = padScore(ks.map((k) => bodies[k]!), end, bpmBefore(song.tempo, end));
+      ks.forEach((k, j) => (bodies[k] = padded[j]!));
     }
+  }
+  song.tracks.forEach((track, index) => {
+    const body = bodies[index]!;
     const n = index + 1;
     lines.push(
       "",

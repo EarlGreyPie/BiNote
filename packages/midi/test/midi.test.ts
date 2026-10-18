@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { emptySong, MOBILE_PROFILE, rat, type Rat, type Song } from "@mmlce/core";
+import { add, emptySong, MOBILE_PROFILE, rat, type Note, type Rat, type Song } from "@mmlce/core";
+import { optimizeMml } from "@mmlce/mml";
 import {
   attenuateChords,
   chordVolume,
@@ -11,6 +12,7 @@ import {
   compressChords,
   gapSplit,
   midiToSong,
+  noteChanges,
   quantize,
   readSmf,
   songToSmf,
@@ -114,6 +116,37 @@ describe("quantize", () => {
     expect(q.tripletBeats).toBe(1);
     expect(q.notes.map((n) => key(n.start))).toEqual(["0/1", "1/12", "1/6", "1/4", "5/16", "3/8", "7/16"]);
   });
+
+  it("32분·64분 셋잇단은 셋잇단으로 맞춰 음을 잃지 않는다", () => {
+    // 120 BPM, 32분 셋잇단 12음 (40tick 간격)
+    const fast = Array.from({ length: 12 }, (_, i) => raw(i * 40, 40));
+    const q = quantize([{ id: "a", notes: fast }], tempo);
+    expect(q.notes).toHaveLength(12);
+    expect(new Set(q.notes.map((n) => key(n.start))).size).toBe(12);
+    // 60 BPM, 64분 셋잇단 24음 (20tick 간격)
+    const slow = Array.from({ length: 24 }, (_, i) => ({ ...raw(i * 20, 20), seconds: (i * 20) / PPQ }));
+    const q2 = quantize([{ id: "a", notes: slow }], [{ at: rat(0), bpm: 60 }]);
+    expect(q2.notes).toHaveLength(24);
+    expect(new Set(q2.notes.map((n) => key(n.start))).size).toBe(24);
+  });
+
+  it("시작이 다른 같은 음이 한 칸에 모여 합쳐지면 그 수를 센다", () => {
+    // 16분 격자로 고정하면 30tick 간격 두 음이 같은 칸에 모인다. 원래 같은 자리에 겹친 음은 세지 않는다
+    const q = quantize([{ id: "a", notes: [raw(0, 30), raw(30, 30), raw(240, 60), raw(240, 60)] }], tempo, { grid: 16, triplets: false });
+    expect(q.notes).toHaveLength(2);
+    expect(q.merged).toBe(1);
+  });
+
+  it("짧게 끊은 16분 셋잇단은 길이를 그대로 두고, 같은 박에 섞인 곧은 16분도 셋잇단 박으로 맞춘다", () => {
+    const staccato = Array.from({ length: 6 }, (_, i) => raw(480 + 80 * i, 40));
+    const straight = Array.from({ length: 8 }, (_, i) => raw(60 * i, 60, 72));
+    const q = quantize([{ id: "a", notes: staccato }, { id: "b", notes: straight }], tempo);
+    expect(q.notes.filter((n) => n.part === "a").map((n) => key(n.dur))).toEqual(Array(6).fill("1/48"));
+    const mixed = [0, 80, 120, 160, 240, 320, 360, 400].map((t) => raw(t, 40));
+    const m = quantize([{ id: "a", notes: mixed }], tempo);
+    expect(m.tripletBeats).toBe(1);
+    expect(m.notes.map((n) => key(n.start))).toEqual(["0/1", "1/24", "1/16", "1/12", "1/8", "1/6", "3/16", "5/24"]);
+  });
 });
 
 describe("compressChords", () => {
@@ -212,6 +245,86 @@ describe("allocateChords", () => {
 });
 
 describe("midiToSong", () => {
+  /** 파트마다 [높이, 시작tick, 길이tick] 목록. 연주자는 players에 파트 번호와 화음 수로 준다 */
+  type Who = { parts: number[]; chords: number; preset?: "bottom" };
+  const song = (bpm: number, parts: [number, number, number][][], players: Who[], quantize: { grid?: number; straighten?: boolean } = { straighten: true }) => {
+    const tracks: SmfEvent[][] = [[{ tick: 0, type: "tempo", usPerQuarter: Math.round(60_000_000 / bpm) }]];
+    parts.forEach((list, c) => tracks.push(list.flatMap(([pitch, start, len]) => [on(start, pitch, 100, c), off(start + len, pitch, c)])));
+    const a = analyzeMidi(smf(...tracks));
+    const instrument = suggestPlan(a, MOBILE_PROFILE).players[0]!.instrument;
+    const ids = a.parts.map((p) => p.id);
+    return midiToSong(a, { players: players.map((p, i) => ({ name: `P${i}`, instrument, parts: p.parts.map((k) => ids[k]!), chords: p.chords, ...(p.preset ? { preset: p.preset } : {}) })), quantize }, MOBILE_PROFILE);
+  };
+  const count = (r: ReturnType<typeof midiToSong>) => r.song.tracks.reduce((s, t) => s + t.notes.length, 0);
+  const dropped = (r: ReturnType<typeof midiToSong>) => r.compressed.reduce((s, c) => s + c.dropped, 0);
+
+  it("밀린 음 곧게 맞추기를 켜면 64분 격자에서 조금씩 밀어 친 정규 음을 셋잇단으로 맞추지 않는다", () => {
+    // 점16분음표를 줄곧 41tick(약 40ms) 늦게 친다. 96분 칸에 1tick 차로 맞아 셋잇단으로 고른다
+    const notes = [Array.from({ length: 32 }, (_, i): [number, number, number] => [60, i * 180 + 41, 170])];
+    const r = song(120, notes, [{ parts: [0], chords: 1 }], { grid: 64, straighten: true });
+    expect(r.tripletBeats).toBe(0);
+    expect(count(r)).toBe(32);
+    // 끄면(기본) 박 판정은 그대로
+    expect(song(120, notes, [{ parts: [0], chords: 1 }], { grid: 64 }).tripletBeats).toBeGreaterThan(0);
+  });
+
+  it("곧게 맞춘 곡은 main 판정과 음 하나하나가 같다 (남는 음·따로 치던 시작·끝·채운 음)", () => {
+    // 트랙마다 (높이, v, 트랙) 묶음과 서로 다른 시작 수
+    const shape = (r: ReturnType<typeof midiToSong>) =>
+      r.song.tracks.map((t) => [t.notes.map((n) => `${n.pitch}:${n.vol}`).sort().join(","), new Set(t.notes.map((n) => key(n.start))).size]);
+    const ends = (r: ReturnType<typeof midiToSong>) => r.song.tracks.map((t) => t.notes.map((n) => (n.start.n / n.start.d + n.dur.n / n.dur.d)));
+    const cases: [number, [number, number, number][][], Who[], number | undefined][] = [
+      // 남는 음이 다른 음으로 바뀌던 경우
+      [120, [[[48, 0, 80], [52, 40, 120], [56, 120, 320], [64, 240, 120]]], [{ parts: [0], chords: 1 }], 32],
+      // 따로 치던 음이 동시 화음으로 모이던 경우
+      [60, [[...[46, 73, 166, 193, 286, 313, 406, 433].map((t, i): [number, number, number] => [i % 2 ? 62 : 60, t, 20]), [72, 960, 240]]], [{ parts: [0], chords: 2 }], undefined],
+      // 박을 넘는 긴 음의 끝이 당겨지던 경우
+      [120, [[[72, 0, 920], [72, 960, 480]], [[60, 520, 40], [60, 600, 40]]], [{ parts: [0, 1], chords: 2 }], 32],
+      // 채우기에서 main이 다시 넣던 음이 빠지던 경우
+      [120, [[[48, 0, 240], [52, 40, 320], [56, 120, 800], [64, 240, 640], [72, 360, 80], [76, 400, 320], [40, 960, 240]]], [{ parts: [0], chords: 2, preset: "bottom" }], 32],
+    ];
+    for (const [bpm, parts, who, grid] of cases) {
+      const straight = song(bpm, parts, who, { straighten: true, ...(grid ? { grid } : {}) });
+      const off = song(bpm, parts, who, grid ? { grid } : {});
+      expect(shape(straight)).toEqual(shape(off));
+      ends(straight).forEach((list, t) => list.forEach((end, i) => expect(Math.abs(end - ends(off)[t]![i]!)).toBeLessThan(1 / (grid ?? 32))));
+    }
+  });
+
+  it("음량·트랙·화음 모양이 달라지면 noteChanges가 잡는다", () => {
+    const base = song(120, [[[60, 0, 240], [64, 240, 240]]], [{ parts: [0], chords: 2 }], {});
+    const edit = (f: (n: Note, i: number) => Partial<Note>) => ({
+      ...base,
+      song: { ...base.song, tracks: base.song.tracks.map((t) => ({ ...t, notes: t.notes.map((n, i) => ({ ...n, ...f(n, i) })) })) },
+    });
+    expect(noteChanges(base, base, 16)).toEqual([]);
+    expect(noteChanges(edit((n, i) => (i === 1 ? { vol: n.vol - 1 } : {})), base, 16)!.length).toBeGreaterThan(0);
+    expect(noteChanges(edit((_, i) => (i === 1 ? { start: rat(0) } : {})), base, 16)!.length).toBeGreaterThan(0);
+    expect(noteChanges(edit((n) => ({ dur: add(n.dur, rat(1, 4)) })), base, 16)!.length).toBeGreaterThan(0);
+  });
+
+  it("정규 칸으로 바꾸면 음이 합쳐지거나 화음 한도에 걸리는 박은 셋잇단으로 둔다", () => {
+    // 여러 파트가 같은 리듬: A는 32분 셋잇단 12음
+    const a: [number, number, number][] = Array.from({ length: 12 }, (_, i) => [60, i * 40, 40]);
+    const bc = (pitch: number): [number, number, number][] => [60, 180, 300].map((t) => [pitch, t, 60]);
+    const r1 = song(120, [a, bc(72), bc(48)], [{ parts: [0], chords: 1 }, { parts: [1], chords: 1 }, { parts: [2], chords: 1 }]);
+    expect(count(r1)).toBe(18);
+    // 60 BPM 64분 셋잇단 24음과 다른 두 파트
+    const a2: [number, number, number][] = Array.from({ length: 24 }, (_, i) => [60, i * 20, 20]);
+    const others = (pitch: number): [number, number, number][] => [30, 90, 150, 210, 270, 330, 390].map((t) => [pitch, t, 30]);
+    expect(count(song(60, [a2, others(72), others(48)], [{ parts: [0], chords: 1 }, { parts: [1], chords: 1 }, { parts: [2], chords: 1 }]))).toBe(38);
+    // 칸 반보다 가까운 두 음: 같은 높이, 번갈아 다른 높이(화음 1), 번갈아 다른 화음(화음 3)
+    const starts = [46, 73, 166, 193, 286, 313, 406, 433];
+    for (const pitches of [[[60]], [[60], [62]], [[60, 64, 67], [62, 66, 69]]]) {
+      const notes = starts.flatMap((t, i) => pitches[i % pitches.length]!.map((p): [number, number, number] => [p, t, 20]));
+      const r = song(60, [notes], [{ parts: [0], chords: pitches[0]!.length }]);
+      expect([count(r), dropped(r)]).toEqual([notes.length, 0]);
+    }
+    // 박을 넘는 긴 음의 끝이 바뀌어 다음 음과 겹치지 않게 (한 연주자, 화음 1)
+    const long = song(120, [[[72, 0, 530]], [505, 560, 720, 800].map((t): [number, number, number] => [60, t, 40])], [{ parts: [0, 1], chords: 1 }], { grid: 32, straighten: true });
+    expect([count(long), dropped(long)]).toEqual([5, 0]);
+  });
+
   it("화음 수를 6보다 크게 주면 같은 악기 연주자를 더 만든다", () => {
     const pitches = [48, 52, 55, 60, 64, 67, 72, 76];
     const a = analyzeMidi(smf([...pitches.map((p) => on(0, p)), ...pitches.map((p) => off(480, p))]));
@@ -233,6 +346,33 @@ describe("midiToSong", () => {
     expect(r.song.tempo).toEqual([{ at: rat(0), bpm: 150 }]);
     const pitches = r.song.tracks.flatMap((t) => t.notes.map((n) => n.pitch)).sort((x, y) => y - x);
     expect(pitches).toEqual([84, 79, 76, 43, 36, 48].sort((x, y) => y - x));
+  });
+
+  it("화음 병합: 잠깐 열린 셋째 트랙의 조각을 쉬는 트랙으로 옮기고, 글자 수가 늘면 옮기지 않는다", () => {
+    // 첫 박에만 3음(g가 셋째 트랙을 연다). 그 뒤 홀수 마디 3·4박의 조각 a·b가 셋째 트랙에 들어간다
+    const piece = (velocity: number) => {
+      const ev: SmfEvent[] = [];
+      for (let bar = 0; bar < 8; bar++) {
+        const t = bar * 4 * PPQ;
+        ev.push(on(t, 48), off(t + 4 * PPQ, 48), on(t, 72), off(t + PPQ, 72), on(t + PPQ, 74), off(t + 2 * PPQ, 74));
+        if (bar === 0) ev.push(on(t, 67), off(t + PPQ, 67));
+        if (bar % 2 === 1) ev.push(on(t + 2 * PPQ, 69, velocity), off(t + 3 * PPQ, 69), on(t + 3 * PPQ, 71, velocity), off(t + 4 * PPQ, 71));
+      }
+      return analyzeMidi(smf(ev));
+    };
+    const notesOf = (s: Song) => s.tracks.flatMap((t) => t.notes.map((n) => `${key(n.start)}:${n.pitch}:${key(n.dur)}:${n.vol}`)).sort();
+    const a = piece(100);
+    const plan = suggestPlan(a, MOBILE_PROFILE);
+    const off_ = midiToSong(a, { ...plan, merge: false }, MOBILE_PROFILE);
+    const on_ = midiToSong(a, plan, MOBILE_PROFILE);
+    expect(on_.compressed[0]!.merged).toBe(8);
+    expect(notesOf(on_.song)).toEqual(notesOf(off_.song));
+    // 셋째 트랙에는 다른 트랙과 겹치는 첫 g만 남는다
+    expect(on_.song.tracks.map((t) => t.notes.length)).toEqual([24, 1, 8]);
+    const chars = (s: Song) => s.tracks.reduce((sum, t) => sum + optimizeMml(t.notes).text.length, 0);
+    expect(chars(on_.song)).toBeLessThan(chars(off_.song));
+    // 조각이 여려(v가 달라) 받는 트랙에 v 명령이 붙어 글자 수 합이 늘면 옮기지 않는다
+    expect(midiToSong(piece(80), plan, MOBILE_PROFILE).compressed[0]!.merged).toBe(0);
   });
 
   it("세기 → v는 v→음량 곡선의 역", () => {
@@ -299,6 +439,29 @@ describe("songToSmf", () => {
     const s = playerSong(["harp"]);
     const song = { ...s, players: s.players.map((p) => ({ ...p, instrument: { canonical: "harp", program: 1048 } })) };
     expect(programs(songToSmf(song, 480, 15, "mabinogi")).map((e) => e.value)).toEqual([24]);
+  });
+
+  it("번호로만 아는 추가 팩 악기는 canonicalOf로 찾은 실제 악기의 GM 번호로 쓰고, 높이는 적힌 그대로 둔다", () => {
+    const s = playerSong(["piano", "piano"]);
+    const song = {
+      ...s,
+      players: [
+        { ...s.players[0]!, instrument: { canonical: "mabi:1578", program: 1578 } },
+        { ...s.players[1]!, instrument: { canonical: "mabi:1579", program: 1579 } },
+      ],
+      tracks: s.tracks.map((t) => ({ ...t, notes: [{ ...t.notes[0]!, pitch: 48 }] })),
+    };
+    const canonicalOf = (instrument: string) => ({ "mabi:1578": "cat-harmonica", "mabi:1579": "bass-drum" })[instrument];
+    const smf = songToSmf(song, 480, 15, "gm", { canonicalOf });
+    expect(programs(smf).map((e) => [e.type, e.channel, e.value])).toEqual([
+      ["program", 0, 22],
+      ["noteOn", 9, 36],
+    ]);
+    const notes = smf.tracks[1]!.events.filter((e) => e.type === "noteOn");
+    expect(notes.map((e) => (e.type === "noteOn" ? e.pitch : 0))).toEqual([48]);
+    // 팩이 없어 모르면 지금처럼 피아노, 마비노기 번호는 원래 팩 안 번호
+    expect(programs(songToSmf(song)).map((e) => e.value)).toEqual([0, 0]);
+    expect(programs(songToSmf(song, 480, 15, "mabinogi", { canonicalOf })).map((e) => e.value)).toEqual([42, 43]);
   });
 
   it("같은 악기 연주자는 채널을 함께 써서 16명이 넘어도 다른 악기와 섞이지 않는다", () => {

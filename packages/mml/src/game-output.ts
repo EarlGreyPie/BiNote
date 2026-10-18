@@ -4,6 +4,7 @@ import { sameSound } from "./compare.js";
 import { parseTrackText, trackSource } from "./edit.js";
 import { optimizeMml } from "./optimizer.js";
 import { placeTempoByScore, type TempoMove } from "./tempo-placement.js";
+import { bpmBefore, padScore, scoreEnd } from "./score-end.js";
 
 /** 게임에 붙여넣을 악보 하나 */
 export interface GameScore extends ScoreChunk {
@@ -42,6 +43,13 @@ export function gameScores(
     const notes = [...t.notes].sort((a, b) => cmp(a.start, b.start));
     const text = optimizeMml(notes, { tempo: placed.get(t.id) ?? [] }).text;
     written.set(id, sameSound(parseTrackText(t.id, { text }).notes, notes) ? { text, asIs: false } : { text: trackSource(song, t).text, asIs: true });
+  }
+  // 다시 쓴 글이 원문 끝 쉼표를 잃어 악보가 짧아지지 않게 악보 길이를 지킨다 (score-end.ts)
+  for (const chunk of chunks) {
+    const tracks = chunk.trackIds.map((id) => song.tracks.find((x) => x.id === id)!);
+    const end = scoreEnd(tracks);
+    const padded = padScore(chunk.trackIds.map((id) => written.get(id)!.text), end, bpmBefore(song.tempo, end));
+    chunk.trackIds.forEach((id, k) => written.set(id, { ...written.get(id)!, text: padded[k]! }));
   }
   return chunks.map((chunk) => {
     const texts = chunk.trackIds.map((trackId) => ({ trackId, text: written.get(trackId)!.text }));

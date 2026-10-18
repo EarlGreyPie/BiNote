@@ -96,15 +96,20 @@ export async function loadSaveTarget(): Promise<void> {
   try {
     handle = await store(undefined);
     saveTarget.folder = handle?.name;
-    // 저장 창이 생기기 전에 폴더를 정해 둔 사람은 그대로 그 폴더에 저장한다
-    if (storedMode === undefined && handle) saveTarget.mode = "folder";
+    // 저장 창이 생기기 전에 폴더를 정해 둔 사람은 그대로 그 폴더에 저장한다.
+    // 읽는 사이 설정에서 방식을 바꿨으면 그 선택을 따른다
+    if (storedMode === undefined && !modeChosen && handle) saveTarget.mode = "folder";
   } catch {
     // 저장소를 못 쓰면 다운로드로 저장한다
   }
 }
 
+/** 이번 창에서 사용자가 저장 방식을 골랐는지 (시작할 때 예전 폴더 설정으로 덮지 않게) */
+let modeChosen = false;
+
 /** 저장 방식을 바꾼다 */
 export function setSaveMode(mode: SaveMode): void {
+  modeChosen = true;
   saveTarget.mode = mode;
   saveStored(MODE_KEY, mode);
 }
@@ -165,19 +170,20 @@ async function writeToFolder(dir: DirHandle, bytes: Uint8Array, name: string): P
   }
 }
 
-/** 저장 창에서 고른 파일. file이 없으면 저장 창을 띄우지 못했다는 뜻이다 */
-export interface AskedFile {
-  file: FileSystemFileHandle | undefined;
+/** 저장할 때 저장 창을 띄우는 설정인지 */
+export function asksSaveDialog(): boolean {
+  return canAskSave && saveTarget.mode === "ask";
 }
 
 /**
  * "저장할 때마다 고르기"이면 저장 창을 띄워 폴더와 파일 이름을 고르게 한다.
- * 묻지 않는 설정이면 undefined, 저장 창을 닫았으면 "cancelled".
- * 브라우저는 단추나 단축키를 누른 직후에만 저장 창을 띄워 주므로, 만드는 데 오래 걸리는 파일(WAV)은 만들기 전에 먼저 부른다.
+ * 묻지 않는 설정이면 undefined, 저장 창을 닫았으면 "cancelled", 띄우지 못했으면 file이 없다.
+ * 저장 창에서 있는 파일을 고르면 브라우저가 그 파일을 먼저 비운다. 그래서 저장할 내용을 다 만든 뒤에 불러 곧바로 쓴다
+ * (오래 걸리는 WAV는 다 만든 뒤 저장 단추로 부른다. 저장 창은 누른 직후에만 뜬다).
  */
-export async function askSaveFile(name: string): Promise<AskedFile | "cancelled" | undefined> {
+async function askSaveFile(name: string): Promise<{ file: FileSystemFileHandle | undefined } | "cancelled" | undefined> {
   const pick = filePicker();
-  if (!canAskSave || !pick || saveTarget.mode !== "ask") return undefined;
+  if (!pick || !asksSaveDialog()) return undefined;
   const ext = /\.[A-Za-z0-9]+$/.exec(name)?.[0];
   try {
     const file = await pick({
@@ -207,19 +213,24 @@ async function shareFile(bytes: Uint8Array, name: string): Promise<"shared" | "c
 
 /**
  * 저장한 결과. written: 고른 폴더에 썼다, shared: 공유 창에서 보냈다 (둘 다 저장을 확인한 것),
- * cancelled: 공유 창을 닫았다, downloaded: 다운로드를 시작했다 (끝났는지는 알 수 없다)
+ * cancelled: 저장 창·공유 창을 닫았다, downloaded: 다운로드를 시작했다 (끝났는지는 알 수 없다),
+ * rescued: 저장 창에서 고른 파일에 쓰지 못해 다운로드로 저장했다 (브라우저가 고른 파일을 먼저 비우므로 그 파일은 비었을 수 있다)
  */
-export type SaveOutcome = "written" | "shared" | "cancelled" | "downloaded";
+export type SaveOutcome = "written" | "shared" | "cancelled" | "downloaded" | "rescued";
 
 /**
  * 고른 저장 위치에 파일을 저장한다. 안 되면 다운로드로 저장한다.
- * asked는 미리 askSaveFile로 물어 둔 결과다. 없으면 여기서 묻는다(누른 직후에 불러야 한다).
+ * 저장 창을 띄울 수 있으므로 단추나 단축키를 누른 직후에 부른다.
  */
-export async function saveFile(bytes: Uint8Array, name: string, asked?: AskedFile | "cancelled"): Promise<SaveOutcome> {
-  const chosen = asked ?? (await askSaveFile(name));
+export async function saveFile(bytes: Uint8Array, name: string): Promise<SaveOutcome> {
+  const chosen = await askSaveFile(name);
   if (chosen === "cancelled") return "cancelled";
   if (chosen) {
-    if (chosen.file && (await writeFile(chosen.file, bytes))) return "written";
+    if (chosen.file) {
+      if (await writeFile(chosen.file, bytes)) return "written";
+      download(bytes, name);
+      return "rescued";
+    }
   } else if (saveTarget.mode === "folder" && canPickFolder && handle) {
     if (await writeToFolder(handle, bytes, name)) return "written";
   } else if (canShareFiles && saveTarget.share) {

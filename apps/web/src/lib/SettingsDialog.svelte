@@ -7,6 +7,8 @@
   import { pwa } from "./pwa.svelte";
   import { setTabTint, tabTint } from "./tabTint.svelte";
   import { rollFlow, setRollFlow, type RollFlow } from "./rollFlow.svelte";
+  import { chordPrefs, setMidiMerge } from "./chordPrefs.svelte";
+  import { setSplitSpread, splitPrefs } from "./splitPrefs.svelte";
   import { canAskSave, canPickFolder, canShareFiles, pickSaveFolder, saveTarget, setSaveMode, setSaveShare } from "./saveTarget.svelte";
   import { LANE_MAX, LANE_MIN, saveVolumeLane, volumeLane, type LaneState } from "./volumeLane.svelte";
 
@@ -47,7 +49,7 @@
     onclose: () => void;
   }
 
-  type Section = "packs" | "playback" | "display" | "save" | "language" | "keys";
+  type Section = "packs" | "playback" | "display" | "chords" | "save" | "language" | "keys";
 
   let {
     packs,
@@ -92,14 +94,14 @@
     dialog.showModal();
   });
 
-  const SECTIONS: readonly Section[] = ["packs", "playback", "display", "save", "language", "keys"];
+  const SECTIONS: readonly Section[] = ["packs", "playback", "display", "chords", "save", "language", "keys"];
   /** 언어 칸은 글자를 못 읽는 언어로 바뀌어도 찾을 수 있게 영어 "Language"를 늘 같이 적는다 */
   const sectionLabel = (s: Section) =>
     s === "language"
       ? i18n.locale === "en"
         ? t("ui.language")
         : `${t("ui.language")} · Language`
-      : t(s === "packs" ? "ui.settingsPacks" : s === "playback" ? "ui.settingsPlayback" : s === "display" ? "ui.settingsDisplay" : s === "save" ? "ui.settingsSave" : "ui.settingsKeys");
+      : t(s === "packs" ? "ui.settingsPacks" : s === "playback" ? "ui.settingsPlayback" : s === "display" ? "ui.settingsDisplay" : s === "chords" ? "ui.settingsChords" : s === "save" ? "ui.settingsSave" : "ui.settingsKeys");
 </script>
 
 <dialog bind:this={dialog} {onclose}>
@@ -258,6 +260,17 @@
           />
           <output>{volumeLane.size}px</output>
         </label>
+      {:else if section === "chords"}
+        <label class="row">
+          <input type="checkbox" checked={chordPrefs.merge} onchange={(e) => setMidiMerge(e.currentTarget.checked)} />
+          <span>{t("ui.mergeOnImport")}</span>
+        </label>
+        <p class="muted help">{t("ui.mergeSettingHelp")}</p>
+        <label class="row">
+          <input type="checkbox" checked={splitPrefs.spread} onchange={(e) => setSplitSpread(e.currentTarget.checked)} />
+          <span>{t("ui.spreadOnSplit")}</span>
+        </label>
+        <p class="muted help">{t("ui.spreadSettingHelp")}</p>
       {:else if section === "save"}
         {#if canAskSave || canPickFolder}
           <div class="save-modes" role="radiogroup" aria-label={t("ui.saveFolder")}>

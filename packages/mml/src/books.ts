@@ -1,6 +1,7 @@
-import { add, cmp, eq, type GameProfile, type Note, type Song } from "@mmlce/core";
+import { add, cmp, eq, type GameProfile, type Note, type Rat, type Song } from "@mmlce/core";
 import { distributeChords } from "./distribute.js";
-import { compactSong } from "./edit.js";
+import { compactResult } from "./edit.js";
+import { trackEnd } from "./score-end.js";
 import { splitSong, type SplitResult } from "./split.js";
 
 /**
@@ -29,7 +30,7 @@ export function fewerBooks(song: Song, profile: GameProfile, books: number, lock
     const limit = Math.floor(profile.charLimitPerScore * target * share);
     const spread = distributeChords(song, profile, { limit, ...(locked ? { locked } : {}) });
     if (spread.moved === 0) continue;
-    const next = compactSong(profile, undefined, locked).apply(spread.song);
+    const next = compactResult(spread.song, profile, locked, endsOf(song)).song;
     const parts = splitSong(next, profile).parts.length;
     if (parts <= target) return { from: books, to: parts, limit, moved: spread.moved };
   }
@@ -84,7 +85,9 @@ export function planBooks(song: Song, profile: GameProfile, options: PlanOptions
   const locked = options.locked;
   const room = spread ? roomFor(song, locked) : undefined;
   const distribute = (channel?: number) => distributeChords(song, profile, { ...(channel === undefined ? {} : { limit: channel }), ...(locked ? { locked } : {}) });
-  const compact = compactSong(profile, undefined, locked);
+  // 음을 옮긴 트랙은 원문이 지워지므로, 옮기기 전 트랙 길이(원문 끝 쉼표 포함)를 지킬 길이로 넘긴다 (화음 분산 명령과 같게)
+  const ends = endsOf(song);
+  const compact = { apply: (moved: Song) => compactResult(moved, profile, locked, ends).song };
 
   // 1) 음을 옮겨 한 권에 들어가면 나누지 않는다. 옮긴 뒤 모든 채널이 한도 안인지는 실제로 옮겨 본 글자 수로 판단한다
   //    (음을 옮기면 옥타브·볼륨 명령과 쉼표가 줄어 글자 수 합이 줄 수 있다)
@@ -171,4 +174,9 @@ function chains(notes: readonly Note[]): number {
     if (!(prev && prev.tie === "next" && eq(add(prev.start, prev.dur), n.start))) count++;
   });
   return count;
+}
+
+/** 음을 옮기기 전 트랙 길이 (원문 끝 쉼표 포함). 옮긴 뒤 다시 쓴 글이 이 길이를 지키게 compactResult에 넘긴다 */
+function endsOf(song: Song): ReadonlyMap<string, Rat> {
+  return new Map(song.tracks.map((t) => [t.id, trackEnd(t)]));
 }

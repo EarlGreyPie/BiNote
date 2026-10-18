@@ -6,6 +6,7 @@ import {
   validateSong,
   type Diagnostic,
   type SongDiagnostic,
+  type ValidateSongOptions,
 } from "@mmlce/mml";
 
 /** 트랙 하나의 원문과, 원문 위치를 짚는 검사 결과 */
@@ -45,8 +46,9 @@ function channel(song: Song, track: Track, profile: GameProfile): ChannelResult 
  * 곡 전체를 검사한다. 음을 짚는 곡 검사(음색 경계 & 등)는 그 음이 원문에서 차지한
  * 자리로 옮겨 편집기에 밑줄로 보이게 하고, 나머지(채널 수 등)는 따로 돌려준다.
  */
-export function analyzeSong(song: Song, profile: GameProfile): { tracks: TrackAnalysis[]; song: SongDiagnostic[] } {
-  const songDiagnostics = validateSong(song, profile);
+export function analyzeSong(song: Song, profile: GameProfile, options: ValidateSongOptions = {}): { tracks: TrackAnalysis[]; song: SongDiagnostic[] } {
+  // options.canonicalOf: 번호로만 아는 악기의 실제 악기 (음역·샘플 길이를 재생과 같게)
+  const songDiagnostics = validateSong(song, profile, options);
   const loose: SongDiagnostic[] = [];
   const located = new Map<string, Diagnostic[]>();
 

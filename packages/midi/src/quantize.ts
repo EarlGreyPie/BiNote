@@ -18,6 +18,11 @@ export interface QuantizeOptions {
   readonly triplets?: boolean;
   /** 이 시간(ms) 안에 시작한 음은 한 화음으로 보고 같은 자리에 맞춘다 */
   readonly chordMs?: number;
+  /**
+   * 셋잇단으로 골랐지만 셋잇단 자리에 친 음이 분명하지 않은 박(밀려 친 정규 음)을 정규 칸으로 맞춰 본다.
+   * 끄면(기본) 박 판정은 그대로다. 켜면 midiToSong이 화음 정리까지 한 결과를 비교해 나빠지지 않는 박만 바꾼다
+   */
+  readonly straighten?: boolean;
 }
 
 export const GRID_CHOICES = [4, 8, 16, 32, 64] as const;
@@ -31,6 +36,10 @@ export interface QuantizeResult {
   readonly grid: number;
   /** 셋잇단으로 맞춘 박 수 */
   readonly tripletBeats: number;
+  /** 시작이 달랐는데 칸에 맞추며 같은 자리의 같은 음이 되어 하나로 합쳐진 음 수 */
+  readonly merged: number;
+  /** 셋잇단으로 골랐지만 셋잇단 자리에 친 음이 분명하지 않은 박 (박 번호 = 4분음표 순번) */
+  readonly suspect: readonly number[];
 }
 
 /**
@@ -42,10 +51,30 @@ export function quantize(
   tempo: readonly TempoEvent[],
   options: QuantizeOptions = {},
 ): QuantizeResult {
+  return prepareQuantize(parts, tempo, options).place();
+}
+
+export interface PreparedQuantize {
+  readonly grid: number;
+  /** 셋잇단으로 골랐지만 셋잇단 자리에 친 음이 분명하지 않은 박 */
+  readonly suspect: readonly number[];
+  /**
+   * 칸에 맞춘다. straight: suspect 가운데 정규 칸으로 맞출 박.
+   * window: [시작, 끝)(온음표 단위)에 걸친 음만 맞춘다 (박 하나를 바꿔 볼 때 빠르게 따지려고)
+   */
+  place(straight?: ReadonlySet<number>, window?: readonly [number, number]): QuantizeResult;
+}
+
+/** 격자 추정·화음 묶기·박 고르기까지 한 번 해 두고, 박 판정을 바꿔 가며 칸에 맞춰 볼 수 있게 한다 */
+export function prepareQuantize(
+  parts: readonly { readonly id: string; readonly notes: readonly RawNote[] }[],
+  tempo: readonly TempoEvent[],
+  options: QuantizeOptions = {},
+): PreparedQuantize {
   const chordSeconds = (options.chordMs ?? 80) / 1000;
   const triplets = options.triplets ?? true;
   const all = parts.flatMap((p) => p.notes.map((n) => ({ n, part: p.id })));
-  if (all.length === 0) return { notes: [], grid: 16, tripletBeats: 0 };
+  if (all.length === 0) return { grid: 16, suspect: [], place: () => ({ notes: [], grid: 16, tripletBeats: 0, merged: 0, suspect: [] }) };
 
   const secondsPerWhole = (at: number) => 240 / bpmAt(tempo, at);
   // 격자는 묶기 전의 음 시작으로 추정한다
@@ -72,50 +101,76 @@ export function quantize(
   }
 
   const onsets = [...new Set(anchor.values())].sort((a, b) => a - b);
-  const beatChoice = chooseBeats(onsets, grid, triplets);
-
-  const snap = (x: number): Rat => {
-    const beat = Math.floor(x * 4 + 1e-9);
-    const step = beatChoice.get(beat) ? (grid * 3) / 2 : grid;
-    return rat(Math.round(x * step), step);
-  };
-
-  const unit = rat(1, grid);
-  const out = all.map(({ n, part }) => {
-    const start = snap(anchor.get(n)!);
-    let end = snap(toFloat(add(n.start, n.dur)) + (anchor.get(n)! - toFloat(n.start)));
-    if (cmp(end, start) <= 0) end = add(start, unit);
-    return { raw: n, note: { start, end, pitch: n.pitch, velocity: n.velocity, part } };
+  const mainChoice = chooseBeats(onsets, grid, triplets);
+  const suspect = suspectTriplets(mainChoice, onsets, grid);
+  // 칸에 맞추기 전 위치: 시작은 묶음 대표, 끝은 대표로 옮긴 만큼 함께 옮긴다
+  const placed = all.map(({ n, part }) => {
+    const at = anchor.get(n)!;
+    return { n, part, at, end: toFloat(add(n.start, n.dur)) + (at - toFloat(n.start)) };
   });
 
-  // 레가토로 살짝 겹친 음(겹침이 격자 반 칸보다 짧음)은 다음 음 시작에서 끊는다.
-  // 안 끊으면 흔들림 때문에 홑음 줄이 화음처럼 보여 트랙이 늘어난다
-  const byPart = new Map<string, typeof out>();
-  for (const x of out) byPart.set(x.note.part, [...(byPart.get(x.note.part) ?? []), x]);
-  for (const list of byPart.values()) {
-    list.sort((a, b) => cmp(a.note.start, b.note.start));
-    for (let i = 0; i < list.length; i++) {
-      const a = list[i]!;
-      const rawEnd = toFloat(add(a.raw.start, a.raw.dur));
-      for (let j = i + 1; j < list.length; j++) {
-        const b = list[j]!;
-        const c = cmp(b.note.start, a.note.start);
-        if (c === 0) continue;
-        if (cmp(b.note.start, a.note.end) >= 0) break;
-        const overlap = rawEnd - toFloat(b.raw.start);
-        if (overlap <= 0.5 / grid) {
-          a.note.end = b.note.start;
-          break;
+  const place = (straight?: ReadonlySet<number>, window?: readonly [number, number]): QuantizeResult => {
+    const beatChoice = new Map(mainChoice);
+    for (const beat of suspect) if (straight?.has(beat)) beatChoice.set(beat, false);
+    const snap = (x: number): Rat => {
+      const beat = Math.floor(x * 4 + 1e-9);
+      const step = beatChoice.get(beat) ? (grid * 3) / 2 : grid;
+      return rat(Math.round(x * step), step);
+    };
+
+    const unit = rat(1, grid);
+    const chosen = window ? placed.filter((x) => x.at < window[1] && x.end > window[0]) : placed;
+    const out = chosen.map(({ n, part, at, end: rawEnd }) => {
+      const start = snap(at);
+      let end = snap(rawEnd);
+      if (cmp(end, start) <= 0) end = add(start, unit);
+      return { raw: n, note: { start, end, pitch: n.pitch, velocity: n.velocity, part } };
+    });
+
+    // 레가토로 살짝 겹친 음(겹침이 격자 반 칸보다 짧음)은 다음 음 시작에서 끊는다.
+    // 안 끊으면 흔들림 때문에 홑음 줄이 화음처럼 보여 트랙이 늘어난다
+    const byPart = new Map<string, typeof out>();
+    for (const x of out) {
+      const list = byPart.get(x.note.part);
+      if (list) list.push(x);
+      else byPart.set(x.note.part, [x]);
+    }
+    for (const list of byPart.values()) {
+      list.sort((a, b) => cmp(a.note.start, b.note.start));
+      for (let i = 0; i < list.length; i++) {
+        const a = list[i]!;
+        const rawEnd = toFloat(add(a.raw.start, a.raw.dur));
+        for (let j = i + 1; j < list.length; j++) {
+          const b = list[j]!;
+          const c = cmp(b.note.start, a.note.start);
+          if (c === 0) continue;
+          if (cmp(b.note.start, a.note.end) >= 0) break;
+          const overlap = rawEnd - toFloat(b.raw.start);
+          if (overlap <= 0.5 / grid) {
+            a.note.end = b.note.start;
+            break;
+          }
         }
       }
     }
-  }
 
-  return {
-    notes: tidy(out.map(({ note }) => ({ start: note.start, dur: sub(note.end, note.start), pitch: note.pitch, velocity: note.velocity, part: note.part }))),
-    grid,
-    tripletBeats: [...beatChoice.values()].filter(Boolean).length,
+    // 원래 시작이 다른 같은 파트·같은 높이의 음이 같은 칸에 모이면 tidy가 하나로 합친다. 그 수를 알린다
+    const spots = new Map<string, Set<number>>();
+    for (const { raw, note } of out) {
+      const key = `${note.part}:${note.pitch}:${toFloat(note.start)}`;
+      spots.set(key, (spots.get(key) ?? new Set()).add(toFloat(raw.start)));
+    }
+    const merged = [...spots.values()].reduce((s, starts) => s + starts.size - 1, 0);
+
+    return {
+      notes: tidy(out.map(({ note }) => ({ start: note.start, dur: sub(note.end, note.start), pitch: note.pitch, velocity: note.velocity, part: note.part }))),
+      grid,
+      tripletBeats: [...beatChoice.values()].filter(Boolean).length,
+      merged,
+      suspect,
+    };
   };
+  return { grid, suspect, place };
 }
 
 /** 가장 굵은 격자 중 음 시작의 90%가 30ms 안에 맞는 것. 그런 격자가 없으면 가장 많이 맞는 격자 */
@@ -159,6 +214,32 @@ function chooseBeats(onsets: readonly number[], grid: number, triplets: boolean)
     out.set(beat, count >= 2 && t < bin * 0.5);
   }
   return out;
+}
+
+/**
+ * 셋잇단으로 고른 박 가운데, 셋잇단 자리에 친 음이 분명하지 않은 박.
+ * 32분·64분 격자의 셋잇단 칸(1/48·1/96)은 잘아서, 사람이 친 듯 조금씩 밀린 정규 음도 셋잇단 칸에 더 잘 맞아 보여
+ * 셋잇단 박으로 골랐고, 길이가 19/192 같은 조각이 되어 글자 수가 늘었다.
+ * "분명하다" = 정규 칸과 16분 셋잇단 칸(1/24)을 함께 쓰면 정규 칸만 쓸 때보다 오차가 4분의 1 아래로 준다.
+ * 이 박을 정규 칸으로 맞출지는 음을 잃지 않는지 최종 결과로 따져야 하므로 여기서는 후보만 고른다 (midiToSong)
+ */
+function suspectTriplets(choice: ReadonlyMap<number, boolean>, onsets: readonly number[], grid: number): number[] {
+  const coarse = (Math.min(grid, 16) * 3) / 2;
+  const off = (x: number, step: number) => Math.abs(x - Math.round(x * step) / step);
+  const errors = new Map<number, [number, number]>();
+  for (const x of onsets) {
+    const beat = Math.floor(x * 4 + 1e-9);
+    const e = errors.get(beat) ?? [0, 0];
+    e[0] += off(x, grid);
+    e[1] += Math.min(off(x, grid), off(x, coarse));
+    errors.set(beat, e);
+  }
+  const out: number[] = [];
+  for (const [beat, triplet] of choice) {
+    const [bin, mixed] = errors.get(beat)!;
+    if (triplet && mixed >= bin * 0.25) out.push(beat);
+  }
+  return out.sort((a, b) => a - b);
 }
 
 function bpmAt(tempo: readonly TempoEvent[], at: number): number {

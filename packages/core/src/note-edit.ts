@@ -13,8 +13,9 @@ function end(n: Note): Rat {
  * 시작 순으로 놓고, 바로 뒤에 붙은 음이 없는 &는 푼다.
  * before(편집 전 음)를 주면, & 사슬 가운데에 있다가 사슬이 끊겨 새로 소리를 내게 된 음은
  * 그 사슬 첫 음의 v를 받는다 (&로 이은 음은 첫 음 v로 울렸으므로, 적혀 있던 v로 바뀌어 들리지 않게. splitNote와 같은 규칙)
+ * explicitVol(호출하는 쪽이 볼륨을 일부러 정한 음 id)에 든 음은 이 보정을 받지 않는다. 명시한 볼륨이 사슬 보정보다 우선한다
  */
-function tidy(notes: readonly Note[], before?: readonly Note[]): Note[] {
+function tidy(notes: readonly Note[], before?: readonly Note[], explicitVol?: ReadonlySet<string>): Note[] {
   const out = [...notes].sort((a, b) => cmp(a.start, b.start));
   for (let i = 0; i < out.length; i++) {
     const n = out[i]!;
@@ -29,7 +30,7 @@ function tidy(notes: readonly Note[], before?: readonly Note[]): Note[] {
   for (let i = 0; i < out.length; i++) {
     const n = out[i]!;
     const vol = headVol.get(n.id);
-    if (vol === undefined || vol === n.vol) continue;
+    if (vol === undefined || vol === n.vol || explicitVol?.has(n.id)) continue;
     const prev = out[i - 1];
     const stillTied = prev?.tie === "next" && cmp(end(prev), n.start) === 0;
     if (!stillTied) out[i] = { ...n, vol };
@@ -37,9 +38,12 @@ function tidy(notes: readonly Note[], before?: readonly Note[]): Note[] {
   return out;
 }
 
-/** `placed` 자리를 비우고 넣는다. 잘린 앞 음과 짝을 잃은 &는 풀린다 */
-export function placeNote(notes: readonly Note[], placed: Note): Note[] {
-  return tidy(placeRaw(notes, placed), notes);
+/**
+ * `placed` 자리를 비우고 넣는다. 잘린 앞 음과 짝을 잃은 &는 풀린다.
+ * explicitVol에 든 음은 & 사슬이 끊겨도 적힌 v를 그대로 둔다 (tidy 참고)
+ */
+export function placeNote(notes: readonly Note[], placed: Note, explicitVol?: ReadonlySet<string>): Note[] {
+  return tidy(placeRaw(notes, placed), notes, explicitVol);
 }
 
 /** placeNote에서 &정리만 뺀 것 (여러 음을 넣는 중간에는 아직 안 넣은 뒤 음 때문에 &를 풀면 안 된다) */
@@ -64,11 +68,14 @@ export function removeNotes(notes: readonly Note[], ids: ReadonlySet<string>): N
   return tidy(notes.filter((n) => !ids.has(n.id)), notes);
 }
 
-/** 음을 옮기거나 길이를 바꾼다. 바뀐 자리에 있던 다른 음은 placeNote 규칙으로 정리한다 */
+/**
+ * 음을 옮기거나 길이를 바꾼다. 바뀐 자리에 있던 다른 음은 placeNote 규칙으로 정리한다.
+ * change에 vol이 있으면 (원래 값과 같아도) 그 음은 & 사슬 보정 없이 change.vol을 그대로 쓴다
+ */
 export function updateNote(notes: readonly Note[], id: string, change: Partial<Omit<Note, "id">>): Note[] {
   const target = notes.find((n) => n.id === id);
   if (!target) return [...notes];
-  return placeNote(notes, { ...target, ...change });
+  return placeNote(notes, { ...target, ...change }, change.vol !== undefined ? new Set([id]) : undefined);
 }
 
 /** 위치 바로 앞(또는 그 위치)에 있는 음. 새 음의 볼륨을 이어받을 때 쓴다 */
@@ -107,12 +114,17 @@ export function toggleTie(notes: readonly Note[], id: string): Note[] | undefine
 /**
  * 여러 음을 한꺼번에 바꾼다 (고른 음 여러 개 옮기기·지우기). changes: id → 바뀐 음, null이면 지운다.
  * 바뀌는 음을 먼저 모두 빼고 시작 순으로 다시 넣으므로, 함께 옮기는 음끼리 서로 잘라 먹지 않는다.
+ * explicitVol: 호출하는 쪽이 볼륨을 일부러 정한 음 id. 이 음들은 & 사슬이 끊겨도 적힌 v를 그대로 둔다
  */
-export function replaceNotes(notes: readonly Note[], changes: ReadonlyMap<string, Note | null>): Note[] {
+export function replaceNotes(
+  notes: readonly Note[],
+  changes: ReadonlyMap<string, Note | null>,
+  explicitVol?: ReadonlySet<string>,
+): Note[] {
   let out: Note[] = notes.filter((n) => !changes.has(n.id));
   const placed = [...changes.values()].filter((n): n is Note => n !== null).sort((a, b) => cmp(a.start, b.start));
   for (const n of placed) out = placeRaw(out, n);
-  return tidy(out, notes);
+  return tidy(out, notes, explicitVol);
 }
 
 /** 음 높이를 반음 단위로 옮긴다 (음정 변환). MIDI 범위(0~127)를 벗어나는 음이 하나라도 있으면 undefined */

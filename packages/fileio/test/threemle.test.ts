@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { rat, type Song } from "@mmlce/core";
+import { parseMml } from "@mmlce/mml";
 import { decodeText, encode3mle, encodeCp949, read3mle, readMmi, write3mle, writeMmi } from "../src/index.js";
 
 const SAMPLE = [
@@ -182,6 +183,13 @@ describe("write3mle: 악보마다 템포 (공개 전 점검)", () => {
     const back = read3mle(text, { chordsPerScore: 1 }).song;
     expect(back.tempo).toEqual(loose.tempo);
     expect(back.tracks[1]!.notes.map((n) => n.pitch)).toEqual([60, 62, 64]);
+  });
+
+  it("출력기로 다시 써도 원문 끝 쉼표 길이(뒤에 템포가 있는 r1)를 지킨다", () => {
+    const s = twoPlayers("t120a4r1t120", "c4");
+    const loose: Song = { ...s, tracks: s.tracks.map((t, k) => (k === 1 ? (({ mml: _m, ...rest }) => rest)(t) : t)) };
+    const first = write3mle(loose).text.split("[Channel1]")[1]!.split("[ChannelProperty2]")[0]!.trim();
+    expect(parseMml(first).gameEnd).toEqual(rat(5, 4));
   });
 
   it("한 채널에서 같은 빠르기를 다시 적은 t는 지도에 남긴다 (재점검 #2)", () => {
