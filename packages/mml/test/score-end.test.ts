@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { emptySong, History, MOBILE_PROFILE, normalizeTempo, rat, type Player, type Rat, type Song, type Track } from "@mmlce/core";
-import { changeTempos, compactSong, distributeSong, gameScores, padScore, parseMml, parseTrackText, planBooks, splitSong, trackSource } from "../src/index.js";
+import { changeTempos, compactSong, distributeSong, fewerBooks, gameScores, padScore, parseMml, parseTrackText, planBooks, splitSong, trackSource } from "../src/index.js";
 
 /** 악보 길이 지키기: 다시 쓰는 출력도 원문의 게임 길이(끝 쉼표 포함)를 지킨다 */
 
@@ -25,13 +25,50 @@ const end = (text: string): Rat => parseMml(text.replace(/^MML@/, "").replace(/;
 /** 게임 붙여넣기 글들 가운데 가장 긴 게임 길이 */
 const pasteEnd = (s: Song, k = 0) => gameScores(s, 6)[k]!.texts.map((t) => parseMml(t.text).gameEnd).reduce((a, b) => (a.n * b.d >= b.n * a.d ? a : b));
 
+const L = MOBILE_PROFILE.length;
+
 describe("padScore", () => {
   it("모자라면 가장 멀리 가는 글 끝에 쉼표와 템포를 붙이고, 이미 길이가 되면 그대로 둔다", () => {
-    expect(padScore(["t120a"], rat(5, 4), 120)).toEqual(["t120ar1t120"]);
-    expect(padScore(["a", "c2"], rat(1), 100)).toEqual(["a", "c2r2t100"]);
-    expect(padScore(["a1"], rat(1), 100)).toEqual(["a1"]);
+    expect(padScore(["t120a"], rat(5, 4), 120, L)).toEqual(["t120ar1t120"]);
+    expect(padScore(["a", "c2"], rat(1), 100, L)).toEqual(["a", "c2r2t100"]);
+    expect(padScore(["a1"], rat(1), 100, L)).toEqual(["a1"]);
     // 잠근 글은 고치지 않는다
-    expect(padScore(["a", "c2"], rat(1), 100, [true, false])).toEqual(["ar2.t100", "c2"]);
+    expect(padScore(["a", "c2"], rat(1), 100, L, [true, false])).toEqual(["ar2.t100", "c2"]);
+  });
+});
+
+describe("끝 채움이 글자 수 한도를 넘기지 않는다 (PR121 점검)", () => {
+  const limit = MOBILE_PROFILE.charLimitPerScore;
+  // A는 정확히 한도 글자. 다시 쓰면 끝 r2r2가 사라져 A에 채우면 한도를 넘는다
+  const a = "cd".repeat((limit - 4) / 2) + "r2r2";
+  const full = () => song([track("a", "p1", a), track("b", "p1", "e")]);
+
+  it("padScore: 채운 뒤 한도 안인 글을 고르고, 없으면 전처럼 가장 멀리 가는 글에 붙인다", () => {
+    expect(padScore(["a", "c2"], rat(1), 100, L, undefined, 6)).toEqual(["a", "c2r2t100"]);
+    // c2에 채우면 7자로 한도 6을 넘으므로 a에 채운다
+    expect(padScore(["a", "c2r64"], rat(1), 100, L, undefined, 8)).toEqual(["ar2.t100", "c2r64"]);
+    // 어디에 채워도 넘으면 가장 멀리 가는 글에 (길이를 잃는 것보다 경고가 낫다)
+    expect(padScore(["a", "c2"], rat(1), 100, L, undefined, 3)).toEqual(["a", "c2r2t100"]);
+  });
+
+  it("쉼표만 있는 짧은 채널에 채워도 그 채널의 게임 끝이 목표 길이와 같다", () => {
+    const [x, y] = padScore(["cd".repeat(10), "e"], rat(6), 120, L, undefined, 24);
+    expect(x).toBe("cd".repeat(10));
+    expect(parseMml(y!).gameEnd).toEqual(rat(6));
+  });
+
+  it("2400자 곡: 글자 수 줄이기·게임 출력·악보책 나누기가 한도를 지키고 1권이다", () => {
+    expect(a.length).toBe(limit);
+    const s = full();
+    const target = end(a);
+    const compact = compactSong(MOBILE_PROFILE).apply(s);
+    const texts = compact.tracks.map((t) => trackSource(compact, t).text);
+    for (const t of texts) expect(t.length).toBeLessThanOrEqual(limit);
+    expect(texts.map((t) => parseMml(t).gameEnd).reduce((p, q) => (p.n * q.d >= q.n * p.d ? p : q))).toEqual(target);
+    const pasted = gameScores(s, 6, undefined, limit)[0]!.texts.map((t) => t.text);
+    for (const t of pasted) expect(t.length).toBeLessThanOrEqual(limit);
+    expect(pasteEnd(s)).toEqual(target);
+    expect(splitSong(s, MOBILE_PROFILE, { gapMs: null }).parts).toHaveLength(1);
   });
 });
 
@@ -118,6 +155,23 @@ describe("PR #122 점검", { timeout: 60_000 }, () => {
     const length = rat(303 * last.start.d - last.start.n, last.start.d);
     expect(ends.some((e) => e.n * length.d === length.n * e.d)).toBe(true);
     expect(last.lossy).toEqual([]);
+  });
+
+  it("음을 옮긴 뒤 글자 수 줄이기가 곡을 그대로 두면(kept) 그 옮기기를 쓰지 않는다 (재점검 1번)", () => {
+    const a = track("a", "p1", "t100l8" + "cdefgab>c<".repeat(300) + "r1r1r1t100");
+    const b = track("b", "p1", "l1" + "r".repeat(300) + "c");
+    // 다른 악보 U: 출력기로 정확히 쓸 수 없는 길이(1/240)의 음이라 글자 수 줄이기가 곡을 그대로 둔다
+    const read = track("u", "p2", "t100c4");
+    const { mml: _mml, ...bare } = read;
+    const u = { ...bare, notes: read.notes.map((n) => ({ ...n, dur: rat(1, 240) })) };
+    const s = song([a, b, u]);
+    const plan = planBooks(s, MOBILE_PROFILE);
+    // 옮긴 곡은 원문이 지워져 끝 길이(303)를 잃으므로 쓰지 않는다
+    expect(plan.spread).toBeUndefined();
+    expect(plan.song).toBe(s);
+    expect(plan.result.parts.at(-1)!.end).toEqual(rat(303));
+    // 권 수 줄이기 안내도 그런 옮기기는 내지 않는다
+    expect(fewerBooks(s, MOBILE_PROFILE, plan.result.parts.length)).toBeUndefined();
   });
 
   it("이미 끝난 악보의 마지막 권(템포 하나뿐)을 손실로 보지 않는다 (3번)", () => {

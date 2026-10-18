@@ -263,13 +263,16 @@ export function compactResult(song: Song, profile?: GameProfile, locked?: Readon
     if (!sameSound(t.notes, notes)) return { song, kept: "notes" };
     tracks.push({ ...t, notes, mml });
   }
-  // 원문 끝 쉼표가 사라져 악보가 짧아지지 않게 악보 길이를 지킨다 (score-end.ts). 쉼표와 그 자리 템포만 붙으므로 음은 그대로
+  // 원문 끝 쉼표가 사라져 악보가 짧아지지 않게 악보 길이를 지킨다 (score-end.ts). 쉼표와 그 자리 템포만 붙으므로 음은 그대로.
+  // 붙인 뒤에도 트랙당 글자 한도 안인 글을 먼저 고른다
+  const songProfile = profile ?? PROFILES[song.meta.profileId] ?? getProfile("mobile");
+  const charLimit = songProfile.charLimitPerScore;
   const scoreEnds = new Map<string, Rat>();
   for (const ids of scoreTrackIds(song, chords)) {
     const end = scoreEnd(ids.map((id) => song.tracks.find((x) => x.id === id)!), ends);
     ids.forEach((id) => scoreEnds.set(id, end));
     const at = ids.map((id) => tracks.findIndex((x) => x.id === id));
-    const padded = padScore(at.map((k) => tracks[k]!.mml?.text ?? ""), end, bpmBefore(song.tempo, end), ids.map((id) => !locked?.has(id)));
+    const padded = padScore(at.map((k) => tracks[k]!.mml?.text ?? ""), end, bpmBefore(song.tempo, end), songProfile.length, ids.map((id) => !locked?.has(id)), charLimit);
     at.forEach((k, i) => {
       const t = tracks[k]!;
       if (t.mml && padded[i] !== t.mml.text) tracks[k] = { ...t, mml: { text: padded[i]! } };
@@ -754,6 +757,8 @@ function insertEdge(song: Song, ids: readonly string[], e: TempoEvent): { song: 
   const tracks = ids.map((id) => song.tracks.find((t) => t.id === id)!);
   // 이미 끝난 악보에는 그 뒤 템포가 필요 없다 (출력기도 악보 길이 뒤 템포는 쓰지 않는다: score-end.ts)
   if (cmp(e.at, scoreEnd(tracks)) >= 0) return { song };
+  // 쉼표·음을 나눠 쓸 음길이 한도 (곡 프로필)
+  const lengths = (PROFILES[song.meta.profileId] ?? getProfile("mobile")).length;
   const generated = scoreTempo(song, ids).generated;
   const heard = [
     ...tracks.flatMap((t) => (t.mml ? tempoTokens(t.mml) : [])),
@@ -798,8 +803,8 @@ function insertEdge(song: Song, ids: readonly string[], e: TempoEvent): { song: 
     const local = localAt(mml, e.at);
     const rest = local && src.parsed.rests.find((r) => within(r, local));
     if (!local || !rest) continue;
-    const a = lengthPieces(sub(local, rest.start));
-    const b = lengthPieces(sub(add(rest.start, rest.dur), local));
+    const a = lengthPieces(sub(local, rest.start), lengths);
+    const b = lengthPieces(sub(add(rest.start, rest.dur), local), lengths);
     const done = a && b ? write(track.id, mml, rest.span, [...a.map((l) => `r${l}`), t, ...b.map((l) => `r${l}`)].join("")) : undefined;
     if (done) return { song: done };
   }
@@ -810,8 +815,8 @@ function insertEdge(song: Song, ids: readonly string[], e: TempoEvent): { song: 
     // n 음표는 길이를 붙일 수 없어 나누지 않는다
     const pitch = /^[a-g][+#-]*/i.exec(mml.text.slice(note.span[0], note.span[1]))?.[0];
     if (!pitch) nNote = true;
-    const a = lengthPieces(sub(local, note.start));
-    const b = lengthPieces(sub(add(note.start, note.dur), local));
+    const a = lengthPieces(sub(local, note.start), lengths);
+    const b = lengthPieces(sub(add(note.start, note.dur), local), lengths);
     const done = pitch && a && b ? write(track.id, mml, note.span, `${a.map((l) => pitch + l).join("&")}&${t}${b.map((l) => pitch + l).join("&")}`, true) : undefined;
     if (done) return { song: done };
   }

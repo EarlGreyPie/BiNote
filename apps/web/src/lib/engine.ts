@@ -18,6 +18,7 @@ import type { WorkletSynthesizer } from "spessasynth_lib";
 import processorUrl from "spessasynth_lib/dist/spessasynth_processor.min.js?url";
 import { computePeaks, type Peaks } from "./waveform";
 import { previewPitch } from "./instrumentRange";
+import { PreviewVoices } from "./previewVoices";
 import { preparePlay } from "./playPlan";
 import type { WavRequest } from "./jobs";
 
@@ -363,7 +364,7 @@ export class Engine {
   /** 미리듣기로 누르고 있는 건반. 오디오를 켜는 동안 떼면 늦게 소리 내지 않는다 */
   private previewHeld = new Set<number>();
   /** 누른 건반 높이 → 음역에 맞춰 접어 보낸 높이 (뗄 때 보낸 높이로 끈다) */
-  private previewSent = new Map<number, number>();
+  private previewSent = new PreviewVoices();
 
   /** profile은 곡의 프로필 (재생과 같은 음역으로 높이를 접는다). pack은 트랙에서 고른 팩 파일 이름 */
   async previewOn(
@@ -395,16 +396,15 @@ export class Engine {
     }
     // 재생과 같이 실제 악기 음역으로 옥타브째 접는다 (번호로만 아는 악기도 알아본 악기로)
     const sent = previewPitch(profile, patch.canonical ?? instrument, pitch);
-    this.previewSent.set(pitch, sent);
+    // 같은 건반이 아직 울리면(다른 악기로 다시 누름) 앞 음을 먼저 끈다
+    for (const off of this.previewSent.press(pitch, sent)) synth.noteOff(ch, off);
     synth.noteOn(ch, sent, velocity);
   }
 
   previewOff(pitch: number): void {
     this.previewHeld.delete(pitch);
-    const sent = this.previewSent.get(pitch) ?? pitch;
-    this.previewSent.delete(pitch);
     // 다른 건반이 같은 높이로 접혀 아직 울리면 끄지 않는다
-    if (![...this.previewSent.values()].includes(sent)) this.synth?.noteOff(Engine.PREVIEW_CHANNEL, sent);
+    for (const off of this.previewSent.release(pitch)) this.synth?.noteOff(Engine.PREVIEW_CHANNEL, off);
     this.fallbackOff(pitch);
   }
 

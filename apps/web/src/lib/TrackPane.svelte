@@ -8,6 +8,7 @@
   import StructureList from "./StructureList.svelte";
   import TrackEditor from "./TrackEditor.svelte";
   import TrackStrip from "./TrackStrip.svelte";
+  import { EDITOR_SLOT_MIN_EM } from "./paneSplit";
   import { mmlPad } from "./mmlPad.svelte";
   import type { ScoreGroup } from "./scores";
   import type { TrackActions } from "./trackActions";
@@ -104,7 +105,7 @@
   {#if showEditor || (dock === "bottom" && !portrait)}
     {#if active}
       <!-- 편집기 여러 개: 위(고른 트랙)와 아래 칸들이 높이를 똑같이 나눈다. 칸이 너무 낮아지면 최소 높이를 두고 이 칸 안에서 굴린다 -->
-      <div class="editors" class:multi={extras.length > 0}>
+      <div class="editors" class:multi={extras.length > 0} style:--slot-min="{EDITOR_SLOT_MIN_EM}em">
         <div class="slot">
           <TrackEditor
             track={active.track}
@@ -188,9 +189,9 @@
     flex: 1 1 0;
     min-height: 0;
   }
-  /* 여럿이면 칸마다 머리 줄 + 글 세 줄쯤은 보이게 */
+  /* 여럿이면 칸마다 머리 줄 + 글 세 줄쯤은 보이게 (세로 화면 분할선 한도와 같은 기준: paneSplit.ts) */
   .editors.multi .slot {
-    min-height: 8.5em;
+    min-height: var(--slot-min, 8.5em);
   }
   .slot.extra {
     border-top: 2px solid var(--line);

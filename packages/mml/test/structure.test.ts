@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { History, rat, trackInstrument } from "@mmlce/core";
-import { addPlayer, addTrack, addTrackWithNotes, duplicateTrack, duplicateTrackToNewPlayer, moveTrack, moveTrackToNewPlayer, newSong, shiftTrack, trackMoveBlock, planMergeTracks, planMoveNotes, planVoiceByPitch, removeTrack, renamePlayer, renameTrack, setMeter, setPlayerInstrument, setPlayerTab, setTrackInstrument, setTrackPack, blockedSplitBack } from "../src/index.js";
+import { assignTab, History, MOBILE_PROFILE, planSlide, rat, trackInstrument } from "@mmlce/core";
+import { addPlayer, addTrack, addTrackWithNotes, duplicateTrack, duplicateTrackToNewPlayer, moveTrack, moveTrackToNewPlayer, newSong, shiftTrack, trackMoveBlock, planMergeTracks, planMoveNotes, planVoiceByPitch, removeTrack, renamePlayer, renameTrack, setMeter, setPlayerInstrument, setPlayerTab, setTrackInstrument, setTrackPack, setNotesAndAddTracks, blockedSplitBack } from "../src/index.js";
+import { optimizeMml, setTracksNotes } from "../src/index.js";
 
 const fresh = () => newSong({ playerName: "피아노", trackName: "트랙 1" });
 
@@ -588,5 +589,38 @@ describe("트랙에서 들을 사운드팩 고르기", () => {
     s = setTrackPack("t1", "pack-b.dls", programFor).apply(s);
     s = setTrackInstrument("t1", "piano", "트랙 악기", undefined, programFor).apply(s);
     expect(s.tracks[0]!.instrument).toMatchObject({ canonical: "piano", packId: "pack-b.dls" });
+  });
+});
+
+describe("음 바꾸기 + 트랙 더하기 (아르페지오)", () => {
+  it("트랙 추가까지 실행 취소 한 번으로 원래 곡(트랙 수 포함)으로 돌아간다", () => {
+    const h = new History(fresh());
+    const before = h.song;
+    const note = (id: string, at: number) => ({ id, start: rat(at, 16), dur: rat(1, 16), pitch: 60 + at, vol: 10, tie: "none" as const });
+    const s = h.run(setNotesAndAddTracks("p1", [{ trackId: "t1", notes: [note("a", 0)] }], [[note("b", 1)], [note("c", 2)]], (n) => `트랙 ${n}`, "아르페지오"));
+    expect(s.tracks.map((t) => [t.name, t.notes.map((x) => x.id)])).toEqual([["트랙 1", ["a"]], ["트랙 2", ["b"]], ["트랙 3", ["c"]]]);
+    expect(h.undo()).toEqual(before);
+    expect(h.redo().tracks).toHaveLength(3);
+  });
+});
+
+describe("슬라이드 결과를 글로 쓰기", () => {
+  it("사슬이 &로 이어지고 & 뒤에 v가 없으며, 타브 배치가 사슬을 같은 줄에 둔다. 실행 취소 한 번으로 원래 곡", () => {
+    const note = (id: string, at: number, pitch: number, vol = 10) => ({ id, start: rat(at, 4), dur: rat(1, 4), pitch, vol, tie: "none" as const });
+    const base = fresh();
+    const s = { ...base, tracks: base.tracks.map((t) => ({ ...t, notes: [note("a", 0, 55, 12), note("b", 1, 59, 5)] })) };
+    let k = 0;
+    const r = planSlide(s, "t1", s.tracks[0]!.notes, { kind: "between", path: "chromatic", direction: "down", semitones: 2, length: rat(1, 16), instrument: "folk-guitar" }, MOBILE_PROFILE, () => `s${++k}`);
+    const text = optimizeMml(r.notes!).text;
+    expect(text).toContain("&");
+    expect(/&[^,;]*?v\d/.test(text)).toBe(false);
+    const slides = new Map<string, string>();
+    const sorted = [...r.notes!];
+    for (let i = 1; i < sorted.length; i++) slides.set(sorted[i]!.id, sorted[i - 1]!.id);
+    const strings = assignTab(r.notes!, undefined, new Map(), slides).flatMap((e) => e.notes.map((x) => x.at?.string));
+    expect(new Set(strings).size).toBe(1);
+    const h = new History(s);
+    h.run(setTracksNotes([{ trackId: "t1", notes: r.notes! }], "슬라이드"));
+    expect(h.undo()).toEqual(s);
   });
 });

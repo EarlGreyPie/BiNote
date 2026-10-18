@@ -1,4 +1,4 @@
-import { add, cmp, eq, fromLength, sub, ZERO, type Rat, type TempoEvent } from "@mmlce/core";
+import { add, cmp, defaultLengthLimit, eq, gameLengths, sub, ZERO, type LengthLimit, type Rat, type TempoEvent } from "@mmlce/core";
 import type { Diagnostic } from "./parser.js";
 import { continues, dropDanglingTies } from "./compare.js";
 
@@ -16,9 +16,8 @@ export interface PrintOptions {
   readonly tempo?: readonly TempoEvent[];
   readonly octave?: number;
   readonly volume?: number;
-  /** 한 토막으로 쓸 수 있는 음길이 범위와 점 개수 (프로필 값) */
-  readonly maxLength?: number;
-  readonly maxDots?: number;
+  /** 한 토막으로 쓸 수 있는 음길이 한도 (GameProfile.length). 없으면 defaultLengthLimit() */
+  readonly lengths?: LengthLimit;
 }
 
 export interface PrintResult {
@@ -36,24 +35,14 @@ const NAMES = ["c", "c+", "d", "d+", "e", "f", "f+", "g", "g+", "a", "a+", "b"] 
 
 const tableCache = new Map<string, Piece[]>();
 
-function pieceTable(maxLength: number, maxDots: number): Piece[] {
-  const key = `${maxLength}/${maxDots}`;
+/** 게임이 받는 한 토막 길이 표 (gameLengths). 긴 것부터, 같은 값이면 짧게 쓰이는 표기(점 없는 쪽)부터 */
+function pieceTable(limit: LengthLimit): Piece[] {
+  const key = `${limit.min}/${limit.max}/${limit.dots}`;
   const cached = tableCache.get(key);
   if (cached) return cached;
-  const built = buildTable(maxLength, maxDots);
+  const built = [...gameLengths(limit)].sort((a, b) => cmp(b.value, a.value) || a.dots - b.dots);
   tableCache.set(key, built);
   return built;
-}
-
-function buildTable(maxLength: number, maxDots: number): Piece[] {
-  const pieces: Piece[] = [];
-  for (let length = 1; length <= maxLength; length++) {
-    for (let dots = 0; dots <= maxDots; dots++) {
-      pieces.push({ length, dots, value: fromLength(length, dots) });
-    }
-  }
-  // 긴 것부터, 같은 값이면 짧게 쓰이는 표기(점 없는 쪽)부터
-  return pieces.sort((a, b) => cmp(b.value, a.value) || a.dots - b.dots);
 }
 
 /**
@@ -76,20 +65,20 @@ export function splitDuration(dur: Rat, table: readonly Piece[]): { pieces: Piec
 
 /** 이 길이를 1~64 음길이(점 포함) 조합으로 정확히 쓸 수 있는지 */
 /** 이 길이의 쉼표를 l 기본값과 상관없이 숫자를 붙여 쓴다 (글 끝에 덧붙일 때) */
-export function restText(dur: Rat, maxLength = 64, maxDots = 1): string {
-  return splitDuration(dur, pieceTable(maxLength, maxDots))
+export function restText(dur: Rat, limit: LengthLimit): string {
+  return splitDuration(dur, pieceTable(limit))
     .pieces.map((p) => `r${p.length}${".".repeat(p.dots)}`)
     .join("");
 }
 
 /** 이 길이를 음길이 숫자(점 포함) 토막들로. 정확히 쓸 수 없으면 undefined (&로 이어 쓸 때) */
-export function lengthPieces(dur: Rat, maxLength = 64, maxDots = 1): string[] | undefined {
-  const split = splitDuration(dur, pieceTable(maxLength, maxDots));
+export function lengthPieces(dur: Rat, limit: LengthLimit): string[] | undefined {
+  const split = splitDuration(dur, pieceTable(limit));
   return split.rest.n === 0 && split.pieces.length > 0 ? split.pieces.map((p) => `${p.length}${".".repeat(p.dots)}`) : undefined;
 }
 
-export function canWriteExactly(dur: Rat, maxLength = 64, maxDots = 1): boolean {
-  return dur.n === 0 || splitDuration(dur, pieceTable(maxLength, maxDots)).rest.n === 0;
+export function canWriteExactly(dur: Rat, limit: LengthLimit): boolean {
+  return dur.n === 0 || splitDuration(dur, pieceTable(limit)).rest.n === 0;
 }
 
 function splitUncached(dur: Rat, table: readonly Piece[]): { pieces: Piece[]; rest: Rat } {
@@ -161,7 +150,8 @@ function findExact(target: Rat, table: readonly Piece[]): Piece[] | undefined {
  * (최적화기는 4단계). 결과를 다시 parseMml로 읽으면 같은 음이 나와야 한다.
  */
 export function printMml(notes: readonly PrintableNote[], options: PrintOptions = {}): PrintResult {
-  const table = pieceTable(options.maxLength ?? 64, options.maxDots ?? 1);
+  const lengths = options.lengths ?? defaultLengthLimit();
+  const table = pieceTable(lengths);
   // 한 번 써 보고 가장 많이 나온 점 없는 토막 길이를 l 기본값으로 삼아 다시 쓴다
   const draft = printWith(notes, options, table, 4);
   let best = 4;
@@ -226,6 +216,7 @@ function printWith(
       diagnostics.push({
         level: "warning",
         code: "unrepresentable-length",
+        params: { min: (options.lengths ?? defaultLengthLimit()).min, max: (options.lengths ?? defaultLengthLimit()).max },
         span: [0, 0],
       });
     }

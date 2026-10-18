@@ -1,4 +1,4 @@
-import { add, cmp, eq, normalizeTempo, sub, type Rat, type Song, type TempoEvent, type Track } from "@mmlce/core";
+import { add, cmp, defaultLengthLimit, eq, normalizeTempo, sub, type Rat, type Song, type TempoEvent, type Track } from "@mmlce/core";
 import { scoreChunks } from "./clipboard.js";
 import { parseMml } from "./parser.js";
 import { canWriteExactly, type PrintableNote } from "./printer.js";
@@ -83,6 +83,12 @@ export function canPlaceTempoAt(notes: readonly PrintableNote[], at: Rat): boole
 }
 
 /** 이 채널에 템포를 쓰기 좋은 정도 (작을수록 좋다). 4면 snap(뒤쪽 가장 가까운 음 경계)으로 옮겨야 하고, 5면 옮길 곳도 없다 */
+/**
+ * 템포 자리를 고를 때 쉼표·음을 나눠 쓸 수 있는지 보는 음길이 한도. 템포 자리 고르기는 음만 받아 곡 프로필이 닿지 않으므로
+ * 기본 한도를 쓴다 (한도가 넓어지면 여기만 곡 프로필을 받게 바꾼다)
+ */
+const LENGTHS = defaultLengthLimit();
+
 function rankAt(notes: readonly PrintableNote[], at: Rat): { rank: number; snap?: Rat } {
   let prevEnd: Rat = { n: 0, d: 1 };
   for (const n of notes) {
@@ -90,15 +96,15 @@ function rankAt(notes: readonly PrintableNote[], at: Rat): { rank: number; snap?
     if (eq(n.start, at) || eq(end, at)) return { rank: 1 };
     if (cmp(at, n.start) < 0) {
       // prevEnd ~ n.start 사이 쉼표 안
-      return canWriteExactly(sub(at, prevEnd)) && canWriteExactly(sub(n.start, at)) ? { rank: 2 } : { rank: 4, snap: n.start };
+      return canWriteExactly(sub(at, prevEnd), LENGTHS) && canWriteExactly(sub(n.start, at), LENGTHS) ? { rank: 2 } : { rank: 4, snap: n.start };
     }
     if (cmp(at, end) < 0) {
-      return canWriteExactly(sub(at, n.start)) && canWriteExactly(sub(end, at)) ? { rank: 3 } : { rank: 4, snap: end };
+      return canWriteExactly(sub(at, n.start), LENGTHS) && canWriteExactly(sub(end, at), LENGTHS) ? { rank: 3 } : { rank: 4, snap: end };
     }
     prevEnd = end;
   }
   // 마지막 음 뒤: 쉼표 하나로 자리를 만든다
-  return cmp(at, prevEnd) === 0 || canWriteExactly(sub(at, prevEnd)) ? { rank: cmp(at, prevEnd) === 0 ? 1 : 2 } : { rank: 5 };
+  return cmp(at, prevEnd) === 0 || canWriteExactly(sub(at, prevEnd), LENGTHS) ? { rank: cmp(at, prevEnd) === 0 ? 1 : 2 } : { rank: 5 };
 }
 
 /** 악보마다 곡 트랙 id. 연주자 목록에 없는 트랙(읽다 만 곡 등)은 연주자 id끼리 악보 하나로 본다 */

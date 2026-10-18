@@ -1,4 +1,4 @@
-import { add, cmp, DEFAULT_BPM, eq, maxChordsOf, normalizeTempo, positionToSeconds, rat, sub, ZERO, type GameProfile, type Rat, type Song, type TempoEvent } from "@mmlce/core";
+import { add, cmp, DEFAULT_BPM, defaultLengthLimit, eq, maxChordsOf, normalizeTempo, positionToSeconds, rat, sub, ZERO, type GameProfile, type LengthLimit, type Rat, type Song, type TempoEvent } from "@mmlce/core";
 import { scoreChunks } from "./clipboard.js";
 import { optimizeMml } from "./optimizer.js";
 import { printMml, restText, type PrintableNote } from "./printer.js";
@@ -88,7 +88,7 @@ export function splitSong(song: Song, profile: GameProfile, options: SplitOption
   for (const notes of tracks) for (const n of notes) lastNote = max(lastNote, add(n.start, n.dur));
   const songEnd = ends.reduce(max, lastNote);
 
-  const whole = render(song, scores, ends, tracks, tempo, ZERO, songEnd, false, false, true);
+  const whole = render(song, scores, ends, tracks, tempo, ZERO, songEnd, false, false, true, 0, limit, profile.length);
   if (whole.texts.every((t) => t.text.length <= limit)) {
     return { parts: [{ start: ZERO, end: songEnd, texts: whole.texts, cut: 0, trim: ZERO, moved: whole.moved, lossy: whole.lossy }], needed: false };
   }
@@ -110,7 +110,7 @@ export function splitSong(song: Song, profile: GameProfile, options: SplitOption
   const part = (start: Rat, end: Rat, quick = false, verify = false) => {
     const trim = cmp(end, songEnd) < 0 ? gapAt(tempo, end, gapMs, start) : ZERO;
     const until = sub(end, trim);
-    return { trim, until, ...render(song, scores, ends, tracks, tempo, start, until, quick, cmp(end, songEnd) < 0, verify, minCarry) };
+    return { trim, until, ...render(song, scores, ends, tracks, tempo, start, until, quick, cmp(end, songEnd) < 0, verify, minCarry, limit, profile.length) };
   };
   // 실제로 내보낼 글(앞당김·끝 쉼표 포함)로 한도를 검사한다. 단순 출력이 들어가면 최적화 출력도 들어간다.
   // 같은 구간을 여러 번 묻게 되므로(최소 권 수 계산 + 자리 고르기) 결과를 기억해 둔다
@@ -425,6 +425,10 @@ function render(
   padEnd = false,
   verify = false,
   minCarry = 0,
+  /** 트랙당 글자 한도. 마지막 권 끝 채움을 붙인 뒤에도 한도 안인 글에 먼저 붙인다 */
+  limit = Infinity,
+  /** 끝 쉼표를 쓸 음길이 한도 (곡 프로필) */
+  lengths: LengthLimit = defaultLengthLimit(),
 ): { texts: { trackId: string; text: string }[]; moved: number; lossy: string[] } {
   // 앞 권에서 넘어온 음의 남은 부분이 아주 짧으면 다시 치지 않는다 (곡 처음부터 쓰는 권은 넘어온 음이 없다).
   // 마지막 권(padEnd가 아님)은 버리지 않는다: 버리면 곡 길이가 줄고, 남은 것이 그것뿐이면 빈 권(t만)이 생긴다
@@ -455,7 +459,7 @@ function render(
     const bookEnd = sub(until, start);
     if (!padEnd) {
       // 마지막 권: 원래 끝 쉼표까지 (모자라면 쉼표와 그 자리 빠르기 템포 하나를 붙인다. 뒤에 명령이 있는 쉼표는 길이에 든다)
-      const padded = padScore(score.map((k) => out[k]!.text), bookEnd, bpmBefore(tempo, until));
+      const padded = padScore(score.map((k) => out[k]!.text), bookEnd, bpmBefore(tempo, until), lengths, undefined, limit);
       score.forEach((k, i) => (out[k] = { ...out[k]!, text: padded[i]! }));
       if (verify) check(score, placed, bookEnd);
       continue;
@@ -481,7 +485,7 @@ function render(
     for (let j = 1; j < simple.length; j++) if (simple[j]!.length < simple[i]!.length) i = j;
     const k = score[i]!;
     const fill = sub(length, reach[i]!);
-    out[k] = { ...out[k]!, text: out[k]!.text + (fill.n > 0 ? restText(fill) : "") + THROWAWAY_REST };
+    out[k] = { ...out[k]!, text: out[k]!.text + (fill.n > 0 ? restText(fill, lengths) : "") + THROWAWAY_REST };
   }
   // padEnd 권은 쉼표를 다 붙인 뒤 검사한다 (위 반복에서 continue로 건너뛰는 악보도 있다)
   if (verify && padEnd) for (const [s, score] of scores.entries()) check(score, placedBy[s] ?? [], length);

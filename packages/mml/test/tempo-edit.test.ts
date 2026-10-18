@@ -126,6 +126,28 @@ describe("템포 편집 (원문 수술)", () => {
     const mixed = songOf("t120 c2 c2", { text: "r2 t90 c2", notesOnly: true });
     expect(tempoMismatch(mixed)).toBe(false);
   });
+
+  it("악보 끝 자리와 그 뒤 템포는 비교하지 않는다: 글자 수 줄이기 뒤 오탐이 없다 (PR122 점검)", () => {
+    const s = songOf("t100c1r1t120");
+    expect(tempoMismatch(s)).toBe(false);
+    const compact = compactSong(MOBILE_PROFILE).apply(s);
+    const text = trackSource(compact, compact.tracks[0]!).text;
+    expect(text).toBe("t100c1r1t100");
+    expect(parseMml(text).gameEnd).toEqual(rat(2));
+    expect(tempoMismatch(compact)).toBe(false);
+    // 원문 없는 트랙이 섞여도 같다
+    const { mml: _mml, ...bare } = compact.tracks[0]!;
+    const mixed = { ...compact, tracks: [...compact.tracks, { ...bare, id: "x", notes: parseTrackText("x", { text: "e1" }).notes }] };
+    expect(tempoMismatch(mixed)).toBe(false);
+  });
+
+  it("악보 안의 진짜 어긋남은 그대로 잡는다", () => {
+    const s = songOf("t100c1t130c1");
+    expect(tempoMismatch({ ...s, tempo: [{ at: rat(0), bpm: 100 }] })).toBe(true);
+    // 다른 악보가 계속 울리는 자리의 지도 템포는 들린다
+    const two = songOf("t100c1r1t120", "t100c1c1c1");
+    expect(tempoMismatch({ ...two, tracks: [two.tracks[0]!, { ...two.tracks[1]!, playerId: "p2" }], players: [...two.players, { id: "p2", name: "", instrument: { canonical: "flute" } }] })).toBe(true);
+  });
 });
 
 describe("악보마다 템포", () => {

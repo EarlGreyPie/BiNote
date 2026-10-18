@@ -269,6 +269,37 @@ export function addTrackWithNotes(
   });
 }
 
+/**
+ * 여러 트랙 음 바꾸기와 같은 악보에 트랙 더하기를 실행 취소 한 칸으로 (아르페지오 등).
+ * changes: 바꿀 트랙과 바뀐 뒤 음 전체 (원문은 음에서 다시 만든다), newTracks: playerId 악보에 더할 트랙의 음.
+ * trackName(n): 그 악보의 n번째 트랙이 될 새 트랙 이름
+ */
+export function setNotesAndAddTracks(
+  playerId: string,
+  changes: readonly { readonly trackId: string; readonly notes: readonly Note[] }[],
+  newTracks: readonly (readonly Note[])[],
+  trackName: (n: number) => string,
+  label: string,
+): Command {
+  return replaceWith(label, (song) => {
+    const byId = new Map(changes.map((c) => [c.trackId, c.notes]));
+    let next: Song = {
+      ...song,
+      tracks: song.tracks.map((t) => {
+        const notes = byId.get(t.id);
+        if (!notes) return t;
+        const { mml: _mml, ...rest } = t;
+        return { ...rest, notes: [...notes] };
+      }),
+    };
+    for (const notes of newTracks) {
+      const n = next.tracks.filter((t) => t.playerId === playerId).length + 1;
+      next = addTrackWithNotes(playerId, trackName(n), notes).apply(next);
+    }
+    return next;
+  });
+}
+
 /** 트랙을 지운다. 연주자에게 남은 트랙이 없으면 연주자도 지운다 (곡 템포는 그대로) */
 export function removeTrack(trackId: string, label = "트랙 지우기"): Command {
   return replaceWith(label, (song) => {

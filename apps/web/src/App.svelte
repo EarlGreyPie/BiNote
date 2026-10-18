@@ -9,14 +9,16 @@
     toFloat,
     History,
     maxChordsOf,
+    type ArpResult,
+    type SlideResult,
+    type ArpSource,
     isSoloInstrument,
     barBeatAt,
-    measureStart,
     meterAt,
     meterGrid,
     foldPitch,
     rat,
-    scaleNotesIn,
+    clipOverlaps,
     transposeNotes,
     DOUBLE,
     HALF,
@@ -89,6 +91,7 @@
     setPlayerInstrument,
     setPlayerTab,
     setTrackInstrument,
+    setNotesAndAddTracks,
     setTrackPack,
     type ProgramForPack,
     type SoloSplit,
@@ -102,10 +105,28 @@
   } from "@mmlce/mml";
   import { analyzeSong, noteSpan, spanAt, textTimeline } from "./lib/analysis";
   import { trackSoundingRange, type CanonicalOf } from "./lib/instrumentRange";
+  import { emptyViewMemory, fromCurrentView, rememberView } from "./lib/viewCarry";
+  import { freshSongView } from "./lib/songView";
+  import type { TabAlign } from "./lib/tabAlign";
   import { Engine, MASTER_MAX } from "./lib/engine";
   import { diag, i18n, instrumentLabel, instrumentName, LOCALE_LABELS, setLocale, t } from "./lib/i18n.svelte";
   import { openScore } from "./lib/load";
-  import { asksSaveDialog, loadSaveTarget, saveFile, type SaveOutcome } from "./lib/saveTarget.svelte";
+  import { confirmedSave } from "./lib/projectSave";
+  import {
+    asksSaveDialog,
+    canAskSave,
+    canOpenFile,
+    loadSaveTarget,
+    pickOpenFile,
+    recallProjectFile,
+    rememberProjectFile,
+    saveFile,
+    saveProject as saveProjectFile,
+    type SavedFile,
+  } from "./lib/saveTarget.svelte";
+  import { saveBaseName } from "./lib/saveName";
+  import { windowTitle } from "./lib/windowTitle";
+  import { restoreWorkFile, sameAutosave, type AutosaveState as WorkAutosave } from "./lib/workFile";
   import { flushAllEditors } from "./lib/MmlEditor.svelte";
   import ReferenceBar from "./lib/ReferenceBar.svelte";
   import TapBar from "./lib/TapBar.svelte";
@@ -132,7 +153,8 @@
   import RecoverDialog from "./lib/RecoverDialog.svelte";
   import NoteInfo from "./lib/NoteInfo.svelte";
 
-  const SCORE_FILES = [...PROJECT_EXTENSIONS, ".mml", ".mmi", ".txt", ".mid", ".midi"].join(",");
+  const SCORE_EXTENSIONS = [...PROJECT_EXTENSIONS, ".mml", ".mmi", ".txt", ".mid", ".midi"];
+  const SCORE_FILES = SCORE_EXTENSIONS.join(",");
   const PACK_FILES = ".dls,.sf2,.sf3";
   import Menu, { type MenuItem } from "./lib/Menu.svelte";
   import MmlKeyPad from "./lib/MmlKeyPad.svelte";
@@ -147,8 +169,11 @@
   import Toolbar, { type RollLayer } from "./lib/Toolbar.svelte";
   import { coarsePointer, mmlPad } from "./lib/mmlPad.svelte";
   import { parseTabPad, TAB_PAD_KEY } from "./lib/tabPad";
+  import { FOLLOW_CURSOR_KEY, parseFollowCursor } from "./lib/tabFollow";
   import VoiceDialog, { parseVoicePrefs, VOICE_STORAGE, type VoiceMode, type VoiceOptions, type VoicePreview } from "./lib/VoiceDialog.svelte";
   import TransposeDialog, { type TransposeCheck, type TransposeScope } from "./lib/TransposeDialog.svelte";
+  import ArpeggioDialog from "./lib/ArpeggioDialog.svelte";
+  import SlideDialog from "./lib/SlideDialog.svelte";
   import { Playback } from "./lib/playback.svelte";
   import { TUNINGS, isTuningName, type ScoreTuning, type TuningName } from "./lib/tunings";
   import PianoRoll from "./lib/PianoRoll.svelte";
@@ -181,7 +206,11 @@
   } from "./lib/keymap";
   import { applyUpdate, checkStorage, pwa, requestPersistentStorage } from "./lib/pwa.svelte";
   import { guideUrl } from "./lib/links";
-  import { VIDEO_DEFAULTS, noteLengthOf, stepNoteLength, type BackgroundVideo, type EventKind, type EventLabel, type EventRef, type NoteLength, type Orientation, type RollTool } from "./lib/roll";
+  import { clampRollShare, maxRollShare, paneMinHeight, ROLL_SHARE_MAX, ROLL_SHARE_MIN } from "./lib/paneSplit";
+  import { meterEditAt, meterTarget } from "./lib/meterTarget";
+  import { dotFactor, toggleDot } from "./lib/dotLength";
+  import { tabArpPick } from "./lib/arpeggioOptions";
+  import { VIDEO_DEFAULTS, lengthsFor, noteLengthOf, stepNoteLength, type BackgroundVideo, type EventKind, type EventLabel, type EventRef, type NoteLength, type Orientation, type RollTool } from "./lib/roll";
 
 
   const engine = new Engine();
@@ -216,9 +245,23 @@
     tabPadOn = !tabPadOn;
     saveStored(TAB_PAD_KEY, tabPadOn ? "1" : "0");
   }
+  /** 보기 → 커서 따라가기 (기본 켬). 지금은 타브에만 쓴다. 이 브라우저에 기억한다 */
+  let followCursor = $state(loadStored(FOLLOW_CURSOR_KEY, parseFollowCursor));
+  function toggleFollowCursor() {
+    followCursor = !followCursor;
+    saveStored(FOLLOW_CURSOR_KEY, followCursor ? "1" : "0");
+  }
   const newNoteDur = $derived(noteLengthOf(noteLength, division));
   const DIVISIONS = GRID_DIVISIONS;
   let viewMode = $state<"roll" | "tab">("roll");
+  /**
+   * 타브 ↔ 피아노롤을 바꿔도 이어 보는 자리: 보던 시간 자리(같이 씀), 롤·타브 확대(따로), 타브 커서.
+   * 보기를 바꾸면 컴포넌트를 새로 만들므로 여기 두고 넘긴다. 화면을 다시 그릴 일이 아니라 반응 상태로 두지 않는다.
+   * 롤에 가 있는 동안 앱의 tabCursor는 비어 있다 (기억한 커서는 여기에만 있고 타브를 다시 열 때 되살린다)
+   */
+  const viewMemory = emptyViewMemory();
+  /** 타브 지판 위치 (TabView가 알린다. PC 위 도구줄 단추 글자·안내용) */
+  let tabAlign = $state<TabAlign>("middle");
   // 화면 모양: 테마·강조색·음 모양. 시스템 테마가 바뀌어도 롤을 다시 그리게 themeKey를 바꾼다
   let appearance = $state<Appearance>(loadStored(APPEARANCE_STORAGE, parseAppearance));
   function setAppearance(next: Appearance) {
@@ -289,6 +332,9 @@
   let releaseNotes = $state<"waiting" | "current" | undefined>(undefined);
   const bindings = $derived(resolve(keymap));
   let roll = $state<ReturnType<typeof PianoRoll> | undefined>(undefined);
+  let tab = $state<ReturnType<typeof TabView> | undefined>(undefined);
+  /** 고른 음 편집을 받는 쪽: 피아노롤 또는 타브 (같은 이름·같은 뜻의 함수를 내보낸다) */
+  const editor = $derived(viewMode === "roll" ? roll : tab);
   let openInput: HTMLInputElement;
   let packInput: HTMLInputElement;
   /** MML@ 붙여넣기 창. 열려 있으면 처음 채울 글 */
@@ -430,6 +476,11 @@
 
 
   const profile = $derived(getProfile(song?.meta.profileId ?? "mobile"));
+  /** 고를 수 있는 새 음 길이: 게임 음길이 한도(곡 프로필)로 거른 목록. 고른 길이가 목록 밖이면(프로필이 바뀜 등) 격자로 */
+  const noteLengths = $derived(lengthsFor(profile.length));
+  $effect(() => {
+    if (!noteLengths.includes(noteLength)) noteLength = "grid";
+  });
   /** 피아노롤에 보일 음 높이: C0~B8 (게임 프로필의 옥타브 범위가 더 좁으면 그 안) */
   const pitchRange = $derived<readonly [number, number]>([
     Math.max(12, (profile.octave.min + 1) * 12),
@@ -560,6 +611,27 @@
     // 편집기가 닫히며 남은 입력을 저장할 때 그 트랙이 이미 지워졌을 수 있다
     if (!track || track.mml?.text === text || !editable(trackId)) return;
     sync(history.run(setTrackText(trackId, text)));
+  }
+
+  /**
+   * 타브 붙이기: 있는 트랙의 바뀐 음과 이 악보에 더할 새 트랙(트랙 나눔 그대로 붙인 화음)을 한 명령으로 (실행 취소 한 칸).
+   * 새 트랙은 고른 트랙에 따로 정한 악기를 따른다 (타브 입력이 트랙을 더할 때와 같다)
+   */
+  function pasteLayers(base: Song, changes: { trackId: string; notes: Note[] }[], added: Note[][], playerId: string, label: string): Command {
+    const instrument = base.tracks.find((tr) => tr.id === activeTrackId && tr.playerId === playerId)?.instrument;
+    const command: Command = {
+      label,
+      apply(song) {
+        let next = changes.length > 0 ? setTracksNotes(changes, label).apply(song) : song;
+        for (const notes of added) {
+          const n = next.tracks.filter((tr) => tr.playerId === playerId).length + 1;
+          next = addTrackWithNotes(playerId, t("ui.newTrackName", { n }), notes, label, instrument).apply(next);
+        }
+        return next;
+      },
+      invert: (before) => ({ label, apply: () => before, invert: () => command }),
+    };
+    return command;
   }
 
   function editNotes(trackId: string, notes: Note[], label: string) {
@@ -792,7 +864,22 @@
     const input = event.currentTarget as HTMLInputElement;
     const file = input.files?.[0];
     input.value = "";
-    if (!file) return;
+    if (file) await openPicked(file);
+  }
+
+  /** 악보 열기. 열기 창을 띄울 수 있는 브라우저(PC 크롬·엣지)는 연 프로젝트 파일을 기억해 다음 저장에서 바로 쓴다 */
+  async function openScoreFile() {
+    if (!canOpenFile) return openInput.click();
+    const picked = await pickOpenFile(SCORE_EXTENSIONS);
+    if (picked === "cancelled") return;
+    if (!picked) return openInput.click();
+    // 프로젝트가 아닌 파일(.mml·.mmi·.mid 등)은 기억하지 않는다: 저장할 때 그 파일을 프로젝트로 덮어쓰지 않게
+    const isProject = PROJECT_EXTENSIONS.some((ext) => picked.file.name.toLowerCase().endsWith(ext));
+    await openPicked(picked.file, isProject ? picked.handle : undefined);
+  }
+
+  /** 고른 파일을 연다. handle: 다시 쓸 수 있는 프로젝트 파일 */
+  async function openPicked(file: File, handle?: FileSystemFileHandle) {
     if (/\.midi?$/i.test(file.name)) {
       try {
         midi = { analysis: analyzeMidi(readSmf(new Uint8Array(await file.arrayBuffer()))), name: file.name };
@@ -804,7 +891,7 @@
     }
     try {
       const result = await openScore(file);
-      openSong(result.song, file.name);
+      openSong(result.song, file.name, handle);
       if (result.editor) {
         applyEditor(parseEditorState(result.editor, result.song));
         notices = [...result.diagnostics, ...fitNotices()];
@@ -875,17 +962,57 @@
 
   const APP_VERSION = `${__MMLCE_BUILD__.version}${__MMLCE_BUILD__.commit ? ` · ${__MMLCE_BUILD__.commit}` : ""}`;
 
-  function saveProject() {
+  /** 지금 곡의 프로젝트 파일 (저장 창으로 저장했거나 열기 창으로 연 .mme). 있으면 다음 저장에서 창 없이 바로 쓴다 */
+  let projectFile: FileSystemFileHandle | undefined;
+
+  /** 되살린 곡의 이름을 믿을 수 없다 (자동 보존 기록과 저장한 이름이 어긋남). 다음 저장은 이름 없는 곡처럼 덮어쓰지 않는다 */
+  let nameUnsure = false;
+
+  /**
+   * 지금 곡의 저장한 이름과 프로젝트 파일을 바꾸고, 새로고침 뒤 복구해도 이어 쓰게 작업 id로 적어 둔다.
+   * name이 없으면 (저장한 적 없는 곡) 적어 둔 것을 지운다
+   */
+  function setProjectFile(file: FileSystemFileHandle | undefined, name?: string) {
+    projectFile = file;
+    rememberProjectFile(workId, name ? { name, ...(file ? { file } : {}) } : undefined).catch(() => {});
+  }
+
+  /** 프로젝트로 저장한다. saveAs: 다른 이름으로 저장 (언제나 저장 창) */
+  function saveProject(saveAs = false) {
     if (!song) return;
     // 편집기에 아직 반영 안 된 입력까지 넣고 저장한다
     flushAllEditors();
     const current = history?.song ?? song;
     const editor = editorState();
-    void store(new TextEncoder().encode(writeProject(current, { editor: { ...editor }, app: APP_VERSION })), `${baseName()}${PROJECT_EXTENSION}`).then((outcome) => {
+    const name = `${baseName()}${PROJECT_EXTENSION}`;
+    const fresh = !fileName || nameUnsure;
+    const work = workId;
+    void saveProjectFile(new TextEncoder().encode(writeProject(current, { editor: { ...editor }, app: APP_VERSION })), name, { file: projectFile, saveAs, fresh }).then((saved) => {
+      const { outcome } = saved;
+      report(saved, name, fresh);
+      if (saved.directFailed) {
+        const was = projectFile?.name ?? name;
+        if (outcome === "written") error = t("ui.saveDirectFailedPicked", { name: was });
+        else if (outcome === "downloaded") error = t("ui.saveDirectFailedDownloaded", { name: was });
+        else if (outcome === "cancelled") error = t("ui.saveDirectFailedCancelled", { name: was });
+      }
+      // 저장하는 사이 다른 곡을 열었으면 그 곡의 이름·파일은 건드리지 않는다
+      if (work === workId) {
+        // 폴더·저장 창에 쓴 이름을 이 곡의 이름으로 삼는다: 다시 저장하면 그 파일을 덮어쓰고, 다른 형식도 같은 이름을 쓴다
+        // (다운로드·공유는 실제 이름을 알 수 없어 그대로 둔다)
+        if (outcome === "written" && saved.name) {
+          fileName = saved.name;
+          nameUnsure = false;
+          // 저장 창·바로 쓰기로 쓴 파일은 기억하고, 폴더에 쓴 것은 (파일 핸들이 없어) 기억한 파일을 버린다. 이름은 언제나 적어 둔다
+          setProjectFile(saved.file, saved.name);
+          if (!saved.directFailed && !renamedInFolder(saved, name, fresh)) flash(t("ui.savedTo", { name: saved.name }));
+        } else if (saved.directFailed) setProjectFile(undefined, fileName);
+      }
       // 폴더에 썼거나 공유 창에서 보냈으면 저장을 확인한 것: 자동 보존이 안 돼도 이 곡·편집 상태로는 새 판으로 바꿀 수 있다
-      if (outcome === "written" || outcome === "shared") projectSaved = { song: current, editor: editorStateKey(editor) };
-      // 쓰지 못해 다운로드로 물러났으면 전에 확인한 저장도 믿지 않는다 (저장 창에서 고른 그 파일은 이미 비었을 수 있다)
-      else if (outcome === "downloaded" || outcome === "rescued") projectSaved = undefined;
+      if (work !== workId) return;
+      // 쓰지 못해 다운로드로 물러났거나 기억한 파일에 바로 쓰지 못했으면 전에 확인한 저장도 믿지 않는다
+      // (저장 창에서 고른 그 파일은 이미 비었을 수 있고, 기억한 파일은 지워졌을 수 있다)
+      projectSaved = confirmedSave(projectSaved, saved, { song: current, editor: editorStateKey(editor) });
     });
     notices = [];
     offerUtf8 = false;
@@ -893,12 +1020,17 @@
 
   /** 프로젝트 파일로 저장한 것이 확인된 곡과 그때의 편집 상태(원곡·영상 맞춤 등, 파일에 함께 들어간다).
    *  다운로드는 끝났는지 알 수 없어 넣지 않는다 */
-  let projectSaved: { song: Song; editor: string } | undefined;
+  let projectSaved = $state.raw<{ song: Song; editor: string } | undefined>(undefined);
 
   /** 지금 곡과 편집 상태가 확인된 프로젝트 저장과 같은지 */
   function savedAsProject(): boolean {
     return !!history && !!projectSaved && history.song === projectSaved.song && editorStateKey(editorState()) === projectSaved.editor;
   }
+
+  // 창 제목에 작업 중인 파일 이름. 프로젝트로 저장한 뒤 고친 곳이 있으면 ● (저장한 적 없는 곡은 표시하지 않는다)
+  $effect(() => {
+    document.title = windowTitle(fileName, !!song, !!projectSaved && !savedAsProject());
+  });
 
   /** 새 판으로 바꾸는 동안 화면 입력과 MIDI 건반 입력을 막는다 */
   function lockForUpdate(on: boolean) {
@@ -957,18 +1089,24 @@
    * 자동 보존이 비교하는 상태: 곡과 타브 튜닝(곡 밖 편집 상태). 튜닝·카포만 바꿔도 다시 적는다.
    * 트랙 고르기·보기 방식 같은 다른 화면 상태만 바뀐 것으로는 새 기록을 만들지 않는다
    */
-  type AutosaveState = { readonly song: Song; readonly tabs: string };
+  type AutosaveState = WorkAutosave<Song>;
   const tabsKey = $derived(editorStateKey({ tuning: tuningName, capo }));
-  function autosaveState(current: Song | undefined = history?.song): AutosaveState | undefined {
-    return current ? { song: current, tabs: tabsKey } : undefined;
+  function autosaveState(current: Song | undefined = history?.song, name: string = fileName): AutosaveState | undefined {
+    return current ? { song: current, tabs: tabsKey, name } : undefined;
   }
 
-  // 작업 자동 보존: 곡을 열거나 새로 만들 때마다 새 작업 id. 고친 뒤에만 적는다
-  let workId = newWorkId();
+  // 작업 자동 보존: 곡을 열거나 새로 만들 때마다 새 작업 id. 고친 뒤에만 적는다.
+  // 롤·타브 보기도 이 값이 바뀔 때(곡을 열 때만) 새로 만든다 (옛 곡의 커서·보던 자리가 남지 않게)
+  let workId = $state(newWorkId());
+  /**
+   * 보기 세대 번호: 곡을 열 때마다 1씩 (같은 작업을 다시 되살려도). 롤·타브 보기를 새로 만들고({#key}),
+   * 옛 보기가 늦게 알린 자리·커서를 버리는 데 쓴다. workId는 자동 보존·프로젝트 파일 기억에만 쓴다
+   */
+  let viewGen = $state(0);
   /** 이 작업으로 저장에 성공한 곡 (아직 안 적었으면 연 그대로의 곡). 이것과 같으면 적을 것이 없다.
    *  실행 취소로 연 그대로 돌아와도 이미 적은 기록이 있으면 그 기록을 지금 상태로 고쳐 적는다.
    *  저장이 실패하면 적지 않은 것으로 남아 다음 기회에 다시 적는다 */
-  const autosaved = new AutosaveTracker<AutosaveState>((a, b) => a.song === b.song && a.tabs === b.tabs);
+  const autosaved = new AutosaveTracker<AutosaveState>(sameAutosave);
   let autosaveTimer: ReturnType<typeof setTimeout> | undefined;
   /** 보낸 순서대로 적고, 실패하면 거부로 알린다 (업데이트 새로고침이 저장 실패를 성공으로 보지 않게) */
   const autosaveQueue = new AutosaveQueue(autosaved);
@@ -990,11 +1128,11 @@
   function flushAutosave(): Promise<void> {
     clearTimeout(autosaveTimer);
     autosaveTimer = undefined;
-    return autosaveQueue.flush(autosaveState(), ({ song: current }) => {
+    return autosaveQueue.flush(autosaveState(), ({ song: current, name }) => {
       const record = {
         id: workId,
         savedAt: Date.now(),
-        fileName,
+        fileName: name,
         title: current.meta.title,
         trackCount: current.tracks.length,
         noteCount: current.tracks.reduce((sum, tr) => sum + tr.notes.length, 0),
@@ -1042,6 +1180,14 @@
       openSong(result.song, record.fileName);
       // 되살린 작업을 이어 고치면 같은 기록을 덮어쓴다
       workId = id;
+      // 그 작업의 프로젝트 파일이 기억돼 있으면 다시 바로 쓴다 (처음 저장할 때 쓰기 허락을 다시 묻는다).
+      // 자동 보존 기록의 이름과 저장할 때 적어 둔 이름이 어긋나면 어느 파일에도 덮어쓰지 않게 이름을 믿지 않는다
+      const stored = await recallProjectFile(id);
+      const restored = stored === "unknown" ? { file: undefined, unsure: !!record.fileName } : restoreWorkFile(record.fileName, stored, (f) => f.name);
+      if (workId === id) {
+        projectFile = restored.file;
+        nameUnsure = restored.unsure;
+      }
       applyEditor(parseEditorState(result.editor, result.song));
       notices = [...result.diagnostics, ...fitNotices()];
       recoverOpen = false;
@@ -1053,10 +1199,12 @@
 
   async function removeWork(id: string) {
     await forgetWork(id);
+    rememberProjectFile(id, undefined).catch(() => {});
     await refreshWorks();
   }
 
-  function openSong(next: Song, name: string) {
+  /** 곡을 연다. file: 다시 쓸 수 있는 프로젝트 파일 (없으면 앞 곡의 파일을 버린다) */
+  function openSong(next: Song, name: string, file?: FileSystemFileHandle) {
     // 앞 곡에서 찍다 만 탭은 버린다. 남겨 두면 정지 감지가 새 곡 템포를 바꾼다
     taps = [];
     tapResult = "";
@@ -1068,22 +1216,53 @@
     flushAllEditors();
     flushAutosave().catch(() => {});
     workId = newWorkId();
+    projectSaved = undefined;
+    nameUnsure = false;
+    setProjectFile(file, file ? name : undefined);
     savedFits = {};
     trackView = {};
     // 새 곡은 기본 튜닝으로 시작한다. 프로젝트 파일이면 applyEditor가 적힌 튜닝으로 다시 잡는다
     tuningName = "standard";
     capo = 0;
-    autosaved.reset(autosaveState(next));
+    autosaved.reset(autosaveState(next, name));
     history = new History(next);
     sync(next);
     activeTrackId = next.tracks[0]?.id;
     fileName = name;
     flash("");
-    split = undefined;
-    // 앞 곡의 커서·반복 구간·치던 화음이 새 곡에 남지 않게
-    cursor = undefined;
-    loop = undefined;
+    resetSongView();
     midiKeys.dropPending();
+  }
+
+  /**
+   * 곡을 열 때 새 곡에 남으면 안 되는 상태는 여기에 더한다 (모든 곡 열기 길이 openSong을 지난다).
+   * 보기 세대 번호를 올려 롤·타브 보기를 새로 만들고, 보기를 바꿀 때 이어 보던 자리·확대·타브 커서 기억,
+   * 재생 위치·반복 구간, 고른 템포·마커와 열린 창, 옛 트랙 id를 가리키는 상태를 비운다 (목록은 songView.ts).
+   * 보기 방향·편집기 수·화면 배치·음량·키맵처럼 곡과 상관없는 설정은 그대로 둔다
+   */
+  function resetSongView() {
+    const fresh = freshSongView(viewGen);
+    viewGen = fresh.viewGen;
+    cursor = fresh.cursor;
+    cursorExact = fresh.cursorExact;
+    loop = fresh.loop;
+    loopStash = fresh.loopStash;
+    tabCursor = fresh.tabCursor;
+    pickedEvent = fresh.pickedEvent;
+    eventEdit = fresh.eventEdit;
+    reveal = fresh.reveal;
+    laneExtra = fresh.laneExtra;
+    extraChosen = [...fresh.extraChosen];
+    extraStamps = [...fresh.extraStamps];
+    arpeggio = fresh.arpeggio;
+    slide = fresh.slide;
+    transposing = fresh.transposing;
+    voicing = fresh.voicing;
+    tempoChangeOpen = fresh.tempoChangeOpen;
+    meterOpen = fresh.meterOpen;
+    split = fresh.split;
+    compactNote = fresh.compactNote;
+    Object.assign(viewMemory, emptyViewMemory());
   }
 
   /** 빈 악보로 시작한다. 고친 내용이 있으면 먼저 묻는다 */
@@ -1296,19 +1475,20 @@
     });
   }
 
-  // 박자: 커서가 있으면 커서가 든 마디부터, 없으면 곡 처음부터 바꾼다
-  const meterPos = $derived(song && cursor !== undefined ? measureStart(song.timeSig, editCursor()!) : rat(0));
+  /** 타브 커서 자리 (타브 보기에서 Alt+B·Alt+M과 박자 바꾸기가 쓴다). 커서가 없거나 타브가 아니면 undefined */
+  let tabCursor = $state.raw<Rat | undefined>(undefined);
+  // 박자: 타브 보기면 타브 커서가 든 마디부터, 아니면 재생 커서가 든 마디부터, 둘 다 없으면 곡 처음부터 바꾼다
+  const meterPos = $derived(song ? meterTarget(song.timeSig, viewMode, tabCursor, cursor === undefined ? undefined : editCursor()) : rat(0));
   const meterHere = $derived(song ? meterAt(song.timeSig, meterPos) : { at: rat(0), beats: 4, unit: 4 });
 
   // 템포·마커·박자 넣기·고치기 창 (이벤트 줄, Alt+B·Alt+M)
   let eventEdit = $state<{ kind: EventKind; at: Rat; existing: boolean; id?: string } | undefined>(undefined);
-  function openEvent(request: { label?: EventLabel; kind: EventKind; at: Rat }) {
-    if (!song) return;
+  function openEvent(request: { label?: EventLabel; kind: EventKind; at: Rat; work?: number | undefined }) {
+    // 곡을 다시 연 뒤 옛 보기가 늦게 보낸 요청(길게 누르기 타이머 등)은 버린다 (onmemory와 같은 보기 세대 검사)
+    if (!song || !fromCurrentView(request.work, viewGen)) return;
     const l = request.label;
     eventEdit = l ? { kind: l.kind, at: l.at, existing: true, ...(l.id ? { id: l.id } : {}) } : { kind: request.kind, at: request.at, existing: false };
   }
-  /** 타브 커서 자리 (타브 보기에서 Alt+B·Alt+M이 쓴다). 커서가 없거나 타브가 아니면 undefined */
-  let tabCursor = $state.raw<Rat | undefined>(undefined);
   /** 편집 커서(타브 보기면 타브 커서 먼저, 없으면 곡 처음) 자리 템포·마커 창. 그 자리에 템포가 있으면 고치기 */
   function openEventAtCursor(kind: EventKind) {
     if (!song) return;
@@ -1337,7 +1517,7 @@
     if (!history || !song || !e) return;
     if (change.kind === "tempo") sync(history.run(setTempoAt(e.at, change.bpm, t("ui.tempoLabel"))));
     else if (change.kind === "marker") sync(history.run(setMarker(e.existing ? e.id : undefined, e.at, change.text, t("ui.markerLabel"))));
-    else sync(history.run(setMeter(measureStart(song.timeSig, e.at), change.beats, change.unit, t("ui.meter"))));
+    else sync(history.run(meterEditAt(song.timeSig, e.at, change.beats, change.unit, t("ui.meter"))));
   }
   function deleteEvent() {
     const e = eventEdit;
@@ -1599,7 +1779,7 @@
   let rollShareV = $state(
     loadStored(SHARE_KEY, (raw) => {
       const v = raw === null ? NaN : Number(raw);
-      return Number.isFinite(v) && v >= 20 && v <= 80 ? Math.round(v) : 46;
+      return Number.isFinite(v) && v >= ROLL_SHARE_MIN && v <= ROLL_SHARE_MAX ? Math.round(v) : 46;
     }),
   );
   // 패널 위치: 아래(3MLE식, 키보드용) / 옆(마우스·터치용). 세로 화면은 설정과 상관없이 위아래 분할
@@ -1624,10 +1804,16 @@
     sideBySide = !sideBySide;
     saveStored(SIDE_KEY, JSON.stringify({ on: sideBySide, share: initialSide.share }));
   }
-  let dividerFrom: { x: number; y: number; width: number; share: number; eh: number; box: DOMRect } | undefined;
+  let dividerFrom: { x: number; y: number; width: number; share: number; eh: number; box: DOMRect; maxShare: number } | undefined;
+  /** 세로 화면 아래 패널 (분할선 한도를 잴 때 쓴다) */
+  let listPaneEl = $state<HTMLElement | undefined>(undefined);
+  /** 세로 화면 롤 몫의 위 한도: 아래 패널이 트랙 띠 + 편집기 머리 + 글 두세 줄보다 작아지지 않게 (paneSplit.ts) */
+  function rollShareLimit(box: DOMRect): number {
+    return listPaneEl ? maxRollShare(box.height, paneMinHeight(listPaneEl)) : ROLL_SHARE_MAX;
+  }
   function ondividerdown(e: PointerEvent) {
     const box = (e.currentTarget as HTMLElement).parentElement!.getBoundingClientRect();
-    dividerFrom = { x: e.clientX, y: e.clientY, width: paneWidth, share: rollShareV, eh: editorHeight, box };
+    dividerFrom = { x: e.clientX, y: e.clientY, width: paneWidth, share: rollShareV, eh: editorHeight, box, maxShare: portrait ? rollShareLimit(box) : ROLL_SHARE_MAX };
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     e.preventDefault();
   }
@@ -1638,7 +1824,7 @@
       const max = Math.max(EDITOR_MIN, dividerFrom.box.height - ROLL_MIN_H - 10);
       editorHeight = Math.round(Math.min(max, Math.max(EDITOR_MIN, dividerFrom.eh - (e.clientY - dividerFrom.y))));
     } else if (portrait) {
-      rollShareV = Math.round(Math.min(80, Math.max(20, dividerFrom.share + ((e.clientY - dividerFrom.y) / Math.max(1, dividerFrom.box.height)) * 100)));
+      rollShareV = clampRollShare(dividerFrom.share + ((e.clientY - dividerFrom.y) / Math.max(1, dividerFrom.box.height)) * 100, dividerFrom.maxShare);
     } else {
       // 오른쪽 패널이므로 왼쪽으로 끌수록 넓어진다
       const max = Math.max(PANE_MIN, dividerFrom.box.width - ROLL_MIN - 10);
@@ -1652,11 +1838,23 @@
     saveStored(SHARE_KEY, String(rollShareV));
     saveStored(EDITOR_KEY, String(editorHeight));
   }
+  // 저장된 몫이 이 화면에서 아래 패널을 너무 작게 하면 불러올 때(세로 화면이 되거나 패널이 생길 때) 맞춘다
+  const hasPane = $derived(!!analysis);
+  $effect(() => {
+    const pane = listPaneEl;
+    if (!portrait || !pane || !hasPane) return;
+    untrack(() => {
+      const box = pane.parentElement?.getBoundingClientRect();
+      if (!box) return;
+      const max = rollShareLimit(box);
+      if (rollShareV > max) rollShareV = max;
+    });
+  });
   function resetDivider() {
     editorHeight = EDITOR_DEFAULT;
     saveStored(EDITOR_KEY, String(editorHeight));
     paneWidth = PANE_DEFAULT;
-    rollShareV = 46;
+    rollShareV = Math.min(46, portrait && listPaneEl?.parentElement ? rollShareLimit(listPaneEl.parentElement.getBoundingClientRect()) : ROLL_SHARE_MAX);
     saveStored(PANE_KEY, String(paneWidth));
     saveStored(SHARE_KEY, String(rollShareV));
   }
@@ -1762,7 +1960,7 @@
   let inputVolume = $state<number | undefined>(undefined);
   /** 피아노롤에서 고른 음들의 v (서로 다르면 null, 고른 음이 없으면 undefined) */
   /** 피아노롤에서 고른 음 (상태줄 음 정보) */
-  const selectedNotes = $derived(viewMode === "roll" ? (roll?.selection() ?? []) : []);
+  const selectedNotes = $derived(editor?.selection() ?? []);
   const selectedIds = $derived(new Set(selectedNotes.map((n) => n.id)));
   const selectedVolume = $derived.by(() => {
     const picked = selectedNotes;
@@ -1778,11 +1976,13 @@
 
   const fileMenu: MenuItem[] = $derived([
     { label: t("ui.newSong"), title: t("ui.newSongHelp"), run: startNewSong },
-    { label: t("ui.openFile"), title: t("ui.openFileHelp"), hint: keyOf("file.open"), run: () => openInput.click() },
+    { label: t("ui.openFile"), title: t("ui.openFileHelp"), hint: keyOf("file.open"), run: () => void openScoreFile() },
     { label: t("ui.paste"), title: t("ui.pasteHint"), run: () => (paste = { text: "" }) },
     { label: t("ui.recoverMenu"), title: t("ui.recoverMenuHelp"), run: () => void refreshWorks().then(() => (recoverOpen = true)) },
     { separator: true },
-    { label: t("ui.saveProject", { ext: PROJECT_EXTENSION }), title: t("ui.saveProjectHelp"), hint: keyOf("file.saveProject"), disabled: !song, run: saveProject },
+    { label: t("ui.saveProject", { ext: PROJECT_EXTENSION }), title: t("ui.saveProjectHelp"), hint: keyOf("file.saveProject"), disabled: !song, run: () => saveProject() },
+    // 다른 이름으로 저장: 저장 창을 띄울 수 있는 브라우저(PC 크롬·엣지)에서만
+    ...(canAskSave ? [{ label: t("ui.saveProjectAs"), title: t("ui.saveProjectAsHelp"), hint: keyOf("file.saveProjectAs"), disabled: !song, run: () => saveProject(true) }] : []),
     { label: t("ui.save3mle"), hint: keyOf("file.save3mle"), disabled: !song, run: () => save3mle() },
     { label: t("ui.saveMmi"), hint: keyOf("file.saveMmi"), disabled: !song, run: saveMmi },
     { label: t("ui.saveMidi"), title: t("ui.saveMidiHelp"), disabled: !song, run: saveMidi },
@@ -1794,26 +1994,67 @@
     { label: t("ui.midiKeysConnect"), title: t("ui.midiKeysHelp"), checked: !!midiKeys.status, run: () => void midiKeys.toggle() },
   ]);
 
+  // 아르페지오: 피아노롤에서 고른 음(한 트랙)의 화음을 펼치거나 깔면서 올라간다 (실행 취소 한 칸).
+  // 타브에서는 고른 음, 없으면 타브 커서 자리에서 시작하는 화음 (화음 음은 같은 시간 음으로 연다)
+  let arpeggio = $state.raw<{ trackId: string; picked: readonly Note[]; source?: ArpSource } | undefined>(undefined);
+  const tabArp = $derived(song && viewMode === "tab" ? tabArpPick(song, activeTrackId, tabCursor, selectedNotes) : undefined);
+  const canArpeggio = $derived(!!song && (viewMode === "roll" ? !!activeTrackId && selectedNotes.length > 0 : !!tabArp));
+  function openArpeggio() {
+    if (!song || !canArpeggio) return;
+    if (viewMode === "tab") {
+      if (tabArp) arpeggio = { ...tabArp, ...(selectedNotes.length === 0 ? { source: "together" as const } : {}) };
+      return;
+    }
+    if (activeTrackId) arpeggio = { trackId: activeTrackId, picked: selectedNotes };
+  }
+  function applyArpeggio(result: ArpResult) {
+    const target = arpeggio;
+    const track = target && history?.song.tracks.find((tr) => tr.id === target.trackId);
+    if (!history || !track) return;
+    // 잠근 트랙을 바꾸는 결과는 넣지 않는다 (계산에서 이미 빼지만, 다른 편집 명령과 같게 적용 직전에도 막는다)
+    if (!result.changes.every((c) => editable(c.trackId))) return;
+    sync(history.run(setNotesAndAddTracks(track.playerId, result.changes, result.newTracks, (n) => t("ui.newTrackName", { n }), t("ui.arpeggio"))));
+  }
+
+  // 슬라이드: 피아노롤에서 고른 음(한 트랙) 사이를 반음씩 잇거나, 앞뒤에 미끄러져 들어가고 나가는 음을 붙인다 (실행 취소 한 칸)
+  let slide = $state.raw<{ trackId: string; picked: readonly Note[] } | undefined>(undefined);
+  function openSlide() {
+    if (!song || viewMode !== "roll" || !activeTrackId || selectedNotes.length === 0) return;
+    slide = { trackId: activeTrackId, picked: selectedNotes };
+  }
+  function applySlide(result: SlideResult) {
+    const target = slide;
+    if (!history || !target || !result.notes) return;
+    // 잠근 트랙은 바꾸지 않는다 (계산·대화상자에서 이미 막지만, 아르페지오처럼 적용 직전에도 막는다)
+    if (!editable(target.trackId)) return;
+    sync(history.run(setTracksNotes([{ trackId: target.trackId, notes: result.notes }], t("ui.slide"))));
+    // 만든 사슬 전체를 골라 바로 다시 고칠 수 있게
+    roll?.selectIds(result.chain);
+  }
+
   const editMenu: MenuItem[] = $derived([
     { label: t("ui.undo"), hint: keyOf("edit.undo"), disabled: !canUndo, run: undo },
     { label: t("ui.redo"), hint: keyOf("edit.redo"), disabled: !canRedo, run: redo },
     { separator: true },
-    { label: t("ui.selectAll"), title: t("ui.selectHelp"), hint: keyOf("edit.selectAll"), disabled: !song || viewMode !== "roll", run: () => run("edit.selectAll") },
-    { label: t("ui.deleteNotes"), hint: keyOf("note.delete"), disabled: !song || viewMode !== "roll", run: () => run("note.delete") },
-    { label: t("ui.cut"), hint: keyOf("edit.cut"), disabled: !song || viewMode !== "roll", run: () => run("edit.cut") },
-    { label: t("ui.copy"), hint: keyOf("edit.copy"), disabled: !song || viewMode !== "roll", run: () => run("edit.copy") },
-    { label: t("ui.pasteNotes"), title: t("ui.pasteNotesHelp"), hint: keyOf("edit.paste"), disabled: !song || viewMode !== "roll" || !noteClipboard.clip, run: () => run("edit.paste") },
+    { label: t("ui.selectAll"), title: t("ui.selectHelp"), hint: keyOf("edit.selectAll"), disabled: !song, run: () => run("edit.selectAll") },
+    { label: t("ui.deleteNotes"), hint: keyOf("note.delete"), disabled: !song, run: () => run("note.delete") },
+    { label: t("ui.cut"), hint: keyOf("edit.cut"), disabled: !song, run: () => run("edit.cut") },
+    { label: t("ui.copy"), hint: keyOf("edit.copy"), disabled: !song, run: () => run("edit.copy") },
+    { label: t("ui.pasteNotes"), title: t("ui.pasteNotesHelp"), hint: keyOf("edit.paste"), disabled: !song || !noteClipboard.clip, run: () => run("edit.paste") },
     { separator: true },
-    { label: t("ui.lengthDouble"), hint: keyOf("edit.lengthDouble"), disabled: !song || viewMode !== "roll", run: () => run("edit.lengthDouble") },
-    { label: t("ui.lengthHalf"), hint: keyOf("edit.lengthHalf"), disabled: !song || viewMode !== "roll", run: () => run("edit.lengthHalf") },
+    { label: t("ui.lengthDouble"), hint: keyOf("edit.lengthDouble"), disabled: !song, run: () => run("edit.lengthDouble") },
+    { label: t("ui.lengthHalf"), hint: keyOf("edit.lengthHalf"), disabled: !song, run: () => run("edit.lengthHalf") },
+    { label: t("ui.dotToggle"), title: t("ui.dotToggleHelp"), hint: keyOf("edit.dotToggle"), disabled: !song, run: () => run("edit.dotToggle") },
+    { label: t("ui.arpeggio") + "…", title: t("ui.arpeggioHelp"), disabled: !canArpeggio, run: openArpeggio },
+    { label: t("ui.slide") + "…", title: t("ui.slideHelp"), disabled: !song || viewMode !== "roll" || selectedNotes.length === 0, run: openSlide },
     { separator: true },
-    { label: t("cmd.note.volumeUp"), hint: keyOf("note.volumeUp"), disabled: !song || viewMode !== "roll", run: () => run("note.volumeUp") },
-    { label: t("cmd.note.volumeDown"), hint: keyOf("note.volumeDown"), disabled: !song || viewMode !== "roll", run: () => run("note.volumeDown") },
-    { label: t("cmd.note.octaveUp"), hint: keyOf("note.octaveUp"), disabled: !song || viewMode !== "roll", run: () => run("note.octaveUp") },
-    { label: t("cmd.note.octaveDown"), hint: keyOf("note.octaveDown"), disabled: !song || viewMode !== "roll", run: () => run("note.octaveDown") },
-    { label: t("cmd.note.tie"), hint: keyOf("note.tie"), disabled: !song || viewMode !== "roll", run: () => run("note.tie") },
-    { label: t("cmd.note.split"), hint: keyOf("note.split"), disabled: !song || viewMode !== "roll" || cursor === undefined, run: () => run("note.split") },
-    { label: t("cmd.note.glue"), hint: keyOf("note.glue"), disabled: !song || viewMode !== "roll", run: () => run("note.glue") },
+    { label: t("cmd.note.volumeUp"), hint: keyOf("note.volumeUp"), disabled: !song, run: () => run("note.volumeUp") },
+    { label: t("cmd.note.volumeDown"), hint: keyOf("note.volumeDown"), disabled: !song, run: () => run("note.volumeDown") },
+    { label: t("cmd.note.octaveUp"), hint: keyOf("note.octaveUp"), disabled: !song, run: () => run("note.octaveUp") },
+    { label: t("cmd.note.octaveDown"), hint: keyOf("note.octaveDown"), disabled: !song, run: () => run("note.octaveDown") },
+    { label: t("cmd.note.tie"), hint: keyOf("note.tie"), disabled: !song, run: () => run("note.tie") },
+    { label: t("cmd.note.split"), hint: keyOf("note.split"), disabled: !song || (viewMode === "roll" ? cursor === undefined : tabCursor === undefined), run: () => run("note.split") },
+    { label: t("cmd.note.glue"), hint: keyOf("note.glue"), disabled: !song, run: () => run("note.glue") },
   ]);
 
   const songMenu: MenuItem[] = $derived([
@@ -1852,23 +2093,45 @@
 
   /** 고른 음 길이 ×2·½ (첫 음 시작 기준으로 리듬 모양을 지킨다) */
   function scaleSelection(factor: Rat, label: string): boolean {
-    const picked = roll?.selection() ?? [];
-    if (picked.length === 0) return false;
-    // 고르지 않은 음은 지우거나 줄이지 않는다: 그 음 앞까지만 늘리고, 늘릴 자리가 없으면 바꾸지 않는다
-    const track = song?.tracks.find((tr) => tr.id === activeTrackId);
-    const scaled = track ? scaleNotesIn(track.notes, picked, factor) : undefined;
-    if (!scaled) {
-      error = t("ui.lengthNoRoom");
-      return false;
-    }
-    const byId = new Map(scaled.map((n) => [n.id, n]));
-    return roll?.editSelected((n) => byId.get(n.id) ?? n, label) ?? false;
+    if ((editor?.selection().length ?? 0) === 0) return false;
+    // 고르지 않은 음은 지우거나 줄이지 않는다: 그 음 앞까지만 늘리고, 늘릴 자리가 없으면 바꾸지 않는다 (타브는 트랙마다 같은 기준)
+    if (editor?.scaleSelected(factor, label)) return true;
+    error = t("ui.lengthNoRoom");
+    return false;
   }
 
-  const hasSelection = () => (roll?.selection().length ?? 0) > 0;
+  const hasSelection = () => (editor?.selection().length ?? 0) > 0;
+
+  /**
+   * `.` 키: 고른 음(타브는 고른 음이 없으면 커서 음)에 점을 붙이거나 뗀다 (길이 ×2와 같은 scaleNotesIn 규칙, 트랙마다).
+   * 바꿀 음이 없으면 새 음 길이에. 한 토큰으로 쓸 수 없는 길이면 바꾸지 않고 알린다
+   */
+  function toggleDotLength(): boolean {
+    if (!song) return false;
+    const picked = editor?.selection() ?? [];
+    const cursorNote = picked.length === 0 && viewMode === "tab" ? tab?.cursorLengthNote() : undefined;
+    const notes = picked.length > 0 ? picked : cursorNote ? [cursorNote] : [];
+    if (notes.length === 0) {
+      // 새 음 길이: 고르기 목록에 있는 길이만 (목록 밖이면 바꾸지 않고 알린다)
+      const next = toggleDot(noteLengthOf(noteLength, division), profile);
+      const found = next && noteLengths.find((l) => l !== "grid" && cmp(noteLengthOf(l, division), next) === 0);
+      if (found) noteLength = found;
+      else error = t("ui.dotNoLength");
+      return true;
+    }
+    const factor = dotFactor(notes.map((n) => n.dur), profile);
+    if (!factor) {
+      error = t("ui.dotNoLength");
+      return true;
+    }
+    const label = t("ui.dotToggle");
+    const done = viewMode === "tab" ? tab?.scaleSelected(factor, label, cursorNote ? [cursorNote.id] : undefined) : roll?.scaleSelected(factor, label);
+    if (!done) error = t("ui.lengthNoRoom");
+    return true;
+  }
   /** 고른 음이 없을 때: 새 음 길이를 ×2·½ (타브의 +/−와 같은 규칙. 격자면 격자 한 칸에서, 목록 밖이면 그대로) */
   function stepNewLength(factor: 2 | 0.5): boolean {
-    const length = stepNoteLength(noteLengthOf(noteLength, division), factor);
+    const length = stepNoteLength(noteLengthOf(noteLength, division), factor, profile.length);
     if (length) noteLength = length;
     return true;
   }
@@ -2028,6 +2291,7 @@
     { separator: true },
     { label: t("ui.mmlPad"), title: t("ui.mmlPadHelp"), checked: mmlPad.enabled, run: () => (mmlPad.enabled = !mmlPad.enabled) },
     { label: t("ui.tabPad"), title: t("ui.tabPadHelp"), checked: tabPadOn, disabled: viewMode === "roll", run: toggleTabPad },
+    { label: t("ui.followCursor"), title: t("ui.followCursorHelp"), checked: followCursor, disabled: viewMode === "roll", run: toggleFollowCursor },
     { label: t("ui.keymap") + "…", hint: keyOf("view.keymap"), run: () => (showKeymap = true) },
     { separator: true },
     ...LOCALES.map((l) => ({ label: LOCALE_LABELS[l], checked: i18n.locale === l, run: () => setLocale(l) })),
@@ -2069,15 +2333,29 @@
   }
 
   /** 파일을 저장한다. 저장 창에서 고른 파일에 쓰지 못해 다운로드로 저장했으면 알린다 */
-  async function store(bytes: Uint8Array, name: string): Promise<SaveOutcome> {
-    const outcome = await saveFile(bytes, name);
-    if (outcome === "rescued") error = t("ui.saveRescued", { name });
-    if (outcome === "retry") error = t("ui.saveRetry");
-    return outcome;
+  async function store(bytes: Uint8Array, name: string): Promise<SavedFile> {
+    // 이름 없는 새 악보는 폴더의 같은 이름 파일을 덮어쓰지 않고 새 이름을 고른다
+    const fresh = !fileName || nameUnsure;
+    const saved = await saveFile(bytes, name, { fresh });
+    report(saved, name, fresh);
+    return saved;
+  }
+
+  /** 저장 결과 알림: 다운로드로 물러남·다시 저장·새 이름 */
+  function report(saved: SavedFile, name: string, fresh: boolean) {
+    if (saved.outcome === "rescued") error = t("ui.saveRescued", { name });
+    if (saved.outcome === "retry") error = t("ui.saveRetry");
+    if (saved.outcome === "full") error = t("ui.saveFolderFull", { name });
+    if (saved.name && renamedInFolder(saved, name, fresh)) flash(t("ui.saveNewName", { name: saved.name }));
+  }
+
+  /** 이름 없는 새 악보를 폴더에 저장하며 같은 이름을 피해 새 이름을 골랐는지 (저장 창에서 사용자가 고친 이름은 아니다) */
+  function renamedInFolder(saved: SavedFile, name: string, fresh: boolean): boolean {
+    return fresh && !saved.file && !!saved.name && saved.name !== name;
   }
 
   function baseName(): string {
-    return fileName.replace(/\.[^.]+$/, "") || "mmlce";
+    return saveBaseName(fileName);
   }
 
   function save3mle(encoding: "cp949" | "utf-8" = "cp949") {
@@ -2136,9 +2414,9 @@
     if (!ready || wavSaving) return;
     wavSaving = true;
     void store(ready.bytes, ready.name)
-      .then((outcome) => {
+      .then(({ outcome }) => {
         // 저장 창을 닫았으면 다시 누를 수 있게 남겨 둔다
-        if (outcome !== "cancelled" && outcome !== "retry" && wavReady === ready) wavReady = undefined;
+        if (outcome !== "cancelled" && outcome !== "retry" && outcome !== "full" && wavReady === ready) wavReady = undefined;
       })
       .finally(() => (wavSaving = false));
   }
@@ -2165,7 +2443,7 @@
   /** 고른 음의 v를 프로필 범위 안에서 바꾼다 */
   function nudgeVolume(delta: number) {
     const { min, max } = profile.volume;
-    roll?.editSelected((n) => ({ ...n, vol: Math.min(max, Math.max(min, n.vol + delta)) }), "음 볼륨");
+    editor?.editSelected((n) => ({ ...n, vol: Math.min(max, Math.max(min, n.vol + delta)) }), "음 볼륨");
   }
 
   function selectTrack(step: number) {
@@ -2183,7 +2461,7 @@
     }
     switch (command) {
       case "file.open":
-        openInput.click();
+        void openScoreFile();
         return true;
       case "file.save3mle":
         save3mle();
@@ -2194,6 +2472,9 @@
       case "file.saveProject":
         saveProject();
         return true;
+      case "file.saveProjectAs":
+        saveProject(true);
+        return true;
       case "edit.undo":
         undo();
         return true;
@@ -2201,10 +2482,12 @@
         redo();
         return true;
       case "note.tie":
-        return roll?.tieSelected() ?? false;
+        return editor?.tieSelected() ?? false;
       case "note.split": {
+        // 피아노롤은 재생 커서 자리, 타브는 타브 커서 자리에서 자른다
+        if (viewMode === "tab") return tab?.splitAt() ?? false;
         const at = editCursor();
-        return viewMode === "roll" && at !== undefined && (roll?.splitAt(at) ?? false);
+        return at !== undefined && (roll?.splitAt(at) ?? false);
       }
       case "tempo.tap":
         return tap();
@@ -2215,14 +2498,14 @@
         openEventAtCursor(command === "event.tempo" ? "tempo" : "marker");
         return true;
       case "note.glue":
-        return viewMode === "roll" && (roll?.glueSelected() ?? false);
+        return editor?.glueSelected() ?? false;
       case "note.delete":
         if (pickedEvent && viewMode === "roll" && showEvents) return deletePicked();
-        return roll?.editSelected(() => null, "음 지우기") ?? false;
+        return editor?.editSelected(() => null, "음 지우기") ?? false;
       case "note.octaveUp":
-        return roll?.editSelected((n) => (n.pitch + 12 <= 127 ? { ...n, pitch: n.pitch + 12 } : n), "옥타브 올리기") ?? false;
+        return editor?.editSelected((n) => (n.pitch + 12 <= 127 ? { ...n, pitch: n.pitch + 12 } : n), "옥타브 올리기") ?? false;
       case "note.octaveDown":
-        return roll?.editSelected((n) => (n.pitch - 12 >= 0 ? { ...n, pitch: n.pitch - 12 } : n), "옥타브 내리기") ?? false;
+        return editor?.editSelected((n) => (n.pitch - 12 >= 0 ? { ...n, pitch: n.pitch - 12 } : n), "옥타브 내리기") ?? false;
       case "note.volumeUp":
         nudgeVolume(1);
         return true;
@@ -2236,6 +2519,13 @@
       case "play.start":
         if (song && packs.length > 0) void play();
         return true;
+      case "play.fromEditCursor": {
+        // 재생 위치를 편집 커서로 (타브는 타브 커서. 피아노롤은 편집 커서가 곧 재생 위치라 할 일이 없다)
+        if (viewMode !== "tab" || !tabCursor) return false;
+        setCursor(tabCursor);
+        if (playing) void play();
+        return true;
+      }
       case "play.stop":
         if (!playing) return false;
         stop();
@@ -2262,13 +2552,23 @@
         showKeymap = true;
         return true;
       case "edit.selectAll":
-        return viewMode === "roll" && (roll?.selectAll() ?? false);
+        return editor?.selectAll() ?? false;
       case "edit.copy":
-        return viewMode === "roll" && (roll?.copySelection() ?? false);
+        return editor?.copySelection() ?? false;
       case "edit.cut":
-        return viewMode === "roll" && (roll?.cutSelection(t("ui.cut")) ?? false);
+        return editor?.cutSelection(t("ui.cut")) ?? false;
       case "edit.paste": {
-        if (viewMode !== "roll") return false;
+        if (viewMode === "tab") {
+          // 타브: 타브 커서 자리(없으면 복사한 원래 자리)에 트랙 나눔 그대로. 커서는 타브가 붙인 끝으로 옮긴다
+          if (!noteClipboard.clip) return false;
+          tab?.pasteAt(undefined, t("ui.pasteNotes"));
+          return true;
+        }
+        // 여러 트랙에서 복사한 화음은 피아노롤의 트랙 하나에 겹쳐 붙일 수 없다 (음을 버리지 않게 붙이지 않는다)
+        if (noteClipboard.clip && clipOverlaps(noteClipboard.clip)) {
+          error = t("ui.pasteChordRoll");
+          return true;
+        }
         // 재생 커서가 있으면 그 자리, 없으면 복사한 원래 자리. 붙인 뒤 커서를 끝으로 옮겨 이어 붙이기 쉽게
         // 편집 커서는 분수로 써서 l7 같은 길이도 틈 없이 잇는다
         const end = roll?.pasteAt(editCursor(), t("ui.pasteNotes"));
@@ -2277,9 +2577,11 @@
         return true;
       }
       case "edit.lengthDouble":
-        return viewMode === "roll" && (hasSelection() ? scaleSelection(DOUBLE, t("ui.lengthDouble")) : stepNewLength(2));
+        return hasSelection() ? scaleSelection(DOUBLE, t("ui.lengthDouble")) : stepNewLength(2);
       case "edit.lengthHalf":
-        return viewMode === "roll" && (hasSelection() ? scaleSelection(HALF, t("ui.lengthHalf")) : stepNewLength(0.5));
+        return hasSelection() ? scaleSelection(HALF, t("ui.lengthHalf")) : stepNewLength(0.5);
+      case "edit.dotToggle":
+        return toggleDotLength();
       case "edit.transpose":
         openTranspose();
         return !!song;
@@ -2290,11 +2592,11 @@
   const TEXT_INPUT = ".cm-editor, input, select, textarea, [contenteditable]";
   const TYPING = `${TEXT_INPUT}, button`;
   // 글 입력 칸에서는 롤 음을 바꾸지 않는다 (Ctrl+A·C·X·V는 글 편집으로, Ctrl+[ ]는 그대로 둔다)
-  const TEXT_COMMANDS: ReadonlySet<CommandId> = new Set(["edit.selectAll", "edit.copy", "edit.cut", "edit.paste", "edit.lengthDouble", "edit.lengthHalf"]);
+  const TEXT_COMMANDS: ReadonlySet<CommandId> = new Set(["edit.selectAll", "edit.copy", "edit.cut", "edit.paste", "edit.lengthDouble", "edit.lengthHalf", "edit.dotToggle"]);
 
   function onKeydown(event: KeyboardEvent) {
     // 편집기가 이미 처리한 키(편집기 안 실행 취소 등)는 건드리지 않는다
-    if (event.defaultPrevented || showKeymap || paste || midi || transposing || voicing || settings || meterOpen || eventEdit || addScoreOpen || recoverOpen || outputOpen || optimizing || event.isComposing) return;
+    if (event.defaultPrevented || showKeymap || paste || midi || transposing || arpeggio || slide || voicing || settings || meterOpen || eventEdit || addScoreOpen || recoverOpen || outputOpen || optimizing || event.isComposing) return;
     // 위 목록에 없는 대화 상자라도 열려 있으면 뒤의 곡에 단축키를 보내지 않는다
     if (document.querySelector("dialog[open]")) return;
     const target = event.target as HTMLElement | null;
@@ -2532,6 +2834,40 @@
   />
 {/if}
 
+{#if slide && song}
+  {@const slideTrack = song.tracks.find((tr) => tr.id === slide?.trackId)}
+  {#if slideTrack}
+    {@const ref = trackInstrument(song, slideTrack)}
+    <SlideDialog
+      {song}
+      trackId={slideTrack.id}
+      picked={slide.picked}
+      {profile}
+      instrument={canonicalOf(ref.canonical, ref.program, ref.packId) ?? ref.canonical}
+      locked={lockedIds}
+      onapply={applySlide}
+      onclose={() => (slide = undefined)}
+    />
+  {/if}
+{/if}
+{#if arpeggio && song}
+  {@const arpTrack = song.tracks.find((tr) => tr.id === arpeggio?.trackId)}
+  {#if arpTrack}
+    <ArpeggioDialog
+      {song}
+      trackId={arpTrack.id}
+      picked={arpeggio.picked}
+      {division}
+      lengthRange={profile.length}
+      range={trackSoundingRange(profile, song, arpTrack, canonicalOf)}
+      maxTracks={maxChordsOf(profile, song.players.find((p) => p.id === arpTrack.playerId)?.instrument.canonical)}
+      locked={lockedIds}
+      source={arpeggio.source}
+      onapply={applyArpeggio}
+      onclose={() => (arpeggio = undefined)}
+    />
+  {/if}
+{/if}
 {#if transposing}
   <TransposeDialog
     scopes={[
@@ -2696,6 +3032,7 @@
       {division}
       ondivision={(d) => (division = d)}
       {noteLength}
+      {noteLengths}
       onnotelength={(l) => (noteLength = l)}
       bind:inputVolume
       volumeMin={profile.volume.min}
@@ -2704,8 +3041,11 @@
       onselectedvolume={(vol) => roll?.editSelected((n) => (n.vol === vol ? n : { ...n, vol }), "음 볼륨")}
       hasCursor={cursor !== undefined}
       onbar={editBar}
-      onfit={() => roll?.fitAll()}
-      onzoom={(axis, factor) => roll?.zoom(axis, factor)}
+      onfit={() => (viewMode === "roll" ? roll?.fitAll() : tab?.fitAll())}
+      onzoom={(axis, factor) => (viewMode === "roll" ? roll?.zoom(axis, factor) : axis === "time" && tab?.zoomTime(factor))}
+      {tabAlign}
+      ontabalign={() => tab?.cycleAlign()}
+      ontabsize={(step) => tab?.resizeTab(step)}
       layer={rollLayer}
       onlayer={setRollLayer}
       compact={narrow}
@@ -2760,7 +3100,7 @@
       <p class="muted empty-note">{t("ui.noSong", { ext: PROJECT_EXTENSION })}</p>
       <div class="start-actions">
         <button onclick={startNewSong} title={t("ui.newSongHelp")}>{t("ui.newSong")}</button>
-        <button onclick={() => openInput.click()} title={t("ui.openFileHelp")}>{t("ui.openFile")}</button>
+        <button onclick={() => void openScoreFile()} title={t("ui.openFileHelp")}>{t("ui.openFile")}</button>
         <button onclick={() => (paste = { text: "" })} title={t("ui.pasteHint")}>{t("ui.paste")}</button>
       </div>
       {#if packs.length === 0}
@@ -2773,6 +3113,8 @@
     </div>
   {:else}
     <div class="roll-pane">
+      <!-- 곡을 열 때마다(보기 세대 번호) 보기를 새로 만든다. 저장·실행 취소로는 번호가 바뀌지 않아 그대로다 -->
+      {#key viewGen}
       {#if viewMode === "roll"}
         <PianoRoll
           bind:this={roll}
@@ -2806,6 +3148,9 @@
           onvolume={nudgeVolume}
           {lightKeys}
           {canonicalOf}
+          memory={viewMemory}
+          work={viewGen}
+          onmemory={(place, zoom, work) => rememberView(viewMemory, work, viewGen, { place, roll: zoom })}
           visibleTrackIds={rollTracks}
           locked={lockedIds}
           pickOthers={pickBackground}
@@ -2824,12 +3169,18 @@
       {:else}
         <TabView
           {song}
+          octaveKey={(e) => {
+            const c = commandFor(bindings, keyName(e) ?? "");
+            return c === "note.octaveUp" || c === "note.octaveDown";
+          }}
           {activeTrackId}
           {tuning}
           {playhead}
           {division}
           noteDur={newNoteDur}
           {noteLength}
+          {noteLengths}
+          lengthLimit={profile.length}
           onnotelength={(l) => (noteLength = l)}
           bind:volume={inputVolume}
           volumeRange={profile.volume}
@@ -2839,12 +3190,30 @@
           {melodyIds}
           onunplayable={(n) => (unplayable = n)}
           padByMouse={tabPadOn}
+          {followCursor}
+          playCursor={cursor}
+          {loop}
+          onseek={seek}
+          onplaycursor={(at) => (cursor = at)}
+          onloop={(r) => (loop = r)}
           onevent={openEvent}
           oncursor={(at) => (tabCursor = at)}
+          onalign={(a) => (tabAlign = a)}
+          memory={viewMemory}
+          work={viewGen}
+          onmemory={(place, tabZoom, work) => rememberView(viewMemory, work, viewGen, { place, tab: tabZoom })}
+          bind:this={tab}
           onedit={(changes, label) => {
-            const open = changes.filter((c) => editable(c.trackId));
-            if (history && open.length > 0) sync(history.run(setTracksNotes(open, label)));
+            // 여러 트랙을 바꾸는 명령은 잠근 트랙이 하나라도 끼면 통째로 하지 않는다 (피아노롤과 같이 알리고 거절)
+            if (!history || changes.length === 0 || !changes.every((c) => editable(c.trackId))) return;
+            sync(history.run(setTracksNotes(changes, label)));
           }}
+          onlayers={(changes, added, playerId, label) => {
+            if (!history || !changes.every((c) => editable(c.trackId))) return;
+            sync(history.run(pasteLayers(history.song, changes, added, playerId, label)));
+          }}
+          onpastefull={(limit) => (error = t("ui.tabPasteFull", { limit }))}
+          ondot={() => run("edit.dotToggle")}
           maxTracks={tabMaxTracks}
           onnewtrack={({ playerId, notes, instrument }, label) => {
             if (!history) return;
@@ -2858,6 +3227,7 @@
           }}
         />
       {/if}
+      {/key}
     </div>
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
@@ -2869,7 +3239,7 @@
       onpointerup={ondividerup}
       ondblclick={resetDivider}
     ></div>
-    <div class="list-pane">
+    <div class="list-pane" bind:this={listPaneEl}>
       {#if analysis}
         <TrackPane
           {song}
@@ -3058,7 +3428,7 @@
       notes={selectedNotes}
       timeSig={song.timeSig}
       range={trackSoundingRange(profile, song, activeTrack, canonicalOf)}
-      onlength={(dur) => roll?.editSelected((n) => ({ ...n, dur }), t("ui.noteInfoLength"))}
+      onlength={(dur) => editor?.editSelected((n) => ({ ...n, dur }), t("ui.noteInfoLength"))}
     />
   {/if}
 {/snippet}

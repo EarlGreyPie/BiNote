@@ -6,6 +6,7 @@
   import TrackMenu from "./TrackMenu.svelte";
   import type { ScoreGroup } from "./scores";
   import type { TrackActions } from "./trackActions";
+  import { movedTooFar } from "./longPress";
 
   /** 패널을 롤 아래에 둘 때(3MLE식) 편집기 위에 오는 32px 트랙 띠. 오른쪽 ▾로 구조 목록 전체를 팝오버로 */
   interface Props {
@@ -72,10 +73,13 @@
   }
   /** 길게 눌러 메뉴를 연 직후 손을 떼며 들어오는 click은 먹는다 */
   let longPressed = false;
+  /** 길게 누르기를 시작한 자리 (손가락이 조금 흔들려도 이어 간다) */
+  let pressAt: { clientX: number; clientY: number } | undefined;
   function press(e: PointerEvent, track: Track, playerId: string) {
     longPressed = false;
     if (e.pointerType === "mouse") return;
     const at = { clientX: e.clientX, clientY: e.clientY };
+    pressAt = at;
     clearTimeout(pressTimer);
     pressTimer = setTimeout(() => {
       longPressed = true;
@@ -87,7 +91,14 @@
     longPressed = false;
     return false;
   }
-  const release = () => clearTimeout(pressTimer);
+  const release = () => {
+    clearTimeout(pressTimer);
+    pressAt = undefined;
+  };
+  /** 허용 거리(longPress.ts)를 넘게 움직였을 때만 길게 누르기를 그만둔다 (구조 목록과 같게) */
+  function pressMove(e: PointerEvent) {
+    if (movedTooFar(pressAt, e)) release();
+  }
 </script>
 
 <svelte:window onpointerdown={onwindowpointerdown} {onkeydown} onresize={() => (popover = false)} />
@@ -114,7 +125,7 @@
               onpointerdown={(e) => press(e, track, g.playerId)}
               onpointerup={release}
               onpointercancel={release}
-              onpointermove={release}
+              onpointermove={pressMove}
             >
               <span class="dot"></span>{k + 1}{#if actions.isMelody(id)}<span class="melody" title={t("ui.melodyTrack")}>♪</span>{/if} {track.name}
               {#if actions.viewOf(id).hidden}<span class="flag" title={t("ui.showTrack")}><Icon name="eye-off" size={12} /></span>{/if}

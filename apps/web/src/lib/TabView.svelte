@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { add, assignTab, cmp, gridLines, mul, rat, sub, toFloat, type Note, type Rat, type Song, type TabTuning } from "@mmlce/core";
+  import { add, assignTab, clipLayers, cmp, gridLines, mul, pasteClip, rat, splitNote, sub, toFloat, type LengthLimit, type Note, type Rat, type Song, type TabTuning } from "@mmlce/core";
   import { t } from "./i18n.svelte";
   import { Pinch, pinchRatio } from "./pinch";
   import { fretFromKeys, placeTabNote, removeTabNote, setTabNoteLength, tieTabNote, type TabEdit } from "./tabInput";
@@ -16,12 +16,19 @@
   import { LANE_MAX, LANE_MIN, laneThickness, saveVolumeLane, volumeLane } from "./volumeLane.svelte";
   import type { RollView } from "./roll";
   import { tabTint } from "./tabTint.svelte";
-  import { nextTabAlign, parseTabAlign, type TabAlign } from "./tabAlign";
-  import { inTabEventBand, layoutTabEvents, TAB_EVENT_TEXT, tabEventAt, type TabEventSpot } from "./tabEvents";
+  import { nextTabAlign, parseTabAlign, TAB_ALIGN_ICON, TAB_ALIGN_LABEL, type TabAlign } from "./tabAlign";
+  import { coarsePointer } from "./mmlPad.svelte";
+  import { carryViewStart, type ViewMemory } from "./viewCarry";
+  import { fretBoxLeft, fretCenter, inTabEventBand, layoutTabEvents, rulerRelease, TAB_EVENT_TEXT, TAB_RULER, TAB_RULER_BASELINE, tabEventAt, tabMarkerText, type TabEventSpot } from "./tabEvents";
   import { snapNearest, type EventKind, type EventLabel } from "./roll";
+  import { firstVisibleCell, followStart, revealStart } from "./tabFollow";
+  import { arrowGoesToApp, editPicked, gluePicked, notesInRange, placeLayers, pruneSelection, scalePicked, selectionRange, tiePicked, type TrackChanges } from "./tabSelect";
+  import { noteClipboard } from "./noteClipboard.svelte";
 
   interface Props {
     song: Song;
+    /** 이 키가 앱의 옥타브 올리기·내리기 명령인지 (키 설정을 따른다). 고른 음이 있으면 타브가 먹지 않고 앱에 넘긴다 */
+    octaveKey?: (e: KeyboardEvent) => boolean;
     /** 이 트랙의 연주자가 가진 트랙을 모두 모아 보여 준다 */
     activeTrackId: string | undefined;
     tuning: TabTuning;
@@ -33,6 +40,9 @@
     noteDur?: Rat;
     /** 새 음 길이 고르기 (숫자판에서도 바꿀 수 있게). noteDur은 이 값으로 정해진다 */
     noteLength?: NoteLength;
+    /** 고를 수 있는 새 음 길이 (게임 한도로 거른 목록, lengthsFor). 게임 음길이 한도 (+/− 키) */
+    noteLengths?: readonly NoteLength[];
+    lengthLimit?: LengthLimit;
     onnotelength?: (length: NoteLength) => void;
     /** 타브에서 음을 넣거나 지울 때 (실행 취소 한 칸) */
     onedit?: (changes: TabEdit["changes"], label: string) => void;
@@ -57,15 +67,42 @@
     /** 보기 → 타브 숫자판: 켜면 마우스로 지판을 눌러도 프렛 숫자판을 연다 (끄면 터치·펜에서만) */
     padByMouse?: boolean;
     /** 위쪽 템포·박자 줄을 두 번 누르거나(터치·펜은 길게) 그 글자를 눌러 템포·박자 창을 연다 (피아노롤 이벤트 줄과 같은 모양) */
-    onevent?: ((request: { label?: EventLabel; kind: EventKind; at: Rat }) => void) | undefined;
+    /** 템포·마커 창 열기. work는 이 보기를 만든 보기 세대 (곡을 다시 연 뒤 옛 보기가 늦게 보낸 요청을 앱이 버리게) */
+    onevent?: ((request: { label?: EventLabel; kind: EventKind; at: Rat; work?: number | undefined }) => void) | undefined;
     /** 타브 커서 자리가 바뀔 때 (Alt+B·Alt+M이 그 자리에 넣게). 커서가 없으면 undefined */
     oncursor?: ((at: Rat | undefined) => void) | undefined;
+    /** 여러 트랙에 붙이기: 있는 트랙의 바뀐 음과 이 악보에 더할 새 트랙의 음 (실행 취소 한 칸) */
+    onlayers?: ((changes: TrackChanges, added: Note[][], playerId: string, label: string) => void) | undefined;
+    /** 재생 위치 (온음표 단위, 피아노롤과 같은 값). 없으면 곡 처음부터 */
+    playCursor?: number | undefined;
+    /** 반복 구간 (피아노롤과 같은 값) */
+    loop?: readonly [number, number] | undefined;
+    /** 마디 번호 줄을 눌렀다 뗀 자리: 재생 위치 (재생 중이면 거기서 이어 재생) */
+    onseek?: ((time: number) => void) | undefined;
+    /** 재생 위치를 바꾸거나 지운다 (구간 앞, 재생 위치 위를 다시 누름) */
+    onplaycursor?: ((time: number | undefined) => void) | undefined;
+    /** 마디 번호 줄을 끌어 정한 반복 구간 */
+    onloop?: ((range: readonly [number, number] | undefined) => void) | undefined;
+    /** 보기 → 커서 따라가기: 키보드·숫자판으로 커서가 화면 밖으로 나가면 화면을 넘긴다 */
+    followCursor?: boolean;
+    /** 보기를 바꾸기 전에 보던 자리와 지난번 타브 확대·커서 (만들 때 한 번만 읽는다) */
+    memory?: ViewMemory | undefined;
+    /** 보던 자리·확대·커서가 바뀔 때 (보기를 바꿨다 돌아와도 이어 보게 앱이 기억한다) */
+    onmemory?: ((place: NonNullable<ViewMemory["place"]>, tab: NonNullable<ViewMemory["tab"]>, work: number | undefined) => void) | undefined;
+    /** 이 보기를 만든 보기 세대(곡을 열 때마다 늘어나는 번호). 만들 때 한 번 읽어 onmemory에 함께 돌려준다 (곡을 연 뒤 옛 보기의 알림을 앱이 버리게) */
+    work?: number | undefined;
+    /** 지판 위치(위·가운데·아래)가 바뀔 때 (PC 위 도구줄 단추가 쓴다) */
+    onalign?: ((align: TabAlign) => void) | undefined;
+    /** 숫자판 점 단추 (앱의 점 붙이기·떼기 명령과 같다) */
+    ondot?: (() => void) | undefined;
+    /** 트랙 수 한도 때문에 붙이지 못했을 때 (아무것도 붙이지 않았다) */
+    onpastefull?: ((limit: number) => void) | undefined;
   }
 
-  let { song, activeTrackId, tuning, playhead, onunplayable, division, noteDur, noteLength, onnotelength, onedit, onnewtrack, onfull, maxTracks = Infinity, onpreview, volume = $bindable(), volumeRange, colors, locked, laneTrackIds, melodyIds, padByMouse = false, onevent, oncursor }: Props = $props();
+  let { song, octaveKey, activeTrackId, tuning, playhead, onunplayable, division, noteDur, noteLength, noteLengths = NOTE_LENGTHS, lengthLimit, onnotelength, onedit, onnewtrack, onfull, maxTracks = Infinity, onpreview, volume = $bindable(), volumeRange, colors, locked, laneTrackIds, melodyIds, padByMouse = false, onevent, oncursor, onlayers, onpastefull, ondot, onalign, memory, onmemory, work, followCursor = true, playCursor, loop, onseek, onplaycursor, onloop }: Props = $props();
 
   // 위쪽에 마디 번호 줄과 변속(템포·박자) 줄을 둔다
-  const TOP = 42;
+  const TOP = 48;
   // 줄 간격(타브 크기). 숫자 글자 크기도 같이 커진다. 이 브라우저에 기억한다
   const GAP_KEY = "mmlce.tabGap";
   let gap = $state(loadStored(GAP_KEY, (raw) => {
@@ -79,27 +116,42 @@
     gap = Math.min(44, Math.max(14, Math.round(next)));
     saveStored(GAP_KEY, String(gap));
   }
+  /** 타브 크기 한 단계 (A+ = 1, A− = −1). 위 도구줄(PC)과 아래 도구 띠(터치)가 같이 쓴다 */
+  export function resizeTab(step: 1 | -1) {
+    setGap(gap + 3 * step);
+  }
   // 지판 세로 위치(위·가운데·아래). 세로로 긴 화면에서 남는 높이가 있을 때만 쓰인다. 이 브라우저에 기억한다
   const ALIGN_KEY = "mmlce.tabAlign";
   let align = $state<TabAlign>(loadStored(ALIGN_KEY, parseTabAlign));
-  const ALIGN_LABEL = { top: "ui.tabAlignTop", middle: "ui.tabAlignMiddle", bottom: "ui.tabAlignBottom" } as const;
-  const ALIGN_ICON = { top: "⤒", middle: "↕", bottom: "⤓" } as const;
-  function cycleAlign() {
+  // 지금 지판 위치를 앱에 알린다 (PC는 위 도구줄 단추가 이 값으로 글자·안내를 쓴다)
+  $effect(() => {
+    const now = align;
+    untrack(() => onalign?.(now));
+  });
+  export function cycleAlign() {
     align = nextTabAlign(align);
     saveStored(ALIGN_KEY, align);
   }
   /** 가로(시간) 확대·축소. factor > 1이면 확대, 화면 가운데를 기준으로 */
-  function zoomTime(factor: number) {
+  export function zoomTime(factor: number) {
     const mid = start + (width - LEFT) / pxPerWhole / 2;
     pxPerWhole = Math.min(2000, Math.max(40, pxPerWhole * factor));
     start = Math.max(0, mid - (width - LEFT) / pxPerWhole / 2);
+  }
+  /** 전체 보기: 곡 전체가 한 화면에 들어오게 가로 확대를 맞추고 처음부터 (가장 작게 해도 넘치면 그만큼만) */
+  export function fitAll() {
+    pxPerWhole = Math.min(2000, Math.max(40, (width - LEFT - 20) / Math.max(songEnd, 0.25)));
+    start = 0;
   }
   let host: HTMLDivElement;
   let wrap: HTMLDivElement;
   let canvas: HTMLCanvasElement;
   let width = $state(600);
-  let start = $state(0);
-  let pxPerWhole = $state(220);
+  // 보기를 바꾸기 전 자리에서 시작한다 (만들 때 한 번만 읽는다). 시작 시간은 화면 폭을 안 뒤 재생 위치가 보이게 다시 맞춘다
+  const carry = untrack(() => ({ place: memory?.place, tab: memory?.tab, cursor: playCursor, work }));
+  let carryPending = !!carry.place;
+  let start = $state(carry.place?.start ?? 0);
+  let pxPerWhole = $state(carry.tab?.pxPerWhole ?? 220);
 
   const player = $derived(song.tracks.find((t) => t.id === activeTrackId)?.playerId);
   const tracks = $derived(song.tracks.filter((t) => t.playerId === player && !t.mute));
@@ -142,13 +194,99 @@
   const events = $derived(assignTab(tracks.flatMap((t) => struck(t.notes)), tuning, new Map(), slides));
 
   /** 타브 커서: 시간(격자에 맞춤)과 줄(1 = 가장 높은 줄) */
-  let cursor = $state.raw<{ at: Rat; string: number } | undefined>(undefined);
+  // 피아노롤에 갔다 와도 전에 있던 커서 그대로 (그 사이 곡이 짧아져도 지우지 않는다)
+  // 롤↔타브 전환에서 기억한 커서만 되살린다. 없으면 커서 없이 시작하고, 키를 누르면 그때 화면에 보이는 첫 칸에 만든다 (onkeydown)
+  let cursor = $state.raw<{ at: Rat; string: number } | undefined>(carry.tab?.cursor);
   // 커서 자리를 앱에 알린다 (Alt+B·Alt+M이 그 자리에 템포·마커를 넣게). 타브를 닫으면 커서도 없다
   $effect(() => {
     const at = cursor?.at;
     untrack(() => oncursor?.(at));
   });
-  onMount(() => () => oncursor?.(undefined));
+  // 사라질 때(곡을 다시 열거나 피아노롤로 바꿀 때) 커서를 알리고, 길게 누르기 타이머를 지운다 (옛 곡 자리로 창이 열리지 않게)
+  onMount(() => () => {
+    oncursor?.(undefined);
+    cancelBandPress();
+  });
+
+  // 보던 자리·확대·커서를 앱에 알린다 (휠·스크롤바·확대·따라가기 등 어느 길로 바뀌어도)
+  $effect(() => {
+    const place = { start, span: (width - LEFT) / pxPerWhole };
+    const tab = { pxPerWhole, cursor };
+    untrack(() => onmemory?.(place, tab, carry.work));
+  });
+
+  // 커서 따라가기: 커서 자리가 바뀔 때만 (휠·끌기로 굴린 화면은 되돌리지 않는다). 커서를 옮기는 모든 길(방향키·Shift+방향키·
+  // 숫자판·프렛 입력 뒤 넘어가기·붙여넣기)이 이 한 곳을 지난다. 마우스로 누르거나 끌어 놓은 커서는 이미 보이는 자리이고,
+  // 누르는 동안 화면이 움직이면 끌기·고르기가 어긋나므로 따라가지 않는다. 재생 중에는 재생선 따라가기가 먼저다
+  // 되살린 커서로는 따라가지 않는다 (앞 보기에서 넘긴 자리를 지킨다)
+  let followedAt: Rat | undefined = carry.tab?.cursor?.at;
+  /**
+   * 규칙: 커서 자리에 쓰는 편집(숫자·지우기·잇기·길이·점·자르기·붙이기)이 적용되기 전에 커서 칸은 화면에 보여야 한다.
+   * 안 보이면 화면을 바로 옮긴다. 커서를 만든 길과 커서 따라가기 설정·재생 중인지와 상관없이 지킨다
+   */
+  function ensureCursorVisible() {
+    if (!cursor) return;
+    const note = noteAtCursor();
+    const from = toFloat(cursor.at);
+    const to = note ? toFloat(note.start) + toFloat(note.dur) : from + 1 / division;
+    start = revealStart(from, to, start, (width - LEFT) / pxPerWhole, timeMax);
+  }
+  /** 마우스·손가락으로 커서를 놓았다 (다음 한 번은 따라가지 않는다) */
+  let placedByPointer = false;
+  $effect(() => {
+    const at = cursor?.at;
+    const on = followCursor;
+    untrack(() => {
+      const changed = at !== undefined && (followedAt === undefined || cmp(at, followedAt) !== 0);
+      followedAt = at;
+      const byPointer = placedByPointer;
+      placedByPointer = false;
+      if (!on || !changed || byPointer || playhead !== undefined || at === undefined) return;
+      const note = noteAtCursor();
+      const from = toFloat(at);
+      const to = note ? toFloat(note.start) + toFloat(note.dur) : from + 1 / division;
+      start = followStart(from, to, start, (width - LEFT) / pxPerWhole, timeMax);
+    });
+  });
+
+  /** 고른 음 id (보이는 모든 트랙의 음). 편집 메뉴·단축키 명령이 이 음에 쓰인다 */
+  let selected = $state.raw<ReadonlySet<string>>(new Set());
+  /** 고르기 범위의 시작 자리 (Shift+←/→, Shift+누르기·끌기, 숫자판 고르기). 없으면 범위를 넓히는 중이 아니다 */
+  let anchor: Rat | undefined;
+  /** 숫자판 고르기 단추: 켜 두면 커서를 옮기는(지판을 누르는) 동안 범위가 넓어진다 (터치용) */
+  let selecting = $state(false);
+  /** Shift+끌기로 고르는 중 */
+  let dragSelect = false;
+  /** 시작 자리에서 head 칸까지 시간 범위 안에 시작하는 음을 모두 고른다 */
+  function selectTo(head: Rat) {
+    anchor ??= head;
+    const [from, to] = selectionRange(anchor, head, rat(1, division));
+    selected = notesInRange(tracks, from, to);
+  }
+  function clearSelection() {
+    anchor = undefined;
+    selecting = false;
+    if (selected.size > 0) selected = new Set();
+  }
+  // 곡이 바뀌어(지우기·실행 취소 등) 사라진 음은 고르기에서 뺀다
+  $effect(() => {
+    const now = untrack(() => selected);
+    const pruned = pruneSelection(now, tracks);
+    if (pruned !== now) selected = pruned;
+  });
+  /** 숫자판 고르기 단추 */
+  function toggleSelecting() {
+    if (selecting) {
+      // 끄면 범위 넓히기만 멈춘다 (고른 음은 남겨 지우기 등에 쓴다)
+      selecting = false;
+      anchor = undefined;
+      return;
+    }
+    if (!cursor) return;
+    selecting = true;
+    anchor = cursor.at;
+    selectTo(cursor.at);
+  }
   let digits = "";
   let digitsTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -239,6 +377,15 @@
   const inEventBand = (px: number, py: number) => inTabEventBand(eventSpots, px, py, TOP, fontPx);
   /** 템포 글자 위에 올렸을 때 보이는 안내 */
   let eventHover = $state<TabEventSpot | undefined>(undefined);
+  /** 마커 글자의 전체 이름 (줄여 쓴 글자 대신 안내에 보인다) */
+  const markerName = (spot: TabEventSpot) => song.markers.find((m) => m.id === spot.id)?.label ?? spot.text;
+  /** 템포·박자 줄의 빈 자리 위인지 (두 번 눌러 템포·박자를 넣는다는 안내) */
+  let bandHover = $state(false);
+  /** 마디 번호 줄 위인지 (누르는 곳 안내) */
+  let rulerHover = $state(false);
+  /** 마디 번호 줄을 누르고 끄는 중: [누른 자리, 지금 자리] (격자에 맞춘 시간) */
+  let marking = $state.raw<[number, number] | undefined>(undefined);
+  const rulerTime = (px: number) => toFloat(snapNearest(Math.max(0, start + (px - LEFT) / pxPerWhole), division));
   /** 터치·펜으로 변속 줄을 길게 누르는 중 */
   let bandPress: { x: number; x0: number; y0: number; timer: ReturnType<typeof setTimeout> } | undefined;
   const LONG_PRESS_MS = 500;
@@ -248,17 +395,18 @@
     bandPress = undefined;
   }
 
-  /** 변속 줄 px 자리: 글자가 있으면 그 템포·박자를 고치고, 없으면 격자에 맞춘 자리에 새 템포 */
+  /** 변속 줄 px 자리: 글자가 있으면 그 템포·박자·마커를 고치고, 없으면 격자에 맞춘 자리에 새 템포 */
   function openEventAt(px: number) {
     if (!onevent) return;
     const spot = tabEventAt(eventSpots, px);
     if (spot) {
-      const label: EventLabel = { kind: spot.kind, at: spot.at, text: spot.text, x: spot.left, y: TAB_EVENT_TEXT.top, w: spot.right - spot.left, h: TAB_EVENT_TEXT.bottom - TAB_EVENT_TEXT.top };
-      onevent({ label, kind: spot.kind, at: spot.at });
+      // 마커는 id로 찾아 고친다 (같은 자리에 마커가 여럿일 수 있다)
+      const label: EventLabel = { kind: spot.kind, at: spot.at, text: spot.text, x: spot.left, y: TAB_EVENT_TEXT.top, w: spot.right - spot.left, h: TAB_EVENT_TEXT.bottom - TAB_EVENT_TEXT.top, ...(spot.id ? { id: spot.id } : {}) };
+      onevent({ label, kind: spot.kind, at: spot.at, work: carry.work });
       return;
     }
     const time = start + (px - LEFT) / pxPerWhole;
-    onevent({ kind: "tempo", at: snapNearest(Math.max(0, time), division) });
+    onevent({ kind: "tempo", at: snapNearest(Math.max(0, time), division), work: carry.work });
   }
 
   function ondblclick(e: MouseEvent) {
@@ -269,9 +417,26 @@
 
   function onpointermove(e: PointerEvent) {
     if (bandPress && Math.hypot(e.clientX - bandPress.x0, e.clientY - bandPress.y0) > 8) cancelBandPress();
+    if (marking && e.buttons & 1) {
+      const t = rulerTime(point(e)[0]);
+      if (t !== marking[1]) marking = [marking[0], t];
+      return;
+    }
+    if (dragSelect && cursor && e.buttons & 1) {
+      const [px] = point(e);
+      const at = rat(Math.max(0, Math.floor((start + (px - LEFT) / pxPerWhole) * division + 1e-9)), division);
+      if (cmp(at, cursor.at) !== 0) {
+        placedByPointer = true;
+        cursor = { ...cursor, at };
+        selectTo(at);
+      }
+    }
     if (e.pointerType === "mouse") {
       const [px, py] = point(e);
-      eventHover = onevent && px >= LEFT && inEventBand(px, py) ? tabEventAt(eventSpots, px) : undefined;
+      rulerHover = !!onseek && px >= LEFT && py < TAB_RULER;
+      const inBand = !!onevent && px >= LEFT && !rulerHover && inEventBand(px, py);
+      eventHover = inBand ? tabEventAt(eventSpots, px) : undefined;
+      bandHover = inBand && !eventHover;
     }
     const f = pinch.move(e, point(e));
     const s = pinchStart;
@@ -283,11 +448,28 @@
 
   function onpointerup(e: PointerEvent) {
     cancelBandPress();
+    if (marking) {
+      // 피아노롤 눈금자와 같다: 같은 자리 = 재생 위치(재생 위치 위를 다시 누르면 지우기), 끌었으면 반복 구간
+      const [a, b] = marking;
+      marking = undefined;
+      if (e.type !== "pointercancel") {
+        const r = rulerRelease(a, b, playCursor);
+        if (r.kind === "seek") onseek?.(r.at);
+        else if (r.kind === "clear") onplaycursor?.(undefined);
+        else {
+          onloop?.(r.range);
+          onplaycursor?.(r.range[0]);
+        }
+      }
+    }
+    dragSelect = false;
     pinch.up(e);
   }
 
   function onpointerdown(e: PointerEvent) {
     if (pinch.down(e, point(e))) {
+      // 두 손가락이면 마디 번호 줄 끌기는 그만두고 확대·축소
+      marking = undefined;
       pinchStart = { pxPerWhole, start };
       canvas.setPointerCapture(e.pointerId);
       return;
@@ -298,6 +480,13 @@
     const px = e.clientX - rect.left;
     const py = e.clientY - rect.top;
     if (px < LEFT) return;
+    // 맨 위 마디 번호 줄: 누르고 떼면 재생 위치, 끌면 반복 구간 (피아노롤 눈금자와 같다). 화면은 움직이지 않는다
+    if (py < TAB_RULER && onseek) {
+      const t = rulerTime(px);
+      marking = [t, t];
+      canvas.setPointerCapture(e.pointerId);
+      return;
+    }
     // 위쪽 템포·박자 줄: 한 번 누르면 아무 일도 없다(지판 커서를 두지 않는다). 터치·펜은 길게 누르면 템포 창
     if (inEventBand(px, py)) {
       cancelBandPress();
@@ -313,8 +502,20 @@
     }
     const time = start + (px - LEFT) / pxPerWhole;
     const string = Math.min(tuning.strings.length, Math.max(1, Math.round((py - TOP) / gap) + 1));
+    const at = rat(Math.max(0, Math.floor(time * division + 1e-9)), division);
+    // Shift+누르기: 커서(없으면 누른 자리)에서 누른 자리까지 고르고, 끌면 범위를 넓힌다. 숫자판 고르기를 켰으면 Shift 없이도
+    const extend = (e.shiftKey && e.pointerType === "mouse") || selecting;
+    if (extend) {
+      anchor ??= cursor?.at ?? at;
+      if (e.shiftKey && e.pointerType === "mouse") {
+        dragSelect = true;
+        canvas.setPointerCapture(e.pointerId);
+      }
+    } else clearSelection();
     touchPad = padByMouse || e.pointerType === "touch" || e.pointerType === "pen" || touchPad;
-    cursor = { at: rat(Math.max(0, Math.floor(time * division + 1e-9)), division), string };
+    placedByPointer = true;
+    cursor = { at, string };
+    if (extend) selectTo(at);
     digits = "";
   }
 
@@ -344,7 +545,7 @@
 
   /** +/− 키: 커서 음(없으면 새 음) 길이를 두 배 / 반으로 (온음표 ~ 64분음표) */
   function stepLength(factor: 2 | 0.5) {
-    const length = stepNoteLength(lengthNoteAtCursor()?.dur ?? noteDur ?? rat(1, division), factor);
+    const length = stepNoteLength(lengthNoteAtCursor()?.dur ?? noteDur ?? rat(1, division), factor, lengthLimit);
     if (length) changeLength(length);
   }
 
@@ -367,8 +568,171 @@
     if (note) apply(removeTabNote(song, note), "타브 지우기");
   }
 
+  // ── 고른 음 편집 (피아노롤과 같은 이름·같은 뜻. 앱의 편집 메뉴·단축키가 부른다) ──
+
+  /** 고른 음들 (시작 순) */
+  const selectedNotes = $derived(
+    tracks
+      .flatMap((t) => t.notes.filter((n) => selected.has(n.id)))
+      .sort((a, b) => cmp(a.start, b.start)),
+  );
+  export function selection(): readonly Note[] {
+    return selectedNotes;
+  }
+
+  /** 타브에 보이는 트랙의 음을 모두 고른다 */
+  export function selectAll(): boolean {
+    if (tracks.length === 0) return false;
+    anchor = undefined;
+    selected = new Set(tracks.flatMap((t) => t.notes.map((n) => n.id)));
+    return true;
+  }
+
+  /** 여러 트랙을 한 번에 바꾼다 (실행 취소 한 칸). 잠근 트랙이 끼면 앱이 알리고 바꾸지 않는다 */
+  function commit(changes: TrackChanges, label: string): boolean {
+    if (changes.length === 0) return false;
+    onedit?.(changes, label);
+    return true;
+  }
+
+  /** 고른 음 모두 바꾸기. change가 null이면 지운다. 높이가 바뀌어 적어 둔 줄에서 못 치면 줄을 다시 고른다. 고른 음이 없으면 false */
+  export function editSelected(change: (n: Note) => Note | null, label: string): boolean {
+    if (selected.size === 0) return false;
+    commit(editPicked(tracks, selected, change, tuning), label);
+    return true;
+  }
+
+  /** 고른 음을 앱 클립보드에 복사한다. 트랙 나눔(화음)을 원래 트랙 순서대로 층으로 담는다 */
+  export function copySelection(): boolean {
+    const clip = clipLayers(tracks.map((t) => t.notes.filter((n) => selected.has(n.id))));
+    if (!clip) return false;
+    noteClipboard.clip = clip;
+    return true;
+  }
+
+  export function cutSelection(label: string): boolean {
+    return copySelection() && editSelected(() => null, label);
+  }
+
+  let pasteCount = 0;
+  /**
+   * 복사한 음을 타브 커서 자리(없으면 복사한 원래 자리)에 붙인다. 층 k를 이 악보의 k번째 보이는 트랙에 먼저 넣고,
+   * 겹치면 빈 트랙, 모자라면 한도 안에서 트랙을 더한다. 하나라도 못 넣으면 아무것도 붙이지 않는다.
+   * 붙인 음을 고르고 커서를 붙인 끝으로 옮긴다. 붙인 끝 위치를 돌려준다 (못 붙이면 undefined)
+   */
+  export function pasteAt(_at: Rat | number | undefined, label: string): Rat | undefined {
+    const clip = noteClipboard.clip;
+    if (!clip || !player || tracks.length === 0) return undefined;
+    ensureCursorVisible();
+    const from = cursor?.at ?? clip.origin;
+    const stamp = `${player}.tp${Date.now().toString(36)}${(pasteCount++).toString(36)}`;
+    let k = 0;
+    const newId = () => `${stamp}.${k++}`;
+    const layers = (clip.layers ?? [clip.notes]).map((l) => pasteClip({ ...clip, notes: l }, from, newId));
+    // 트랙 수 한도는 음소거한 트랙도 센다 (타브에는 안 보여도 악보 자리는 차지한다)
+    const scoreTracks = song.tracks.filter((t) => t.playerId === player).length;
+    const placed = placeLayers(tracks, layers, Math.max(0, maxTracks - scoreTracks), locked);
+    if (!placed) {
+      onpastefull?.(maxTracks);
+      return undefined;
+    }
+    onlayers?.(placed.changes, placed.added, player, label);
+    selected = new Set(layers.flat().map((n) => n.id));
+    anchor = undefined;
+    const end = add(from, clip.length);
+    if (cursor) cursor = { ...cursor, at: end };
+    return end;
+  }
+
+  /** 고른 음을 다음 음과 &로 잇거나 푼다. 하나도 못 바꾸면 false */
+  export function tieSelected(): boolean {
+    if (selected.size === 0) return false;
+    const changes = tiePicked(tracks, selected);
+    const first = selectedNotes[0];
+    return !!changes && commit(changes, first?.tie === "next" ? "이음줄 풀기" : "이음줄");
+  }
+
+  /**
+   * 타브 커서 자리에서 음을 자른다 (at은 피아노롤과 모양을 맞춘 것이고, 타브는 늘 타브 커서 자리).
+   * 고른 음이 있으면 그 가운데 커서 자리에 걸린 음, 없으면 커서 줄에서 커서 자리에 걸린 음. 자른 조각을 고른다
+   */
+  export function splitAt(_at?: Rat): boolean {
+    if (!cursor) return false;
+    ensureCursorVisible();
+    const c = cursor;
+    const inside = (n: Note) => cmp(n.start, c.at) < 0 && cmp(c.at, add(n.start, n.dur)) < 0;
+    let targets: Note[];
+    if (selected.size > 0) targets = selectedNotes.filter(inside);
+    else {
+      const onString = new Set(events.flatMap((e) => e.notes.filter((x) => x.at?.string === c.string).map((x) => x.note.id)));
+      targets = tracks.flatMap((t) => t.notes).filter((n) => inside(n) && onString.has(n.id)).slice(0, 1);
+    }
+    if (targets.length === 0) return false;
+    const changes: TrackChanges = [];
+    const pieces = new Set<string>();
+    for (const t of tracks) {
+      let notes: Note[] = [...t.notes];
+      for (const n of targets.filter((x) => t.notes.includes(x))) {
+        const done = splitNote(notes, n.id, c.at, `${n.id}.s${Date.now().toString(36)}`);
+        if (!done) continue;
+        notes = done[0];
+        pieces.add(done[1].id).add(done[2].id);
+      }
+      if (notes.length !== t.notes.length) changes.push({ trackId: t.id, notes });
+    }
+    if (!commit(changes, "음 자르기")) return false;
+    selected = pieces;
+    return true;
+  }
+
+  /** 고른 음 가운데 같은 트랙에서 높이가 같고 맞닿은 음을 붙인다. 붙일 것이 없으면 false */
+  export function glueSelected(): boolean {
+    if (selected.size < 2) return false;
+    const done = gluePicked(tracks, selected);
+    if (!done || !commit(done.changes, "음 붙이기")) return false;
+    selected = done.kept;
+    return true;
+  }
+
+  /** 고른 음(ids를 주면 그 음) 길이 ×factor (트랙마다, 같은 기준). 늘릴 자리가 없으면 바꾸지 않고 false */
+  export function scaleSelected(factor: Rat, label: string, ids?: readonly string[]): boolean {
+    const changes = scalePicked(tracks, ids ? new Set(ids) : selected, factor);
+    return !!changes && commit(changes, label);
+  }
+
+  /** 길이를 바꿀 커서 음 (이어 울리는 뒷음도. +/−와 같은 기준). 없으면 undefined */
+  export function cursorLengthNote(): Note | undefined {
+    // 앱의 점 붙이기·떼기가 이 음 길이를 바꾼다: 바꾸기 전에 커서 칸을 보이게
+    ensureCursorVisible();
+    return lengthNoteAtCursor();
+  }
+
+  /** Delete 키·숫자판 지우기: 고른 음이 있으면 고른 음, 없으면 커서 음 */
+  function deleteKey() {
+    if (selected.size > 0) editSelected(() => null, "음 지우기");
+    else deleteAtCursor();
+  }
+  /** L·& 키·숫자판 잇기 */
+  function tieKey() {
+    if (selected.size > 0) tieSelected();
+    else tieAtCursor();
+  }
+  /** +/− 키: 고른 음이 있으면 고른 음 길이 ×2·½, 없으면 커서 음(또는 새 음) 길이 */
+  function lengthKey(factor: 2 | 0.5) {
+    if (selected.size > 0) scaleSelected(rat(factor === 2 ? 2 : 1, factor === 2 ? 1 : 2), factor === 2 ? "길이 ×2" : "길이 ½");
+    else stepLength(factor);
+  }
+
   /** 커서를 격자 한 칸(좌우, 또는 step만큼) 또는 한 줄(위 = 높은 줄) 옮긴다 */
-  function moveCursor(dir: "left" | "right" | "up" | "down", step = rat(1, division)) {
+  function moveCursor(dir: "left" | "right" | "up" | "down", step = rat(1, division), extend = selecting) {
+    if (!cursor) return;
+    if (extend) anchor ??= cursor.at;
+    else clearSelection();
+    moveCursorBy(dir, step);
+    if (extend) selectTo(cursor.at);
+  }
+
+  function moveCursorBy(dir: "left" | "right" | "up" | "down", step: Rat) {
     if (!cursor) return;
     if (dir === "right") cursor = { ...cursor, at: add(cursor.at, step) };
     else if (dir === "left") cursor = cmp(cursor.at, step) >= 0 ? { ...cursor, at: sub(cursor.at, step) } : cursor;
@@ -394,6 +758,8 @@
   /** 숫자판을 닫는다. 커서도 같이 지워 지판만 남긴다 (다시 누르면 다시 뜬다) */
   function closePad() {
     touchPad = false;
+    selecting = false;
+    anchor = undefined;
     cursor = undefined;
     digits = "";
   }
@@ -417,16 +783,28 @@
   });
 
   function padFret(fret: number) {
+    ensureCursorVisible();
     // 한도로 거절된 음이면 커서를 그 자리에 둔다. 넘어갈 때는 그 자리 음의 길이만큼 (4분음표면 다음 4분음표 자리)
     const dur = enterFret(fret);
     if (dur && padAdvance && !padChord) moveCursor("right", dur);
   }
 
   function onkeydown(e: KeyboardEvent) {
-    if (!cursor || e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented) return;
+    if (e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented) return;
     // 숫자판의 볼륨 칸·버튼에서 친 키는 그 칸이 받는다
     if ((e.target as HTMLElement | null)?.closest?.("input, select, textarea, button")) return;
     const key = e.key;
+    if (!cursor) {
+      // 커서가 없을 때 숫자·방향키가 오면 지금 화면에 보이는 첫 칸·첫 줄에 커서를 만들고 그 키를 처리한다.
+      // 키보드로 옮긴 커서와 똑같이 다룬다 (커서 따라가기도 평소대로)
+      if (!(/^[0-9]$/.test(key) || /^Numpad[0-9]$/.test(e.code) || /^Arrow(Left|Right|Up|Down)$/.test(key))) return;
+      cursor = { at: firstVisibleCell(start, division, (width - LEFT) / pxPerWhole), string: 1 };
+    }
+    // 편집 키는 적용하기 전에 커서 칸을 화면에 보이게 한다 (규칙은 ensureCursorVisible 한 곳)
+    const digitKey = /^[0-9]$/.test(key) || /^Numpad[0-9]$/.test(e.code);
+    if (digitKey || ["Delete", "Backspace", "l", "L", "&", "+", "=", "-"].includes(key) || e.code === "NumpadAdd" || e.code === "NumpadSubtract") ensureCursorVisible();
+    // 고른 음이 있으면 옥타브 키(기본 Shift+↑/↓)는 앱 명령으로 넘긴다 (막지 않고 그대로 올려 보낸다). 고르기는 남는다
+    if (arrowGoesToApp(key, selected.size > 0, octaveKey?.(e) ?? false)) return;
     if (/^[0-9]$/.test(key) || /^Numpad[0-9]$/.test(e.code)) {
       const digit = /^[0-9]$/.test(key) ? key : e.code.slice(6);
       const { fret, buffer } = fretFromKeys(digits, digit, tuning.maxFret);
@@ -434,15 +812,20 @@
       clearTimeout(digitsTimer);
       if (buffer) digitsTimer = setTimeout(() => (digits = ""), 700);
       enterFret(fret);
-    } else if (key === "Delete" || key === "Backspace") deleteAtCursor();
-    else if (key === "l" || key === "L" || key === "&") tieAtCursor();
-    else if (key === "+" || key === "=" || e.code === "NumpadAdd") stepLength(2);
-    else if (key === "-" || e.code === "NumpadSubtract") stepLength(0.5);
-    else if (key === "ArrowRight") moveCursor("right");
-    else if (key === "ArrowLeft") moveCursor("left");
-    else if (key === "ArrowUp") moveCursor("up");
-    else if (key === "ArrowDown") moveCursor("down");
-    else if (key === "Escape") closePad();
+    } else if (key === "Delete" || key === "Backspace") deleteKey();
+    else if (key === "l" || key === "L" || key === "&") tieKey();
+    else if (key === "+" || key === "=" || e.code === "NumpadAdd") lengthKey(2);
+    else if (key === "-" || e.code === "NumpadSubtract") lengthKey(0.5);
+    // Shift+←/→: 커서 자리에서 시작해 시간 범위를 넓히고 좁힌다
+    else if (key === "ArrowRight") moveCursor("right", undefined, e.shiftKey || selecting);
+    else if (key === "ArrowLeft") moveCursor("left", undefined, e.shiftKey || selecting);
+    else if (key === "ArrowUp") moveCursor("up", undefined, selecting);
+    else if (key === "ArrowDown") moveCursor("down", undefined, selecting);
+    // Esc: 고르기를 먼저 풀고, 고른 것이 없으면 숫자판을 닫는다
+    else if (key === "Escape") {
+      if (selected.size > 0 || selecting) clearSelection();
+      else closePad();
+    }
     else return;
     // 타브가 처리한 키는 앱 단축키(숫자 = 격자 등)로 넘기지 않는다
     e.preventDefault();
@@ -560,7 +943,13 @@
 
   onMount(() => {
     const observer = new ResizeObserver(([entry]) => {
-      if (entry) width = Math.max(100, Math.floor(entry.contentRect.width));
+      if (!entry) return;
+      width = Math.max(100, Math.floor(entry.contentRect.width));
+      // 처음 폭을 알았을 때: 앞 보기에서 보이던 재생 위치가 이 화면에서도 보이게
+      if (carryPending) {
+        carryPending = false;
+        start = carryViewStart(carry.place, (width - LEFT) / pxPerWhole, carry.cursor);
+      }
     });
     observer.observe(wrap);
     // 휠은 타브 줄 칸뿐 아니라 그 아래 빈 곳·음량 레인 위에서도 시간을 굴린다
@@ -599,6 +988,11 @@
     const y = (string: number) => TOP + (string - 1) * gap;
     const end = start + (width - LEFT) / pxPerWhole;
 
+    // 마디 번호 줄 (누르는 곳): 피아노롤 눈금자와 같은 바탕색과 아래 경계선
+    g.fillStyle = css("--bg");
+    g.fillRect(LEFT, 0, width - LEFT, TAB_RULER);
+    g.fillStyle = css("--line");
+    g.fillRect(LEFT, TAB_RULER - 1, width - LEFT, 1);
     // 마디선과 마디 번호
     g.font = '10px "D2Coding", ui-monospace, Consolas, monospace';
     for (const gl of gridLines(song.timeSig, start, end)) {
@@ -606,25 +1000,47 @@
       g.fillStyle = css("--line");
       g.fillRect(x(gl.at), 4, 1, y(tuning.strings.length) - 4);
       g.fillStyle = css("--muted");
-      g.fillText(String(gl.bar), x(gl.at) + 3, 12);
+      g.fillText(String(gl.bar), x(gl.at) + 3, TAB_RULER_BASELINE);
+    }
+    // 반복 구간 (끄는 중이면 그 범위): 타브 전체에 옅은 띠, 마디 번호 줄은 조금 진하게 (피아노롤과 같은 색)
+    const range = marking ? ([Math.min(...marking), Math.max(...marking)] as const) : loop;
+    if (range && range[1] > range[0]) {
+      const a = x(range[0]);
+      const b = x(range[1]);
+      g.fillStyle = "rgba(127,127,255,0.14)";
+      g.fillRect(a, 0, b - a, height);
+      g.fillRect(a, 0, b - a, TAB_RULER);
+    }
+    // 재생 위치: 피아노롤과 같은 점선
+    if (playCursor !== undefined && playCursor >= start - 0.01 && playCursor <= end) {
+      g.strokeStyle = css("--accent");
+      g.lineWidth = 1.5;
+      g.setLineDash([5, 4]);
+      g.beginPath();
+      g.moveTo(x(playCursor), 0);
+      g.lineTo(x(playCursor), height);
+      g.stroke();
+      g.setLineDash([]);
     }
 
-    // 변속: 템포·박자가 바뀌는 자리를 위쪽 둘째 줄에 글자로, 타브 전체에 점선으로.
-    // 글자 자리는 누를 때 찾을 수 있게 남긴다 (같은 자리에 템포와 박자가 함께 바뀌면 옆으로 이어 쓴다)
+    // 변속: 템포·박자가 바뀌는 자리와 마커를 위쪽 둘째 줄에 글자로, 타브 전체에 점선으로 (마커는 피아노롤과 같은 곡 데이터).
+    // 글자 자리는 누를 때 찾을 수 있게 남긴다 (같은 자리에 여럿이 있으면 옆으로 이어 쓴다)
     const visible = (at: Rat) => toFloat(at) >= start - 0.01 && toFloat(at) < end;
     const changes = [
       ...song.tempo.filter((e) => visible(e.at)).map((e) => ({ kind: "tempo" as const, at: e.at, text: `t${e.bpm}` })),
       ...song.timeSig.filter((e) => visible(e.at)).map((e) => ({ kind: "meter" as const, at: e.at, text: `${e.beats}/${e.unit}` })),
+      ...song.markers.filter((e) => visible(e.at)).map((e) => ({ kind: "marker" as const, at: e.at, text: tabMarkerText(e.label), id: e.id })),
     ];
     eventSpots = layoutTabEvents(changes, (at) => x(toFloat(at)), (text) => g.measureText(text).width);
+    const eventColor = { tempo: css("--ev-tempo"), meter: css("--ev-meter"), marker: css("--ev-marker") };
     for (const e of eventSpots) {
       const px = x(toFloat(e.at));
-      const color = css(e.kind === "tempo" ? "--ev-tempo" : "--ev-meter");
+      const color = eventColor[e.kind];
       g.strokeStyle = color;
       g.lineWidth = 1;
       g.setLineDash([3, 3]);
       g.beginPath();
-      g.moveTo(px + 0.5, 16);
+      g.moveTo(px + 0.5, TAB_EVENT_TEXT.top);
       g.lineTo(px + 0.5, y(tuning.strings.length));
       g.stroke();
       g.setLineDash([]);
@@ -683,7 +1099,8 @@
           j++;
         }
         const w = g.measureText(text).width + 4;
-        const left = x(first.t) - g.measureText(String(first.fret)).width / 2 - 2;
+        // 음이 시작하는 자리에서 오른쪽으로 쓴다 (마디 첫 음이 마디선·박자 글자와 겹치지 않게)
+        const left = fretBoxLeft(x(first.t));
         g.fillStyle = css("--panel");
         g.fillRect(left, y(string) - fontPx / 2 - 1, w, fontPx + 2);
         // 트랙 색 설정을 켰고 트랙이 둘 이상이면 숫자 칸을 그 트랙 색으로 옅게 칠하고, 고른 트랙이 아닌 숫자는 흐리게 쓴다
@@ -692,6 +1109,13 @@
         if (tint) {
           g.globalAlpha = 0.32;
           g.fillStyle = tint;
+          g.fillRect(left, y(string) - fontPx / 2 - 1, w, fontPx + 2);
+          g.globalAlpha = 1;
+        }
+        // 고른 음: 숫자 칸을 강조색으로 옅게 (트랙 색 위에 덧칠해 알아보게)
+        if (list.slice(i, j).some((p) => selected.has(p.id))) {
+          g.globalAlpha = 0.38;
+          g.fillStyle = css("--accent");
           g.fillRect(left, y(string) - fontPx / 2 - 1, w, fontPx + 2);
           g.globalAlpha = 1;
         }
@@ -706,8 +1130,9 @@
       if (t < start - 0.1 || t > end) continue;
       const missing = e.notes.filter((n) => !n.at).length;
       if (missing > 0) {
+        const marks = "×".repeat(missing);
         g.fillStyle = css("--danger");
-        g.fillText("×".repeat(missing), x(t), y(tuning.strings.length) + fontPx + 4);
+        g.fillText(marks, fretCenter(x(t), g.measureText(marks).width), y(tuning.strings.length) + fontPx + 4);
       }
     }
     // 이음·슬라이드: 숫자 사이에 표시 (다른 줄로 갈 수밖에 없는 슬라이드는 흐리게). 너무 붙은 것은 덩어리 글자로 이미 썼다
@@ -721,16 +1146,19 @@
         const x1 = x(toFloat(l.at));
         if (x1 < LEFT - 20 || x0 > width + 20 || x1 - x0 < tight) continue;
         const yy = y(a.string) - fontPx / 2 - 2;
-        g.beginPath();
-        g.moveTo(x0 + 2, yy);
-        g.quadraticCurveTo((x0 + x1) / 2, yy - 7, x1 - 2, yy);
-        g.stroke();
         const label = `(${a.fret})`;
         const w = g.measureText(label).width + 4;
+        // 앞 숫자 가운데에서 이어 울리는 자리의 (5) 칸 가운데까지
+        const from = fretCenter(x0, g.measureText(String(a.fret)).width);
+        const to = fretCenter(x1, w - 4);
+        g.beginPath();
+        g.moveTo(from + 2, yy);
+        g.quadraticCurveTo((from + to) / 2, yy - 7, to - 2, yy);
+        g.stroke();
         g.fillStyle = css("--panel");
-        g.fillRect(x1 - w / 2, y(a.string) - fontPx / 2 - 1, w, fontPx + 2);
+        g.fillRect(fretBoxLeft(x1), y(a.string) - fontPx / 2 - 1, w, fontPx + 2);
         g.fillStyle = css("--muted");
-        g.fillText(label, x1, y(a.string) + fontPx * 0.36);
+        g.fillText(label, to, y(a.string) + fontPx * 0.36);
       } else {
         if (grouped.has(l.to)) continue;
         const b = placed.get(l.to);
@@ -738,8 +1166,10 @@
         g.globalAlpha = a.string === b.string ? 1 : 0.4;
         const tilt = (l.up ? 1 : -1) * Math.max(4, fontPx * 0.35);
         g.beginPath();
-        g.moveTo(x(a.t) + fontPx * 0.7, y(a.string) + tilt);
-        g.lineTo(x(b.t) - fontPx * 0.7, y(b.string) - tilt);
+        // 앞 숫자 칸 오른쪽 끝에서 뒤 숫자 칸 왼쪽 끝까지
+        const wa = g.measureText(String(a.fret)).width;
+        g.moveTo(fretCenter(x(a.t), wa) + wa / 2 + 3, y(a.string) + tilt);
+        g.lineTo(fretBoxLeft(x(b.t)) - 1, y(b.string) - tilt);
         g.stroke();
         g.globalAlpha = 1;
       }
@@ -749,10 +1179,15 @@
 
     // 타브 커서: 그 줄·그 자리에 칸 표시
     if (cursor) {
-      const cx = x(toFloat(cursor.at));
+      // 숫자 칸(한 자리 숫자)을 감싸게 숫자와 같은 만큼 오른쪽으로
+      g.font = `${fontPx}px "D2Coding", ui-monospace, Consolas, monospace`;
+      // 왼쪽 끝은 숫자 칸 왼쪽(마디선을 덮지 않게), 가운데는 숫자 가운데
+      const at = x(toFloat(cursor.at));
+      const cx = fretCenter(at, g.measureText("0").width);
+      const left = fretBoxLeft(at);
       g.strokeStyle = css("--accent");
       g.lineWidth = 2;
-      g.strokeRect(cx - fontPx * 0.8, y(cursor.string) - fontPx * 0.7, fontPx * 1.6, fontPx * 1.4);
+      g.strokeRect(left, y(cursor.string) - fontPx * 0.7, Math.max((cx - left) * 2, fontPx * 1.2), fontPx * 1.4);
     }
 
     if (playhead !== undefined) {
@@ -768,10 +1203,10 @@
   <div class="canvas-wrap" bind:this={wrap} data-align={padOpen ? "top" : align} style:min-height={padOpen ? `min(${height}px, 45%)` : undefined}>
     <canvas
       bind:this={canvas}
-      class:event-hover={!!eventHover}
-      title={eventHover ? t(eventHover.kind === "tempo" ? "ui.tabTempoEdit" : "ui.tabMeterEdit") : undefined}
+      class:event-hover={!!eventHover || rulerHover}
+      title={rulerHover ? t("ui.tabRulerHelp") : eventHover ? (eventHover.kind === "marker" ? t("ui.tabMarkerEdit", { name: markerName(eventHover) }) : t(eventHover.kind === "tempo" ? "ui.tabTempoEdit" : "ui.tabMeterEdit")) : bandHover ? t("ui.tabEventAdd") : undefined}
       {ondblclick}
-      onpointerleave={() => (eventHover = undefined)} style:width="{width}px" style:height="{height}px" {onpointerdown} {onpointermove} {onpointerup} onpointercancel={onpointerup}></canvas>
+      onpointerleave={() => ((eventHover = undefined), (bandHover = false), (rulerHover = false))} style:width="{width}px" style:height="{height}px" {onpointerdown} {onpointermove} {onpointerup} onpointercancel={onpointerup}></canvas>
   </div>
   {#if laneHeight > 0 && !padOpen}
     <!-- 높이 손잡이: 위로 끌면 레인이 커진다 (얇은 띠에서 끌어도 크게 펼쳐진다) -->
@@ -812,8 +1247,8 @@
           <button title={t("ui.fretPadRight")} onclick={() => moveCursor("right")}><Icon name="chevron-right" /></button>
           <button title={t("ui.fretPadUp")} onclick={() => moveCursor("up")}><Icon name="chevron-up" /></button>
           <button title={t("ui.fretPadDown")} onclick={() => moveCursor("down")}><Icon name="chevron-down" /></button>
-          <button title={t("ui.fretPadTieHelp")} onclick={tieAtCursor}>{t("ui.fretPadTie")}</button>
-          <button onclick={deleteAtCursor}>{t("ui.fretPadDelete")}</button>
+          <button title={t("ui.fretPadTieHelp")} onclick={() => (ensureCursorVisible(), tieKey())}>{t("ui.fretPadTie")}</button>
+          <button onclick={() => (ensureCursorVisible(), deleteKey())}>{t("ui.fretPadDelete")}</button>
           <button class:on={padChord} aria-pressed={padChord} title={t("ui.fretPadChordHelp")} onclick={() => (padChord = !padChord)}>{t("ui.fretPadChord")}</button>
           <VolumeBox
             bind:value={volume}
@@ -825,12 +1260,14 @@
           />
           <label class="advance"><input type="checkbox" bind:checked={padAdvance} /> {t("ui.fretPadAdvance")}</label>
         </div>
+        <!-- 고르기: 옆으로 미는 줄 밖에 두어 좁은 화면에서도 늘 보인다 -->
+        <button class="select" class:on={selecting} aria-pressed={selecting} title={t("ui.fretPadSelectHelp")} onclick={toggleSelecting}>{t("ui.fretPadSelect")}</button>
         {#if noteLength !== undefined && onnotelength}
           <!-- 음 길이: 옆으로 미는 줄 밖에 두어 좁은 화면에서도 늘 보인다 -->
           <label class="length" title={t("ui.noteLengthHelp")}>
             {t("ui.noteLength")}
             <select value={noteLength} onchange={(e) => changeLength(e.currentTarget.value as NoteLength)}>
-              {#each NOTE_LENGTHS as l (l)}<option value={l}>{lengthLabel(l)}</option>{/each}
+              {#each noteLengths as l (l)}<option value={l}>{lengthLabel(l)}</option>{/each}
             </select>
           </label>
         {/if}
@@ -840,6 +1277,8 @@
         {#each Array.from({ length: tuning.maxFret + 1 }, (_, i) => i) as fret (fret)}
           <button onclick={() => padFret(fret)}>{fret}</button>
         {/each}
+        <!-- 점 붙이기·떼기: 0~10, 11~20 두 줄의 빈 칸(20 다음)에 둔다 -->
+        {#if ondot}<button class="dot" title={t("ui.dotToggleHelp")} aria-label={t("ui.dotToggle")} onclick={ondot}>.</button>{/if}
       </div>
     </div>
   {/if}
@@ -871,18 +1310,21 @@
         <button class="small" title={t("ui.laneCollapse")} onclick={() => saveVolumeLane({ state: "collapsed" })}>×</button>
       {/if}
     </span>
-    <span class="zoom">
-      <button class="small" title={t("ui.zoomOutTime")} onclick={() => zoomTime(1 / 1.25)}><Icon name="arrows-h" size={14} /><Icon name="minus" size={12} /></button>
-      <button class="small" title={t("ui.zoomInTime")} onclick={() => zoomTime(1.25)}><Icon name="arrows-h" size={14} /><Icon name="plus" size={12} /></button>
-      <button class="small" title={t("ui.tabSmaller")} onclick={() => setGap(gap - 3)}>A−</button>
-      <button class="small" title={t("ui.tabBigger")} onclick={() => setGap(gap + 3)}>A+</button>
-      <button
-        class="small tab-align"
-        title={t("ui.tabAlign", { now: t(ALIGN_LABEL[align]), next: t(ALIGN_LABEL[nextTabAlign(align)]) })}
-        aria-label={t("ui.tabAlign", { now: t(ALIGN_LABEL[align]), next: t(ALIGN_LABEL[nextTabAlign(align)]) })}
-        onclick={cycleAlign}>{ALIGN_ICON[align]}</button
-      >
-    </span>
+    <!-- 확대·타브 크기·지판 위치: 터치는 엄지가 닿는 여기, PC(마우스)는 피아노롤처럼 위 도구줄에 있다 -->
+    {#if coarsePointer}
+      <span class="zoom">
+        <button class="small" title={t("ui.zoomOutTime")} onclick={() => zoomTime(1 / 1.25)}><Icon name="arrows-h" size={14} /><Icon name="minus" size={12} /></button>
+        <button class="small" title={t("ui.zoomInTime")} onclick={() => zoomTime(1.25)}><Icon name="arrows-h" size={14} /><Icon name="plus" size={12} /></button>
+        <button class="small" title={t("ui.tabSmaller")} onclick={() => resizeTab(-1)}>A−</button>
+        <button class="small" title={t("ui.tabBigger")} onclick={() => resizeTab(1)}>A+</button>
+        <button
+          class="small tab-align"
+          title={t("ui.tabAlign", { now: t(TAB_ALIGN_LABEL[align]), next: t(TAB_ALIGN_LABEL[nextTabAlign(align)]) })}
+          aria-label={t("ui.tabAlign", { now: t(TAB_ALIGN_LABEL[align]), next: t(TAB_ALIGN_LABEL[nextTabAlign(align)]) })}
+          onclick={cycleAlign}>{TAB_ALIGN_ICON[align]}</button
+        >
+      </span>
+    {/if}
   </div>
 </div>
 
@@ -1008,7 +1450,14 @@
   .length select {
     min-height: 34px;
   }
-  .moves button.on {
+  .select {
+    flex: none;
+    min-height: 34px;
+    min-width: 44px;
+    padding-inline: 8px;
+  }
+  .moves button.on,
+  .select.on {
     background: var(--accent);
     border-color: var(--accent);
     color: #fff;
@@ -1021,6 +1470,10 @@
     line-height: 1;
   }
   /* 0~10, 11~20 두 줄: 폰 폭에서도 세 줄 이상 쌓이지 않는다 */
+  .frets .dot {
+    font-weight: 700;
+    font-size: 1.2em;
+  }
   .frets {
     display: grid;
     grid-template-columns: repeat(11, minmax(0, 1fr));

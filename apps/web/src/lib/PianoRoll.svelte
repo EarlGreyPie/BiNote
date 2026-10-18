@@ -1,6 +1,7 @@
 <script lang="ts">
   import {
     add,
+    scaleNotesIn,
     gridLines,
     MOBILE_PROFILE,
     PROFILES,
@@ -23,13 +24,15 @@
     type Rat,
     type Song,
   } from "@mmlce/core";
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
+  import Icon from "./Icon.svelte";
   import { fonts } from "./fonts.svelte";
   import { noteClipboard } from "./noteClipboard.svelte";
   import { rollFlow } from "./rollFlow.svelte";
   import { t } from "./i18n.svelte";
   import { drawRoll } from "./rollDraw";
   import type { CanonicalOf } from "./instrumentRange";
+  import { carryViewStart, type ViewMemory } from "./viewCarry";
   import { Pinch, pinchRatio, type PinchFrame } from "./pinch";
   import { wholeToSecondsFn, type Peaks } from "./waveform";
   import type { NoteLook } from "./appearance";
@@ -124,6 +127,12 @@
     lightKeys?: boolean;
     /** 번호로만 아는 악기의 실제 악기 (올린 팩이 바뀌면 새 함수를 넘겨 다시 그린다) */
     canonicalOf?: CanonicalOf | undefined;
+    /** 보기를 바꾸기 전에 보던 자리와 지난번 롤 확대 (만들 때 한 번만 읽는다) */
+    memory?: ViewMemory | undefined;
+    /** 보던 자리·확대가 바뀔 때 (보기를 바꿨다 돌아와도 이어 보게 앱이 기억한다) */
+    onmemory?: ((place: NonNullable<ViewMemory["place"]>, zoom: NonNullable<ViewMemory["roll"]>, work: number | undefined) => void) | undefined;
+    /** 이 보기를 만든 보기 세대(곡을 열 때마다 늘어나는 번호). 만들 때 한 번 읽어 onmemory에 함께 돌려준다 (곡을 연 뒤 옛 보기의 알림을 앱이 버리게) */
+    work?: number | undefined;
     /** 롤에 그릴 트랙 id. 없으면 곡의 모든 트랙. 고른 트랙은 항상 그린다 */
     visibleTrackIds?: readonly string[] | undefined;
     /** 고르기 도구에서 음을 끌어 옮길 수 있는지 (자물쇠 풀림). 길이 바꾸기·음 넣기는 여전히 안 한다 */
@@ -136,7 +145,8 @@
      * 이벤트 줄에서 템포·마커·박자를 고치려 할 때 (두 번 누르기·길게 누르기·오른쪽 클릭).
      * label이 있으면 그 라벨을 고치고, 없으면 kind를 at에 새로 넣는다
      */
-    onevent?: (request: { label?: EventLabel; kind: EventKind; at: Rat }) => void;
+    /** 템포·마커 창 열기. work는 이 보기를 만든 보기 세대 (곡을 다시 연 뒤 옛 보기가 늦게 보낸 요청을 앱이 버리게) */
+    onevent?: (request: { label?: EventLabel; kind: EventKind; at: Rat; work?: number | undefined }) => void;
     /** 이벤트 라벨을 끌어 옮겼을 때 (템포·마커만) */
     oneventmove?: (label: EventLabel, to: Rat) => void;
     /** 원곡 파형 띠에서 마디선을 끌어 놓았을 때: 그 마디(bar)가 곡 위치 to(지금 템포로, 파형의 그 박 자리)에 오게 */
@@ -157,7 +167,7 @@
     onclearlane?: () => void;
   }
 
-  let { cursor, loop, oncursor, onloop, song: fullSong, activeTrackId, orientation, division, playhead, onnotes, onselecttrack, onpicknote, onpreview, onseek, showEvents = false, video = $bindable(), videoPlay = $bindable(false), pitchRange = [12, 119], wave, look, themeKey = "", seconds, colors, tool = "pen", noteDur, volume, onvolume, lightKeys = false, canonicalOf, visibleTrackIds, selectMove = false, locked, pickOthers = true, onevent, oneventmove, onalignbar, onwaveoffset, pickedEvent, onpickevent, ontempowheel, laneTrackIds, melodyIds, onvolumes, onclearlane }: Props =
+  let { cursor, loop, oncursor, onloop, song: fullSong, activeTrackId, orientation, division, playhead, onnotes, onselecttrack, onpicknote, onpreview, onseek, showEvents = false, video = $bindable(), videoPlay = $bindable(false), pitchRange = [12, 119], wave, look, themeKey = "", seconds, colors, tool = "pen", noteDur, volume, onvolume, lightKeys = false, canonicalOf, memory, onmemory, work, visibleTrackIds, selectMove = false, locked, pickOthers = true, onevent, oneventmove, onalignbar, onwaveoffset, pickedEvent, onpickevent, ontempowheel, laneTrackIds, melodyIds, onvolumes, onclearlane }: Props =
     $props();
 
   /** 레이어: 고른 트랙이 든 보기만 그리고 다루는 곡 (나머지 트랙은 롤에서 보이지도 눌리지도 않는다) */
@@ -221,10 +231,13 @@
   let width = $state(600);
   let height = $state(320);
 
-  let start = $state(0);
-  let pxPerWhole = $state(160);
-  let pxPerKey = $state(12);
-  let edgePitch = $state(84);
+  // 보기를 바꾸기 전 자리에서 시작한다 (만들 때 한 번만 읽는다). 시작 시간은 화면 크기를 안 뒤 재생 위치가 보이게 다시 맞춘다
+  const carry = untrack(() => ({ place: memory?.place, zoom: memory?.roll, cursor, work }));
+  let carryPending = !!carry.place;
+  let start = $state(carry.place?.start ?? 0);
+  let pxPerWhole = $state(carry.zoom?.pxPerWhole ?? 160);
+  let pxPerKey = $state(carry.zoom?.pxPerKey ?? 12);
+  let edgePitch = $state(carry.zoom?.edgePitch ?? 84);
   /** 고른 음 id. 고른 트랙의 음만 쓴다 (다른 트랙 id는 걸러진다) */
   let selected = $state.raw<ReadonlySet<string>>(new Set());
   /** Ctrl+끌기로 그리는 고르기 상자 (시간·높이) */
@@ -281,6 +294,18 @@
     if (volumeLane.state === "expanded") size = Math.max(LANE_MIN, Math.min(size, laneRoom()));
     return size + LANE_GUTTER;
   });
+  /**
+   * 확대 단추 자리. 가로 롤은 오른쪽 아래(음 높이 스크롤바 왼쪽, 시간 스크롤바 위), 세로 롤은 건반 띠 위 오른쪽(시간 스크롤바 왼쪽).
+   * 음량 레인이 열려 있으면 레인과 높이 손잡이(레인 끝 ±6px) 바깥으로 비킨다
+   */
+  const zoomCornerStyle = $derived(
+    orientation === "horizontal"
+      ? `right:20px;bottom:${laneReserved > 0 ? laneReserved + 10 : 20}px`
+      : `right:${laneReserved > 0 ? laneReserved + 10 : 20}px;bottom:${KEYBOARD + 4}px`,
+  );
+  /** 롤이 아주 좁으면(작은 휴대폰 세로 롤 등) 건반 높이 −/+는 접는다 (도구줄·더 보기 메뉴에 그대로 있다) */
+  const cornerNarrow = $derived((orientation === "horizontal" ? width - KEYBOARD : width - laneReserved) < 260);
+
   /** 이 화면에서 레인이 가질 수 있는 가장 큰 두께 */
   function laneRoom(): number {
     return Math.min(LANE_MAX, (orientation === "horizontal" ? height : width) - LANE_GUTTER - 120);
@@ -457,14 +482,23 @@
     saveVolumeLane({ state: volumeLane.state, size: volumeLane.size });
   }
 
-  // 방향을 바꾸면 음 축의 기준을 그 방향에 맞는 자리로 옮긴다
-  let lastOrientation: Orientation | undefined;
+  // 방향을 바꾸면 음 축의 기준을 그 방향에 맞는 자리로 옮긴다. 실제로 바뀔 때만
+  // (기억한 확대로 다시 만들었으면 그때 방향에서 시작해, 같은 방향이면 기억한 음 자리를 덮지 않는다)
+  let lastOrientation: Orientation | undefined = carry.zoom?.orientation;
   $effect(() => {
     if (orientation === lastOrientation) return;
     lastOrientation = orientation;
     edgePitch = orientation === "horizontal" ? 84 : 36;
     // 떨어지는 음 영상은 세로 롤에서 본다: 세로로 바꾸면 롤을 영상 건반에 맞춘다
     if (orientation === "vertical" && video?.fit && videoSize) fitVideo();
+  });
+
+  // 보던 자리·확대를 앱에 알린다 (휠·스크롤바·확대·따라가기·reveal·fitAll 등 어느 길로 바뀌어도)
+  $effect(() => {
+    const [from, to] = visibleTime(view);
+    const place = { start, span: to - from };
+    const zoom = { pxPerWhole, pxPerKey, edgePitch, orientation };
+    untrack(() => onmemory?.(place, zoom, carry.work));
   });
 
   // 재생 위치가 화면 밖으로 나가면 따라간다
@@ -484,6 +518,12 @@
       if (!entry) return;
       width = Math.max(100, Math.floor(entry.contentRect.width));
       height = Math.max(100, Math.floor(entry.contentRect.height));
+      // 처음 크기를 알았을 때: 앞 보기에서 보이던 재생 위치가 이 화면에서도 보이게
+      if (carryPending) {
+        carryPending = false;
+        const [from, to] = visibleTime(view);
+        start = carryViewStart(carry.place, to - from, carry.cursor);
+      }
     });
     observer.observe(host);
     // 휠로 화면을 움직일 때 페이지가 같이 스크롤되지 않게 (passive가 아닌 리스너가 필요)
@@ -491,6 +531,8 @@
     return () => {
       observer.disconnect();
       canvas.removeEventListener("wheel", onwheel);
+      // 사라질 때(곡을 다시 열거나 타브로 바꿀 때) 이벤트 줄 길게 누르기 타이머를 지운다 (옛 곡 자리로 창이 열리지 않게)
+      endEventPress();
     };
   });
 
@@ -570,7 +612,7 @@
   }
 
   function openEvent(label: EventLabel | undefined, row: 0 | 1, at: number) {
-    onevent?.(label ? { label, kind: label.kind, at: label.at } : { kind: row === 0 ? "tempo" : "marker", at: snapNearest(at, division) });
+    onevent?.(label ? { label, kind: label.kind, at: label.at, work: carry.work } : { kind: row === 0 ? "tempo" : "marker", at: snapNearest(at, division), work: carry.work });
   }
 
   // 파형 띠에서 마디선 끌기: 놓은 자리의 원곡 박에 그 마디가 오도록 템포를 맞춘다
@@ -1170,6 +1212,13 @@
     return true;
   }
 
+  /** 고른 트랙에서 이 id의 음들을 고른다 (슬라이드 적용 뒤 만든 사슬을 바로 다시 고칠 수 있게) */
+  export function selectIds(ids: readonly string[]): void {
+    if (!active) return;
+    const own = new Set(active.notes.map((n) => n.id));
+    selected = new Set(ids.filter((id) => own.has(id)));
+  }
+
   /** 고른 트랙에서 고른 음들 (시작 순) */
   export function selection(): readonly Note[] {
     return selectedNotes;
@@ -1209,6 +1258,18 @@
     if (!active || activeLocked) return false;
     const target = active.notes.find((n) => cmp(n.start, at) < 0 && cmp(at, add(n.start, n.dur)) < 0);
     return target ? splitNoteAt(target.id, at) : false;
+  }
+
+  /**
+   * 고른 음 길이 ×factor (첫 음 시작 기준으로 리듬 모양을 지킨다). 고르지 않은 음은 지우거나 줄이지 않는다:
+   * 그 음 앞까지만 늘리고, 늘릴 자리가 없으면 바꾸지 않고 false
+   */
+  export function scaleSelected(factor: Rat, label: string): boolean {
+    if (!active || selectedNotes.length === 0) return false;
+    const scaled = scaleNotesIn(active.notes, selectedNotes, factor);
+    if (!scaled) return false;
+    const byId = new Map(scaled.map((n) => [n.id, n]));
+    return editSelected((n) => byId.get(n.id) ?? n, label);
   }
 
   /** 고른 음 가운데 높이가 같고 맞닿은 음을 한 음으로 붙인다. 붙일 것이 없으면 false */
@@ -1534,6 +1595,24 @@
     oninput={(e) => (start = Number(e.currentTarget.value))}
     onpointerdown={(e) => e.stopPropagation()}
   />
+  <!-- 확대·축소 단추: 롤 안 시간 스크롤바 끝 모서리 (도구줄이 좁아 건반 높이가 메뉴로 들어가도 바로 누르게). 레인이 열려 있으면 그 위로 -->
+  <div class="zoom-corner" style={zoomCornerStyle} role="group" aria-label={t("ui.fitAll")} onpointerdown={(e) => e.stopPropagation()}>
+    <button class="icon" title={t("ui.fitAllHelp")} aria-label={t("ui.fitAll")} onclick={fitAll}><Icon name="maximize" size={14} /></button>
+    <button class="icon" title={t("ui.zoomTimeOut")} aria-label={t("ui.zoomTimeOut")} onclick={() => zoom("time", 1 / 1.25)}>
+      <Icon name="arrows-h" size={14} /><Icon name="minus" size={12} />
+    </button>
+    <button class="icon" title={t("ui.zoomTimeIn")} aria-label={t("ui.zoomTimeIn")} onclick={() => zoom("time", 1.25)}>
+      <Icon name="arrows-h" size={14} /><Icon name="plus" size={12} />
+    </button>
+    {#if !cornerNarrow}
+      <button class="icon" title={t("ui.zoomPitchOut")} aria-label={t("ui.zoomPitchOut")} onclick={() => zoom("pitch", 1 / 1.25)}>
+        <Icon name="arrows-v" size={14} /><Icon name="minus" size={12} />
+      </button>
+      <button class="icon" title={t("ui.zoomPitchIn")} aria-label={t("ui.zoomPitchIn")} onclick={() => zoom("pitch", 1.25)}>
+        <Icon name="arrows-v" size={14} /><Icon name="plus" size={12} />
+      </button>
+    {/if}
+  </div>
 </div>
 <style>
   /* 지우개 모드: 마우스 모양으로도 알 수 있게 */
@@ -1591,6 +1670,25 @@
     right: 20px;
     top: 2px;
     height: 14px;
+  }
+
+  /* 확대·축소 단추: 스크롤바처럼 평소 옅게, 올리면 진하게. 터치로도 누르게 28px */
+  .zoom-corner {
+    position: absolute;
+    z-index: 3;
+    display: flex;
+    gap: 2px;
+    opacity: 0.55;
+  }
+  .zoom-corner:hover,
+  .zoom-corner:focus-within {
+    opacity: 1;
+  }
+  .zoom-corner button {
+    min-width: 28px;
+    height: 28px;
+    padding: 0 4px;
+    gap: 1px;
   }
 
   /* 음량 레인 단추: 건반 띠와 레인이 만나는 모서리 */

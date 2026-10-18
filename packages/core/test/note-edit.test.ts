@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyVolumes, voiceRanks, clipNotes, rampVolumes, volumeBars, glueNotes, noteAt, noteBefore, pasteClip, placeNote, rat, scaleNotes, scaleNotesIn, removeNotes, splitNote, replaceNotes, toggleTie, transposeNotes, updateNote, type Note } from "../src/index.js";
+import { applyVolumes, voiceRanks, clipLayers, clipNotes, clipOverlaps, rampVolumes, volumeBars, glueNotes, noteAt, noteBefore, pasteClip, placeNote, rat, scaleNotes, scaleNotesIn, removeNotes, splitNote, replaceNotes, toggleTie, transposeNotes, updateNote, type Note } from "../src/index.js";
 
 const note = (id: string, start: number, dur: number, pitch = 60, tie: Note["tie"] = "none"): Note => ({
   id,
@@ -317,5 +317,35 @@ describe("고른 음만 길이 ×2·½ (고르지 않은 음은 지우거나 줄
     expect(apply([note("c", 0, 2), note("d", 2, 2)], ["c"], rat(1, 2))).toEqual(["c:0/1+1/8", "d:1/4+1/4"]);
     // a(0)·c(1/2)를 골라 ½ → c가 1/4로 와서 고르지 않은 b(1/4) 자리와 겹친다
     expect(apply([note("a", 0, 2), note("b", 2, 2), note("c", 4, 2)], ["a", "c"], rat(1, 2))).toBeUndefined();
+  });
+});
+
+describe("여러 트랙 복사 (타브)", () => {
+  it("층마다 같은 기준으로 옮기고 트랙 순서를 지킨다", () => {
+    const clip = clipLayers([[note("a", 2, 2, 64)], [], [note("b", 4, 2, 60), note("c", 6, 2, 60, "next")]])!;
+    expect(clip.origin).toEqual(rat(1, 4));
+    expect(clip.length).toEqual(rat(3, 4));
+    expect(clip.layers!.map((l) => shape([...l]))).toEqual([["a:0/1+1/4"], ["b:1/4+1/4", "c:1/2+1/4"]]);
+    // 짝 없이 남은 &는 푼다 (clipNotes와 같음)
+    expect(clip.layers![1]![1]!.tie).toBe("none");
+    expect(shape([...clip.notes])).toEqual(["a:0/1+1/4", "b:1/4+1/4", "c:1/2+1/4"]);
+  });
+
+  it("층이 하나면 clipNotes와 같고 layers가 없다", () => {
+    const one = [note("a", 2, 2), note("b", 4, 2)];
+    expect(clipLayers([[], one])).toEqual(clipNotes(one));
+    expect(clipLayers([[], []])).toBeUndefined();
+  });
+
+  it("층을 한 트랙에 모으면 겹치는지", () => {
+    expect(clipOverlaps(clipLayers([[note("a", 0, 2)], [note("b", 0, 2, 64)]])!)).toBe(true);
+    // 긴 음이 뒤의 떨어진 음과 겹치는 경우도 찾는다
+    expect(clipOverlaps(clipLayers([[note("a", 0, 8)], [note("b", 1, 1, 64), note("c", 4, 1, 64)]])!)).toBe(true);
+    expect(clipOverlaps(clipLayers([[note("a", 0, 2)], [note("b", 2, 2, 64)]])!)).toBe(false);
+  });
+
+  it("길이 ×2의 기준을 주면 트랙마다 같은 기준으로 벌린다", () => {
+    expect(shape(scaleNotes([note("b", 4, 2)], rat(2), rat(0)))).toEqual(["b:1/1+1/2"]);
+    expect(shape(scaleNotes([note("b", 4, 2)], rat(2)))).toEqual(["b:1/2+1/2"]);
   });
 });

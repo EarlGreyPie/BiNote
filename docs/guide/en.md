@@ -103,7 +103,7 @@ Game limits:
 - **Music box and gramophone** take 3 tracks per score. For 6-note chords, split into two 3-track scores and play them at the same time (each paste holds all 6 tracks in a different order: the game plays only the first 3, but takes length and tempo from all 6, so the boxes stay in sync). Tracks with their own instrument can't stay in a music box score and move to a new score
 - **2400 characters** per track
 - **Tempo is read separately for each score.** That is why BiNote writes the tempo into every score when you put a song in the game
-- Tempo t32–t255, note length 1–64 (up to one dot), volume v0–v15 (v0 is silent)
+- Tempo t32–t255, note length 1–64 (up to one dot; the dot works even on the 64th, so `64.` = 3/128 is allowed), volume v0–v15 (v0 is silent)
 - Each instrument has a fixed range of pitches it can sound. Notes outside it raise no error; they are moved by octaves into the range. This guide calls this **range folding**
 - In a score book, there is a gap of about 1 second when moving to the next score
 
@@ -125,7 +125,7 @@ These limits are BiNote's current check values, measured on the Korean server (a
 | Menu | Contents |
 |---|---|
 | File | New score, Open score, Paste MML@, Restore recent work, saving (3MLE, project, MabiIcco, MIDI, WAV), Put in game, Add sound pack, Connect MIDI keyboard |
-| Edit | Undo and Redo, Select all, delete, Cut, Copy, paste, Length ×2 and ½, Transpose, Split / merge tracks |
+| Edit | Undo and Redo, Select all, delete, Cut, Copy, paste, Length ×2 and ½, Arpeggio, Slide, Transpose, Split / merge tracks |
 | Song | Change time signature, Tap tempo, Clear tempos, Change all tempos, Copy tempo to every score, Add track and Add score, Distribute chords, Merge chords, Shrink MML, Split into score books |
 | View | Piano roll/Tab, Panel below/beside, Side by side, Editors, Vertical roll, Events, Note list, Light keys while playing, Mark stop position in MML, Track colors, MML keypad, Tab fret pad, Shortcuts |
 
@@ -169,6 +169,7 @@ Changes made in the piano roll, the MML editor and the tab all apply to the same
 - **Layer**: draws only the Selected track, the same Score, or All tracks in the roll. Notes of other tracks appear faded; with "Click other tracks' notes to switch" on, clicking one switches to that track.
 - Clicking a note highlights its place in the MML text; double-clicking lets you type there right away.
 - Moving around: wheel (time) · Shift+wheel (pitch) · Ctrl+wheel (zoom time) · Ctrl+Shift+wheel (key height) · Fit all button
+- The buttons in the lower-right corner of the roll also zoom (time −/+, key height −/+) and fit all (in the vertical roll, at the right just above the keyboard strip). They stay faint until you hover them; on a very narrow screen, use key height −/+ from the toolbar or the ⋯ menu
 - **Vertical roll**: for tracing falling-note videos Set Settings → Display → **Roll during playback** to **Scroll continuously** and notes keep falling onto the keyboard while playing (for recording vertical videos).
 
 ### MML editor
@@ -195,16 +196,25 @@ Write MML directly. Your edits show up in the piano roll and in playback. If the
 Switch with the Piano roll/Tab button (Alt+T). The tab gathers the tracks of the selected score and picks strings and frets automatically.
 
 - Click on a string to place the cursor, then **type the fret number** (two digits in a row), move with the arrow keys, delete with Delete
+- When the cursor moved by keyboard or the fret pad goes off screen, the view scrolls with it (turn this on or off with View → **Follow cursor**; on by default)
+- Click the **bar number row** at the top to play from that spot (while playing, playback continues from there; clicking the play position again clears it), or drag it to set a loop, as in the piano roll (on touch, drag with a finger). The play position and loop are shared with the piano roll, so they stay when you switch views. Assign a key to **Move play position to the edit cursor** in the key settings to move the play position to the tab cursor (no key by default)
 - `+` / `-`: double / halve the cursor note (also sets the new-note length). On the fret pad, changing **New note** also changes the note at the cursor. Lengthening stops at the next note in the same track
+- `.`: add or remove a dot on the selected notes, or with nothing selected on the cursor note (for a held note, the one at the cursor), e.g. quarter ↔ dotted quarter. With no cursor note either, it applies to the new-note length. The fret pad has a **.** button next to 20
 - Typing a fret over an existing note changes only its pitch, not its length
 - `L`: tie to the note right after with & · `(5)` held · `5/7` slide. If nothing follows, adds the same pitch for the new-note length, tied (an eighth + L rings as a quarter)
 - Chord notes at the same spot go into free tracks of the same score
 - You can choose a tuning (Standard, Drop D, DADGAD, Baritone and more) and a capo
-- Use `A−` / `A+` at the right of the toolbar to change the tab size (string spacing and text), and the **fretboard position** button next to them (⤒ / ↕ / ⤓) to place the fretboard at the top, middle, or bottom of the area when there is spare height. Each click goes top → middle → bottom (middle by default), and the choice is remembered in this browser. While the fret pad is open, the fretboard always sits at the top
+- On a PC (mouse) the zoom buttons are in the top toolbar (after Input v), as in the piano roll; on touch screens they are in the strip below the tab (next to the time scroll bar). Horizontal −/+ zooms time, and **Fit all** in the PC toolbar fits the whole song on screen (when the toolbar is narrow, `A−` / `A+` and the fretboard position are in the ⋯ menu)
+- Use `A−` / `A+` to change the tab size (string spacing and text), and the **fretboard position** button next to them (⤒ / ↕ / ⤓) to place the fretboard at the top, middle, or bottom of the area when there is spare height. Each click goes top → middle → bottom (middle by default), and the choice is remembered in this browser. While the fret pad is open, the fretboard always sits at the top
 - With several tracks, each number is tinted with its track color and numbers from other tracks are dimmed (turn off in Settings → Display → Track colors on tab numbers)
 - On touch, use the **Fret pad**. Pick the length of new notes in **New note** at the top of the pad (Grid / l4 / l8 / triplets…, the same setting as New note in the toolbar). With "Advance after entering" on, the cursor moves on by that length
 - Turn on View → **Tab fret pad** to open the fret pad when you click the fretboard with a mouse too (when off, only touch and pen open it). The setting is remembered in this browser
-- **Double-click** the tempo/time signature row at the top (long-press on touch or pen) to add a tempo there; on a tempo label it edits that tempo, and on a time signature label it edits the time signature. `Alt+B` works too (at the tab cursor, otherwise the edit cursor or the start of the song)
+- **Double-click** the tempo/time signature row at the top (long-press on touch or pen) to add a tempo there (in the dialog opened on an empty spot, switch the kind to **Meter** to add a time signature from that bar); on a tempo label it edits that tempo, and on a time signature label it edits the time signature. `Alt+B` works too (at the tab cursor, otherwise the edit cursor or the start of the song). Hovering over an empty spot shows this hint
+- The toolbar **Meter** field also changes the time signature from the bar containing the tab cursor (with no tab cursor, the play cursor's bar or the start of the song)
+- Markers added in the piano roll show in the same row (a song has one set of markers, shared by both views). **Double-click** a marker label (long-press on touch or pen) to open the marker dialog and rename or delete it. Long names show only their first 12 characters followed by …; hover to see the full name
+- **Selecting notes**: `Shift+←/→` widens or narrows a time range from the cursor slot and selects every note that starts inside it, on any string or track (a whole vertical column). With the mouse, `Shift`+click (from the cursor to the clicked slot) or `Shift`+drag; `Ctrl+A` selects all notes of the tracks shown in the tab. On touch, turn on **Select** in the fret pad and tap the fretboard to widen the range (tap it again or press Esc to turn it off). Selected numbers are lightly tinted with the accent color; a click without `Shift`, the arrow keys or Esc clear the selection. While notes are selected, `Shift+↑/↓` moves them up or down an octave as in the piano roll and keeps the selection so you can press it again (or whatever keys you set for the octave commands)
+- The Edit menu and shortcuts work on selected notes as in the piano roll: delete (Delete), cut, copy, paste, length ×2/½ (`+`/`-`; lengthening stops before the next unselected note), octave and volume up/down, tie (`L`), split (Alt+S, at the tab cursor) and glue (Alt+G). If an octave change makes a note unplayable on its string, the string is chosen again. With nothing selected, Delete, `L` and `+`/`-` act on the cursor note as before. Locked tracks are not changed and you are told
+- **Copying and pasting chords**: copying in the tab keeps the split across tracks; pasting in the tab starts at the tab cursor (otherwise the original position) and puts the first layer in the first track, the next layer in the next track, and so on. If a track already has overlapping notes, a free track is used, and tracks are added up to the score's track limit if needed. If even one layer does not fit within the limit, nothing is pasted and you are told. Pasting overlapping chord notes into the piano roll is refused with a message (one track holds one note at a time)
 
 ### MIDI keys
 
@@ -228,11 +238,20 @@ Turn on File menu → **Connect MIDI keyboard** and connect a MIDI keyboard to u
 | Volume up / down | Alt+↑ / Alt+↓, Alt+wheel |
 | Set volume directly | Alt+digit (6–9 → v6–9, 0 → v10, 1–5 → v11–15, Alt+\` → v0, Alt+Shift+0–5 → v0–5) |
 | Length ×2 / ½ | Ctrl+] / Ctrl+[, + / - (numpad +/− too). With no notes selected, doubles / halves the new-note length (toolbar length picker). Notes you didn't select are never removed; a note is lengthened only up to the next one |
+| Add/remove dot | `.` (numpad `.` too). Adds or removes a dot on the selected notes (quarter ↔ dotted quarter); with nothing selected, on the new-note length. Lengths that cannot be one token, such as triplets or tied lengths, are left as they are. Lengthening stops before the next unselected note, as with length ×2 |
 | Exact length | Type an MML length (8, 8., 16..) or a fraction into the selected-note box in the status bar and press Enter. Fractions are in whole notes, so `1/7` is one seventh of a whole note. Any fraction can be used while editing, but when putting the song in the game it is written as a combination of lengths 1–64 (up to one dot), and you get a warning if it cannot be written exactly |
 | Tie / untie | Alt+L |
 | Split | Scissors tool, or Alt+S at the play cursor |
 | Glue | Alt+G (makes touching notes of the same pitch one note for editing; different from tying with &) |
 | Copy / cut / paste | Ctrl+C / Ctrl+X / Ctrl+V (pastes at the play cursor) |
+
+**Arpeggio** (Edit menu): select notes in the piano roll and open it to spread their chords out in order. **Spread on one track** places the chord notes one after another on the selected track (chord-track notes can be removed or kept); **Roll up across tracks** starts each note a little later and holds it to the end of the chord, rotating through the score's tracks (adding tracks within the track limit if needed). Chord notes come from notes starting together / selected notes only / a chord name (Major, Minor, 7, M7, m7, sus4, sus2, dim, aug, add9), and you pick the order (up, down, up and down, random), note length, octave span (1–3), and repeat. Check the preview and apply; one undo reverts it. For notes starting together, the chord lasts until the latest-ending chord note, so a long bass note is not cut short.
+
+- A **rolled chord** (the wavy line in guitar music) is **Roll up across tracks + 64th + octave span 1 + repeat off**. In that case no new notes are made: the original chord notes stay in place (same track, volume and tab string) and only their starts are delayed in order, each keeping its original end. **Up = low notes first** (from the guitar's 6th string), Down = high notes first. Notes too short to delay are left as they are.
+- With octave span 2 or more, or repeat on, rolling up makes new notes, but notes of the same pitch keep the original note's track, volume and tab string, and a chord whose original notes would be shortened is skipped with a message.
+- It also works in the **tab view**: the notes selected in the tab, otherwise the **chord at the tab cursor** (notes of the same score starting there).
+
+**Slide** (Edit menu): makes a guitar-like slide. **Between two notes** fills two adjacent notes with short in-between notes a semitone apart; **Slide in / Slide out** starts a note a few semitones below (or above) or falls off at its end. The notes are joined with `&`, so the pitch changes without re-striking. Pick the slide length and step length (Auto splits it to fit the game's shortest note length and skips semitones if needed). Places more than 24 semitones from the first note of the chain are not made, and you are warned when a long upward slide may cut off at the end of the sample. Each in-between note adds a few characters, so check the character count in the dialog.
 
 ### Whole-song editing
 
@@ -259,7 +278,7 @@ Two rows above the roll show tempo, meter and markers. They are on from the star
 
 ### Time signature
 
-Song → Change time signature. The change starts from the bar containing the play cursor (or from the start of the song if there is no cursor). 6/8, 9/8 and 12/8 show three eighth notes as one beat.
+Song → Change time signature (the toolbar **Meter** field works the same). The change starts from the bar containing the play cursor (or from the start of the song if there is no cursor). In the tab view it starts from the bar containing the tab cursor. 6/8, 9/8 and 12/8 show three eighth notes as one beat.
 
 ### Tap tempo
 
@@ -418,7 +437,8 @@ Importing MIDI does not copy the original exactly. Notes beyond the chord count 
 Set this in Settings → **Saving**.
 
 - Chrome and Edge on a PC: the default is **Choose folder and name each time**. As when opening a file, a save dialog opens so you pick the folder and file name, and the next save starts in the folder you used last. For a WAV, press the **Save** button that appears once it is rendered.
-- Chrome and Edge on a PC: pick **Save straight to a set folder** and choose a folder, and every saved file goes there without asking. A file with the same name is overwritten. After the browser restarts, the first save may ask you to allow the folder again. Pick **Downloads folder** to save through browser downloads.
+- With this setting, once you save a project (.mme) (or open a project with **Open score**), the next save (Ctrl+S) writes straight to the same file without a dialog. For an opened file, the first save asks once for permission to write. To save to a new file, pick File → **Save as…** (you can give it a shortcut in the key settings). If the file was moved or deleted and cannot be written, the save dialog opens again. On iPad and Safari, browser limits mean every save goes through the share sheet or downloads.
+- Chrome and Edge on a PC: pick **Save straight to a set folder** and choose a folder, and every saved file goes there without asking. A file with the same name is overwritten, except that an unnamed new song is saved under a new name such as `new project 2` and keeps that name for later saves. After the browser restarts, the first save may ask you to allow the folder again. Pick **Downloads folder** to save through browser downloads.
 - iPad and iPhone: with **Save through the share sheet** (on by default), saving opens the share sheet. Use "Save to Files" to pick a folder, or send the file straight to an app such as Google Drive.
 - Other browsers (Firefox and so on) save to the Downloads folder.
 
@@ -478,15 +498,16 @@ While typing in the MML editor, only Ctrl/Alt combinations and F keys work as sh
 | | F5 | Play |
 | | Esc | Stop |
 | Edit | Ctrl+Z / Ctrl+Y | Undo / Redo |
-| | Ctrl+A | Select all notes in the current track |
+| | Ctrl+A | Select all notes in the current track (in the tab, all tracks shown) |
 | | Ctrl+C / X / V | Copy / cut / paste |
 | | Delete, Backspace | Delete selected notes |
 | | Ctrl+] / Ctrl+[, + / - | Length ×2 / ½ (new-note length when nothing is selected) |
+| | . | Add / remove dot (new-note length when nothing is selected) |
 | | Alt+P | Transpose |
 | Note | Shift+↑ / ↓ | Octave up / down |
 | | Alt+↑ / ↓ | Volume up / down |
 | | Alt+L | Tie or untie to the next note with & |
-| | Alt+S | Split at the play cursor |
+| | Alt+S | Split at the play cursor (in the tab, at the tab cursor) |
 | | Alt+G | Glue touching notes of the same pitch |
 | Events | Alt+B | Add or edit a tempo |
 | | Alt+M | Add a marker |

@@ -1,4 +1,4 @@
-import { cmp, type Song } from "@mmlce/core";
+import { cmp, getProfile, type Song } from "@mmlce/core";
 import { mmlAt, pasteTrackIds, scoreChunks, type ScoreChunk } from "./clipboard.js";
 import { sameSound } from "./compare.js";
 import { parseTrackText, trackSource } from "./edit.js";
@@ -32,8 +32,11 @@ export function gameScores(
   maxChords: number | ((playerId: string) => number),
   /** 게임 악보 하나의 트랙 한도 (profile.maxChordsPerPlayer). 주면 오르골·축음기 악보에 나머지 트랙을 붙인다 */
   pasteLimit?: number,
+  /** 트랙당 글자 한도 (profile.charLimitPerScore). 주면 끝 채움을 붙인 뒤에도 한도 안인 글에 먼저 붙인다 */
+  charLimit?: number,
 ): GameScore[] {
   const moved = new Map<string, TempoMove[]>();
+  const lengths = getProfile(song.meta.profileId).length;
   const placed = placeTempoByScore(song, maxChords, moved);
   const chunks = scoreChunks(song, maxChords);
   /** 트랙마다 쓴 글. 출력기로 정확히 쓸 수 없으면 화면의 글 그대로 (asIs) */
@@ -41,14 +44,14 @@ export function gameScores(
   for (const id of chunks.flatMap((c) => c.trackIds)) {
     const t = song.tracks.find((x) => x.id === id)!;
     const notes = [...t.notes].sort((a, b) => cmp(a.start, b.start));
-    const text = optimizeMml(notes, { tempo: placed.get(t.id) ?? [] }).text;
+    const text = optimizeMml(notes, { tempo: placed.get(t.id) ?? [], lengths }).text;
     written.set(id, sameSound(parseTrackText(t.id, { text }).notes, notes) ? { text, asIs: false } : { text: trackSource(song, t).text, asIs: true });
   }
   // 다시 쓴 글이 원문 끝 쉼표를 잃어 악보가 짧아지지 않게 악보 길이를 지킨다 (score-end.ts)
   for (const chunk of chunks) {
     const tracks = chunk.trackIds.map((id) => song.tracks.find((x) => x.id === id)!);
     const end = scoreEnd(tracks);
-    const padded = padScore(chunk.trackIds.map((id) => written.get(id)!.text), end, bpmBefore(song.tempo, end));
+    const padded = padScore(chunk.trackIds.map((id) => written.get(id)!.text), end, bpmBefore(song.tempo, end), lengths, undefined, charLimit);
     chunk.trackIds.forEach((id, k) => written.set(id, { ...written.get(id)!, text: padded[k]! }));
   }
   return chunks.map((chunk) => {

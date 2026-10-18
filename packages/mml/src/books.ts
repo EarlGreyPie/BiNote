@@ -30,7 +30,10 @@ export function fewerBooks(song: Song, profile: GameProfile, books: number, lock
     const limit = Math.floor(profile.charLimitPerScore * target * share);
     const spread = distributeChords(song, profile, { limit, ...(locked ? { locked } : {}) });
     if (spread.moved === 0) continue;
-    const next = compactResult(spread.song, profile, locked, endsOf(song)).song;
+    // 글자 수 줄이기가 곡을 그대로 두면(kept) 옮긴 곡은 원문이 지워져 끝 길이를 잃으므로 이 옮기기는 버린다
+    const compacted = compactResult(spread.song, profile, locked, endsOf(song));
+    if (compacted.kept) continue;
+    const next = compacted.song;
     const parts = splitSong(next, profile).parts.length;
     if (parts <= target) return { from: books, to: parts, limit, moved: spread.moved };
   }
@@ -87,7 +90,13 @@ export function planBooks(song: Song, profile: GameProfile, options: PlanOptions
   const distribute = (channel?: number) => distributeChords(song, profile, { ...(channel === undefined ? {} : { limit: channel }), ...(locked ? { locked } : {}) });
   // 음을 옮긴 트랙은 원문이 지워지므로, 옮기기 전 트랙 길이(원문 끝 쉼표 포함)를 지킬 길이로 넘긴다 (화음 분산 명령과 같게)
   const ends = endsOf(song);
-  const compact = { apply: (moved: Song) => compactResult(moved, profile, locked, ends).song };
+  // 글자 수 줄이기가 곡을 그대로 두면(kept) undefined: 옮긴 곡은 원문이 지워져 끝 길이를 잃으므로 그 옮기기는 버린다
+  const compact = {
+    apply: (moved: Song): Song | undefined => {
+      const r = compactResult(moved, profile, locked, ends);
+      return r.kept ? undefined : r.song;
+    },
+  };
 
   // 1) 음을 옮겨 한 권에 들어가면 나누지 않는다. 옮긴 뒤 모든 채널이 한도 안인지는 실제로 옮겨 본 글자 수로 판단한다
   //    (음을 옮기면 옥타브·볼륨 명령과 쉼표가 줄어 글자 수 합이 줄 수 있다)
@@ -96,8 +105,8 @@ export function planBooks(song: Song, profile: GameProfile, options: PlanOptions
     const one = distribute();
     if (one.moved > 0 && one.over.length === 0) {
       const next = compact.apply(one.song);
-      const result = splitSong(next, profile);
-      if (!result.needed) return { song: next, result, spread: { to: 1, limit, moved: one.moved } };
+      const result = next && splitSong(next, profile);
+      if (next && result && !result.needed) return { song: next, result, spread: { to: 1, limit, moved: one.moved } };
     }
   }
 
@@ -125,6 +134,7 @@ export function planBooks(song: Song, profile: GameProfile, options: PlanOptions
         // 한 권 적게보다 더 줄이려는 시도는, 옮겨도 채널이 넘치면 나눠 보지 않는다 (오래 걸린다)
         if (target < books - 1 && moved.over.length > 0) continue;
         const next = compact.apply(moved.song);
+        if (!next) continue;
         const result = splitSong(next, profile);
         if (result.parts.length < plan.result.parts.length) {
           plan = { song: next, result, spread: { from: books, to: result.parts.length, limit: channel, moved: moved.moved } };

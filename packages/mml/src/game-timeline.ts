@@ -34,7 +34,7 @@ export function gameTimelineOf(whole: Song, profile: GameProfile, player?: strin
   const scores: string[] = [];
   const events = new Map<string, string[]>();
   const count = new Map<string, number>();
-  for (const score of gameScores(song, chords, profile.maxChordsPerPlayer)) {
+  for (const score of gameScores(song, chords, profile.maxChordsPerPlayer, profile.charLimitPerScore)) {
     const index = count.get(score.playerId) ?? 0;
     count.set(score.playerId, index + 1);
     const name = `${score.playerId}#${index}`;

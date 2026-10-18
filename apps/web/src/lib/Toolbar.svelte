@@ -21,7 +21,9 @@
   import VolumeBox from "./VolumeBox.svelte";
   import { GRID_DIVISIONS } from "./keymap";
   import { TUNINGS, type TuningName } from "./tunings";
-  import { NOTE_LENGTHS, type NoteLength, type Orientation, type RollTool } from "./roll";
+  import { type NoteLength, type Orientation, type RollTool } from "./roll";
+  import { coarsePointer } from "./mmlPad.svelte";
+  import { nextTabAlign, TAB_ALIGN_ICON, TAB_ALIGN_LABEL, type TabAlign } from "./tabAlign";
 
   /** 보기별 도구줄: 피아노롤이면 입력 도구·박자·격자·줌·마디·레이어, 타브면 튜닝·카포·격자 */
   interface Props {
@@ -38,6 +40,8 @@
     division: number;
     /** 새 음 길이 */
     noteLength: NoteLength;
+    /** 고를 수 있는 새 음 길이 (게임 한도로 거른 목록, lengthsFor) */
+    noteLengths: readonly NoteLength[];
     inputVolume: number | undefined;
     volumeMin: number;
     volumeMax: number;
@@ -45,8 +49,14 @@
     onselectedvolume: (vol: number) => void;
     hasCursor: boolean;
     onbar: (kind: "insert" | "delete") => void;
+    /** 전체 보기 (피아노롤·타브 모두. 앱이 보기에 맞게 부른다) */
     onfit: () => void;
+    /** 확대·축소 (타브는 시간만) */
     onzoom: (axis: "time" | "pitch", factor: number) => void;
+    /** 타브 지판 위치와 바꾸기, 타브 크기 한 단계 (PC에서만 위 도구줄에 둔다. 터치는 타브 아래 도구 띠) */
+    tabAlign: TabAlign;
+    ontabalign: () => void;
+    ontabsize: (step: 1 | -1) => void;
     layer: RollLayer;
     /** 좁은 화면(세로·1700px 이하): 도구줄을 한 줄로 쓰려고 일부를 ⋯ 메뉴로 넘긴다 */
     compact: boolean;
@@ -86,6 +96,7 @@
     onmeter,
     division,
     noteLength,
+    noteLengths,
     inputVolume = $bindable(),
     volumeMin,
     volumeMax,
@@ -95,6 +106,9 @@
     onbar,
     onfit,
     onzoom,
+    tabAlign,
+    ontabalign,
+    ontabsize,
     layer,
     compact,
     tuningName,
@@ -126,6 +140,8 @@
   const LAYERS: readonly RollLayer[] = ["track", "score", "all"];
   const layerLabel = (l: RollLayer) => t(l === "track" ? "ui.layerTrack" : l === "score" ? "ui.layerScore" : "ui.layerAll");
 
+  const alignText = $derived(t("ui.tabAlign", { now: t(TAB_ALIGN_LABEL[tabAlign]), next: t(TAB_ALIGN_LABEL[nextTabAlign(tabAlign)]) }));
+
   const moreMenu: MenuItem[] = $derived([
     ...(viewMode === "roll"
       ? [
@@ -146,6 +162,15 @@
           { separator: true } as const,
         ]
       : []),
+    // PC 타브: 좁은 도구줄에서는 덜 쓰는 타브 크기·지판 위치를 메뉴로 (가로 −/+와 전체 보기는 도구줄에 남는다)
+    ...(viewMode === "tab" && compact && !coarsePointer
+      ? [
+          { label: t("ui.tabSmaller"), run: () => ontabsize(-1) },
+          { label: t("ui.tabBigger"), run: () => ontabsize(1) },
+          { label: alignText, run: ontabalign },
+          { separator: true } as const,
+        ]
+      : []),
     { label: loadingReference ? t("ui.referenceLoading") : t("ui.reference") + "…", title: t("ui.referenceHelp"), run: () => referenceInput.click() },
     ...(viewMode === "roll" ? [{ label: t("ui.video") + "…", run: () => videoInput.click() }] : []),
   ]);
@@ -162,6 +187,18 @@
       </button>
     </span>
   {/if}
+{/snippet}
+
+{#snippet meterField()}
+  <!-- 박자 칸: 피아노롤은 재생 커서, 타브는 타브 커서가 든 마디부터 바꾼다 -->
+  <span class="field" title={t("ui.meterHelp")}>
+    <span class="muted">{t("ui.meter")}</span>
+    <input class="num" type="number" min="1" max="32" value={meter.beats} onchange={(e) => onmeter(Number(e.currentTarget.value), meter.unit)} />
+    /
+    <select value={meter.unit} onchange={(e) => onmeter(meter.beats, Number(e.currentTarget.value))}>
+      {#each METER_UNITS as u (u)}<option value={u}>{u}</option>{/each}
+    </select>
+  </span>
 {/snippet}
 
 <div class="toolbar" class:compact role="toolbar">
@@ -197,14 +234,7 @@
       <Icon name="scissors" />
     </button>
     <span class="sep"></span>
-    <span class="field" title={t("ui.meterHelp")}>
-      <span class="muted">{t("ui.meter")}</span>
-      <input class="num" type="number" min="1" max="32" value={meter.beats} onchange={(e) => onmeter(Number(e.currentTarget.value), meter.unit)} />
-      /
-      <select value={meter.unit} onchange={(e) => onmeter(meter.beats, Number(e.currentTarget.value))}>
-        {#each METER_UNITS as u (u)}<option value={u}>{u}</option>{/each}
-      </select>
-    </span>
+    {@render meterField()}
     <label class="field">
       <span class="muted">{t("ui.grid")}</span>
       <select value={division} onchange={(e) => ondivision(Number(e.currentTarget.value))}>
@@ -214,7 +244,7 @@
     <label class="field" title={t("ui.noteLengthHelp")}>
       <span class="muted">{t("ui.noteLength")}</span>
       <select value={noteLength} onchange={(e) => onnotelength(e.currentTarget.value as NoteLength)}>
-        {#each NOTE_LENGTHS as l (l)}<option value={l}>{lengthLabel(l)}</option>{/each}
+        {#each noteLengths as l (l)}<option value={l}>{lengthLabel(l)}</option>{/each}
       </select>
     </label>
     <VolumeBox bind:value={inputVolume} min={volumeMin} max={volumeMax} selected={selectedVolume} onselected={onselectedvolume} />
@@ -272,6 +302,7 @@
         {#each CAPOS as c (c)}<option value={c}>{c}</option>{/each}
       </select>
     </label>
+    {@render meterField()}
     <label class="field">
       <span class="muted">{t("ui.grid")}</span>
       <select value={division} onchange={(e) => ondivision(Number(e.currentTarget.value))}>
@@ -281,10 +312,28 @@
     <label class="field" title={t("ui.noteLengthHelp")}>
       <span class="muted">{t("ui.noteLength")}</span>
       <select value={noteLength} onchange={(e) => onnotelength(e.currentTarget.value as NoteLength)}>
-        {#each NOTE_LENGTHS as l (l)}<option value={l}>{lengthLabel(l)}</option>{/each}
+        {#each noteLengths as l (l)}<option value={l}>{lengthLabel(l)}</option>{/each}
       </select>
     </label>
     <VolumeBox bind:value={inputVolume} min={volumeMin} max={volumeMax} selected={undefined} />
+    {#if !coarsePointer}
+      <!-- PC: 피아노롤처럼 확대 묶음을 위 도구줄에 (터치는 타브 아래 도구 띠에 그대로) -->
+      <span class="sep"></span>
+      <span class="group">
+        <button class="icon" title={t("ui.tabFitAllHelp")} aria-label={t("ui.fitAll")} onclick={onfit}><Icon name="maximize" /></button>
+        <button class="icon" title={t("ui.zoomOutTime")} aria-label={t("ui.zoomOutTime")} onclick={() => onzoom("time", 1 / 1.25)}>
+          <Icon name="arrows-h" size={14} /><Icon name="minus" size={12} />
+        </button>
+        <button class="icon" title={t("ui.zoomInTime")} aria-label={t("ui.zoomInTime")} onclick={() => onzoom("time", 1.25)}>
+          <Icon name="arrows-h" size={14} /><Icon name="plus" size={12} />
+        </button>
+        {#if !compact}
+          <button class="icon" title={t("ui.tabSmaller")} aria-label={t("ui.tabSmaller")} onclick={() => ontabsize(-1)}>A−</button>
+          <button class="icon" title={t("ui.tabBigger")} aria-label={t("ui.tabBigger")} onclick={() => ontabsize(1)}>A+</button>
+          <button class="icon" title={alignText} aria-label={alignText} onclick={ontabalign}>{TAB_ALIGN_ICON[tabAlign]}</button>
+        {/if}
+      </span>
+    {/if}
     <span class="spacer"></span>
     {@render dockSwitch()}
   {/if}

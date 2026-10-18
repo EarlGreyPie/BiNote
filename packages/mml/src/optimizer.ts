@@ -1,4 +1,4 @@
-import { add, cmp, fromLength, sub, ZERO, type Rat } from "@mmlce/core";
+import { add, cmp, defaultLengthLimit, gameLengths, sub, ZERO, type LengthLimit, type Rat } from "@mmlce/core";
 import { continues, mergeTies, sameSound } from "./compare.js";
 import { parseMml } from "./parser.js";
 import { printMml, splitDuration, type PrintableNote, type PrintOptions, type PrintResult } from "./printer.js";
@@ -17,9 +17,8 @@ import { printMml, splitDuration, type PrintableNote, type PrintOptions, type Pr
  */
 export function optimizeMml(notes: readonly PrintableNote[], options: OptimizeOptions = {}): PrintResult {
   const fallback = printMml(notes, options);
-  const maxLength = options.maxLength ?? 64;
-  const maxDots = options.maxDots ?? 1;
-  const optimized = optimizeText(notes, options, maxLength, maxDots);
+  const lengths = options.lengths ?? defaultLengthLimit();
+  const optimized = optimizeText(notes, options, lengths);
   if (optimized === undefined || optimized.length >= fallback.text.length) return fallback;
   const check = parseMml(optimized, { octave: options.octave ?? 4, volume: options.volume ?? 8 });
   if (!sameSound(check.notes, mergeTies(notes))) return fallback;
@@ -63,12 +62,12 @@ export interface OptimizeOptions extends PrintOptions {
 function optimizeText(
   input: readonly PrintableNote[],
   options: OptimizeOptions,
-  maxLength: number,
-  maxDots: number,
+  lengths: LengthLimit,
 ): string | undefined {
+  const maxDots = lengths.dots;
   const notes = mergeTies(input);
   const tempo = [...(options.tempo ?? [])].sort((a, b) => cmp(a.at, b.at));
-  const table = pieces(maxLength, maxDots);
+  const table = pieces(lengths);
   const elements: Element[] = [];
 
   let volume = options.volume ?? 8;
@@ -393,19 +392,9 @@ function solve(elements: readonly Element[], options: OptimizeOptions, maxDots: 
   return out.join("");
 }
 
-const pieceCache = new Map<string, Piece[]>();
-
-function pieces(maxLength: number, maxDots: number): Piece[] {
-  const key = `${maxLength}/${maxDots}`;
-  let table = pieceCache.get(key);
-  if (!table) {
-    table = [];
-    for (let length = 1; length <= maxLength; length++) {
-      for (let dots = 0; dots <= maxDots; dots++) table.push({ length, dots, value: fromLength(length, dots) });
-    }
-    pieceCache.set(key, table);
-  }
-  return table;
+/** 게임이 받는 한 토막 길이 (gameLengths, 짧은 순서 그대로) */
+function pieces(lengths: LengthLimit): readonly Piece[] {
+  return gameLengths(lengths);
 }
 
 const ratKey = (r: Rat) => `${r.n}/${r.d}`;

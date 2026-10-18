@@ -1,4 +1,4 @@
-import { cmp, mul, rat, toFloat, type Rat } from "@mmlce/core";
+import { cmp, defaultLengthLimit, isGameLength, mul, rat, toFloat, type LengthLimit, type Rat } from "@mmlce/core";
 
 /**
  * 피아노롤 좌표 계산. 가로는 시간이 오른쪽으로 흐르고 건반이 왼쪽,
@@ -296,9 +296,10 @@ export function isResizeGrab(n: { start: Rat; dur: Rat }, time: number, pxPerWho
 
 /**
  * 새로 넣는 음 길이. "grid"면 격자 한 칸(지금까지의 동작), 아니면 MML 길이 표기(l4·l8. 의 숫자 부분).
- * 12·24·48은 셋잇단(8분·16분·32분 셋잇단)
+ * 12·24·48은 셋잇단(8분·16분·32분 셋잇단). 사람이 고르기 좋은 목록이고, 게임이 받는지는 lengthsFor로 거른다
+ * (점은 가장 짧은 길이에도 붙는다: 32. = 3/64, 64. = 3/128. 48.은 32와 같은 길이라 따로 두지 않는다)
  */
-export const NOTE_LENGTHS = ["grid", "1", "2", "2.", "4", "4.", "8", "8.", "16", "16.", "32", "64", "12", "24", "48"] as const;
+export const NOTE_LENGTHS = ["grid", "1", "2", "2.", "4", "4.", "8", "8.", "16", "16.", "32", "32.", "64", "64.", "12", "24", "48"] as const;
 export type NoteLength = (typeof NOTE_LENGTHS)[number];
 
 export function noteLengthOf(length: NoteLength, division: number): Rat {
@@ -308,10 +309,25 @@ export function noteLengthOf(length: NoteLength, division: number): Rat {
   return dotted ? rat(3, 2 * n) : rat(1, n);
 }
 
-/** +/− 키: 길이 now를 두 배 / 반으로 한 음 길이 (격자 제외 고르기 목록 안, 온음표 ~ 64분음표). 목록에 없으면 undefined */
-export function stepNoteLength(now: Rat, factor: 2 | 0.5): Exclude<NoteLength, "grid"> | undefined {
+/** 길이 표기의 숫자와 점 수 ("32." → 32, 점 1). grid면 undefined */
+export function lengthParts(length: NoteLength): { length: number; dots: number } | undefined {
+  if (length === "grid") return undefined;
+  const dots = length.length - length.replace(/\.+$/, "").length;
+  return { length: Number(length.slice(0, length.length - dots)), dots };
+}
+
+/** 길이 고르기 목록에서 게임이 받는 길이만 (grid는 늘 남는다). 게임 음길이 한도(GameProfile.length)를 따른다 */
+export function lengthsFor(limit: LengthLimit, list: readonly NoteLength[] = NOTE_LENGTHS): NoteLength[] {
+  return list.filter((l) => {
+    const p = lengthParts(l);
+    return !p || isGameLength(limit, p.length, p.dots);
+  });
+}
+
+/** +/− 키: 길이 now를 두 배 / 반으로 한 음 길이 (격자 제외, 게임 한도 안 고르기 목록에서: 온음표 ~ 게임 최단 길이). 목록에 없으면 undefined */
+export function stepNoteLength(now: Rat, factor: 2 | 0.5, limit: LengthLimit = defaultLengthLimit()): Exclude<NoteLength, "grid"> | undefined {
   const want = mul(now, factor === 2 ? rat(2) : rat(1, 2));
-  return NOTE_LENGTHS.find((l): l is Exclude<NoteLength, "grid"> => l !== "grid" && cmp(noteLengthOf(l, 1), want) === 0);
+  return lengthsFor(limit).find((l): l is Exclude<NoteLength, "grid"> => l !== "grid" && cmp(noteLengthOf(l, 1), want) === 0);
 }
 
 /** 이벤트 줄 라벨 종류 */

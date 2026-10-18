@@ -1,5 +1,8 @@
-import { add, cmp, normalizeTempo, sub, ZERO, type Rat, type Song, type TempoEvent, type TrackText } from "@mmlce/core";
+import { add, cmp, getProfile, normalizeTempo, PROFILES, sub, ZERO, type Rat, type Song, type TempoEvent, type TrackText } from "@mmlce/core";
 import { parseMml, type ParseResult } from "./parser.js";
+import { chordsPerScore } from "./clipboard.js";
+import { scoreEnd, tempoBefore } from "./score-end.js";
+import { scoreTrackIds } from "./tempo-placement.js";
 
 /**
  * 원문 속 템포(t) 다루기. 곡 템포 지도(Song.tempo)가 진짜 값이고, 원문의 t는 쓴 사람의 표기를 지키는 거울이다.
@@ -88,12 +91,24 @@ export function tempoAtPosition(map: readonly TempoEvent[], at: Rat): number | u
 /**
  * 원문들의 t와 곡 템포 지도가 어긋났는지. 원문에 적힌 t는 늘 지도와 맞아야 한다(그 자리 지도 템포와 같은 빠르기).
  * 모든 트랙에 원문이 있으면(3MLE에 원문 그대로 저장하는 경우) 들리는 템포가 같아야 한다.
- * 원문 없는 트랙이 있으면 저장 때 어차피 출력기가 지도대로 다시 쓰므로 지도에만 있는 템포는 괜찮다
+ * 원문 없는 트랙이 있으면 저장 때 어차피 출력기가 지도대로 다시 쓰므로 지도에만 있는 템포는 괜찮다.
+ * 악보 끝(그 악보의 게임 길이) 자리와 그 뒤 템포는 소리에 영향이 없으므로 보지 않는다. 원문 t는 악보마다 그 악보 끝까지,
+ * 지도는 가장 긴 악보 끝까지 본다 (글자 수 줄이기의 검사와 같은 규칙: tempoBefore·scoreEnd).
+ * 그래서 길이를 지키려고 끝에 붙인 그 자리 빠르기 t는 어긋남이 아니다
  */
 export function tempoMismatch(song: Song): boolean {
-  const declared = normalizeTempo(song.tracks.flatMap((t) => (t.mml ? tempoTokens(t.mml).map(({ at, bpm }) => ({ at, bpm })) : [])));
-  const map = normalizeTempo(song.tempo);
   if (song.tracks.length === 0) return false;
+  const chords = chordsPerScore(song, PROFILES[song.meta.profileId] ?? getProfile("mobile"));
+  const scores = scoreTrackIds(song, chords).map((ids) => song.tracks.filter((t) => ids.includes(t.id)));
+  const declared = normalizeTempo(
+    scores.flatMap((tracks) =>
+      tempoBefore(
+        tracks.flatMap((t) => (t.mml ? tempoTokens(t.mml).map(({ at, bpm }) => ({ at, bpm })) : [])),
+        scoreEnd(tracks),
+      ),
+    ),
+  );
+  const map = normalizeTempo(tempoBefore(song.tempo, scoreEnd(song.tracks)));
   if (song.tracks.some((t) => !t.mml)) return !declared.every((d) => tempoAtPosition(map, d.at) === d.bpm);
   return !sameTempo(audibleTempo(declared), audibleTempo(map));
 }

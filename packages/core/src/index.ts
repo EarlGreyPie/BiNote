@@ -8,3 +8,6 @@ export * from "./instruments.js";
 export * from "./note-edit.js";
 export * from "./tab.js";
 export * from "./meter.js";
+export * from "./arpeggio.js";
+export * from "./note-length.js";
+export * from "./slide.js";

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { rat } from "@mmlce/core";
-import { canWriteExactly, placeTempo, type PrintableNote } from "../src/index.js";
+import { MOBILE_PROFILE, rat } from "@mmlce/core";
+import { canWriteExactly, lengthPieces, placeTempo, printMml, type PrintableNote } from "../src/index.js";
 
 const note = (start: [number, number], dur: [number, number]): PrintableNote => ({
   start: rat(...start), dur: rat(...dur), pitch: 60, vol: 8, tie: "none",
@@ -22,8 +22,26 @@ describe("placeTempo", () => {
 
 describe("canWriteExactly", () => {
   it("1~64와 점 토막 조합으로 쓸 수 있는지", () => {
-    expect(canWriteExactly(rat(17, 48))).toBe(true);   // l3 + l48
-    expect(canWriteExactly(rat(113, 48))).toBe(true);  // l1 l1 + l3 + l48
-    expect(canWriteExactly(rat(1, 240))).toBe(false);  // l64보다 짧음
+    expect(canWriteExactly(rat(17, 48), MOBILE_PROFILE.length)).toBe(true);   // l3 + l48
+    expect(canWriteExactly(rat(113, 48), MOBILE_PROFILE.length)).toBe(true);  // l1 l1 + l3 + l48
+    expect(canWriteExactly(rat(1, 240), MOBILE_PROFILE.length)).toBe(false);  // l64보다 짧음
+  });
+});
+
+describe("음길이 한도를 받아 쓴다 (lengthPieces·printMml)", () => {
+  it("지금 한도: 3/128은 64., 1/32는 32", () => {
+    expect(lengthPieces(rat(3, 128), MOBILE_PROFILE.length)).toEqual(["64."]);
+    expect(lengthPieces(rat(1, 32), MOBILE_PROFILE.length)).toEqual(["32"]);
+  });
+
+  it("가짜 한도(128, 점 둘)에서는 1/128과 7/512(128..)를 쓰고, 지금 한도로는 못 쓰며 진단이 나온다", () => {
+    const wide = { min: 1, max: 128, dots: 2 };
+    expect(lengthPieces(rat(1, 128), wide)).toEqual(["128"]);
+    expect(lengthPieces(rat(7, 512), wide)).toEqual(["128.."]);
+    expect(lengthPieces(rat(1, 128), MOBILE_PROFILE.length)).toBeUndefined();
+    expect(lengthPieces(rat(7, 512), MOBILE_PROFILE.length)).toBeUndefined();
+    const note = { start: rat(0), dur: rat(1, 128), pitch: 60, vol: 8, tie: "none" as const };
+    expect(printMml([note]).diagnostics.map((d) => [d.code, d.params])).toEqual([["unrepresentable-length", { min: 1, max: 64 }]]);
+    expect(printMml([note], { lengths: wide }).diagnostics).toEqual([]);
   });
 });

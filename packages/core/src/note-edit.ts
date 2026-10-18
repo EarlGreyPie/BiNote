@@ -137,9 +137,10 @@ export function transposeNotes(notes: readonly Note[], semitones: number): Note[
  * 음 길이를 factor배로 (마비꼬의 길이 ×2·½). 첫 음 시작을 기준으로 시작 위치도 같은 배율로 벌리거나 좁혀
  * 리듬 모양을 지킨다. 바꾼 음만 돌려주므로 트랙에는 replaceNotes로 넣는다
  */
-export function scaleNotes(notes: readonly Note[], factor: Rat): Note[] {
+export function scaleNotes(notes: readonly Note[], factor: Rat, from?: Rat): Note[] {
   if (notes.length === 0) return [];
-  const origin = notes.reduce((m, n) => (cmp(n.start, m) < 0 ? n.start : m), notes[0]!.start);
+  // from: 기준 시작 (여러 트랙을 같이 바꿀 때 트랙마다 같은 기준을 써서 화음의 리듬이 어긋나지 않게)
+  const origin = from ?? notes.reduce((m, n) => (cmp(n.start, m) < 0 ? n.start : m), notes[0]!.start);
   return notes.map((n) => ({ ...n, start: add(origin, mul(sub(n.start, origin), factor)), dur: mul(n.dur, factor) }));
 }
 
@@ -148,11 +149,11 @@ export function scaleNotes(notes: readonly Note[], factor: Rat): Note[] {
  * 늘어난 음이 고르지 않은 다음 음과 겹치면 그 음 시작 앞까지만 늘린다 (타브의 길이 바꾸기와 같다).
  * 바꾼 고른 음만 돌려준다. 바뀌는 것이 없거나(늘릴 자리가 없음) 고른 음이 고르지 않은 음 자리로 옮겨 가 겹치면 undefined
  */
-export function scaleNotesIn(notes: readonly Note[], picked: readonly Note[], factor: Rat): Note[] | undefined {
+export function scaleNotesIn(notes: readonly Note[], picked: readonly Note[], factor: Rat, from?: Rat): Note[] | undefined {
   const ids = new Set(picked.map((n) => n.id));
   const others = notes.filter((n) => !ids.has(n.id));
   const out: Note[] = [];
-  for (const n of scaleNotes(picked, factor)) {
+  for (const n of scaleNotes(picked, factor, from)) {
     // 옮겨 간 시작이 고르지 않은 음 안(또는 같은 자리)이면 그 음을 지우게 되므로 하지 않는다
     if (others.some((o) => cmp(o.start, n.start) <= 0 && cmp(n.start, end(o)) < 0)) return undefined;
     const next = others.filter((o) => cmp(o.start, n.start) > 0).reduce<Rat | undefined>((m, o) => (m === undefined || cmp(o.start, m) < 0 ? o.start : m), undefined);
@@ -168,10 +169,16 @@ export function scaleNotesIn(notes: readonly Note[], picked: readonly Note[], fa
 
 /** 복사한 음 묶음: 첫 음 시작을 0으로 옮긴 음들과 원래 시작 위치 */
 export interface NoteClip {
+  /** 모든 음 (층이 여럿이면 모두 모은 것, 시작 순) */
   readonly notes: readonly Note[];
   readonly origin: Rat;
   /** 첫 음 시작부터 마지막 음 끝까지 */
   readonly length: Rat;
+  /**
+   * 트랙 나눔 (타브에서 여러 트랙의 화음을 복사한 경우, 원래 트랙 순서대로). 층마다 겹치지 않는 음 한 줄이다.
+   * 없으면 트랙 하나 (notes가 한 층)
+   */
+  readonly layers?: readonly (readonly Note[])[];
 }
 
 /**
@@ -204,6 +211,34 @@ export function clipNotes(notes: readonly Note[]): NoteClip | undefined {
     chain.map((n, i): Note => (i === chain.length - 1 && n.tie === "next" ? { ...n, tie: "none" } : n)),
   );
   return { notes: kept.map((n) => ({ ...n, start: sub(n.start, origin) })), origin, length: sub(last, origin) };
+}
+
+/**
+ * 여러 트랙의 고른 음을 트랙 나눔 그대로 복사한다 (layers: 트랙 순서대로, 빈 층은 뺀다). 모든 층이 같은 기준(가장 앞 음 시작)을 쓴다.
+ * 층이 하나면 clipNotes와 같다
+ */
+export function clipLayers(layers: readonly (readonly Note[])[]): NoteClip | undefined {
+  const used = layers.filter((l) => l.length > 0);
+  if (used.length === 0) return undefined;
+  if (used.length === 1) return clipNotes(used[0]!);
+  const clips = used.map((l) => clipNotes(l)!);
+  const origin = clips.reduce((m, c) => (cmp(c.origin, m) < 0 ? c.origin : m), clips[0]!.origin);
+  const shifted = clips.map((c) => c.notes.map((n) => ({ ...n, start: add(n.start, sub(c.origin, origin)) })));
+  const length = clips.reduce((m, c) => {
+    const e = add(sub(c.origin, origin), c.length);
+    return cmp(e, m) > 0 ? e : m;
+  }, clips[0]!.length);
+  return { notes: shifted.flat().sort((a, b) => cmp(a.start, b.start)), origin, length, layers: shifted };
+}
+
+/** 층들을 트랙 하나에 모으면 음이 겹치는지 (화음을 피아노롤의 트랙 하나에 붙일 수 없다) */
+export function clipOverlaps(clip: NoteClip): boolean {
+  let reach: Rat | undefined;
+  for (const n of [...clip.notes].sort((a, b) => cmp(a.start, b.start))) {
+    if (reach && cmp(n.start, reach) < 0) return true;
+    if (!reach || cmp(end(n), reach) > 0) reach = end(n);
+  }
+  return false;
 }
 
 /** 복사한 음을 at 위치에 새 id로 놓을 음들 */

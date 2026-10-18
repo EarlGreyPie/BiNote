@@ -5,6 +5,7 @@
   import InlineName from "./InlineName.svelte";
   import TrackMenu from "./TrackMenu.svelte";
   import type { ScoreGroup } from "./scores";
+  import { movedTooFar } from "./longPress";
   import type { TrackActions } from "./trackActions";
 
   /**
@@ -77,9 +78,9 @@
     }, 550);
   }
   const release = () => clearTimeout(pressTimer);
-  /** 손가락은 가만히 대고 있어도 조금씩 흔들린다. 10px 넘게 움직였을 때만 길게 누르기를 그만둔다 */
+  /** 손가락은 가만히 대고 있어도 조금씩 흔들린다. 허용 거리(longPress.ts)를 넘게 움직였을 때만 길게 누르기를 그만둔다 */
   function pressMove(e: PointerEvent) {
-    if (pressAt && Math.hypot(e.clientX - pressAt.clientX, e.clientY - pressAt.clientY) > 10) release();
+    if (movedTooFar(pressAt, e)) release();
   }
   /** 줄 끝 ⋯ 단추: 단추 아래에 메뉴를 연다 */
   function menuButton(e: MouseEvent, track: Track | undefined, playerId: string) {

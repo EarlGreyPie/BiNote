@@ -2,6 +2,10 @@
 export const TAB_ALIGNS = ["top", "middle", "bottom"] as const;
 export type TabAlign = (typeof TAB_ALIGNS)[number];
 
+/** 지판 위치 이름(i18n 키)과 단추 글자 (타브 아래 도구 띠·위 도구줄이 같이 쓴다) */
+export const TAB_ALIGN_LABEL = { top: "ui.tabAlignTop", middle: "ui.tabAlignMiddle", bottom: "ui.tabAlignBottom" } as const;
+export const TAB_ALIGN_ICON = { top: "⤒", middle: "↕", bottom: "⤓" } as const;
+
 /** 저장해 둔 값을 읽는다. 없거나 모르는 값이면 가운데 */
 export function parseTabAlign(raw: string | null): TabAlign {
   return TAB_ALIGNS.find((a) => a === raw) ?? "middle";

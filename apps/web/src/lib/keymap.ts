@@ -5,6 +5,10 @@
  */
 
 /** 격자 단축키가 고르는 칸 (온음표의 1/n) */
+/**
+ * 격자(편집 칸). 게임 음길이 한도(GameProfile.length)와 같을 필요는 없다: 격자가 게임 최단 길이보다 잘게 찍힌 음은
+ * 출력할 때 검사(unrepresentable-length)가 알린다
+ */
 export const GRID_DIVISIONS = [1, 2, 4, 8, 12, 16, 24, 32, 48, 64] as const;
 export type GridDivision = (typeof GRID_DIVISIONS)[number];
 
@@ -13,6 +17,7 @@ export const COMMANDS = [
   "file.save3mle",
   "file.saveMmi",
   "file.saveProject",
+  "file.saveProjectAs",
   "edit.undo",
   "edit.redo",
   "edit.selectAll",
@@ -21,6 +26,7 @@ export const COMMANDS = [
   "edit.paste",
   "edit.lengthDouble",
   "edit.lengthHalf",
+  "edit.dotToggle",
   "edit.transpose",
   "note.delete",
   "note.octaveUp",
@@ -36,6 +42,7 @@ export const COMMANDS = [
   "play.toggle",
   "play.start",
   "play.stop",
+  "play.fromEditCursor",
   "track.prev",
   "track.next",
   "track.moveUp",
@@ -62,6 +69,7 @@ const COMMON: Bindings = {
   "file.save3mle": ["Ctrl+Alt+S"],
   "file.saveMmi": ["Ctrl+Shift+S"],
   "file.saveProject": ["Ctrl+S"],
+  // 다른 이름으로 저장은 기본 키를 비워 둔다 (Ctrl+Shift+S는 마비꼬 저장). 키 설정에서 정할 수 있다
   "edit.undo": ["Ctrl+Z"],
   "edit.redo": ["Ctrl+Y", "Ctrl+Shift+Z"],
   "edit.selectAll": ["Ctrl+A"],
@@ -70,6 +78,8 @@ const COMMON: Bindings = {
   "edit.paste": ["Ctrl+V"],
   "edit.lengthDouble": ["Ctrl+]"],
   "edit.lengthHalf": ["Ctrl+["],
+  // 점음표 붙이기·떼기 (고른 음, 타브는 커서 음, 없으면 새 음 길이)
+  "edit.dotToggle": [".", "Num."],
   "edit.transpose": ["Alt+P"],
   "note.octaveUp": ["Shift+Up"],
   "note.octaveDown": ["Shift+Down"],

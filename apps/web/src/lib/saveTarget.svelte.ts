@@ -1,5 +1,10 @@
 import { loadStored, saveStored } from "./persist";
 import { SaveStartup, type SaveMode } from "./saveStartup";
+import { freeName } from "./saveName";
+import { saveProjectFile, type SavedFile, type SaveOutcome } from "./projectSave";
+import type { WorkFile } from "./workFile";
+
+export type { SavedFile, SaveOutcome };
 
 /**
  * 저장 위치. 기본은 브라우저 다운로드(다운로드 폴더)이고,
@@ -18,6 +23,18 @@ interface DirHandle extends FileSystemDirectoryHandle {
 }
 type DirPicker = (options?: { id?: string; mode?: "readwrite" }) => Promise<DirHandle>;
 
+/** 파일 핸들의 권한 묻기 (표준 DOM 타입에 아직 없다) */
+interface FileHandle extends FileSystemFileHandle {
+  queryPermission?(desc: { mode: "readwrite" }): Promise<PermissionState>;
+  requestPermission?(desc: { mode: "readwrite" }): Promise<PermissionState>;
+}
+
+type OpenPicker = (options?: {
+  id?: string;
+  multiple?: false;
+  types?: { description?: string; accept: Record<string, string[]> }[];
+}) => Promise<FileSystemFileHandle[]>;
+
 type FilePicker = (options?: {
   id?: string;
   suggestedName?: string;
@@ -26,6 +43,7 @@ type FilePicker = (options?: {
 
 const picker = (): DirPicker | undefined => (globalThis as { showDirectoryPicker?: DirPicker }).showDirectoryPicker;
 const filePicker = (): FilePicker | undefined => (globalThis as { showSaveFilePicker?: FilePicker }).showSaveFilePicker;
+const openPicker = (): OpenPicker | undefined => (globalThis as { showOpenFilePicker?: OpenPicker }).showOpenFilePicker;
 
 const secure = typeof window !== "undefined" && window.isSecureContext;
 
@@ -34,6 +52,9 @@ export const canPickFolder = secure && typeof picker() === "function";
 
 /** 저장 창(폴더와 파일 이름 고르기)을 띄울 수 있는 브라우저인지 (PC 크롬·엣지) */
 export const canAskSave = secure && typeof filePicker() === "function";
+
+/** 연 파일을 기억해 다시 쓸 수 있게 여는 창을 띄울 수 있는지 (PC 크롬·엣지) */
+export const canOpenFile = secure && typeof openPicker() === "function";
 
 export type { SaveMode };
 
@@ -68,12 +89,15 @@ const LOAD_WAIT_MS = 1000;
 const DB_NAME = "mmlce-save";
 const STORE = "folder";
 const KEY = "dir";
+/** 작업(자동 보존 기록) id별로 기억한 프로젝트 파일 */
+const PROJECT_STORE = "project";
 
 function db(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 1);
+    const req = indexedDB.open(DB_NAME, 2);
     req.onupgradeneeded = () => {
       if (!req.result.objectStoreNames.contains(STORE)) req.result.createObjectStore(STORE);
+      if (!req.result.objectStoreNames.contains(PROJECT_STORE)) req.result.createObjectStore(PROJECT_STORE);
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -93,6 +117,59 @@ async function store(value: DirHandle | undefined): Promise<DirHandle | undefine
   } finally {
     d.close();
   }
+}
+
+/** 이 브라우저가 저장한 파일 이름을 알 수 있는지 (폴더·저장 창·열기 창) */
+const knowsSavedName = canPickFolder || canAskSave || canOpenFile;
+
+/**
+ * 작업에 저장한 파일 이름과 (다시 쓸 수 있으면) 그 파일을 적어 둔다 (undefined면 잊는다).
+ * 새로고침 뒤 복구한 곡도 그 파일에 바로 쓰고, 자동 보존 기록의 이름이 늦었는지 견줄 수 있게
+ */
+export async function rememberProjectFile(workId: string, entry: WorkFile<FileSystemFileHandle> | undefined): Promise<void> {
+  if (!knowsSavedName) return;
+  const d = await db();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = d.transaction(PROJECT_STORE, "readwrite");
+      const s = tx.objectStore(PROJECT_STORE);
+      if (entry) s.put(entry.file ? { name: entry.name, file: entry.file } : { name: entry.name }, workId);
+      else s.delete(workId);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } finally {
+    d.close();
+  }
+}
+
+/** 작업에 적어 둔 저장 이름과 파일. 없으면 undefined, 읽지 못하면 "unknown" (믿을 수 없다) */
+export async function recallProjectFile(workId: string): Promise<WorkFile<FileSystemFileHandle> | "unknown" | undefined> {
+  if (!knowsSavedName) return undefined;
+  try {
+    const d = await db();
+    try {
+      return await new Promise((resolve, reject) => {
+        const tx = d.transaction(PROJECT_STORE, "readonly");
+        const req = tx.objectStore(PROJECT_STORE).get(workId);
+        tx.oncomplete = () => resolve(readWorkFile(req.result));
+        tx.onerror = () => reject(tx.error);
+      });
+    } finally {
+      d.close();
+    }
+  } catch {
+    return "unknown";
+  }
+}
+
+function readWorkFile(raw: unknown): WorkFile<FileSystemFileHandle> | "unknown" | undefined {
+  if (raw === undefined) return undefined;
+  // 이름 없이 파일만 적던 판(beta.20 개발 중)
+  if (raw instanceof FileSystemFileHandle) return { name: raw.name, file: raw };
+  const r = raw as { name?: unknown; file?: unknown };
+  if (typeof r.name !== "string") return "unknown";
+  return r.file instanceof FileSystemFileHandle ? { name: r.name, file: r.file } : { name: r.name };
 }
 
 /**
@@ -149,6 +226,17 @@ export function download(bytes: Uint8Array, name: string): void {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+/** 기억한 파일에 쓴다. 쓰기 허락이 없으면 먼저 묻는다 (연 파일은 처음 저장할 때 한 번 묻는다) */
+async function writeFileAsked(file: FileHandle, bytes: Uint8Array): Promise<boolean> {
+  try {
+    const mode = { mode: "readwrite" } as const;
+    if (file.queryPermission && (await file.queryPermission(mode)) !== "granted" && (await file.requestPermission?.(mode)) !== "granted") return false;
+  } catch {
+    return false;
+  }
+  return writeFile(file, bytes);
+}
+
 async function writeFile(file: FileSystemFileHandle, bytes: Uint8Array): Promise<boolean> {
   try {
     const out = await file.createWritable();
@@ -160,13 +248,30 @@ async function writeFile(file: FileSystemFileHandle, bytes: Uint8Array): Promise
   }
 }
 
-async function writeToFolder(dir: DirHandle, bytes: Uint8Array, name: string): Promise<boolean> {
+/** 폴더에 그 이름의 항목이 있는지. 없다고 확인될 때(NotFoundError)만 false (다른 오류는 있다고 보고 피한다) */
+async function inFolder(dir: DirHandle, name: string): Promise<boolean> {
+  try {
+    await dir.getFileHandle(name);
+    return true;
+  } catch (e) {
+    return !(e instanceof DOMException && e.name === "NotFoundError");
+  }
+}
+
+/**
+ * 폴더에 쓴다. fresh(이름 없는 새 악보)이면 같은 이름을 피해 `이름 2.확장자`처럼 새 이름을 고른다.
+ * 쓴 이름, 비어 있는 이름이 없으면 "full", 못 썼으면 undefined
+ */
+async function writeToFolder(dir: DirHandle, bytes: Uint8Array, name: string, fresh: boolean): Promise<string | "full" | undefined> {
   try {
     const mode = { mode: "readwrite" } as const;
-    if ((await dir.queryPermission?.(mode)) !== "granted" && (await dir.requestPermission?.(mode)) !== "granted") return false;
-    return await writeFile(await dir.getFileHandle(name, { create: true }), bytes);
+    if ((await dir.queryPermission?.(mode)) !== "granted" && (await dir.requestPermission?.(mode)) !== "granted") return undefined;
+    const ext = /\.[^.]+$/.exec(name)?.[0] ?? "";
+    const target = fresh ? await freeName(name.slice(0, name.length - ext.length), ext, (n) => inFolder(dir, n)) : name;
+    if (target === undefined) return "full";
+    return (await writeFile(await dir.getFileHandle(target, { create: true }), bytes)) ? target : undefined;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
@@ -181,9 +286,9 @@ export function asksSaveDialog(): boolean {
  * 저장 창에서 있는 파일을 고르면 브라우저가 그 파일을 먼저 비운다. 그래서 저장할 내용을 다 만든 뒤에 불러 곧바로 쓴다
  * (오래 걸리는 WAV는 다 만든 뒤 저장 단추로 부른다. 저장 창은 누른 직후에만 뜬다).
  */
-async function askSaveFile(name: string): Promise<{ file: FileSystemFileHandle | undefined } | "cancelled" | undefined> {
+async function askSaveFile(name: string, always = false): Promise<{ file: FileSystemFileHandle | undefined } | "cancelled" | undefined> {
   const pick = filePicker();
-  if (!pick || !asksSaveDialog()) return undefined;
+  if (!pick || !(always ? canAskSave : asksSaveDialog())) return undefined;
   const ext = /\.[A-Za-z0-9]+$/.exec(name)?.[0];
   try {
     const file = await pick({
@@ -212,34 +317,67 @@ async function shareFile(bytes: Uint8Array, name: string): Promise<"shared" | "c
 }
 
 /**
- * 저장한 결과. written: 고른 폴더에 썼다, shared: 공유 창에서 보냈다 (둘 다 저장을 확인한 것),
- * cancelled: 저장 창·공유 창을 닫았다, downloaded: 다운로드를 시작했다 (끝났는지는 알 수 없다),
- * rescued: 저장 창에서 고른 파일에 쓰지 못해 다운로드로 저장했다 (브라우저가 고른 파일을 먼저 비우므로 그 파일은 비었을 수 있다),
- * retry: 시작할 때 예전 폴더를 아직 읽는 중이라 저장하지 않았다 (잠시 뒤 다시 저장하게 알린다)
- */
-export type SaveOutcome = "written" | "shared" | "cancelled" | "downloaded" | "rescued" | "retry";
-
-/**
  * 고른 저장 위치에 파일을 저장한다. 안 되면 다운로드로 저장한다.
  * 저장 창을 띄울 수 있으므로 단추나 단축키를 누른 직후에 부른다.
+ * fresh: 이름 없는 새 악보. 폴더에 저장할 때 같은 이름 파일을 덮어쓰지 않고 새 이름을 고른다.
  */
-export async function saveFile(bytes: Uint8Array, name: string): Promise<SaveOutcome> {
+export async function saveFile(bytes: Uint8Array, name: string, options: { fresh?: boolean } = {}): Promise<SavedFile> {
   // 시작 직후면 예전 폴더 읽기가 끝나기를 기다린 뒤 방식을 고른다 (읽기 전 기본값 ask로 저장 창이 뜨지 않게)
-  if (!(await startup.ready(LOAD_WAIT_MS))) return "retry";
+  if (!(await startup.ready(LOAD_WAIT_MS))) return { outcome: "retry" };
   const chosen = await askSaveFile(name);
-  if (chosen === "cancelled") return "cancelled";
+  if (chosen === "cancelled") return { outcome: "cancelled" };
   if (chosen) {
     if (chosen.file) {
-      if (await writeFile(chosen.file, bytes)) return "written";
+      if (await writeFile(chosen.file, bytes)) return { outcome: "written", name: chosen.file.name, file: chosen.file };
       download(bytes, name);
-      return "rescued";
+      return { outcome: "rescued" };
     }
   } else if (saveTarget.mode === "folder" && canPickFolder && handle) {
-    if (await writeToFolder(handle, bytes, name)) return "written";
+    const written = await writeToFolder(handle, bytes, name, options.fresh ?? false);
+    // 같은 이름이 상한까지 다 있으면 덮어쓰지도, 다운로드로 돌리지도 않고 멈춰 알린다
+    if (written === "full") return { outcome: "full" };
+    if (written) return { outcome: "written", name: written };
   } else if (canShareFiles && saveTarget.share) {
     const shared = await shareFile(bytes, name);
-    if (shared) return shared;
+    if (shared) return { outcome: shared };
   }
   download(bytes, name);
-  return "downloaded";
+  return { outcome: "downloaded" };
+}
+
+/**
+ * 프로젝트(.mme)를 저장한다. file: 지금 곡의 기억한 프로젝트 파일, saveAs: 다른 이름으로 저장 (언제나 저장 창).
+ * 기억한 파일이 있고 저장 방식이 "저장할 때마다 고르기"면 창 없이 그 파일에 바로 쓴다.
+ * 바로 쓰지 못하면 저장 창, 그것도 못 띄우면 다운로드로 저장한다 (directFailed로 알린다)
+ */
+export async function saveProject(
+  bytes: Uint8Array,
+  name: string,
+  o: { file: FileSystemFileHandle | undefined; saveAs: boolean; fresh: boolean },
+): Promise<SavedFile> {
+  if (!(await startup.ready(LOAD_WAIT_MS))) return { outcome: "retry" };
+  return saveProjectFile(bytes, name, { file: o.file, saveAs: o.saveAs, asks: asksSaveDialog(), canAsk: canAskSave }, {
+    write: writeFileAsked,
+    ask: async (n) => (await askSaveFile(n, true)) ?? { file: undefined },
+    target: (b, n) => saveFile(b, n, { fresh: o.fresh }),
+    download,
+    nameOf: (f) => f.name,
+  });
+}
+
+/**
+ * 열기 창으로 악보를 고른다. 고른 파일과 그 핸들, 닫았으면 "cancelled", 띄우지 못했으면 undefined
+ * (그때는 <input type="file">로 연다)
+ */
+export async function pickOpenFile(extensions: readonly string[]): Promise<{ file: File; handle: FileSystemFileHandle } | "cancelled" | undefined> {
+  const pick = openPicker();
+  if (!pick || !canOpenFile) return undefined;
+  try {
+    const [handle] = await pick({ id: "binote-open", types: [{ description: "BiNote", accept: { "application/octet-stream": [...extensions] } }] });
+    if (!handle) return "cancelled";
+    return { file: await handle.getFile(), handle };
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "AbortError") return "cancelled";
+    return undefined;
+  }
 }

@@ -60,7 +60,7 @@ export function outputRows(
   const byTrack = new Map<string, { level: string; code: string }[]>();
   for (const a of diagnostics.tracks) byTrack.set(a.track.id, [...a.diagnostics]);
   for (const d of diagnostics.song) if (d.trackId) byTrack.get(d.trackId)?.push(d);
-  const scores = gameScores(song, (id) => maxChordsOf(profile, instrumentOf(id)), profile.maxChordsPerPlayer);
+  const scores = gameScores(song, (id) => maxChordsOf(profile, instrumentOf(id)), profile.maxChordsPerPlayer, limit);
   // 트랙마다 쓴 글 (소리 없는 자리에 붙인 트랙은 그 트랙의 악보에서 쓴 글 그대로)
   const written = new Map(scores.flatMap((s) => s.texts.map((x) => [x.trackId, x.text] as const)));
   return scores.map((score, k) => {

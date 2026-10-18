@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { rat } from "@mmlce/core";
+import { MOBILE_PROFILE, rat } from "@mmlce/core";
+import { describeDiagnostic } from "@mmlce/i18n";
 import {
+  lengthsFor,
+  NOTE_LENGTHS,
   stepNoteLength,
   clampPitchView,
   dragKeyLine,
@@ -239,5 +242,28 @@ describe("stepNoteLength: +/− 키 길이", () => {
   it("격자에서 출발하면 격자 한 칸 길이를 바꾼다", () => {
     expect(stepNoteLength(noteLengthOf("grid", 16), 2)).toBe("8");
     expect(stepNoteLength(noteLengthOf("grid", 12), 0.5)).toBe("24");
+  });
+});
+
+describe("길이 고르기 목록을 게임 음길이 한도로 거르기", () => {
+  it("지금 한도에서는 32.·64.이 들어 있고, grid는 늘 남는다", () => {
+    const now = lengthsFor(MOBILE_PROFILE.length);
+    expect(now).toContain("32.");
+    expect(now).toContain("64.");
+    expect(now).toEqual([...NOTE_LENGTHS]);
+    const narrow = lengthsFor({ min: 1, max: 32, dots: 0 });
+    expect(narrow).not.toContain("64");
+    expect(narrow).not.toContain("16.");
+    expect(narrow[0]).toBe("grid");
+  });
+
+  it("+/− 키도 거른 목록에서 찾는다 (점 붙은 짧은 길이 포함)", () => {
+    expect(stepNoteLength(rat(3, 32), 0.5, MOBILE_PROFILE.length)).toBe("32.");
+    expect(stepNoteLength(rat(3, 64), 0.5, MOBILE_PROFILE.length)).toBe("64.");
+    expect(stepNoteLength(rat(3, 64), 0.5, { min: 1, max: 32, dots: 1 })).toBeUndefined();
+  });
+
+  it("진단 문구에 한도가 들어간다", () => {
+    expect(describeDiagnostic("ko", { code: "unrepresentable-length", params: { min: 1, max: 64 } })).toContain("1~64");
   });
 });

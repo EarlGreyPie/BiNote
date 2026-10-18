@@ -1,4 +1,4 @@
-import { emptySong, trackInstrument, ZERO, type Player, type Song, type TempoEvent, type Track } from "@mmlce/core";
+import { emptySong, getProfile, PROFILES, trackInstrument, ZERO, type Player, type Song, type TempoEvent, type Track } from "@mmlce/core";
 import { bpmBefore, optimizeMml, padScore, placeTempoByScore, scoreEnd, scoreTrackIds, songChordsPerScore, type TempoMove } from "@mmlce/mml";
 import { encodeCp949 } from "./cp949.js";
 import { channelToTrack, idMaker, instrumentFromProgram, mergeTempo, type ChannelTempo, verbatimTexts, type FileDiagnostic } from "./common.js";
@@ -170,7 +170,8 @@ export function write3mle(song: Song, options: Write3mleOptions = {}): { text: s
     for (const ids of scoreTrackIds(song, songChordsPerScore(song))) {
       const ks = ids.map((id) => song.tracks.findIndex((t) => t.id === id)).filter((k) => k >= 0);
       const end = scoreEnd(ks.map((k) => song.tracks[k]!));
-      const padded = padScore(ks.map((k) => bodies[k]!), end, bpmBefore(song.tempo, end));
+      const profile = PROFILES[song.meta.profileId] ?? getProfile("mobile");
+      const padded = padScore(ks.map((k) => bodies[k]!), end, bpmBefore(song.tempo, end), profile.length, undefined, profile.charLimitPerScore);
       ks.forEach((k, j) => (bodies[k] = padded[j]!));
     }
   }
