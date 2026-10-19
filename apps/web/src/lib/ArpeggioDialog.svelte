@@ -4,6 +4,7 @@
   import { t } from "./i18n.svelte";
   import { lengthLabel } from "./Toolbar.svelte";
   import { lengthsFor, noteLengthOf } from "./roll";
+  import { withLengths } from "./tuplet";
   import { ARP_KEY, ARP_LENGTHS, parseArpChoice, storeArpChoice, type ArpChoice } from "./arpeggioOptions";
   import { loadStored, parseJson, saveStored } from "./persist";
 
@@ -19,6 +20,8 @@
     division: number;
     /** 게임이 받는 음 길이 범위 (GameProfile.length) */
     lengthRange: GameProfile["length"];
+    /** 정해 둔 잇단음 길이 ("20"). 게임이 받으면 길이 목록 제자리에 끼운다 */
+    tupletLength?: string | undefined;
     /** 고른 트랙 악기가 소리 내는 음역 */
     range: PitchRange;
     /** 한 악보 트랙 한도 (maxChordsOf) */
@@ -30,7 +33,7 @@
     onclose: () => void;
   }
 
-  let { song, trackId, picked, division, lengthRange, range, maxTracks, locked, source, onapply, onclose }: Props = $props();
+  let { song, trackId, picked, division, lengthRange, tupletLength, range, maxTracks, locked, source, onapply, onclose }: Props = $props();
 
   let dialog: HTMLDialogElement;
   const stored = loadStored(ARP_KEY, (raw) => parseArpChoice(parseJson(raw)));
@@ -45,8 +48,8 @@
     dialog.showModal();
   });
 
-  /** 게임이 받는 길이만 (점음표·셋잇단 포함, 길이 순, 격자는 그대로) */
-  const lengths = $derived(lengthsFor(lengthRange, ARP_LENGTHS));
+  /** 게임이 받는 길이만 (점음표·셋잇단 포함, 길이 순, 격자는 그대로). 정해 둔 잇단음과 지난번에 쓴 잇단음도 끼운다 */
+  const lengths = $derived(withLengths(lengthsFor(lengthRange, ARP_LENGTHS), [...(tupletLength ? [tupletLength] : []), choice.length], lengthRange, true));
   /** 기억해 둔 길이가 게임 한도 밖이면 격자 */
   const length = $derived(lengths.includes(choice.length) ? choice.length : "grid");
 

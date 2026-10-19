@@ -17,6 +17,12 @@ interface Entry {
   gone?: Map<string, PlayerTab | undefined>;
 }
 
+/**
+ * 곡을 바꾸는 명령을 기록에 넣기 전에 결과를 보는 검사. false면 곡을 그대로 두고 기록하지 않는다.
+ * 모든 편집이 run 한 곳을 지나므로 검사도 여기 한 곳에 둔다 (편집하는 길마다 따로 붙이지 않는다)
+ */
+export type EditGuard = (before: Song, after: Song, command: Command) => boolean;
+
 /** 실행 취소·다시 실행 스택. 텍스트와 피아노롤이 같은 스택을 쓴다. */
 export class History {
   private undoStack: Entry[] = [];
@@ -29,7 +35,13 @@ export class History {
    */
   private tabs = new Map<string, PlayerTab | undefined>();
 
-  constructor(private current: Song) {
+  /** 마지막 run을 검사가 거절했는지 */
+  private wasRefused = false;
+
+  constructor(
+    private current: Song,
+    private readonly guard?: EditGuard,
+  ) {
     this.rememberTabs();
   }
 
@@ -50,9 +62,21 @@ export class History {
     return this.redoStack.length > 0;
   }
 
-  run(command: Command): Song {
+  /** 마지막 run을 검사가 거절해 곡이 그대로인지 */
+  get refused(): boolean {
+    return this.wasRefused;
+  }
+
+  /**
+   * 명령을 실행해 기록에 넣는다. 검사(guard)가 거절하면 곡도 기록도 그대로 두고 지금 곡을 돌려준다 (refused가 true).
+   * unchecked: 검사를 일부러 건너뛰는 길 (MML 글 직접 입력처럼 쓴 글이 곧 출력인 편집)
+   */
+  run(command: Command, options?: { readonly unchecked?: boolean }): Song {
     const before = this.current;
-    this.current = command.apply(before);
+    const after = command.apply(before);
+    this.wasRefused = !options?.unchecked && after !== before && this.guard !== undefined && !this.guard(before, after, command);
+    if (this.wasRefused) return before;
+    this.current = after;
     // 새로 생긴 트랙은 같은 id를 쓰던 예전 트랙의 음소거·솔로를 물려받지 않는다
     const existed = new Set(before.tracks.map((t) => t.id));
     for (const t of this.current.tracks) if (!existed.has(t.id)) this.listening.set(t.id, { mute: t.mute, solo: t.solo });

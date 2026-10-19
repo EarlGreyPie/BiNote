@@ -1,9 +1,11 @@
-import { CHORD_KIND_IDS, cmp, type ArpOrder, type ArpSource, type ArpStyle, type ChordKind, type Note, type Rat, type Song } from "@mmlce/core";
+import { CHORD_KIND_IDS, cmp, defaultLengthLimit, type ArpOrder, type ArpSource, type ArpStyle, type ChordKind, type Note, type Rat, type Song } from "@mmlce/core";
 import type { LengthName } from "./roll";
+import { isGameLengthName } from "./tuplet";
 
 /** 아르페지오 음 길이 목록: 셋잇단(l3·l6·l12·l24·l48)을 넣어 긴 것부터 길이 순 (게임 한도는 lengthsFor로 거른다) */
 export const ARP_LENGTHS = ["grid", "1", "2.", "2", "4.", "3", "4", "8.", "6", "8", "16.", "12", "16", "32.", "24", "32", "64.", "48", "64"] as const satisfies readonly LengthName[];
-export type ArpLength = (typeof ARP_LENGTHS)[number];
+/** 목록 길이 + 사용자가 정한 잇단음 ("20", "20.") */
+export type ArpLength = (typeof ARP_LENGTHS)[number] | `${number}` | `${number}.`;
 
 /** 아르페지오 창에서 고른 것 (이 브라우저에 마지막 값을 기억한다) */
 export interface ArpChoice {
@@ -42,7 +44,8 @@ export function parseArpChoice(raw: unknown): ArpChoice {
     chord: pick(v.chord, CHORD_KIND_IDS, DEFAULT_ARP.chord),
     style: old && style === "strum" && octaves === 1 && !repeat ? "roll" : style,
     order: pick(v.order, ["up", "down", "updown", "random"] as const, DEFAULT_ARP.order),
-    length: pick(v.length, ARP_LENGTHS, DEFAULT_ARP.length),
+    // 잇단음은 게임이 받는 한 토막이면 받는다 (곡 프로필로 다시 거르는 건 창이 한다)
+    length: isGameLengthName(v.length, defaultLengthLimit()) ? v.length : pick(v.length, ARP_LENGTHS, DEFAULT_ARP.length),
     octaves,
     repeat,
     clear: typeof v.clear === "boolean" ? v.clear : DEFAULT_ARP.clear,

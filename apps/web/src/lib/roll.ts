@@ -95,6 +95,16 @@ export function snapDown(time: number, division: number): Rat {
   return rat(Math.max(0, Math.floor(time * division + 1e-9)), division);
 }
 
+/**
+ * 화면 위치(소수)를 편집에 쓸 분수로. 격자 칸(1/division) 위에 있으면 그 칸 그대로 (1/28·1/20처럼 1/960에 안 맞는 칸도
+ * 반올림하지 않는다), 칸 밖이면 1/960 칸 (예전 동작)
+ */
+export function exactTime(time: number, division: number): Rat {
+  const k = Math.round(time * division);
+  if (Math.abs(time * division - k) < 1e-6) return rat(Math.max(0, k), division);
+  return rat(Math.max(0, Math.round(time * 960)), 960);
+}
+
 /** 가장 가까운 격자 위치 */
 export function snapNearest(time: number, division: number): Rat {
   return rat(Math.max(0, Math.round(time * division)), division);
@@ -353,7 +363,8 @@ export function isResizeGrab(n: { start: Rat; dur: Rat }, time: number, pxPerWho
  * (점은 가장 짧은 길이에도 붙는다: 32. = 3/64, 64. = 3/128. 48.은 32와 같은 길이라 따로 두지 않는다)
  */
 export const NOTE_LENGTHS = ["grid", "1", "2", "2.", "4", "4.", "8", "8.", "16", "16.", "32", "32.", "64", "64.", "12", "24", "48"] as const;
-export type NoteLength = (typeof NOTE_LENGTHS)[number];
+/** 목록 길이 + 사용자가 정한 잇단음 길이 ("20" = 4분 5잇단, "20." = 점4분 5잇단, tuplet.ts) */
+export type NoteLength = (typeof NOTE_LENGTHS)[number] | `${number}` | `${number}.`;
 /** 길이 표기 ("grid", "16", "8." 같은 것). 아르페지오 창처럼 NOTE_LENGTHS 밖 길이(l3·l6)를 쓰는 목록도 받는다 */
 export type LengthName = NoteLength | `${number}` | `${number}.`;
 

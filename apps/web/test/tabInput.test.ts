@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { assignTab, emptySong, rat, STANDARD_TUNING, type Note, type Song } from "@mmlce/core";
-import { fretFromKeys, placeTabNote, typeFretDigit, type DigitNote, removeTabNote, setTabNoteLength, tieTabNote } from "../src/lib/tabInput";
+import { fretFromKeys, pinShownStrings, placeTabNote, shownStrings, typeFretDigit, type DigitNote, removeTabNote, setTabNoteLength, tieTabNote } from "../src/lib/tabInput";
 
 function song(): Song {
   const base = emptySong({ title: "", author: "", profileId: "mobile" });
@@ -209,5 +209,43 @@ describe("두 자리 프렛으로 화음을 줄마다 넣기 (E♭maj7 15·15·1
     t.key(2, "1");
     t.key(3, "5");
     expect(t.strings()).toEqual(["60→2:1", "60→3:5"]);
+  });
+});
+
+describe("타브 입력: 앞 음 줄 지키기", () => {
+  // 재현(beta.22): l20 fd+dc<a+ 가 D 3·1·0, A 3·1로 보이는데, 뒤에 A줄 5(d)를 치면 c·a+가 낮은 E줄 8·6으로 옮겨 갔다
+  const l20 = rat(1, 20);
+  const at = (k: number) => rat(k, 20);
+  const notes: Note[] = [53, 51, 50, 48, 46].map((pitch, k) => ({ id: `a.${k + 1}`, start: at(k), dur: l20, pitch, vol: 8, tie: "none" }));
+  const fretsOf = (list: readonly Note[]) =>
+    assignTab(list).flatMap((e) => e.notes.map((x) => `${x.note.pitch}:${x.at?.string}/${x.at?.fret}`));
+  const enterD = (pin: boolean) => {
+    const s = { ...song(), tracks: song().tracks.map((t) => (t.id === "a" ? { ...t, notes } : t)) };
+    const edit = placeTabNote(s, ["a", "b"], "a", at(5), rat(1, 12), 50);
+    const shown = shownStrings(assignTab(notes));
+    const changed = edit.changes[0]!.notes.map((n) => (n.id === edit.noteId ? { ...n, tabString: 5 } : n));
+    return pin ? pinShownStrings(changed, shown) : changed;
+  };
+
+  it("넣기 전에는 A줄 3·1로 보인다", () => {
+    expect(fretsOf(notes).slice(3)).toEqual(["48:5/3", "46:5/1"]);
+  });
+
+  it("묶지 않으면 앞 음이 다른 줄로 옮겨 간다 (고친 원인)", () => {
+    expect(fretsOf(enterD(false)).slice(3, 5)).not.toEqual(["48:5/3", "46:5/1"]);
+  });
+
+  it("뒤에 음을 쳐도 앞에 보이던 줄·프렛은 그대로다", () => {
+    expect(fretsOf(enterD(true))).toEqual(["53:4/3", "51:4/1", "50:4/0", "48:5/3", "46:5/1", "50:5/5"]);
+  });
+
+  it("이미 줄이 적힌 음과 높이가 바뀐 음은 묶지 않는다", () => {
+    const shown = new Map([
+      ["x", { pitch: 48, string: 5 }],
+      ["y", { pitch: 48, string: 5 }],
+    ]);
+    const x: Note = { id: "x", start: at(0), dur: l20, pitch: 48, vol: 8, tie: "none", tabString: 6 };
+    const y: Note = { id: "y", start: at(1), dur: l20, pitch: 50, vol: 8, tie: "none" };
+    expect(pinShownStrings([x, y], shown)).toEqual([x, y]);
   });
 });

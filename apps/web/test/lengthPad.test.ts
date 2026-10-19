@@ -8,6 +8,11 @@ describe("음표 입력판", () => {
     expect(padLengths(NOTE_LENGTHS, true)).toEqual(["grid", "1", "2", "4", "8", "16", "32", "64", "12", "24", "48"]);
     expect(padLengths(["grid", "4", "8", "24"], true)).toEqual(["grid", "4", "8", "24"]);
   });
+  it("잇단음 단추는 목록에 있을 때만 맨 끝에, 다른 단추와 겹치면 하나만", () => {
+    expect(padLengths([...NOTE_LENGTHS, "20"], true, "20")).toEqual(["grid", "1", "2", "4", "8", "16", "32", "64", "12", "24", "48", "20"]);
+    expect(padLengths(NOTE_LENGTHS, false, "20")).toEqual(["grid", "1", "2", "4", "8", "16", "32", "64"]);
+    expect(padLengths(NOTE_LENGTHS, true, "12")).toEqual(["grid", "1", "2", "4", "8", "16", "32", "64", "12", "24", "48"]);
+  });
   it("점 붙은 새 음 길이는 점 없는 단추가 눌린 것으로 본다", () => {
     expect(padPressed("4", "4")).toBe(true);
     expect(padPressed("4", "4.")).toBe(true);

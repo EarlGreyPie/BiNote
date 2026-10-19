@@ -7,6 +7,7 @@
   import { pwa } from "./pwa.svelte";
   import { setTabTint, tabTint } from "./tabTint.svelte";
   import { fretPadPrefs, setLengthPadTriplets, setPadAdvanceDir, type PadAdvanceDir } from "./fretPadPrefs.svelte";
+  import { setLengthPadTuplet, tupletPrefs } from "./tupletPrefs.svelte";
   import { setVolumeLabels, volumeLabels } from "./volumeLabels.svelte";
   import type { VolumeLabelMode } from "./volumeLabels";
   import { rollFlow, setRollFlow, type RollFlow } from "./rollFlow.svelte";
@@ -215,6 +216,10 @@
         <label class="row" title={t("ui.lengthPadTripletsHelp")}>
           <input type="checkbox" checked={fretPadPrefs.triplets} onchange={(e) => setLengthPadTriplets(e.currentTarget.checked)} />
           <span>{t("ui.lengthPadTriplets")}</span>
+        </label>
+        <label class="row" title={t("ui.lengthPadTupletHelp")}>
+          <input type="checkbox" checked={tupletPrefs.pad} onchange={(e) => setLengthPadTuplet(e.currentTarget.checked)} />
+          <span>{t("ui.lengthPadTuplet")}</span>
         </label>
         <label class="row" title={t("ui.padAdvanceDirHelp")}>
           <span>{t("ui.padAdvanceDir")}</span>

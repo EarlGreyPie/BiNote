@@ -17,7 +17,7 @@ export const SLIDE_KEY = "mmlce.slide";
 
 export const DEFAULT_SLIDE: SlideChoice = { kind: "between", path: "chromatic", direction: "down", semitones: 2, length: "16", step: "auto" };
 
-const LENGTHS = NOTE_LENGTHS.filter((l): l is Exclude<NoteLength, "grid"> => l !== "grid");
+const LENGTHS = NOTE_LENGTHS.filter((l): l is Exclude<(typeof NOTE_LENGTHS)[number], "grid"> => l !== "grid");
 
 /** 저장해 둔 값을 읽는다. 모르는 값은 기본으로 */
 export function parseSlideChoice(raw: unknown): SlideChoice {

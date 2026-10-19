@@ -1,4 +1,4 @@
-import { add, cmp, placeNote, removeNotes, sub, toggleTie, type InstrumentRef, type Note, type Rat, type Song } from "@mmlce/core";
+import { add, cmp, placeNote, removeNotes, sub, toggleTie, type InstrumentRef, type Note, type Rat, type Song, type TabEvent } from "@mmlce/core";
 import { previousVolume } from "./midiInput";
 
 /** 타브에서 넣은 음이 들어갈 트랙과 바뀐 음 목록 */
@@ -164,4 +164,27 @@ export function typeFretDigit(
   const next = fretFromKeys(kept, digit, maxFret);
   const joined = kept !== "" && next.fret === Number(kept + digit);
   return { ...next, replaceId: joined && same ? memo!.id : undefined };
+}
+
+/** 타브에 지금 보이는 음의 줄: 음 id → 그때 높이와 줄 (assignTab 결과에서 만든다) */
+export type ShownStrings = ReadonlyMap<string, { readonly pitch: number; readonly string: number }>;
+
+/** 배정 결과에서 줄에 놓인 음만 모은다 (칠 수 없는 음은 뺀다) */
+export function shownStrings(events: readonly TabEvent[]): ShownStrings {
+  const out = new Map<string, { pitch: number; string: number }>();
+  for (const e of events) for (const x of e.notes) if (x.at) out.set(x.note.id, { pitch: x.note.pitch, string: x.at.string });
+  return out;
+}
+
+/**
+ * 타브에서 음을 넣거나 바꿀 때, 바뀌는 트랙의 다른 음을 지금 보이는 줄에 묶는다 (Note.tabString).
+ * 줄 배정은 곡 전체를 다시 계산하므로, 묶지 않으면 뒤에 친 음 하나 때문에 앞에 보이던 음이 다른 줄·프렛으로 옮겨 간다.
+ * 이미 줄이 적힌 음과, 높이가 바뀌어 보이던 줄이 의미 없는 음은 그대로 둔다
+ */
+export function pinShownStrings(notes: readonly Note[], shown: ShownStrings): Note[] {
+  return notes.map((n) => {
+    if (n.tabString !== undefined) return n;
+    const s = shown.get(n.id);
+    return s && s.pitch === n.pitch ? { ...n, tabString: s.string } : n;
+  });
 }

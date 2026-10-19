@@ -164,6 +164,10 @@
   import HelpPopover from "./lib/HelpPopover.svelte";
   import Icon from "./lib/Icon.svelte";
   import MeterDialog from "./lib/MeterDialog.svelte";
+  import TupletDialog from "./lib/TupletDialog.svelte";
+  import { newUnwritableTrack } from "./lib/writable";
+  import { gridDivisions, isGridDivision, tupletFits, tupletGrid, tupletName, withLengths, type Tuplet } from "./lib/tuplet";
+  import { setTuplet, tupletPrefs } from "./lib/tupletPrefs.svelte";
   import EventDialog from "./lib/EventDialog.svelte";
   import TempoChangeDialog from "./lib/TempoChangeDialog.svelte";
   import SettingsDialog from "./lib/SettingsDialog.svelte";
@@ -212,7 +216,7 @@
   import { meterEditAt, meterTarget } from "./lib/meterTarget";
   import { dotFactor, toggleDot } from "./lib/dotLength";
   import { tabArpPick } from "./lib/arpeggioOptions";
-  import { VIDEO_DEFAULTS, tempoChanges, lengthsFor, noteLengthOf, stepNoteLength, type BackgroundVideo, type EventKind, type EventLabel, type EventRef, type NoteLength, type Orientation, type RollTool } from "./lib/roll";
+  import { VIDEO_DEFAULTS, exactTime, tempoChanges, lengthsFor, noteLengthOf, stepNoteLength, type BackgroundVideo, type EventKind, type EventLabel, type EventRef, type NoteLength, type Orientation, type RollTool } from "./lib/roll";
 
 
   const engine = new Engine();
@@ -255,6 +259,14 @@
   }
   const newNoteDur = $derived(noteLengthOf(noteLength, division));
   const DIVISIONS = GRID_DIVISIONS;
+  /** 새 음 → 잇단음… 창 */
+  let tupletOpen = $state(false);
+  /** 잇단음을 정한다: 새 음 길이로 삼고, grid면 격자도 그 칸으로 */
+  function applyTuplet(tuplet: Tuplet, grid: boolean) {
+    setTuplet(tuplet);
+    noteLength = tupletName(tuplet);
+    if (grid && isGridDivision(tupletGrid(tuplet), profile.length)) division = tupletGrid(tuplet);
+  }
   let viewMode = $state<"roll" | "tab">("roll");
   /**
    * 타브 ↔ 피아노롤을 바꿔도 이어 보는 자리: 보던 시간 자리(같이 씀), 롤·타브 확대(따로), 타브 커서.
@@ -515,7 +527,18 @@
 
   const profile = $derived(getProfile(song?.meta.profileId ?? "mobile"));
   /** 고를 수 있는 새 음 길이: 게임 음길이 한도(곡 프로필)로 거른 목록. 고른 길이가 목록 밖이면(프로필이 바뀜 등) 격자로 */
-  const noteLengths = $derived(lengthsFor(profile.length));
+  /** 정해 둔 잇단음 길이 ("20"). 게임이 받지 못하면(곡 프로필이 바뀜 등) 없다 */
+  const tupletLength = $derived(tupletFits(tupletPrefs.tuplet, profile.length) ? tupletName(tupletPrefs.tuplet) : undefined);
+  /** 잇단음 길이와, 파일에서 읽은 지금 길이(다른 잇단음)도 게임이 받으면 목록에 둔다 */
+  const noteLengths = $derived(withLengths(lengthsFor(profile.length), [...(tupletLength ? [tupletLength] : []), noteLength], profile.length));
+  /**
+   * 고를 수 있는 격자: 목록 칸 + 잇단음 칸 + 새 음 길이에 맞는 칸(l20.이면 1/40) + 지금 격자.
+   * 새 음을 같은 길이로 이어 넣을 자리가 칸에 맞아야 롤에서 눌러 넣고 고칠 수 있다.
+   * 칸 하나가 게임 최단 토막보다 짧은 격자(1/128 등)는 넣지 않는다 (그 칸 길이 음·쉼표를 MML로 쓸 수 없다)
+   */
+  const divisions = $derived(
+    gridDivisions(GRID_DIVISIONS, [...(tupletLength ? [tupletGrid(tupletPrefs.tuplet)] : []), ...(noteLength !== "grid" ? [noteLengthOf(noteLength, 1).d] : []), division], profile.length),
+  );
   $effect(() => {
     if (!noteLengths.includes(noteLength)) noteLength = "grid";
   });
@@ -547,7 +570,7 @@
   /** 음량 레인 한 획이 여러 트랙을 바꿀 때 (잠근 트랙은 뺀다) */
   function editVolumes(changes: { trackId: string; notes: Note[] }[], label: string) {
     const open = changes.filter((c) => editable(c.trackId));
-    if (history && open.length > 0) sync(history.run(setTracksNotes(open, label)));
+    if (open.length > 0) commit(setTracksNotes(open, label));
   }
   // 트랙 색은 지금 보이는 테마(밝게·어둡게)에 맞춘 짝을 쓴다
   const paletteTheme = $derived(appearance.theme === "system" ? (systemDark ? "dark" : "light") : appearance.theme);
@@ -588,7 +611,8 @@
   });
   const songSeconds = $derived(playback.seconds);
   const playhead = $derived(playback.playhead(song));
-  const asRat = (time: number) => rat(Math.round(time * 960), 960);
+  /** 화면 위치(소수) → 분수. 지금 격자 칸에 있으면 그 칸 그대로(1/28 등), 아니면 1/960 칸 */
+  const asRat = (time: number) => exactTime(time, division);
   // 동시발음 모니터: 재생 중이면 재생선, 아니면 커서 자리. 곡 전체 최대도 함께
   const peak = $derived(song ? peakPolyphony(song) : { count: 0, at: 0 });
   const nowAt = $derived(playhead ?? cursor);
@@ -648,7 +672,8 @@
     const track = history.song.tracks.find((tr) => tr.id === trackId);
     // 편집기가 닫히며 남은 입력을 저장할 때 그 트랙이 이미 지워졌을 수 있다
     if (!track || track.mml?.text === text || !editable(trackId) || picking) return;
-    sync(history.run(setTrackText(trackId, text)));
+    // MML 글 직접 입력은 검사하지 않는다: 쓴 글이 곧 출력이고, 입력하는 중간 글을 거절하면 타이핑이 막힌다
+    commit(setTrackText(trackId, text), { unchecked: true });
   }
 
   /**
@@ -672,8 +697,35 @@
     return command;
   }
 
+  /** 새 곡의 실행 취소 기록. 모든 편집이 지나는 run에 쓸 수 없는 길이 검사(guardEdit)를 건다 */
+  function newHistory(next: Song): History {
+    return new History(next, guardEdit);
+  }
+
+  /**
+   * 곡을 바꾸는 모든 편집의 검사 (실행 취소 기록 run 한 곳에서 부른다).
+   * 결과 곡에 게임에 정확히 쓸 수 없는 길이(1/70 쉼표 등)가 새로 생기면 곡을 그대로 두고 이유를 알린다
+   * (출력기가 그 조각을 버려 음이 빠지거나 당겨지지 않게)
+   */
+  function guardEdit(before: Song, after: Song): boolean {
+    const bad = newUnwritableTrack(before, after, profile.length);
+    if (bad === undefined) return true;
+    const name = after.tracks.find((tr) => tr.id === bad)?.name ?? "";
+    error = t("ui.unwritableEdit", { track: name, max: profile.length.max });
+    return false;
+  }
+
+  /** 명령을 실행 취소 기록에 넣고 화면을 맞춘다. 검사가 거절했으면 undefined (곡은 그대로) */
+  function commit(command: Command, options?: { readonly unchecked?: boolean }): Song | undefined {
+    if (!history) return undefined;
+    const next = history.run(command, options);
+    if (history.refused) return undefined;
+    sync(next);
+    return next;
+  }
+
   function editNotes(trackId: string, notes: Note[], label: string) {
-    if (history && editable(trackId) && !picking) sync(history.run(setTrackNotes(trackId, notes, label)));
+    if (history && editable(trackId) && !picking) commit(setTrackNotes(trackId, notes, label));
   }
 
   /** 게임에 넣기 점검판. 열려 있는 동안 곡이 바뀌면 바로 다시 센다 */
@@ -796,7 +848,7 @@
   function applyOptimize() {
     if (!history || !song || !optimizing || optimizing.before !== song) return;
     const before = totalChars(song);
-    const next = history.run(
+    const next = commit(
       optimizing.kind === "compact"
         ? compactSong(profile, undefined, lockedIds)
         : optimizing.kind === "merge"
@@ -805,7 +857,7 @@
             ? addAndDistribute(optimizing.addTo)
             : distributeSong(profile, undefined, undefined, lockedIds),
     );
-    sync(next);
+    if (!next) return;
     flash(t("ui.compactDone", { before, after: totalChars(next) }));
   }
 
@@ -863,8 +915,7 @@
     booksRunner.cancel();
     fewer = undefined;
     // 적용할 때의 잠금으로 다시 옮긴다 (계산한 뒤 잠금이 바뀌었어도 잠근 트랙은 건드리지 않는다)
-    sync(history.run(distributeSong(profile, t("ui.splitFewerUndo"), limit, lockedIds)));
-    void runSplit();
+    if (commit(distributeSong(profile, t("ui.splitFewerUndo"), limit, lockedIds))) void runSplit();
   }
   function cancelSplit() {
     booksRunner.cancel();
@@ -952,7 +1003,7 @@
     const old = state.scoreTunings;
     if (history && old && Object.keys(old).length > 0) {
       const next = { ...history.song, players: history.song.players.map((p) => (Object.hasOwn(old, p.id) && !p.tab ? { ...p, tab: old[p.id]! } : p)) };
-      history = new History(next);
+      history = newHistory(next);
       sync(next);
     }
     // 파일에 적힌 튜닝을 되살린 것은 고친 것이 아니다: 연 그대로의 상태로 다시 잡는다
@@ -1263,7 +1314,7 @@
     tuningName = "standard";
     capo = 0;
     autosaved.reset(autosaveState(next, name));
-    history = new History(next);
+    history = newHistory(next);
     sync(next);
     activeTrackId = next.tracks[0]?.id;
     fileName = name;
@@ -1317,25 +1368,23 @@
     if (!history || !activePlayer) return;
     const s = history.song;
     const n = s.tracks.filter((tr) => tr.playerId === activePlayer.id).length + 1;
-    const next = history.run(addTrack(activePlayer.id, t("ui.newTrackName", { n }), t("ui.addTrack")));
-    sync(next);
+    const next = commit(addTrack(activePlayer.id, t("ui.newTrackName", { n }), t("ui.addTrack")));
+    if (!next) return;
     activeTrackId = next.tracks.find((tr) => !s.tracks.some((o) => o.id === tr.id))?.id ?? activeTrackId;
   }
 
   function addNewPlayer(canonical: string) {
     if (!history) return;
     const s = history.song;
-    const next = history.run(addPlayer(canonical, freshScoreName(s, canonical), t("ui.newTrackName", { n: 1 }), t("ui.addPlayer")));
-    sync(next);
+    const next = commit(addPlayer(canonical, freshScoreName(s, canonical), t("ui.newTrackName", { n: 1 }), t("ui.addPlayer")));
+    if (!next) return;
     activeTrackId = next.tracks.find((tr) => !s.tracks.some((o) => o.id === tr.id))?.id ?? activeTrackId;
   }
 
   /** 바뀌는 게 있을 때만 실행한다 (제자리 옮기기가 실행 취소 기록에 빈 단계로 남지 않게) */
   function runIfChanged(command: Command): Song | undefined {
     if (!history || command.apply(history.song) === history.song) return undefined;
-    const next = history.run(command);
-    sync(next);
-    return next;
+    return commit(command);
   }
 
   function deleteTrack(track: Track) {
@@ -1344,16 +1393,17 @@
     const s = history.song;
     const index = s.tracks.findIndex((tr) => tr.id === track.id);
     const wasActive = activeTrackId === track.id;
-    const next = history.run(removeTrack(track.id, t("ui.removeTrack")));
-    sync(next);
+    const next = commit(removeTrack(track.id, t("ui.removeTrack")));
+    if (!next) return;
     // 고르던 트랙을 지우면 그 자리 이웃 트랙을 고른다 (sync가 첫 트랙으로 바꾸기 전 값으로 판단)
     if (wasActive) activeTrackId = next.tracks[Math.min(index, next.tracks.length - 1)]?.id;
   }
 
   function appendPasted(other: Song) {
     if (!history) return openSong(other, "");
-    const next = history.run(appendSong(other));
-    sync(next);
+    // 붙여 넣은 MML 글을 새 악보로 더한다: 글 그대로 출력되는 것은 새로 열기와 같아서 검사하지 않는다
+    const next = commit(appendSong(other), { unchecked: true });
+    if (!next) return;
     activeTrackId = next.tracks[next.tracks.length - other.tracks.length]?.id ?? activeTrackId;
     split = undefined;
   }
@@ -1361,7 +1411,7 @@
   /** 편집 칸 밖에서 MML@ 글을 붙여넣으면 붙여넣기 창을 연다 */
   function onPaste(event: ClipboardEvent) {
     if (picking) return;
-    if (showKeymap || paste || midi || settings || meterOpen || eventEdit || addScoreOpen) return;
+    if (showKeymap || paste || midi || settings || meterOpen || tupletOpen || eventEdit || addScoreOpen) return;
     const target = event.target as HTMLElement | null;
     if (target?.closest?.(TYPING)) return;
     const text = event.clipboardData?.getData("text/plain") ?? "";
@@ -1488,7 +1538,7 @@
     // 화음을 나눠 넣을 다른 트랙이 잠겼으면 그 트랙 몫은 버린다
     const open = changes.filter((c) => !lockedIds.has(c.trackId));
     if (open.length === 0) return;
-    sync(history.run(setTracksNotes(open, t("ui.midiKeysInput"))));
+    if (!commit(setTracksNotes(open, t("ui.midiKeysInput")))) return;
     setCursor(add(at, dur));
   }
 
@@ -1562,16 +1612,16 @@
   function applyEvent(change: { kind: "tempo"; bpm: number } | { kind: "marker"; text: string } | { kind: "meter"; beats: number; unit: number }) {
     const e = eventEdit;
     if (!history || !song || !e) return;
-    if (change.kind === "tempo") sync(history.run(setTempoAt(e.at, change.bpm, t("ui.tempoLabel"))));
-    else if (change.kind === "marker") sync(history.run(setMarker(e.existing ? e.id : undefined, e.at, change.text, t("ui.markerLabel"))));
-    else sync(history.run(meterEditAt(song.timeSig, e.at, change.beats, change.unit, t("ui.meter"))));
+    if (change.kind === "tempo") commit(setTempoAt(e.at, change.bpm, t("ui.tempoLabel")));
+    else if (change.kind === "marker") commit(setMarker(e.existing ? e.id : undefined, e.at, change.text, t("ui.markerLabel")));
+    else commit(meterEditAt(song.timeSig, e.at, change.beats, change.unit, t("ui.meter")));
   }
   function deleteEvent() {
     const e = eventEdit;
     if (!history || !e) return;
-    if (e.kind === "tempo") sync(history.run(removeTempoAt(e.at, t("ui.tempoDelete"))));
-    else if (e.kind === "marker" && e.id) sync(history.run(removeMarker(e.id, t("ui.markerDelete"))));
-    else if (e.kind === "meter") sync(history.run(removeMeter(e.at, t("ui.meterDelete"))));
+    if (e.kind === "tempo") commit(removeTempoAt(e.at, t("ui.tempoDelete")));
+    else if (e.kind === "marker" && e.id) commit(removeMarker(e.id, t("ui.markerDelete")));
+    else if (e.kind === "meter") commit(removeMeter(e.at, t("ui.meterDelete")));
   }
   function moveEvent(label: EventLabel, to: Rat) {
     if (!history) return;
@@ -1662,8 +1712,8 @@
     const bpm = Math.min(max, Math.max(min, bpmAt(history.song.tempo, at) + step));
     if (bpm === bpmAt(history.song.tempo, at)) return;
     if (merge) history.undo();
-    const next = history.run(setTempoAt(at, bpm, t("ui.tempoLabel")));
-    sync(next);
+    const next = commit(setTempoAt(at, bpm, t("ui.tempoLabel")));
+    if (!next) return;
     tempoWheel = { at, after: next, time: performance.now() };
   }
   /** 템포 한꺼번에 지우기: 반복 구간이 있으면 그 안, 없으면 곡 처음 템포를 뺀 전부 (실행 취소 한 칸) */
@@ -1722,7 +1772,7 @@
     if (!history || !Number.isInteger(beats) || beats < 1 || beats > 32) return;
     // 박자를 바꿀 자리: meterPos와 같은 규칙이고, 타브 커서를 쓰면 그 칸을 먼저 보인다
     const pos = song ? meterTarget(song.timeSig, viewMode, tabCursorForCommand(), cursor === undefined ? undefined : editCursor()) : meterPos;
-    sync(history.run(setMeter(pos, beats, unit, t("ui.meter"))));
+    commit(setMeter(pos, beats, unit, t("ui.meter")));
   }
 
   /** 음 목록 (보기 메뉴): 고른 트랙의 음을 키보드·화면 낭독기로 찾아 고르는 길 */
@@ -1741,7 +1791,7 @@
     const at = editCursor();
     if (!history || !at) return;
     const bar = meterGrid(meterAt(history.song.timeSig, at)).measure;
-    sync(history.run(kind === "insert" ? insertTime(at, bar, t("ui.insertBar")) : deleteTime(at, bar, t("ui.deleteBar"))));
+    commit(kind === "insert" ? insertTime(at, bar, t("ui.insertBar")) : deleteTime(at, bar, t("ui.deleteBar")));
   }
 
   /** 일시정지: 지금 재생 자리를 커서로 두고 멈춘다. 다시 재생하면 그 자리부터 */
@@ -2065,7 +2115,7 @@
     if (target.source === "together" && selectedNotes.length === 0) tabCursorForCommand();
     // 잠근 트랙을 바꾸는 결과는 넣지 않는다 (계산에서 이미 빼지만, 다른 편집 명령과 같게 적용 직전에도 막는다)
     if (!result.changes.every((c) => editable(c.trackId))) return;
-    sync(history.run(setNotesAndAddTracks(track.playerId, result.changes, result.newTracks, (n) => t("ui.newTrackName", { n }), t("ui.arpeggio"))));
+    commit(setNotesAndAddTracks(track.playerId, result.changes, result.newTracks, (n) => t("ui.newTrackName", { n }), t("ui.arpeggio")));
   }
 
   // 슬라이드: 피아노롤에서 고른 음(한 트랙) 사이를 반음씩 잇거나, 앞뒤에 미끄러져 들어가고 나가는 음을 붙인다 (실행 취소 한 칸)
@@ -2079,7 +2129,7 @@
     if (!history || !target || !result.notes) return;
     // 잠근 트랙은 바꾸지 않는다 (계산·대화상자에서 이미 막지만, 아르페지오처럼 적용 직전에도 막는다)
     if (!editable(target.trackId)) return;
-    sync(history.run(setTracksNotes([{ trackId: target.trackId, notes: result.notes }], t("ui.slide"))));
+    if (!commit(setTracksNotes([{ trackId: target.trackId, notes: result.notes }], t("ui.slide")))) return;
     // 만든 사슬 전체를 골라 바로 다시 고칠 수 있게
     roll?.selectIds(result.chain);
   }
@@ -2248,7 +2298,7 @@
       const byId = new Map(moved.map((n) => [n.id, n]));
       return [{ trackId: track.id, notes: track.notes.map((n) => (picked.has(n.id) ? byId.get(n.id)! : n)) }];
     });
-    if (changes.length > 0) sync(history.run(setTracksNotes(changes, label)));
+    if (changes.length > 0) commit(setTracksNotes(changes, label));
   }
 
   // 화음↔트랙 정리: 고른 음 옮기기 / 트랙 합치기 / 높이 순으로 다시 나누기. 지난번 방식을 기억한다
@@ -2307,7 +2357,7 @@
     const plan = voicePlan(mode, o);
     if (!history || !plan || plan.moved === 0) return;
     const label = t(mode === "move" ? "ui.voiceMoveLabel" : mode === "merge" ? "ui.voiceMergeLabel" : "ui.voiceByPitchLabel");
-    sync(history.run(applyPlan(plan, label)));
+    if (!commit(applyPlan(plan, label))) return;
     voicePrefs = { mode, order: o.order };
     saveStored(VOICE_STORAGE, JSON.stringify(voicePrefs));
     flash(plan.blocked > 0 ? t("ui.voiceDoneBlocked", { moved: plan.moved, blocked: plan.blocked }) : t("ui.voiceDone", { moved: plan.moved }));
@@ -2743,8 +2793,8 @@
 
   const trackActions: TrackActions = {
     select: (id) => (activeTrackId = id),
-    renameTrack: (id, name) => history && sync(history.run(renameTrack(id, name, t("ui.rename")))),
-    renamePlayer: (id, name) => history && sync(history.run(renamePlayer(id, name, t("ui.rename")))),
+    renameTrack: (id, name) => commit(renameTrack(id, name, t("ui.rename"))),
+    renamePlayer: (id, name) => commit(renamePlayer(id, name, t("ui.rename"))),
     playerInstrument: (playerId, canonical) => {
       const player = history?.song.players.find((p) => p.id === playerId);
       if (!history || !player) return;
@@ -2752,7 +2802,7 @@
       runSoloSplit(keepScoreTempo(setPlayerInstrument(playerId, canonical, { from, to: instrumentName(canonical) }, t("ui.instrument"), soloSplit, programFor)));
     },
     trackInstrument: (id, canonical) => runSoloSplit(keepScoreTempo(setTrackInstrument(id, canonical, t("ui.trackInstrument"), soloSplit, programFor))),
-    trackPack: (id, pack) => history && sync(history.run(setTrackPack(id, pack, programFor, t("ui.trackPack")))),
+    trackPack: (id, pack) => commit(setTrackPack(id, pack, programFor, t("ui.trackPack"))),
     listen: updateTrack,
     viewOf: (id) => trackView[id] ?? {},
     view: (id, change) => (trackView = withTrackView(trackView, id, change)),
@@ -2852,7 +2902,7 @@
     const owners = new Map(history.song.tracks.map((tr) => [tr.id, tr.playerId]));
     const beforeSong = history.song;
     const before = new Set(beforeSong.players.map((p) => p.id));
-    sync(history.run(command));
+    if (!commit(command)) return;
     const moved = history.song.tracks.filter((tr) => owners.has(tr.id) && owners.get(tr.id) !== tr.playerId);
     // 원래 있던 악보로 옮겼으면 떼어 냈던 트랙을 돌려보낸 것
     const back = moved.filter((tr) => before.has(tr.playerId)).length;
@@ -2935,6 +2985,7 @@
       picked={arpeggio.picked}
       {division}
       lengthRange={profile.length}
+      {tupletLength}
       range={trackSoundingRange(profile, song, arpTrack, canonicalOf)}
       maxTracks={maxChordsOf(profile, song.players.find((p) => p.id === arpTrack.playerId)?.instrument.canonical)}
       locked={lockedIds}
@@ -3050,6 +3101,9 @@
 {#if meterOpen}
   <MeterDialog beats={meterHere.beats} unit={meterHere.unit} onapply={changeMeter} onclose={() => (meterOpen = false)} />
 {/if}
+{#if tupletOpen}
+  <TupletDialog tuplet={tupletPrefs.tuplet} limit={profile.length} onapply={applyTuplet} onclose={() => (tupletOpen = false)} />
+{/if}
 
 {#if addScoreOpen}
   <AddScoreDialog initial="piano" onadd={addNewPlayer} onclose={() => (addScoreOpen = false)} />
@@ -3103,7 +3157,9 @@
       meter={meterHere}
       onmeter={changeMeter}
       {division}
+      {divisions}
       ondivision={(d) => (division = d)}
+      ontuplet={() => (tupletOpen = true)}
       {noteLength}
       {noteLengths}
       onnotelength={(l) => (noteLength = l)}
@@ -3269,8 +3325,10 @@
           noteDur={newNoteDur}
           {noteLength}
           {noteLengths}
+          {tupletLength}
           lengthLimit={profile.length}
           onnotelength={(l) => (noteLength = l)}
+          ontuplet={() => (tupletOpen = true)}
           bind:volume={inputVolume}
           volumeRange={profile.volume}
           {colors}
@@ -3295,11 +3353,11 @@
           onedit={(changes, label) => {
             // 여러 트랙을 바꾸는 명령은 잠근 트랙이 하나라도 끼면 통째로 하지 않는다 (피아노롤과 같이 알리고 거절)
             if (!history || changes.length === 0 || !changes.every((c) => editable(c.trackId))) return;
-            sync(history.run(setTracksNotes(changes, label)));
+            commit(setTracksNotes(changes, label));
           }}
           onlayers={(changes, added, playerId, label) => {
             if (!history || !changes.every((c) => editable(c.trackId))) return;
-            sync(history.run(pasteLayers(history.song, changes, added, playerId, label)));
+            commit(pasteLayers(history.song, changes, added, playerId, label));
           }}
           onpastefull={(limit) => (error = t("ui.tabPasteFull", { limit }))}
           ondot={() => run("edit.dotToggle")}
@@ -3307,7 +3365,7 @@
           onnewtrack={({ playerId, notes, instrument }, label) => {
             if (!history) return;
             const n = history.song.tracks.filter((tr) => tr.playerId === playerId).length + 1;
-            sync(history.run(addTrackWithNotes(playerId, t("ui.newTrackName", { n }), notes, label, instrument)));
+            commit(addTrackWithNotes(playerId, t("ui.newTrackName", { n }), notes, label, instrument));
           }}
           onfull={(limit) => (error = t("ui.tabChordFull", { limit }))}
           onpreview={(pitch) => {

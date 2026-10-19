@@ -1,12 +1,16 @@
 import type { NoteLength } from "./roll";
 
-/** 음표 입력판(타브 숫자판 위 한 줄)에 놓는 길이: 격자대로, 온음표~64분음표, 켜면 셋잇단 */
+/** 음표 입력판(타브 숫자판 위 한 줄)에 놓는 길이: 격자대로, 온음표~64분음표, 켜면 셋잇단과 사용자가 정한 잇단음 */
 const BASE = ["grid", "1", "2", "4", "8", "16", "32", "64"] as const;
 const TRIPLETS = ["12", "24", "48"] as const;
 
-/** 게임이 받는 길이(noteLengths, lengthsFor로 거른 목록) 가운데 입력판에 놓을 단추 */
-export function padLengths(noteLengths: readonly NoteLength[], triplets: boolean): NoteLength[] {
-  const wanted: readonly NoteLength[] = triplets ? [...BASE, ...TRIPLETS] : BASE;
+/**
+ * 게임이 받는 길이(noteLengths, lengthsFor로 거른 목록) 가운데 입력판에 놓을 단추.
+ * tuplet: 잇단음 단추를 켰을 때 그 길이 ("20"). 목록에 있고 다른 단추와 겹치지 않을 때만 맨 끝에 붙는다
+ */
+export function padLengths(noteLengths: readonly NoteLength[], triplets: boolean, tuplet?: NoteLength): NoteLength[] {
+  const wanted: NoteLength[] = triplets ? [...BASE, ...TRIPLETS] : [...BASE];
+  if (tuplet !== undefined && !wanted.includes(tuplet)) wanted.push(tuplet);
   return wanted.filter((l) => noteLengths.includes(l));
 }
 

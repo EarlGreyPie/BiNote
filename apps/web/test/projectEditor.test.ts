@@ -42,9 +42,17 @@ describe("parseEditorState", () => {
     expect(parseEditorState({ scoreTunings: { p2: { tuning: "dropD", capo: 30 } } }, withPlayers)).toEqual({});
   });
 
+  it("잇단음 격자·길이(1/20, l20, l20.)도 받는다", () => {
+    expect(parseEditorState({ division: 20, noteLength: "20" }, song)).toEqual({ division: 20, noteLength: "20" });
+    expect(parseEditorState({ division: 40, noteLength: "20." }, song)).toEqual({ division: 40, noteLength: "20." });
+    // 칸 하나가 게임 최단 토막(1/64)보다 짧은 격자는 받지 않는다
+    expect(parseEditorState({ division: 128 }, song)).toEqual({});
+    expect(parseEditorState({ division: 2.5, noteLength: "80" }, song)).toEqual({});
+  });
+
   it("없는 트랙·모르는 격자·깨진 맞춤값은 버린다", () => {
     const state = parseEditorState(
-      { activeTrackId: "gone", division: 7, viewMode: "staff", tuning: "toString", capo: -1, reference: { name: "a" }, video: { name: "v", high: 1, low: 2 } },
+      { activeTrackId: "gone", division: 200, viewMode: "staff", tuning: "toString", capo: -1, reference: { name: "a" }, video: { name: "v", high: 1, low: 2 } },
       song,
     );
     expect(state).toEqual({});

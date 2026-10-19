@@ -4,6 +4,24 @@ import { emptySong, findOverlaps, History, rat, replaceSong, type Track } from "
 const meta = { title: "t", author: "EarlGreyPie", profileId: "mobile" };
 
 describe("History", () => {
+  it("검사가 거절한 명령은 곡도 기록도 바꾸지 않는다. unchecked는 검사를 건너뛴다", () => {
+    const a = emptySong(meta);
+    const b = { ...a, meta: { ...meta, title: "b" } };
+    const seen: string[] = [];
+    const h = new History(a, (_before, after, command) => {
+      seen.push(command.label);
+      return after.meta.title !== "b";
+    });
+    expect(h.run(replaceSong("rename", b))).toBe(a);
+    expect(h.refused).toBe(true);
+    expect(h.canUndo).toBe(false);
+    expect(seen).toEqual(["rename"]);
+    expect(h.run(replaceSong("text", b), { unchecked: true })).toBe(b);
+    expect(h.refused).toBe(false);
+    expect(h.canUndo).toBe(true);
+    expect(seen).toEqual(["rename"]);
+  });
+
   it("실행 취소와 다시 실행", () => {
     const a = emptySong(meta);
     const b = { ...a, meta: { ...meta, title: "b" } };

@@ -2,7 +2,7 @@
   import { add, assignTab, clipLayers, cmp, gridLines, mul, pasteClip, rat, splitNote, sub, toFloat, type LengthLimit, type Note, type Rat, type Song, type TabTuning } from "@mmlce/core";
   import { t } from "./i18n.svelte";
   import { Pinch, pinchRatio } from "./pinch";
-  import { typeFretDigit, type DigitNote, placeTabNote, removeTabNote, setTabNoteLength, tieTabNote, type TabEdit } from "./tabInput";
+  import { typeFretDigit, type DigitNote, pinShownStrings, placeTabNote, removeTabNote, setTabNoteLength, shownStrings, tieTabNote, type TabEdit } from "./tabInput";
   import { onMount, untrack } from "svelte";
   import { fonts } from "./fonts.svelte";
   import { loadStored, saveStored } from "./persist";
@@ -18,6 +18,8 @@
   import { tabTint } from "./tabTint.svelte";
   import { padLengths, padPressed } from "./lengthPad";
   import { fretPadPrefs } from "./fretPadPrefs.svelte";
+  import { tupletPrefs } from "./tupletPrefs.svelte";
+  import { TUPLET_PICK } from "./tuplet";
   import { nextTabAlign, parseTabAlign, TAB_ALIGN_ICON, TAB_ALIGN_LABEL, type TabAlign } from "./tabAlign";
   import { coarsePointer } from "./mmlPad.svelte";
   import { carryViewStart, type ViewMemory } from "./viewCarry";
@@ -54,6 +56,10 @@
     noteLengths?: readonly NoteLength[];
     lengthLimit?: LengthLimit;
     onnotelength?: (length: NoteLength) => void;
+    /** 정해 둔 잇단음 길이 ("20"). 설정에서 켜면 음표 입력판에 단추로 둔다 */
+    tupletLength?: NoteLength | undefined;
+    /** 새 음 → 잇단음…: 잇단음 정하기 창을 연다 */
+    ontuplet?: () => void;
     /** 타브에서 음을 넣거나 지울 때 (실행 취소 한 칸) */
     onedit?: (changes: TabEdit["changes"], label: string) => void;
     /** 빈 트랙이 없어 이 악보에 트랙을 더해 음을 넣을 때 (실행 취소 한 칸) */
@@ -109,7 +115,7 @@
     onpastefull?: ((limit: number) => void) | undefined;
   }
 
-  let { song, octaveKey, wave, onwaveoffset, activeTrackId, tuning, playhead, onunplayable, division, noteDur, noteLength, noteLengths = NOTE_LENGTHS, lengthLimit, onnotelength, onedit, onnewtrack, onfull, maxTracks = Infinity, onpreview, volume = $bindable(), volumeRange, colors, locked, laneTrackIds, melodyIds, padByMouse = false, onevent, oncursor, onlayers, onpastefull, ondot, onalign, memory, onmemory, work, followCursor = true, playCursor, loop, onseek, onplaycursor, onloop }: Props = $props();
+  let { song, octaveKey, wave, onwaveoffset, activeTrackId, tuning, playhead, onunplayable, division, noteDur, noteLength, noteLengths = NOTE_LENGTHS, tupletLength, ontuplet, lengthLimit, onnotelength, onedit, onnewtrack, onfull, maxTracks = Infinity, onpreview, volume = $bindable(), volumeRange, colors, locked, laneTrackIds, melodyIds, padByMouse = false, onevent, oncursor, onlayers, onpastefull, ondot, onalign, memory, onmemory, work, followCursor = true, playCursor, loop, onseek, onplaycursor, onloop }: Props = $props();
 
   // 위쪽에 마디 번호 줄과 변속 줄 두 칸(위 칸 템포, 아래 칸 박자·마커), 원곡이 있으면 그 아래 파형 띠를 두고 그 아래에 첫 줄
   // 숫자판을 띄운 동안은 지판 자리를 위해 띠를 숨긴다 (도구 띠를 숨기는 것과 같은 규칙)
@@ -363,8 +369,11 @@
     }
     if (edit.changes.length === 0 && !edit.newTrack) return;
     // 고른 줄은 음에 적는다 (Note.tabString): 곡과 함께 저장되고, 되돌리기·보기 전환·다시 열기에도 남는다
+    // 바뀌는 트랙의 다른 음은 지금 보이는 줄에 묶는다: 새 음 때문에 앞 음이 다른 줄로 옮겨 가지 않게
     const id = edit.noteId;
-    const stamp = (notes: readonly Note[]): Note[] => (id && string !== undefined ? notes.map((n) => (n.id === id && n.tabString !== string ? { ...n, tabString: string } : n)) : [...notes]);
+    const shown = shownStrings(events);
+    const stamp = (notes: readonly Note[]): Note[] =>
+      pinShownStrings(notes, shown).map((n) => (id && string !== undefined && n.id === id && n.tabString !== string ? { ...n, tabString: string } : n));
     if (edit.newTrack) onnewtrack?.({ ...edit.newTrack, notes: stamp(edit.newTrack.notes) }, label);
     else onedit?.(edit.changes.map((c) => ({ ...c, notes: stamp(c.notes) })), label);
   }
@@ -624,6 +633,14 @@
     if (note) apply(setTabNoteLength(song, note, noteLengthOf(length, division)), "음 길이", cursor?.string);
   }
 
+  /** 숫자판 위 길이 고르기. 잇단음…이면 창을 열고 고르기 칸은 지금 길이로 되돌린다 */
+  function pickLength(e: Event & { currentTarget: HTMLSelectElement }) {
+    const value = e.currentTarget.value;
+    if (value !== TUPLET_PICK) return changeLength(value as NoteLength);
+    if (noteLength !== undefined) e.currentTarget.value = noteLength;
+    ontuplet?.();
+  }
+
   /** +/− 키: 커서 음(없으면 새 음) 길이를 두 배 / 반으로 (온음표 ~ 64분음표) */
   function stepLength(factor: 2 | 0.5) {
     const length = stepNoteLength(lengthNoteAtCursor()?.dur ?? noteDur ?? rat(1, division), factor, lengthLimit);
@@ -673,7 +690,9 @@
   /** 여러 트랙을 한 번에 바꾼다 (실행 취소 한 칸). 잠근 트랙이 끼면 앱이 알리고 바꾸지 않는다 */
   function commit(changes: TrackChanges, label: string): boolean {
     if (changes.length === 0) return false;
-    onedit?.(changes, label);
+    // 바뀌는 트랙의 다른 음은 지금 보이는 줄에 묶는다 (apply와 같다)
+    const shown = shownStrings(events);
+    onedit?.(changes.map((c) => ({ ...c, notes: pinShownStrings(c.notes, shown) })), label);
     return true;
   }
 
@@ -1413,8 +1432,9 @@
           <!-- 음 길이: 옆으로 미는 줄 밖에 두어 좁은 화면에서도 늘 보인다 -->
           <label class="length" title={t("ui.noteLengthHelp")}>
             {t("ui.noteLength")}
-            <select value={noteLength} onchange={(e) => changeLength(e.currentTarget.value as NoteLength)}>
+            <select value={noteLength} onchange={pickLength}>
               {#each noteLengths as l (l)}<option value={l}>{lengthLabel(l)}</option>{/each}
+              {#if ontuplet}<option value={TUPLET_PICK}>{t("ui.noteLengthTupletPick")}</option>{/if}
             </select>
           </label>
         {/if}
@@ -1423,10 +1443,10 @@
       {#if noteLength !== undefined && onnotelength}
         <!-- 음표 입력판: 한 줄로 깔고 넘치면 옆으로 민다. 눌린 단추가 새 음 길이이고, 커서 음이 있으면 그 음에도 적용한다 -->
         <div class="lengths" role="group" aria-label={t("ui.lengthPad")}>
-          {#each padLengths(noteLengths, fretPadPrefs.triplets) as l (l)}
+          {#each padLengths(noteLengths, fretPadPrefs.triplets, tupletPrefs.pad ? tupletLength : undefined) as l (l)}
             {@const on = padPressed(l, noteLength)}
             <button class:on aria-pressed={on} title={lengthLabel(l)} onclick={() => changeLength(l)}>
-              {l === "grid" ? t("ui.lengthPadGrid") : on && noteLength.endsWith(".") ? `${l}.` : l}
+              {l === "grid" ? t("ui.lengthPadGrid") : on && !l.endsWith(".") && noteLength.endsWith(".") ? `${l}.` : l}
             </button>
           {/each}
         </div>

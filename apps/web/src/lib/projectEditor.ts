@@ -1,8 +1,8 @@
-import type { Song } from "@mmlce/core";
+import { defaultLengthLimit, type Song } from "@mmlce/core";
 import type { ProjectEditor } from "@mmlce/fileio";
-import { GRID_DIVISIONS } from "./keymap";
 import { isTuningName, type ScoreTuning, type TuningName } from "./tunings";
 import { NOTE_LENGTHS, type NoteLength } from "./roll";
+import { isGameLengthName, isGridDivision } from "./tuplet";
 
 /**
  * 프로젝트 파일과 자동 보존에 함께 남기는 편집 화면 상태.
@@ -56,14 +56,17 @@ const isObject = (v: unknown): v is Obj => typeof v === "object" && v !== null &
 const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 
 const validTuning = isTuningName;
+
 const validCapo = (v: unknown): v is number => Number.isInteger(v) && (v as number) >= 0 && (v as number) <= 24;
 
 /** 파일에 적힌 화면 상태를 검사한다. 모르는 값·맞지 않는 값은 버린다 (곡은 그대로 열린다) */
 export function parseEditorState(raw: ProjectEditor, song: Song): EditorState {
   const out: { -readonly [K in keyof EditorState]: EditorState[K] } = {};
   if (typeof raw.activeTrackId === "string" && song.tracks.some((tr) => tr.id === raw.activeTrackId)) out.activeTrackId = raw.activeTrackId;
-  if ((GRID_DIVISIONS as readonly unknown[]).includes(raw.division)) out.division = raw.division as number;
-  if ((NOTE_LENGTHS as readonly unknown[]).includes(raw.noteLength)) out.noteLength = raw.noteLength as NoteLength;
+  // 격자: 목록 칸(1/16 등) 말고도 잇단음 칸(1/20 등)일 수 있다. 게임이 받는 길이 숫자면 받는다
+  if (isGridDivision(raw.division, defaultLengthLimit())) out.division = raw.division;
+  // 새 음 길이: 목록 길이, 또는 게임이 받는 한 토막 (잇단음 "20"·"20." 등)
+  if ((NOTE_LENGTHS as readonly unknown[]).includes(raw.noteLength) || isGameLengthName(raw.noteLength, defaultLengthLimit())) out.noteLength = raw.noteLength as NoteLength;
   if (raw.viewMode === "roll" || raw.viewMode === "tab") out.viewMode = raw.viewMode;
   if (validTuning(raw.tuning)) out.tuning = raw.tuning;
   if (validCapo(raw.capo)) out.capo = raw.capo;

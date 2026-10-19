@@ -8,7 +8,18 @@
   /** 새 음 길이 이름 (타브 숫자판도 쓴다) */
   export function lengthLabel(l: LengthName): string {
     if (l === "grid") return t("ui.noteLengthGrid");
-    return ["3", "6", "12", "24", "48"].includes(l) ? t("ui.noteLengthTriplet", { n: l }) : `l${l}`;
+    if (["3", "6", "12", "24", "48"].includes(l)) return t("ui.noteLengthTriplet", { n: l });
+    // 2의 거듭제곱이 아닌 길이 숫자는 잇단음. 정해 둔 잇단음이면 몇 분 몇 잇단인지 붙인다
+    const p = lengthNumber(l);
+    if (p === undefined || (p.length & (p.length - 1)) === 0) return `l${l}`;
+    const tp = tupletPrefs.tuplet;
+    return tupletName(tp) === l ? t("ui.noteLengthTuplet", { n: l, base: tupletBaseLabel(tp.base, tp.dotted), count: tp.count }) : t("ui.noteLengthTupletPlain", { n: l });
+  }
+
+  /** 잇단음 바탕 음표 이름 ("4분", "점4분") */
+  export function tupletBaseLabel(base: number, dotted: boolean): string {
+    if (base === 1) return t(dotted ? "ui.tupletBaseWholeDotted" : "ui.tupletBaseWhole");
+    return t(dotted ? "ui.tupletBaseDotted" : "ui.tupletBaseName", { n: base });
   }
 </script>
 
@@ -19,7 +30,8 @@
   import Icon from "./Icon.svelte";
   import Menu, { type MenuItem } from "./Menu.svelte";
   import VolumeBox from "./VolumeBox.svelte";
-  import { GRID_DIVISIONS } from "./keymap";
+  import { lengthNumber, tupletName, TUPLET_PICK } from "./tuplet";
+  import { tupletPrefs } from "./tupletPrefs.svelte";
   import { TUNINGS, type TuningName } from "./tunings";
   import { type LengthName, type NoteLength, type Orientation, type RollTool } from "./roll";
   import { coarsePointer } from "./mmlPad.svelte";
@@ -38,6 +50,10 @@
     meter: { beats: number; unit: number };
     onmeter: (beats: number, unit: number) => void;
     division: number;
+    /** 고를 수 있는 격자 (목록 칸 + 잇단음 칸) */
+    divisions: readonly number[];
+    /** 새 음 → 잇단음…: 잇단음 정하기 창을 연다 */
+    ontuplet: () => void;
     /** 새 음 길이 */
     noteLength: NoteLength;
     /** 고를 수 있는 새 음 길이 (게임 한도로 거른 목록, lengthsFor) */
@@ -95,6 +111,8 @@
     meter,
     onmeter,
     division,
+    divisions,
+    ontuplet,
     noteLength,
     noteLengths,
     inputVolume = $bindable(),
@@ -133,6 +151,14 @@
     ondock,
     ontoggleside,
   }: Props = $props();
+
+  /** 새 음 길이 고르기. 잇단음…이면 창을 열고 고르기 칸은 지금 길이로 되돌린다 */
+  function pickLength(e: Event & { currentTarget: HTMLSelectElement }) {
+    const value = e.currentTarget.value;
+    if (value !== TUPLET_PICK) return onnotelength(value as NoteLength);
+    e.currentTarget.value = noteLength;
+    ontuplet();
+  }
 
   let referenceInput: HTMLInputElement;
   let videoInput: HTMLInputElement;
@@ -238,13 +264,14 @@
     <label class="field">
       <span class="muted">{t("ui.grid")}</span>
       <select value={division} onchange={(e) => ondivision(Number(e.currentTarget.value))}>
-        {#each GRID_DIVISIONS as d (d)}<option value={d}>1/{d}</option>{/each}
+        {#each divisions as d (d)}<option value={d}>1/{d}</option>{/each}
       </select>
     </label>
     <label class="field" title={t("ui.noteLengthHelp")}>
       <span class="muted">{t("ui.noteLength")}</span>
-      <select value={noteLength} onchange={(e) => onnotelength(e.currentTarget.value as NoteLength)}>
+      <select value={noteLength} onchange={pickLength}>
         {#each noteLengths as l (l)}<option value={l}>{lengthLabel(l)}</option>{/each}
+        <option value={TUPLET_PICK}>{t("ui.noteLengthTupletPick")}</option>
       </select>
     </label>
     <VolumeBox bind:value={inputVolume} min={volumeMin} max={volumeMax} selected={selectedVolume} onselected={onselectedvolume} />
@@ -306,13 +333,14 @@
     <label class="field">
       <span class="muted">{t("ui.grid")}</span>
       <select value={division} onchange={(e) => ondivision(Number(e.currentTarget.value))}>
-        {#each GRID_DIVISIONS as d (d)}<option value={d}>1/{d}</option>{/each}
+        {#each divisions as d (d)}<option value={d}>1/{d}</option>{/each}
       </select>
     </label>
     <label class="field" title={t("ui.noteLengthHelp")}>
       <span class="muted">{t("ui.noteLength")}</span>
-      <select value={noteLength} onchange={(e) => onnotelength(e.currentTarget.value as NoteLength)}>
+      <select value={noteLength} onchange={pickLength}>
         {#each noteLengths as l (l)}<option value={l}>{lengthLabel(l)}</option>{/each}
+        <option value={TUPLET_PICK}>{t("ui.noteLengthTupletPick")}</option>
       </select>
     </label>
     <VolumeBox bind:value={inputVolume} min={volumeMin} max={volumeMax} selected={undefined} />
