@@ -98,6 +98,10 @@ describe("타브 입력", () => {
     expect(fretFromKeys("1", "2", 20)).toEqual({ fret: 12, buffer: "" });
     expect(fretFromKeys("", "5", 20)).toEqual({ fret: 5, buffer: "" });
     expect(fretFromKeys("2", "5", 20)).toEqual({ fret: 5, buffer: "" });
+    // 24프렛 지판: 2 다음 1·4는 21·24, 2 다음 5는 따로
+    expect(fretFromKeys("2", "1", STANDARD_TUNING.maxFret)).toEqual({ fret: 21, buffer: "" });
+    expect(fretFromKeys("2", "4", STANDARD_TUNING.maxFret)).toEqual({ fret: 24, buffer: "" });
+    expect(fretFromKeys("2", "5", STANDARD_TUNING.maxFret)).toEqual({ fret: 5, buffer: "" });
   });
 
   it("타브에서 고른 줄을 자동 배정이 지킨다", () => {

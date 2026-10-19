@@ -11,6 +11,7 @@
     maxChordsOf,
     type ArpResult,
     type SlideResult,
+    type GraceResult,
     type ArpSource,
     isSoloInstrument,
     barBeatAt,
@@ -180,6 +181,7 @@
   import TransposeDialog, { type TransposeCheck, type TransposeScope } from "./lib/TransposeDialog.svelte";
   import ArpeggioDialog from "./lib/ArpeggioDialog.svelte";
   import SlideDialog from "./lib/SlideDialog.svelte";
+  import GraceDialog from "./lib/GraceDialog.svelte";
   import { Playback } from "./lib/playback.svelte";
   import { TUNINGS, isTuningName, type ScoreTuning, type TuningName } from "./lib/tunings";
   import PianoRoll from "./lib/PianoRoll.svelte";
@@ -1248,10 +1250,14 @@
       // 편집기에 아직 반영 안 된 입력까지
       flushAllEditors();
       flushAutosave().catch(() => {});
+      // 아이패드·폰에서 앱을 나가면(홈으로, 다른 앱으로, 전원 버튼) 재생을 멈춘다. 그대로 두면 안 보이는 채로
+      // 곡 끝까지 소리가 났다. PC는 다른 탭을 보며 들을 수 있게 둔다
+      if (navigator.maxTouchPoints > 0) stop();
     };
     const onpagehide = () => {
       flushAllEditors();
       flushAutosave().catch(() => {});
+      stop();
     };
     document.addEventListener("visibilitychange", onhide);
     window.addEventListener("pagehide", onpagehide);
@@ -1345,6 +1351,7 @@
     extraStamps = [...fresh.extraStamps];
     arpeggio = fresh.arpeggio;
     slide = fresh.slide;
+    grace = fresh.grace;
     transposing = fresh.transposing;
     voicing = fresh.voicing;
     tempoChangeOpen = fresh.tempoChangeOpen;
@@ -2134,6 +2141,39 @@
     roll?.selectIds(result.chain);
   }
 
+  // 꾸밈음: 고른 음(본음) 앞에 짧은 음을 붙인다 (실행 취소 한 칸). 피아노롤은 고른 음, 타브는 고른 음이나 없으면 커서 자리 음.
+  // 타브에서 열면 본음 줄의 프렛 번호로 높이를 받고, 꾸밈음도 본음이 보이는 줄에 놓는다
+  let grace = $state.raw<
+    { picked: readonly Note[]; tab?: { fret: number; string: number; maxFret: number }; strings?: ReadonlyMap<string, number> } | undefined
+  >(undefined);
+  const canGrace = $derived(!!song && (viewMode === "roll" ? !!activeTrackId && selectedNotes.length > 0 : selectedNotes.length > 0 || !!tabArp));
+  function openGrace() {
+    if (!song || !canGrace) return;
+    if (viewMode === "roll") {
+      grace = { picked: selectedNotes };
+      return;
+    }
+    const picked = selectedNotes.length > 0 ? selectedNotes : (tabArpPick(song, activeTrackId, tabCursorForCommand(), [])?.picked ?? []);
+    if (picked.length === 0) return;
+    const strings = new Map<string, number>();
+    for (const n of picked) {
+      const at = tab?.positionOf(n.id);
+      if (at) strings.set(n.id, at.string);
+    }
+    // 기준 본음: 가장 먼저 시작하는 음 중 가장 높은 음 (화음이면 꾸밈음을 붙이는 음)
+    const ref = [...picked].sort((a, b) => cmp(a.start, b.start) || b.pitch - a.pitch)[0]!;
+    const at = tab?.positionOf(ref.id);
+    grace = { picked, strings, ...(at ? { tab: { fret: at.fret, string: at.string, maxFret: tuning.maxFret } } : {}) };
+  }
+  function applyGrace(result: GraceResult) {
+    if (!history || result.changes.length === 0) return;
+    // 잠근 트랙은 바꾸지 않는다 (계산에서 이미 건너뛰지만, 다른 편집 명령과 같게 적용 직전에도 막는다)
+    if (!result.changes.every((c) => editable(c.trackId))) return;
+    if (!commit(setTracksNotes(result.changes.map((c) => ({ trackId: c.trackId, notes: c.notes })), t("ui.grace")))) return;
+    if (viewMode === "roll") roll?.selectIds(result.ids);
+    else tab?.selectIds(result.ids);
+  }
+
   const editMenu: MenuItem[] = $derived([
     { label: t("ui.undo"), hint: keyOf("edit.undo"), disabled: !canUndo, run: undo },
     { label: t("ui.redo"), hint: keyOf("edit.redo"), disabled: !canRedo, run: redo },
@@ -2149,6 +2189,7 @@
     { label: t("ui.dotToggle"), title: t("ui.dotToggleHelp"), hint: keyOf("edit.dotToggle"), disabled: !song, run: () => run("edit.dotToggle") },
     { label: t("ui.arpeggio") + "…", title: t("ui.arpeggioHelp"), disabled: !canArpeggio, run: openArpeggio },
     { label: t("ui.slide") + "…", title: t("ui.slideHelp"), disabled: !song || viewMode !== "roll" || selectedNotes.length === 0, run: openSlide },
+    { label: t("ui.grace") + "…", title: t("ui.graceHelp"), disabled: !canGrace, run: openGrace },
     { separator: true },
     { label: t("cmd.note.volumeUp"), hint: keyOf("note.volumeUp"), disabled: !song, run: () => run("note.volumeUp") },
     { label: t("cmd.note.volumeDown"), hint: keyOf("note.volumeDown"), disabled: !song, run: () => run("note.volumeDown") },
@@ -2722,7 +2763,7 @@
   function onKeydown(event: KeyboardEvent) {
     // 편집기가 이미 처리한 키(편집기 안 실행 취소 등)는 건드리지 않는다
     if (picking && !event.defaultPrevented) return pickingKey(event);
-    if (event.defaultPrevented || showKeymap || paste || midi || transposing || arpeggio || slide || voicing || settings || meterOpen || eventEdit || addScoreOpen || recoverOpen || outputOpen || optimizing || event.isComposing) return;
+    if (event.defaultPrevented || showKeymap || paste || midi || transposing || arpeggio || slide || grace || voicing || settings || meterOpen || eventEdit || addScoreOpen || recoverOpen || outputOpen || optimizing || event.isComposing) return;
     // 위 목록에 없는 대화 상자라도 열려 있으면 뒤의 곡에 단축키를 보내지 않는다
     if (document.querySelector("dialog[open]")) return;
     const target = event.target as HTMLElement | null;
@@ -2855,6 +2896,7 @@
     isMelody: (id) => melodyIds.has(id),
     // 끌 때는 "화음"으로 표시해 악보 첫 트랙 기본 멜로디에서도 빠지게 한다
     setMelody: (id, on) => runIfChanged(setTrackRole(id, on ? "melody" : "harmony", t("ui.melodyTrack"))),
+    isActive: (id) => id === activeTrackId,
     inLane: (id) => laneExtra.includes(id),
     toggleLane: toggleLaneTrack,
     openSecond,
@@ -2975,6 +3017,25 @@
       onclose={() => (slide = undefined)}
     />
   {/if}
+{/if}
+{#if grace && song}
+  {@const g = grace}
+  <GraceDialog
+    {song}
+    picked={g.picked}
+    {profile}
+    locked={lockedIds}
+    {...g.tab ? { tab: g.tab } : {}}
+    stringOf={(n) => g.strings?.get(n.id)}
+    instrumentOf={(id) => {
+      const tr = song?.tracks.find((x) => x.id === id);
+      if (!song || !tr) return undefined;
+      const ref = trackInstrument(song, tr);
+      return canonicalOf(ref.canonical, ref.program, ref.packId) ?? ref.canonical;
+    }}
+    onapply={applyGrace}
+    onclose={() => (grace = undefined)}
+  />
 {/if}
 {#if arpeggio && song}
   {@const arpTrack = song.tracks.find((tr) => tr.id === arpeggio?.trackId)}
@@ -3308,6 +3369,7 @@
           {melodyIds}
           onvolumes={editVolumes}
           onclearlane={() => (laneExtra = [])}
+          onlanetoggle={toggleLaneTrack}
         />
       {:else}
         <TabView
@@ -3334,6 +3396,8 @@
           {colors}
           locked={lockedIds}
           laneTrackIds={laneExtra}
+          onlanetoggle={toggleLaneTrack}
+          onclearlane={() => (laneExtra = [])}
           {melodyIds}
           onunplayable={(n) => (unplayable = n)}
           padByMouse={tabPadOn}

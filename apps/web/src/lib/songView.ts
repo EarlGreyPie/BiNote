@@ -22,9 +22,10 @@ export interface SongViewReset {
   readonly laneExtra: readonly string[];
   readonly extraChosen: readonly (string | undefined)[];
   readonly extraStamps: readonly (number | undefined)[];
-  /** 옛 트랙·음을 들고 있는 창: 아르페지오·슬라이드·음정 변환·화음↔트랙 정리·템포 한꺼번에·박자 */
+  /** 옛 트랙·음을 들고 있는 창: 아르페지오·슬라이드·꾸밈음·음정 변환·화음↔트랙 정리·템포 한꺼번에·박자 */
   readonly arpeggio: undefined;
   readonly slide: undefined;
+  readonly grace: undefined;
   readonly transposing: undefined;
   readonly voicing: undefined;
   readonly tempoChangeOpen: false;
@@ -51,6 +52,7 @@ export function freshSongView(viewGen: number): SongViewReset {
     extraStamps: [],
     arpeggio: undefined,
     slide: undefined,
+    grace: undefined,
     transposing: undefined,
     voicing: undefined,
     tempoChangeOpen: false,

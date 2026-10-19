@@ -11,3 +11,4 @@ export * from "./meter.js";
 export * from "./arpeggio.js";
 export * from "./note-length.js";
 export * from "./slide.js";
+export * from "./grace.js";

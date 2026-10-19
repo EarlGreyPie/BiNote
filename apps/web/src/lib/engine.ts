@@ -21,6 +21,7 @@ import { previewPitch } from "./instrumentRange";
 import { PreviewVoices } from "./previewVoices";
 import { preparePlay } from "./playPlan";
 import type { WavRequest } from "./jobs";
+import { clockMoves, needsRebuild, settlesWithin } from "./audioHealth";
 
 /** CC 0 = 뱅크 선택(MSB) */
 const BANK_SELECT = 0;
@@ -41,6 +42,11 @@ const COLD_START_DELAY = 0.4;
 
 /** CC 120 = 소리 모두 끄기 (끝소리 없이) */
 const ALL_SOUND_OFF = 120;
+
+/** 잠자기 뒤 오디오를 깨울 때 resume()을 기다리는 최대 시간(ms). 아이패드는 이게 끝나지 않을 때가 있다 */
+const RESUME_TIMEOUT = 800;
+/** 깨운 뒤 오디오 시계가 흐르는지 보는 시간(ms) */
+const CLOCK_TIMEOUT = 400;
 
 /** 오디오 시계가 실제로 흐르기 시작할 때까지 기다린다 (최대 1초) */
 async function waitForClock(context: AudioContext): Promise<void> {
@@ -67,13 +73,49 @@ export class Engine {
   private fromSeconds = 0;
 
   private starting: Promise<WorkletSynthesizer> | undefined;
+
+  /** 워크릿이 오류로 멈췄다. 다음에 쓸 때 오디오를 새로 만든다 */
+  private broken = false;
+  /**
+   * 기기를 재웠거나 화면을 가렸다가 돌아왔다. 아이패드는 전원 버튼으로 재웠다 깨우면 오디오를 멈춘 채 두고
+   * 다시 켜지지 않을 때가 있어(소리 없음, 사운드팩 다시 올리기도 멈춤), 다음에 쓸 때 살아 있는지 확인한다
+   */
+  private suspect = false;
+  /** 오디오를 새로 만드는 중 */
+  private reviving: Promise<WorkletSynthesizer> | undefined;
+  /** 지금 신스를 버리면 풀리는 약속. 버린 신스의 응답을 기다리던 작업(팩 올리기 등)이 멈춰 있지 않게 한다 */
+  private lost: { promise: Promise<void>; resolve: () => void } = Engine.lostSignal();
+
+  private static lostSignal(): { promise: Promise<void>; resolve: () => void } {
+    let resolve!: () => void;
+    const promise = new Promise<void>((r) => (resolve = r));
+    return { promise, resolve };
+  }
+
+  constructor() {
+    if (typeof document === "undefined") return;
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") this.suspect = true;
+    });
+    // 뒤로 가기 캐시에서 돌아온 페이지도 오디오가 멈춰 있을 수 있다
+    window.addEventListener("pageshow", (e) => {
+      if (e.persisted) this.suspect = true;
+    });
+    // 한 번 소리를 낸 뒤 멈춘 오디오는 화면을 누를 때 바로 깨운다. 아이패드는 누른 그 순간에만 깨울 수 있다
+    const wake = () => {
+      const c = this.context;
+      if (c && this.warmed && c.state !== "running" && c.state !== "closed") void c.resume().catch(() => {});
+    };
+    document.addEventListener("pointerdown", wake, true);
+    document.addEventListener("keydown", wake, true);
+  }
   /** 지금 있는 신스 채널 수 (라이브러리의 channelCount는 채널을 더할 때 두 번 셀 수 있어 따로 센다) */
   private channels = 16;
 
   /** 오디오는 사용자가 누른 뒤에만 켤 수 있어서, 처음 쓸 때 만든다. 동시에 불려도 한 번만 만든다 */
-  private ready(): Promise<WorkletSynthesizer> {
+  private ready(made?: AudioContext): Promise<WorkletSynthesizer> {
     if (this.synth) return Promise.resolve(this.synth);
-    this.starting ??= this.create().catch((e) => {
+    this.starting ??= this.create(made).catch((e) => {
       this.starting = undefined;
       throw e;
     });
@@ -92,10 +134,11 @@ export class Engine {
     synth.reset();
   }
 
-  private async create(): Promise<WorkletSynthesizer> {
+  private async create(made?: AudioContext): Promise<WorkletSynthesizer> {
+    // 새로 만들 때는 누른 그 순간에 오디오를 만들어 둔다 (아이패드는 그때만 소리를 켤 수 있다)
+    const context = made ?? new AudioContext();
     // 신스 라이브러리는 커서 처음 소리를 낼 때 불러온다 (첫 화면을 빨리 띄우려고)
     const { WorkletSynthesizer } = await import("spessasynth_lib");
-    const context = new AudioContext();
     await context.audioWorklet.addModule(processorUrl);
     // 리미터는 WAV 저장과 같은 코드(PeakLimiter)를 워크릿으로 올린다
     const limiterUrl = URL.createObjectURL(new Blob([limiterWorkletSource(LIMITER)], { type: "text/javascript" }));
@@ -105,12 +148,20 @@ export class Engine {
       URL.revokeObjectURL(limiterUrl);
     }
     const synth = new WorkletSynthesizer(context);
+    // 워크릿이 오류로 멈추면 그 뒤로 소리가 나지 않는다. 다음에 쓸 때 새로 만든다
+    const node = (synth as unknown as { worklet?: AudioWorkletNode }).worklet;
+    if (node) node.onprocessorerror = () => (this.broken = true);
+    // 소리를 낸 뒤 오디오가 멈추면(잠자기·다른 앱이 오디오를 가져감) 다음에 쓸 때 살아 있는지 확인한다
+    context.onstatechange = () => {
+      if (this.context === context && context.state !== "running" && this.warmed) this.suspect = true;
+    };
     // 전체 음량: 신스 → 음량 → 스피커 (미리듣기 대체 소리도 같은 음량을 지난다)
     const master = context.createGain();
     master.gain.value = this.masterVolume;
     // 음량을 1보다 크게 올리거나 악기별 음량을 키워도 소리가 깨지지 않게 끝에 리미터를 둔다
     // (문턱 −3dB 아래에서는 손대지 않는다). WAV 저장도 같은 리미터를 거친다
     const limiter = new AudioWorkletNode(context, LIMITER, { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2] });
+    limiter.onprocessorerror = () => (this.broken = true);
     master.connect(limiter).connect(context.destination);
     // 리미터는 다가올 봉우리를 미리 보려고 소리를 조금(3ms) 늦춘다. 재생선도 그만큼 늦춘다
     this.limiterLag = new PeakLimiter(context.sampleRate).latency / context.sampleRate;
@@ -123,6 +174,15 @@ export class Engine {
     for (let ch = this.channels; ch < MAX_CHANNELS; ch++) synth.addNewChannel();
     this.channels = MAX_CHANNELS;
     synth.reset();
+    // 오디오를 새로 만든 경우: 올려 두었던 사운드팩을 같은 이름·뱅크로 다시 올린다 (등록부는 그대로)
+    for (const [id, { bank, file }] of [...this.packFiles]) {
+      if (this.packFiles.get(id)?.file !== file) continue;
+      try {
+        await synth.soundBankManager.addSoundBank(await file.arrayBuffer(), id, bank);
+      } catch {
+        // 한 팩을 못 올려도 나머지 팩과 오디오는 살린다 (그 팩 악기만 소리가 나지 않는다)
+      }
+    }
     const sink: LiveSink = {
       get currentTime() {
         return context.currentTime;
@@ -161,6 +221,89 @@ export class Engine {
   }
 
   /**
+   * 쓰기 전에 오디오가 살아 있는지 본다. 잠자기 뒤 멈춘 채 깨어나지 않거나 닫혔거나 워크릿이 멈췄으면
+   * 버리고 새로 만든 뒤 사운드팩을 다시 올린다. 재생·미리듣기·사운드팩 올리기/빼기 때 부른다
+   */
+  private async live(): Promise<WorkletSynthesizer> {
+    if (this.reviving) return this.reviving;
+    const context = this.context;
+    if (!this.synth || !context) return this.ready();
+    const state = context.state as string;
+    // 닫혔거나 멈췄거나, 재운 뒤 "중단됨"으로 남아 있으면 바로 새로 만든다 (누른 그 순간에 만들어야 소리가 켜진다)
+    if (this.broken || state === "closed" || (this.suspect && state === "interrupted")) return this.rebuild();
+    if (!this.suspect) return this.synth;
+    // 의심스러우면 깨워 보고 시계가 흐르는지 확인한다
+    await settlesWithin(context.resume(), RESUME_TIMEOUT);
+    const clockMoved = context.state === "running" && (await clockMoves(() => context.currentTime, CLOCK_TIMEOUT));
+    if (this.context !== context) return this.live();
+    if (!needsRebuild({ state: context.state, broken: this.broken, suspect: this.suspect, clockMoved })) {
+      this.suspect = false;
+      return this.synth!;
+    }
+    return this.rebuild();
+  }
+
+  /** 지금 오디오를 버리고 새로 만든다 (사운드팩은 create가 다시 올린다) */
+  private rebuild(): Promise<WorkletSynthesizer> {
+    if (this.reviving) return this.reviving;
+    let fresh: AudioContext | undefined;
+    try {
+      fresh = new AudioContext();
+      void fresh.resume().catch(() => {});
+    } catch {
+      // 만들지 못하면 create가 다시 시도한다
+    }
+    this.discard();
+    const reviving = this.ready(fresh).finally(() => {
+      if (this.reviving === reviving) this.reviving = undefined;
+    });
+    this.reviving = reviving;
+    return reviving;
+  }
+
+  /** 지금 오디오와 신스를 버린다. 재생 중이던 소리·원곡·미리듣기도 함께 끝난다 */
+  private discard(): void {
+    try {
+      this.player?.stop();
+    } catch {
+      // 멈춘 신스에 보내는 정지
+    }
+    this.player = undefined;
+    this.stopReference();
+    this.fallback.clear();
+    this.previewHeld.clear();
+    this.previewSent = new PreviewVoices();
+    try {
+      this.synth?.destroy();
+    } catch {
+      // 이미 멈춘 워크릿
+    }
+    const old = this.context;
+    if (old && old.state !== "closed") void old.close().catch(() => {});
+    this.context = undefined;
+    this.synth = undefined;
+    this.master = undefined;
+    this.referenceGain = undefined;
+    this.starting = undefined;
+    this.channels = 16;
+    this.warmed = false;
+    this.broken = false;
+    this.suspect = false;
+    this.preparedVoices.clear();
+    this.previewKey = "";
+    this.packVersion++;
+    // 버린 신스의 응답을 기다리던 작업을 풀어 준다
+    this.lost.resolve();
+    this.lost = Engine.lostSignal();
+  }
+
+  /** 신스 작업을 기다리되, 그사이 오디오를 새로 만들면(그 신스를 버리면) 더 기다리지 않는다. 끝까지 했으면 true */
+  private async untilLost(work: Promise<unknown>): Promise<boolean> {
+    const lost = this.lost.promise;
+    return Promise.race([work.then(() => true), lost.then(() => false)]);
+  }
+
+  /**
    * 번호로만 아는 악기(#42.3 등)를 지금 올린 팩의 프리셋 이름으로 알아본다. 음역·샘플 길이를 맞추려고.
    * 악보 진단·롤 음역도 재생과 같게 이걸 쓴다. pack은 트랙에서 고른 팩 파일 이름 (없거나 지금 없는 팩이면 자동)
    */
@@ -172,11 +315,17 @@ export class Engine {
 
   async addPack(file: File): Promise<SoundPackInfo> {
     this.packVersion++;
-    const synth = await this.ready();
+    let synth = await this.live();
     const id = `${file.name}#${this.registry.nextBank}`;
     const bank = this.registry.nextBank;
     this.packFiles.set(id, { bank, file });
-    await synth.soundBankManager.addSoundBank(await file.arrayBuffer(), id, bank);
+    try {
+      // 올리는 사이 오디오를 새로 만들면 새 신스가 이 팩도 다시 올리므로, 버린 신스의 대답은 기다리지 않는다
+      if (!(await this.untilLost(synth.soundBankManager.addSoundBank(await file.arrayBuffer(), id, bank)))) synth = await this.live();
+    } catch (e) {
+      this.packFiles.delete(id);
+      throw e;
+    }
     // 팩을 바꾸면 신스가 준비해 둔 음을 비운다
     this.preparedVoices.clear();
     // 팩마다 뱅크를 밀어 올렸으므로, 이 팩의 프리셋은 그 뱅크 번호로 보인다
@@ -199,8 +348,11 @@ export class Engine {
     this.packVersion++;
     this.registry.remove(id);
     this.packFiles.delete(id);
-    await this.synth?.soundBankManager.deleteSoundBank(id);
     this.preparedVoices.clear();
+    if (!this.synth) return;
+    // 잠자기 뒤 멈춘 신스에 빼기를 보내면 대답이 없어 다시 올리기까지 멈춘다. 먼저 살아 있는지 본다
+    const synth = await this.live();
+    await this.untilLost(synth.soundBankManager.deleteSoundBank(id));
   }
 
   get playing(): boolean {
@@ -236,11 +388,13 @@ export class Engine {
   /** loop: 반복할 길이(초). 주면 시작 자리부터 그 길이를 끊김 없이 되풀이한다 */
   async play(song: Song, from?: Rat, loop?: number): Promise<Unresolved[]> {
     const request = ++this.playRequest;
-    await this.ready();
+    await this.live();
     const context = this.context!;
     // 오디오가 쉬고 있다 깨어나면(첫 재생, 아이패드가 재운 뒤) 첫 음이 늦게 나므로 시계가 실제로 돌기를 기다리고 조금 늦게 시작한다
     const cold = !this.warmed || context.state !== "running";
-    await context.resume();
+    // 아이패드는 resume()이 끝나지 않을 때가 있어 오래 기다리지 않는다
+    await settlesWithin(context.resume(), RESUME_TIMEOUT);
+    if (request !== this.playRequest || this.context !== context) return [];
     if (cold) await waitForClock(context);
     this.warmed = true;
     // 예열을 기다리는 사이 팩 구성이 바뀌면 패치를 다시 정하고, 시작 직전 악기별 음량은 최신 값으로 (preparePlay)
@@ -376,8 +530,9 @@ export class Engine {
     pack?: string,
   ): Promise<void> {
     this.previewHeld.add(pitch);
-    const synth = await this.ready();
-    await this.context!.resume();
+    const synth = await this.live();
+    await settlesWithin(this.context!.resume(), RESUME_TIMEOUT);
+    if (this.synth !== synth) return;
     if (!this.previewHeld.has(pitch)) return;
     const patch = this.registry.resolve(instrument, program, this.registry.idOfLabel(pack));
     if (!patch) {
@@ -454,16 +609,9 @@ export class Engine {
 
   /** 원곡 파일(음원·영상)을 불러와 길이(초)를 돌려준다 */
   async loadReference(file: File): Promise<number> {
-    await this.ready();
+    await this.live();
     const context = this.context!;
     this.reference = await context.decodeAudioData(await file.arrayBuffer());
-    if (!this.referenceGain) {
-      this.referenceGain = context.createGain();
-      // 합성음은 리미터를 지나며 3ms 늦게 나오므로 원곡도 같은 만큼 늦춰 함께 듣는 시각을 맞춘다
-      const delay = context.createDelay(0.05);
-      delay.delayTime.value = this.limiterLag;
-      this.referenceGain.connect(delay).connect(context.destination);
-    }
     if (this.playing) this.startReference();
     return this.reference.duration;
   }
@@ -482,8 +630,24 @@ export class Engine {
     if (this.master && this.context) this.master.gain.setTargetAtTime(volume, this.context.currentTime, 0.02);
   }
 
+  private referenceVolume = 1;
+
   setReferenceVolume(volume: number): void {
+    this.referenceVolume = volume;
     if (this.referenceGain) this.referenceGain.gain.value = volume;
+  }
+
+  /** 원곡 음량 노드. 오디오를 새로 만들면 다시 만든다 */
+  private referenceOut(context: AudioContext): GainNode {
+    if (this.referenceGain) return this.referenceGain;
+    const gain = context.createGain();
+    gain.gain.value = this.referenceVolume;
+    // 합성음은 리미터를 지나며 3ms 늦게 나오므로 원곡도 같은 만큼 늦춰 함께 듣는 시각을 맞춘다
+    const delay = context.createDelay(0.05);
+    delay.delayTime.value = this.limiterLag;
+    gain.connect(delay).connect(context.destination);
+    this.referenceGain = gain;
+    return gain;
   }
 
   /** 어긋남을 바꾸면 재생 중인 원곡도 그 자리로 다시 맞춘다 */
@@ -497,13 +661,14 @@ export class Engine {
     this.stopReference(wrapAt);
     const context = this.context;
     const origin = wrapAt ?? this.player?.startTime;
-    if (!context || !this.reference || !this.referenceGain || origin === undefined) return;
+    if (!context || !this.reference || origin === undefined) return;
+    const out = this.referenceOut(context);
     // 지금(아직 시작 전이면 곡 시작 시각) 곡이 있을 자리에 원곡을 맞춘다. 반복으로 돌아갈 때는 그 경계 시각에 맞춘다
     const at = wrapAt ?? Math.max(context.currentTime, origin);
     const want = this.fromSeconds + (at - origin) + this.referenceOffset;
     const source = context.createBufferSource();
     source.buffer = this.reference;
-    source.connect(this.referenceGain);
+    source.connect(out);
     if (want >= 0) source.start(at, want);
     else source.start(at - want, 0);
     this.referenceSource = source;

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { add, assignTab, clipLayers, cmp, gridLines, mul, pasteClip, rat, splitNote, sub, toFloat, type LengthLimit, type Note, type Rat, type Song, type TabTuning } from "@mmlce/core";
+  import { add, assignTab, clipLayers, cmp, gridLines, mul, pasteClip, rat, splitNote, sub, toFloat, type LengthLimit, type Note, type Rat, type Song, type TabPosition, type TabTuning } from "@mmlce/core";
   import { t } from "./i18n.svelte";
   import { Pinch, pinchRatio } from "./pinch";
   import { typeFretDigit, type DigitNote, pinShownStrings, placeTabNote, removeTabNote, setTabNoteLength, shownStrings, tieTabNote, type TabEdit } from "./tabInput";
@@ -14,6 +14,7 @@
   import { LaneGesture } from "./laneGesture.svelte";
   import { laneItems, type LaneTrack } from "./volumeLaneEdit";
   import { LANE_MAX, LANE_MIN, laneThickness, saveVolumeLane, volumeLane } from "./volumeLane.svelte";
+  import LaneTrackPicker from "./LaneTrackPicker.svelte";
   import type { RollView } from "./roll";
   import { tabTint } from "./tabTint.svelte";
   import { padLengths, padPressed } from "./lengthPad";
@@ -25,6 +26,7 @@
   import { carryViewStart, type ViewMemory } from "./viewCarry";
   import { volumeLabels } from "./volumeLabels.svelte";
   import { labelFits, volumeLabelNotes } from "./volumeLabels";
+  import { layoutTabMarks, struckNotes, tieLinks } from "./tabMarks";
   import { fretBoxLeft, fretCenter, layoutTabEvents, rulerRelease, TAB_RULER, TAB_RULER_BASELINE, TAB_WAVE_TOP, tabEventAction, tabEventAt, tabEventRow, tabEventText, tabMarkerText, tabTop, tabZone, type TabEventRow, type TabEventSpot } from "./tabEvents";
   import { drawWaveStrip, noteStarts, WAVE_SIZE } from "./waveDraw";
   import { wholeToSecondsFn, type Peaks } from "./waveform";
@@ -79,6 +81,9 @@
     locked?: ReadonlySet<string> | undefined;
     /** 음량 레인에 고른 트랙과 같이 그릴 트랙, 멜로디 트랙 (피아노롤과 같다) */
     laneTrackIds?: readonly string[] | undefined;
+    /** 음량 레인에 같이 그릴 트랙 넣고 빼기·모두 빼기 (레인의 트랙 고르기 판) */
+    onlanetoggle?: ((trackId: string) => void) | undefined;
+    onclearlane?: (() => void) | undefined;
     melodyIds?: ReadonlySet<string> | undefined;
     /** 보기 → 타브 숫자판: 켜면 마우스로 지판을 눌러도 프렛 숫자판을 연다 (끄면 터치·펜에서만) */
     padByMouse?: boolean;
@@ -115,7 +120,7 @@
     onpastefull?: ((limit: number) => void) | undefined;
   }
 
-  let { song, octaveKey, wave, onwaveoffset, activeTrackId, tuning, playhead, onunplayable, division, noteDur, noteLength, noteLengths = NOTE_LENGTHS, tupletLength, ontuplet, lengthLimit, onnotelength, onedit, onnewtrack, onfull, maxTracks = Infinity, onpreview, volume = $bindable(), volumeRange, colors, locked, laneTrackIds, melodyIds, padByMouse = false, onevent, oncursor, onlayers, onpastefull, ondot, onalign, memory, onmemory, work, followCursor = true, playCursor, loop, onseek, onplaycursor, onloop }: Props = $props();
+  let { song, octaveKey, wave, onwaveoffset, activeTrackId, tuning, playhead, onunplayable, division, noteDur, noteLength, noteLengths = NOTE_LENGTHS, tupletLength, ontuplet, lengthLimit, onnotelength, onedit, onnewtrack, onfull, maxTracks = Infinity, onpreview, volume = $bindable(), volumeRange, colors, locked, laneTrackIds, onlanetoggle, onclearlane, melodyIds, padByMouse = false, onevent, oncursor, onlayers, onpastefull, ondot, onalign, memory, onmemory, work, followCursor = true, playCursor, loop, onseek, onplaycursor, onloop }: Props = $props();
 
   // 위쪽에 마디 번호 줄과 변속 줄 두 칸(위 칸 템포, 아래 칸 박자·마커), 원곡이 있으면 그 아래 파형 띠를 두고 그 아래에 첫 줄
   // 숫자판을 띄운 동안은 지판 자리를 위해 띠를 숨긴다 (도구 띠를 숨기는 것과 같은 규칙)
@@ -177,39 +182,13 @@
   const span = $derived((width - LEFT) / pxPerWhole);
   const songEnd = $derived(Math.max(0, ...tracks.flatMap((tr) => tr.notes.map((n) => toFloat(n.start) + toFloat(n.dur)))));
   const timeMax = $derived(Math.max(span, songEnd + span * 0.5));
-  /**
-   * &로 이은 음. 같은 높이면 이어 울림(hold: 뒷자리에 괄호 숫자와 호), 다른 높이면 슬라이드(slide: / \ 선).
-   * from은 화면에 숫자로 쓰는 앞 음(같은 높이로 여러 번 이었으면 맨 처음 음)
-   */
-  type TieLink =
-    | { readonly kind: "hold"; readonly from: string; readonly prev: Rat; readonly at: Rat }
-    | { readonly kind: "slide"; readonly from: string; readonly to: string; readonly up: boolean };
-  const links = $derived.by(() => {
-    const out: TieLink[] = [];
-    for (const track of tracks) {
-      const notes = [...track.notes].sort((a, b) => cmp(a.start, b.start));
-      let head: string | undefined;
-      notes.forEach((n, i) => {
-        head ??= n.id;
-        const next = notes[i + 1];
-        if (n.tie !== "next" || !next || cmp(add(n.start, n.dur), next.start) !== 0) {
-          head = undefined;
-          return;
-        }
-        if (next.pitch === n.pitch) out.push({ kind: "hold", from: head, prev: n.start, at: next.start });
-        else {
-          out.push({ kind: "slide", from: head, to: next.id, up: next.pitch > n.pitch });
-          head = next.id;
-        }
-      });
-    }
-    return out;
-  });
+  /** &로 이은 음 (이어 울림·슬라이드). 규칙은 tabMarks.tieLinks */
+  const links = $derived(tieLinks(tracks.map((t) => t.notes)));
   /** 슬라이드로 닿는 음 → 출발 음 (줄 배정이 같은 줄을 먼저 고른다) */
   const slides = $derived(new Map(links.flatMap((l) => (l.kind === "slide" ? [[l.to, l.from] as const] : []))));
   /** 음 id → 트랙 id (여러 트랙을 모아 보일 때 숫자에 트랙 색을 칠한다) */
   const trackOf = $derived(new Map(tracks.flatMap((t) => t.notes.map((n) => [n.id, t.id] as const))));
-  const events = $derived(assignTab(tracks.flatMap((t) => struck(t.notes)), tuning, new Map(), slides));
+  const events = $derived(assignTab(tracks.flatMap((t) => struckNotes(t.notes)), tuning, new Map(), slides));
 
   /** 타브 커서: 시간(격자에 맞춤)과 줄(1 = 가장 높은 줄) */
   // 피아노롤에 갔다 와도 전에 있던 커서 그대로 (그 사이 곡이 짧아져도 지우지 않는다)
@@ -679,6 +658,18 @@
     return selectedNotes;
   }
 
+  /** 이 id의 음들을 고른다 (꾸밈음을 넣은 뒤 만든 음과 본음을 바로 다시 고칠 수 있게). 곡이 바뀐 직후에도 부르므로 보이는 트랙으로 거르지 않는다 */
+  export function selectIds(ids: readonly string[]): void {
+    anchor = undefined;
+    selected = new Set(ids);
+  }
+
+  /** 음이 지금 타브에 보이는 자리 (줄·프렛). 칠 수 없거나 이어 울리는 음이면 undefined (꾸밈음 창이 본음 줄을 읽는다) */
+  export function positionOf(id: string): TabPosition | undefined {
+    for (const e of events) for (const x of e.notes) if (x.note.id === id) return x.at;
+    return undefined;
+  }
+
   /** 타브에 보이는 트랙의 음을 모두 고른다 */
   export function selectAll(): boolean {
     if (tracks.length === 0) return false;
@@ -937,16 +928,6 @@
   }
 
   /** 같은 음을 &로 이은 뒷부분은 다시 치는 음이 아니라 타브에 숫자를 또 쓰지 않는다 */
-  function struck(notes: readonly Note[]): Note[] {
-    const out: Note[] = [];
-    let prev: Note | undefined;
-    for (const n of notes) {
-      const held = prev?.tie === "next" && prev.pitch === n.pitch && cmp(add(prev.start, prev.dur), n.start) === 0;
-      if (!held) out.push(n);
-      prev = n;
-    }
-    return out;
-  }
   const unplayable = $derived(events.reduce((sum, e) => sum + e.notes.filter((x) => !x.at).length, 0));
   /** 음표 볼륨 숫자를 켜면 지판 맨 아래(빠진 음 × 밑)에 더하는 볼륨 줄 높이. 끄면 0이라 지금과 같다 */
   const VOLUME_ROW = 14;
@@ -1213,113 +1194,76 @@
     g.rect(labelEdge, 0, width - labelEdge, height);
     g.clip();
 
-    // 프렛 숫자. 칠 수 없는 음은 아래에 ×
+    // 프렛 숫자·이어 울림 괄호·× 자리 (tabMarks: 곡의 모든 음이 이 가운데 하나로 보인다).
     // 같은 줄에서 슬라이드로 이어진 음이 너무 붙어 있으면(48분음표 꾸밈음 등) "7\6\5"처럼 한 덩어리로 쓴다
-    const placed = new Map<string, { string: number; fret: number; t: number }>();
-    for (const e of events) for (const { note, at } of e.notes) if (at) placed.set(note.id, { ...at, t: toFloat(e.start) });
-    const slideFrom = new Map<string, string>();
-    for (const l of links) if (l.kind === "slide") slideFrom.set(l.to, l.from);
     const tight = fontPx * 1.4;
-    /** 덩어리로 묶여 따로 선을 긋지 않을 슬라이드 (닿는 음 id) */
-    const grouped = new Set<string>();
-    const byString = new Map<number, { id: string; fret: number; t: number }[]>();
-    for (const [id, p] of placed) {
-      if (p.t < start - 0.5 || p.t > end) continue;
-      const list = byString.get(p.string) ?? [];
-      list.push({ id, fret: p.fret, t: p.t });
-      byString.set(p.string, list);
-    }
+    const marks = layoutTabMarks(events, links, x, (text) => g.measureText(text).width, tight, start, end);
+    const { placed, grouped } = marks;
+    const box = (string: number, left: number, w: number) => g.fillRect(left, y(string) - fontPx / 2 - 1, w, fontPx + 2);
+    // 이어 울림: 숫자보다 먼저 그린다 (괄호가 넓어 뒤에 친 음 숫자를 덮지 않게 숫자가 위에 온다).
+    // 앞 숫자와 너무 붙었으면 호 없이 앞 표시 바로 오른쪽에 쓴다 (예전에는 건너뛰어 &로 이은 긴 음이 안 보였다)
     g.textAlign = "left";
-    for (const [string, list] of byString) {
-      list.sort((a, b) => a.t - b.t);
-      let i = 0;
-      while (i < list.length) {
-        const first = list[i]!;
-        let text = String(first.fret);
-        let j = i + 1;
-        while (j < list.length) {
-          const prev = list[j - 1]!;
-          const cur = list[j]!;
-          if (x(cur.t) - x(prev.t) >= tight || slideFrom.get(cur.id) !== prev.id) break;
-          text += (cur.fret > prev.fret ? "/" : "\\") + cur.fret;
-          grouped.add(cur.id);
-          j++;
-        }
-        const w = g.measureText(text).width + 4;
-        // 음이 시작하는 자리에서 오른쪽으로 쓴다 (마디 첫 음이 마디선·박자 글자와 겹치지 않게)
-        const left = fretBoxLeft(x(first.t));
-        g.fillStyle = css("--panel");
-        g.fillRect(left, y(string) - fontPx / 2 - 1, w, fontPx + 2);
-        // 트랙 색 설정을 켰고 트랙이 둘 이상이면 숫자 칸을 그 트랙 색으로 옅게 칠하고, 고른 트랙이 아닌 숫자는 흐리게 쓴다
-        const owner = trackOf.get(first.id);
-        const tint = tabTint.on && tracks.length > 1 && owner ? colors?.get(owner) : undefined;
-        if (tint) {
-          g.globalAlpha = 0.32;
-          g.fillStyle = tint;
-          g.fillRect(left, y(string) - fontPx / 2 - 1, w, fontPx + 2);
-          g.globalAlpha = 1;
-        }
-        // 고른 음: 숫자 칸을 강조색으로 옅게 (트랙 색 위에 덧칠해 알아보게)
-        if (list.slice(i, j).some((p) => selected.has(p.id))) {
-          g.globalAlpha = 0.38;
-          g.fillStyle = css("--accent");
-          g.fillRect(left, y(string) - fontPx / 2 - 1, w, fontPx + 2);
-          g.globalAlpha = 1;
-        }
-        g.fillStyle = css(tint && owner !== activeTrackId ? "--muted" : "--text");
-        g.fillText(text, left + 2, y(string) + fontPx * 0.36);
-        i = j;
+    g.strokeStyle = css("--text");
+    g.lineWidth = 1.5;
+    for (const h of marks.holds) {
+      if (h.left + h.width < LEFT - 20 || h.left > width + 20) continue;
+      if (h.arc) {
+        const yy = y(h.string) - fontPx / 2 - 2;
+        g.beginPath();
+        g.moveTo(h.arc.from + 2, yy);
+        g.quadraticCurveTo((h.arc.from + h.arc.to) / 2, yy - 7, h.arc.to - 2, yy);
+        g.stroke();
       }
+      g.fillStyle = css("--panel");
+      box(h.string, h.left, h.width);
+      g.fillStyle = css("--muted");
+      g.fillText(h.text, h.left + 2, y(h.string) + fontPx * 0.36);
+    }
+    for (const f of marks.frets) {
+      g.fillStyle = css("--panel");
+      box(f.string, f.left, f.width);
+      // 트랙 색 설정을 켰고 트랙이 둘 이상이면 숫자 칸을 그 트랙 색으로 옅게 칠하고, 고른 트랙이 아닌 숫자는 흐리게 쓴다
+      const owner = trackOf.get(f.ids[0]!);
+      const tint = tabTint.on && tracks.length > 1 && owner ? colors?.get(owner) : undefined;
+      if (tint) {
+        g.globalAlpha = 0.32;
+        g.fillStyle = tint;
+        box(f.string, f.left, f.width);
+        g.globalAlpha = 1;
+      }
+      // 고른 음: 숫자 칸을 강조색으로 옅게 (트랙 색 위에 덧칠해 알아보게)
+      if (f.ids.some((id) => selected.has(id))) {
+        g.globalAlpha = 0.38;
+        g.fillStyle = css("--accent");
+        box(f.string, f.left, f.width);
+        g.globalAlpha = 1;
+      }
+      g.fillStyle = css(tint && owner !== activeTrackId ? "--muted" : "--text");
+      g.fillText(f.text, f.left + 2, y(f.string) + fontPx * 0.36);
     }
     g.textAlign = "center";
-    for (const e of events) {
-      const t = toFloat(e.start);
-      if (t < start - 0.1 || t > end) continue;
-      const missing = e.notes.filter((n) => !n.at).length;
-      if (missing > 0) {
-        const marks = "×".repeat(missing);
-        g.fillStyle = css("--danger");
-        g.fillText(marks, fretCenter(x(t), g.measureText(marks).width), y(tuning.strings.length) + fontPx + 4);
-      }
+    for (const m of marks.missing) {
+      const text = "×".repeat(m.count);
+      g.fillStyle = css("--danger");
+      g.fillText(text, fretCenter(x(m.t), g.measureText(text).width), y(tuning.strings.length) + fontPx + 4);
     }
-    // 이음·슬라이드: 숫자 사이에 표시 (다른 줄로 갈 수밖에 없는 슬라이드는 흐리게). 너무 붙은 것은 덩어리 글자로 이미 썼다
+    // 슬라이드: 숫자 사이에 선 (다른 줄로 갈 수밖에 없는 슬라이드는 흐리게). 너무 붙은 것은 덩어리 글자로 이미 썼다
     g.strokeStyle = css("--text");
     g.lineWidth = 1.5;
     for (const l of links) {
+      if (l.kind !== "slide" || grouped.has(l.to)) continue;
       const a = placed.get(l.from);
-      if (!a) continue;
-      if (l.kind === "hold") {
-        const x0 = x(toFloat(l.prev));
-        const x1 = x(toFloat(l.at));
-        if (x1 < LEFT - 20 || x0 > width + 20 || x1 - x0 < tight) continue;
-        const yy = y(a.string) - fontPx / 2 - 2;
-        const label = `(${a.fret})`;
-        const w = g.measureText(label).width + 4;
-        // 앞 숫자 가운데에서 이어 울리는 자리의 (5) 칸 가운데까지
-        const from = fretCenter(x0, g.measureText(String(a.fret)).width);
-        const to = fretCenter(x1, w - 4);
-        g.beginPath();
-        g.moveTo(from + 2, yy);
-        g.quadraticCurveTo((from + to) / 2, yy - 7, to - 2, yy);
-        g.stroke();
-        g.fillStyle = css("--panel");
-        g.fillRect(fretBoxLeft(x1), y(a.string) - fontPx / 2 - 1, w, fontPx + 2);
-        g.fillStyle = css("--muted");
-        g.fillText(label, to, y(a.string) + fontPx * 0.36);
-      } else {
-        if (grouped.has(l.to)) continue;
-        const b = placed.get(l.to);
-        if (!b || x(b.t) < LEFT - 20 || x(a.t) > width + 20) continue;
-        g.globalAlpha = a.string === b.string ? 1 : 0.4;
-        const tilt = (l.up ? 1 : -1) * Math.max(4, fontPx * 0.35);
-        g.beginPath();
-        // 앞 숫자 칸 오른쪽 끝에서 뒤 숫자 칸 왼쪽 끝까지
-        const wa = g.measureText(String(a.fret)).width;
-        g.moveTo(fretCenter(x(a.t), wa) + wa / 2 + 3, y(a.string) + tilt);
-        g.lineTo(fretBoxLeft(x(b.t)) - 1, y(b.string) - tilt);
-        g.stroke();
-        g.globalAlpha = 1;
-      }
+      const b = placed.get(l.to);
+      if (!a || !b || x(b.t) < LEFT - 20 || x(a.t) > width + 20) continue;
+      g.globalAlpha = a.string === b.string ? 1 : 0.4;
+      const tilt = (l.up ? 1 : -1) * Math.max(4, fontPx * 0.35);
+      g.beginPath();
+      // 앞 숫자 칸 오른쪽 끝에서 뒤 숫자 칸 왼쪽 끝까지
+      const wa = g.measureText(String(a.fret)).width;
+      g.moveTo(fretCenter(x(a.t), wa) + wa / 2 + 3, y(a.string) + tilt);
+      g.lineTo(fretBoxLeft(x(b.t)) - 1, y(b.string) - tilt);
+      g.stroke();
+      g.globalAlpha = 1;
     }
     // 볼륨 줄: 고르는 트랙 음의 v (피아노롤 볼륨 숫자와 같은 규칙). 프렛 숫자와 같은 왼쪽 끝에, 앞 숫자와 겹치면 건너뛴다.
     // 고른 음이면 진하게. 그리기만 한다 (누르기는 지판 칸 규칙 그대로)
@@ -1449,14 +1393,17 @@
               {l === "grid" ? t("ui.lengthPadGrid") : on && !l.endsWith(".") && noteLength.endsWith(".") ? `${l}.` : l}
             </button>
           {/each}
+          <!-- 점 붙이기·떼기: 음 길이 단추 끝에 둔다 -->
+          {#if ondot}<button class="dot" title={t("ui.dotToggleHelp")} aria-label={t("ui.dotToggle")} onclick={ondot}>.</button>{/if}
         </div>
       {/if}
-      <div class="frets">
+      <!-- 두 줄로 나눈다: 24프렛이면 0~12, 13~24 -->
+      <div class="frets" style:grid-template-columns="repeat({Math.ceil((tuning.maxFret + 2) / 2)}, minmax(0, 1fr))">
         {#each Array.from({ length: tuning.maxFret + 1 }, (_, i) => i) as fret (fret)}
           <button onclick={() => padFret(fret)}>{fret}</button>
         {/each}
-        <!-- 점 붙이기·떼기: 0~10, 11~20 두 줄의 빈 칸(20 다음)에 둔다 -->
-        {#if ondot}<button class="dot" title={t("ui.dotToggleHelp")} aria-label={t("ui.dotToggle")} onclick={ondot}>.</button>{/if}
+        <!-- 음표 입력판이 없을 때만 점 단추를 두 줄 끝의 빈 칸(마지막 프렛 다음)에 둔다 -->
+        {#if ondot && (noteLength === undefined || !onnotelength)}<button class="dot" title={t("ui.dotToggleHelp")} aria-label={t("ui.dotToggle")} onclick={ondot}>.</button>{/if}
       </div>
     </div>
   {/if}
@@ -1477,7 +1424,10 @@
       {#if volumeLane.state === "collapsed"}
         <button class="small" title={t("ui.laneOpen")} onclick={() => saveVolumeLane({ state: "compact" })}>{t("ui.laneName")} ▲</button>
       {:else}
-        {#if laneTracks.length > 1}<span class="muted" title={t("ui.laneMultiHelp")}>{t("ui.laneTracks", { n: laneTracks.length })}</span>{/if}
+        {#if onlanetoggle}
+          <!-- 같이 그릴 트랙 고르기 (터치에는 Ctrl+클릭이 없다) -->
+          <LaneTrackPicker buttonClass="small" tracks={song.tracks} players={song.players} activeId={activeTrackId} laneIds={laneTrackIds ?? []} ontoggle={onlanetoggle} onclear={onclearlane} label={t("ui.laneTracks", { n: laneTracks.length })} />
+        {:else if laneTracks.length > 1}<span class="muted" title={t("ui.laneMultiHelp")}>{t("ui.laneTracks", { n: laneTracks.length })}</span>{/if}
         {#if volumeLane.state === "expanded"}
           <button class="small" class:on={volumeLane.mode === "brush"} onclick={() => saveVolumeLane({ mode: "brush" })}>{t("ui.laneBrush")}</button>
           <button class="small" class:on={volumeLane.mode === "line"} onclick={() => saveVolumeLane({ mode: "line" })}>{t("ui.laneLine")}</button>
@@ -1669,16 +1619,15 @@
     border-color: var(--accent);
     color: #fff;
   }
-  /* 0~10, 11~20 두 줄: 폰 폭에서도 세 줄 이상 쌓이지 않는다 */
-  .frets .dot {
+  /* 두 줄(칸 수는 위에서 최고 프렛으로 정한다): 폰 폭에서도 세 줄 이상 쌓이지 않는다 */
+  .dot {
     font-weight: 700;
     font-size: 1.2em;
   }
   .frets {
     display: grid;
-    grid-template-columns: repeat(11, minmax(0, 1fr));
     gap: 3px;
-    max-width: 760px;
+    max-width: 880px;
   }
   .frets button,
   .moves button {

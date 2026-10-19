@@ -161,6 +161,10 @@
       {:else}
         <button role="menuitem" title={t("ui.melodyHelp")} onclick={() => run(() => actions.setMelody(track.id, true))}>{t("ui.markMelody")}</button>
       {/if}
+      {#if actions.toggleLane && actions.inLane && !actions.isActive?.(track.id)}
+        {@const toggleLane = actions.toggleLane}
+        <button role="menuitem" title={t("ui.laneMultiHelp")} onclick={() => run(() => toggleLane(track.id))}>{actions.inLane(track.id) ? t("ui.laneMenuOff") : t("ui.laneMenuOn")}</button>
+      {/if}
       {#if actions.openSecond}
         {@const openSecond = actions.openSecond}
         <button role="menuitem" title={t("ui.openSecondHelp")} onclick={() => run(() => openSecond(track.id))}>{t("ui.openSecond")}</button>

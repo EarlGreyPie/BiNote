@@ -34,6 +34,13 @@ describe("타브 배정", () => {
     expect(assignTab(seven)[0]!.notes.filter((x) => !x.at)).toHaveLength(1);
   });
 
+  it("1번 줄 21~24프렛까지 칠 수 있다", () => {
+    // 악보에 자주 나오는 1번 줄 21프렛(C#6 = 85)과 24프렛(E6 = 88). 그 위(89)는 칠 수 없다
+    expect(frets(assignTab([n(0, 85)]))).toEqual(["1:21"]);
+    expect(frets(assignTab([n(0, 88)]))).toEqual(["1:24"]);
+    expect(frets(assignTab([n(0, 89)]))).toEqual(["x"]);
+  });
+
   it("아직 울리는 음의 줄은 다음 음에 쓰지 않는다", () => {
     // E4(64)를 온음표로 누른 채 F4(65)를 4분음표 뒤에: 둘 다 1번 줄이면 E가 끊긴다
     const held = { id: "h", start: rat(0), dur: rat(1), pitch: 64, vol: 12, tie: "none" as const };

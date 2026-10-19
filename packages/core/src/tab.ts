@@ -12,7 +12,7 @@ export interface TabTuning {
   readonly maxFret: number;
 }
 
-export const STANDARD_TUNING: TabTuning = { strings: [64, 59, 55, 50, 45, 40], capo: 0, maxFret: 20 };
+export const STANDARD_TUNING: TabTuning = { strings: [64, 59, 55, 50, 45, 40], capo: 0, maxFret: 24 };
 
 export interface TabPosition {
   /** 1부터. 1번 줄이 가장 높다 */
@@ -25,6 +25,13 @@ export interface TabEvent {
   readonly start: Rat;
   readonly notes: readonly { readonly note: Note; readonly at?: TabPosition }[];
 }
+
+/**
+ * 칠 수 없는 음 하나의 비용. 어떤 배치 비용보다 커야 칠 수 있는 음을 빼지 않는다:
+ * 가장 큰 손 벌림(24프렛 지판에서 1~24프렛, (23 − COMFORT_SPAN) × 50 + 23 × 2 + 손 자리 ≈ 1000)과
+ * 사용자가 고른 줄을 벗어나는 비용(PREFER_PENALTY)보다 크다
+ */
+const MISSING_COST = 2000;
 
 /** 손가락이 한 번에 벌릴 수 있는 프렛 폭. 넘으면 비용을 크게 준다 */
 const COMFORT_SPAN = 4;
@@ -68,7 +75,7 @@ function candidates(pitches: readonly number[], tuning: TabTuning, prefer: reado
     const hand = fretted.length ? fretted.reduce((a, b) => a + b, 0) / fretted.length : undefined;
     const astray = chosen.filter((c, i) => prefer[i] !== undefined && c?.string !== prefer[i]).length;
     const cost =
-      missing * 1000 + Math.max(0, span - COMFORT_SPAN) * 50 + span * 2 + (hand ?? 0) * 0.3 + astray * PREFER_PENALTY;
+      missing * MISSING_COST + Math.max(0, span - COMFORT_SPAN) * 50 + span * 2 + (hand ?? 0) * 0.3 + astray * PREFER_PENALTY;
     out.push({ positions: [...chosen], hand, cost });
   };
 
@@ -95,7 +102,7 @@ function candidates(pitches: readonly number[], tuning: TabTuning, prefer: reado
   walk(0);
   out.sort((a, b) => a.cost - b.cost);
   out.length = Math.min(out.length, KEEP);
-  return out.length ? out : [{ positions: pitches.map(() => undefined), hand: undefined, cost: pitches.length * 1000 }];
+  return out.length ? out : [{ positions: pitches.map(() => undefined), hand: undefined, cost: pitches.length * MISSING_COST }];
 }
 
 interface Held {
@@ -107,7 +114,7 @@ interface Held {
 /** 슬라이드(다른 음으로 &)를 다른 줄로 옮기는 비용. 같은 줄 위에서만 손으로 미끄러질 수 있다 */
 const SLIDE_STRING_PENALTY = 150;
 
-/** 아직 울리는 음의 줄을 다시 쓰는 비용. 칠 수 없는 음(1000)보다는 작게 둔다 */
+/** 아직 울리는 음의 줄을 다시 쓰는 비용. 칠 수 없는 음(MISSING_COST)보다는 작게 둔다 */
 const HELD_STRING_PENALTY = 500;
 
 /** 손은 프렛 네 칸 정도를 그대로 덮으므로, 그 안의 이동은 거의 공짜로 본다 */
@@ -119,10 +126,9 @@ function move(from: number | undefined, to: number | undefined): number {
 
 /**
  * 사용자가 고른 줄을 벗어나는 비용. 타브에서 그 줄에 친 것은 사용자의 뜻이므로 칠 수 있으면 지킨다:
- * 가장 큰 손 벌림 비용(20프렛 지판에서 1~20프렛, (19 − COMFORT_SPAN) × 50 + 19 × 2 + 손 자리 ≈ 800)보다 크고,
- * 칠 수 없는 음(1000)보다는 작다
+ * 가장 큰 손 벌림 비용(24프렛 지판에서 ≈ 1000, MISSING_COST 참고)보다 크고, 칠 수 없는 음(MISSING_COST)보다는 작다
  */
-const PREFER_PENALTY = 900;
+const PREFER_PENALTY = 1500;
 
 /**
  * 여러 트랙의 음을 모아 타브로 배정한다. prefer는 음 id → 사용자가 타브에서 고른 줄(1부터). 없으면 음에 적힌 줄(Note.tabString).

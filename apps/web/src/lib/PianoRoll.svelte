@@ -38,6 +38,7 @@
   import { wholeToSecondsFn, type Peaks } from "./waveform";
   import type { NoteLook } from "./appearance";
   import { LANE_MAX, LANE_MIN, laneThickness, saveVolumeLane, volumeLane } from "./volumeLane.svelte";
+  import LaneTrackPicker from "./LaneTrackPicker.svelte";
   import { laneItems, type LaneTrack } from "./volumeLaneEdit";
   import { LaneGesture } from "./laneGesture.svelte";
   import { fallShift, fallSpeed, SPEED_FRAME_GAP, SPEED_FRAME_WIDTH, SPEED_PICK_GAP, speedPickLost, speedPickPress, speedPickWheel, toGray } from "./videoSpeed";
@@ -174,9 +175,11 @@
     onvolumes?: (changes: { trackId: string; notes: Note[] }[], label: string) => void;
     /** 같이 그리던 트랙을 모두 뺀다 */
     onclearlane?: () => void;
+    /** 음량 레인에 같이 그릴 트랙 넣고 빼기 (레인의 트랙 고르기 판) */
+    onlanetoggle?: ((trackId: string) => void) | undefined;
   }
 
-  let { cursor, loop, oncursor, onloop, song: fullSong, activeTrackId, orientation, division, playhead, onnotes, onselecttrack, onpicknote, onpreview, onseek, showEvents = false, video = $bindable(), videoPlay = $bindable(false), speedStep = $bindable(0), onspeedpicked, pitchRange = [12, 119], wave, look, themeKey = "", seconds, colors, tool = "pen", noteDur, volume, onvolume, lightKeys = false, canonicalOf, memory, onmemory, work, visibleTrackIds, selectMove = false, locked, pickOthers = true, onevent, oneventmove, onalignbar, onwaveoffset, pickedEvent, onpickevent, ontempowheel, laneTrackIds, melodyIds, onvolumes, onclearlane }: Props =
+  let { cursor, loop, oncursor, onloop, song: fullSong, activeTrackId, orientation, division, playhead, onnotes, onselecttrack, onpicknote, onpreview, onseek, showEvents = false, video = $bindable(), videoPlay = $bindable(false), speedStep = $bindable(0), onspeedpicked, pitchRange = [12, 119], wave, look, themeKey = "", seconds, colors, tool = "pen", noteDur, volume, onvolume, lightKeys = false, canonicalOf, memory, onmemory, work, visibleTrackIds, selectMove = false, locked, pickOthers = true, onevent, oneventmove, onalignbar, onwaveoffset, pickedEvent, onpickevent, ontempowheel, laneTrackIds, melodyIds, onvolumes, onclearlane, onlanetoggle }: Props =
     $props();
 
   /** 레이어: 고른 트랙이 든 보기만 그리고 다루는 곡 (나머지 트랙은 롤에서 보이지도 눌리지도 않는다) */
@@ -1677,7 +1680,11 @@
       title={t("ui.laneMultiHelp")}
       style={orientation === "horizontal" ? `left:${KEYBOARD + 4}px;top:${height - laneReserved - 24}px` : `right:${laneReserved + 2}px;top:20px`}
     >
-      <span>{t("ui.laneTracks", { n: laneTracks.length })}</span>
+      {#if onlanetoggle}
+        <LaneTrackPicker tracks={song.tracks} players={song.players} activeId={activeTrackId} laneIds={laneTrackIds ?? []} ontoggle={onlanetoggle} onclear={onclearlane} label={t("ui.laneTracks", { n: laneTracks.length })} />
+      {:else}
+        <span>{t("ui.laneTracks", { n: laneTracks.length })}</span>
+      {/if}
       {#if volumeLane.state === "expanded"}
         {#each [["top", "ui.laneTop"], ["middle", "ui.laneMiddle"], ["bottom", "ui.laneBottom"]] as const as [rank, label] (rank)}
           <label
@@ -1712,7 +1719,14 @@
       style={orientation === "horizontal" ? `height:${laneReserved}px;width:${KEYBOARD}px` : `width:${laneReserved}px;height:${KEYBOARD}px`}
     >
       <div class="row">
-        {#if orientation === "horizontal" || volumeLane.state === "expanded"}<span class="name">{t("ui.laneName")}</span>{/if}
+        {#if orientation === "horizontal" || volumeLane.state === "expanded"}
+          <!-- 이름표를 누르면 같이 그릴 트랙 고르기 (터치에는 Ctrl+클릭이 없다) -->
+          {#if onlanetoggle}
+            <LaneTrackPicker buttonClass="name" tracks={song.tracks} players={song.players} activeId={activeTrackId} laneIds={laneTrackIds ?? []} ontoggle={onlanetoggle} onclear={onclearlane} label={`${t("ui.laneName")} ▾`} />
+          {:else}
+            <span class="name">{t("ui.laneName")}</span>
+          {/if}
+        {/if}
         {#if volumeLane.state === "expanded"}
           <button onclick={() => saveVolumeLane({ state: "compact" })} title={t("ui.laneShrink")} aria-label={t("ui.laneShrink")}>▼</button>
         {:else}
@@ -1884,14 +1898,27 @@
     gap: 2px;
   }
   /* 이름표: 이 띠가 음량을 그리는 곳이라는 걸 보이게 */
-  .lane-corner .name {
+  .lane-corner .name,
+  .lane-corner :global(button.name) {
     font-size: 10px;
     font-weight: 700;
     line-height: 12px;
     color: var(--accent);
     white-space: nowrap;
   }
-  .horizontal .lane-corner .name {
+  /* 이름표 단추: 글자는 이름표 그대로, 누를 수 있게 테두리만 옅게 */
+  .lane-corner :global(button.name) {
+    flex: 1 1 100%;
+    height: auto;
+    min-height: 14px;
+    padding: 0 2px;
+    background: transparent;
+    border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+    border-radius: 3px;
+    cursor: pointer;
+  }
+  .horizontal .lane-corner .name,
+  .horizontal .lane-corner :global(button.name) {
     flex-basis: 100%;
     text-align: center;
   }
@@ -1946,7 +1973,8 @@
     font-size: 11px;
     padding: 0 2px;
   }
-  .lane-multi button {
+  .lane-multi button,
+  .lane-multi :global(button) {
     height: 16px;
     padding: 0 4px;
     font-size: 11px;
