@@ -140,7 +140,8 @@
   import VideoBar from "./lib/VideoBar.svelte";
   import { MidiKeys } from "./lib/midiKeys.svelte";
   import { loadStored, parseJson, saveStored } from "./lib/persist";
-  import { untrack } from "svelte";
+  import { flushSync, untrack } from "svelte";
+  import { speedPickAllows } from "./lib/videoSpeed";
   import { clock } from "./lib/time";
   import { forgetPack, loadPacks, savePack, savePackOrder } from "./lib/packStore";
   import { fileAccept, hasExtension } from "./lib/fileAccept";
@@ -325,6 +326,24 @@
   let videoPlay = $state(false);
   /** 영상 속도 직접 재기 단계 (PianoRoll과 묶음) */
   let speedStep = $state<0 | 1 | 2 | 3>(0);
+  // 영상 속도를 직접 재는 동안에는 곡을 바꾸는 입구를 모두 닫는다 (규칙은 speedPickAllows 한 곳).
+  // 단축키·메뉴·실행 취소·MIDI 건반·롤에서 넘어오는 편집·글 입력이 모두 여기서 막힌다. 그만두기는 Esc나 도구줄의 취소
+  const picking = $derived(speedStep !== 0);
+  /**
+   * 피아노롤 ↔ 타브. 재는 중에 롤을 떠나면 재기를 그만두고, 재기 전 화면 자리를 보기 기억에 먼저 적은 뒤 바꾼다
+   * (타브는 만들어질 때 그 기억을 읽으므로, 롤이 사라지며 적으면 늦다)
+   */
+  function showView(mode: "roll" | "tab") {
+    if (mode !== viewMode && picking) {
+      roll?.cancelSpeedPick();
+      flushSync();
+    }
+    viewMode = mode;
+  }
+  // 롤이 사라지면(타브로 바꾸기) 재기 단계를 남기지 않는다 (남으면 위 규칙이 타브에서도 키를 막는다)
+  $effect(() => {
+    if (viewMode !== "roll") untrack(() => (speedStep = 0));
+  });
   /** 영상 속도 재기 결과 한 줄 */
   let speedNote = $state("");
   /** 속도 맞추기: 자동으로 재고, 못 재면 직접 재기로 넘어간다 */
@@ -628,7 +647,7 @@
     if (!history) return;
     const track = history.song.tracks.find((tr) => tr.id === trackId);
     // 편집기가 닫히며 남은 입력을 저장할 때 그 트랙이 이미 지워졌을 수 있다
-    if (!track || track.mml?.text === text || !editable(trackId)) return;
+    if (!track || track.mml?.text === text || !editable(trackId) || picking) return;
     sync(history.run(setTrackText(trackId, text)));
   }
 
@@ -654,7 +673,7 @@
   }
 
   function editNotes(trackId: string, notes: Note[], label: string) {
-    if (history && editable(trackId)) sync(history.run(setTrackNotes(trackId, notes, label)));
+    if (history && editable(trackId) && !picking) sync(history.run(setTrackNotes(trackId, notes, label)));
   }
 
   /** 게임에 넣기 점검판. 열려 있는 동안 곡이 바뀌면 바로 다시 센다 */
@@ -872,11 +891,11 @@
   });
 
   function undo() {
-    if (history) sync(history.undo(), true);
+    if (history && !picking) sync(history.undo(), true);
   }
 
   function redo() {
-    if (history) sync(history.redo(), true);
+    if (history && !picking) sync(history.redo(), true);
   }
 
   async function onOpen(event: Event) {
@@ -1341,6 +1360,7 @@
 
   /** 편집 칸 밖에서 MML@ 글을 붙여넣으면 붙여넣기 창을 연다 */
   function onPaste(event: ClipboardEvent) {
+    if (picking) return;
     if (showKeymap || paste || midi || settings || meterOpen || eventEdit || addScoreOpen) return;
     const target = event.target as HTMLElement | null;
     if (target?.closest?.(TYPING)) return;
@@ -1454,7 +1474,7 @@
   $effect(() => () => midiKeys.stop());
 
   function placeMidiChord(chord: { pitches: number[]; velocity: number }) {
-    if (!history || !activeTrackId || !editable(activeTrackId)) return;
+    if (!history || !activeTrackId || !editable(activeTrackId) || picking) return;
     const s = history.song;
     const active = s.tracks.find((tr) => tr.id === activeTrackId);
     if (!active) return;
@@ -1636,7 +1656,7 @@
   /** 잇달아 굴린 휠 템포는 실행 취소 한 칸으로 묶는다 */
   let tempoWheel: { at: Rat; after: Song; time: number } | undefined;
   function wheelTempo(at: Rat, step: number) {
-    if (!history) return;
+    if (!history || picking) return;
     const merge = tempoWheel && cmp(tempoWheel.at, at) === 0 && tempoWheel.after === history.song && performance.now() - tempoWheel.time < 1500;
     const { min, max } = profile.tempo;
     const bpm = Math.min(max, Math.max(min, bpmAt(history.song.tempo, at) + step));
@@ -2300,8 +2320,8 @@
   ];
 
   const viewMenu: MenuItem[] = $derived([
-    { label: t("ui.pianoRoll"), checked: viewMode === "roll", run: () => (viewMode = "roll") },
-    { label: t("ui.tabView"), checked: viewMode === "tab", hint: keyOf("view.tab"), run: () => (viewMode = "tab") },
+    { label: t("ui.pianoRoll"), checked: viewMode === "roll", run: () => showView("roll") },
+    { label: t("ui.tabView"), checked: viewMode === "tab", hint: keyOf("view.tab"), run: () => showView("tab") },
     { separator: true },
     { label: t("ui.dockBottom"), title: t("ui.dockHelp"), checked: paneDock === "bottom", run: () => setDock("bottom") },
     { label: t("ui.dockRight"), title: t("ui.dockHelp"), checked: paneDock === "right", run: () => setDock("right") },
@@ -2487,6 +2507,7 @@
 
   /** 명령 실행. 할 일이 없었으면 false (키를 브라우저에 그대로 넘긴다) */
   function run(command: CommandId): boolean {
+    if (!speedPickAllows(speedStep, command)) return false;
     if (command.startsWith("grid.")) {
       division = Number(command.slice(5));
       return true;
@@ -2576,7 +2597,7 @@
         return true;
       }
       case "view.tab":
-        viewMode = viewMode === "roll" ? "tab" : "roll";
+        showView(viewMode === "roll" ? "tab" : "roll");
         return true;
       case "view.orientation":
         orientation = orientation === "horizontal" ? "vertical" : "horizontal";
@@ -2627,8 +2648,30 @@
   // 글 입력 칸에서는 롤 음을 바꾸지 않는다 (Ctrl+A·C·X·V는 글 편집으로, Ctrl+[ ]는 그대로 둔다)
   const TEXT_COMMANDS: ReadonlySet<CommandId> = new Set(["edit.selectAll", "edit.copy", "edit.cut", "edit.paste", "edit.lengthDouble", "edit.lengthHalf", "edit.dotToggle"]);
 
+  /** 영상 속도를 직접 재는 동안의 키: Esc는 재기를 그만두고, 저장 말고 묶인 키는 아무것도 하지 않는다 (브라우저에도 넘기지 않는다) */
+  function pickingKey(event: KeyboardEvent) {
+    if (event.isComposing) return;
+    const key = keyName(event);
+    if (key === "Escape") {
+      event.preventDefault();
+      roll?.cancelSpeedPick();
+      return;
+    }
+    // 글 입력 칸(영상 칸의 숫자 등)에서는 글 치기를 그대로 둔다. MML 편집기는 그동안 고칠 수 없다
+    const target = event.target as HTMLElement | null;
+    if (target?.closest?.(TEXT_INPUT) && !allowedWhileTyping(key ?? "")) return;
+    const command = key ? commandFor(bindings, key) : undefined;
+    if (!command) return;
+    event.preventDefault();
+    if (speedPickAllows(speedStep, command)) {
+      flushAllEditors();
+      run(command);
+    }
+  }
+
   function onKeydown(event: KeyboardEvent) {
     // 편집기가 이미 처리한 키(편집기 안 실행 취소 등)는 건드리지 않는다
+    if (picking && !event.defaultPrevented) return pickingKey(event);
     if (event.defaultPrevented || showKeymap || paste || midi || transposing || arpeggio || slide || voicing || settings || meterOpen || eventEdit || addScoreOpen || recoverOpen || outputOpen || optimizing || event.isComposing) return;
     // 위 목록에 없는 대화 상자라도 열려 있으면 뒤의 곡에 단축키를 보내지 않는다
     if (document.querySelector("dialog[open]")) return;
@@ -3051,7 +3094,7 @@
   <div class="toolzone">
     <Toolbar
       {viewMode}
-      onview={(mode) => (viewMode = mode)}
+      onview={showView}
       tabHint={hint("view.tab")}
       tool={rollTool}
       ontool={(next) => (rollTool = next)}
@@ -3312,6 +3355,7 @@
           onedit={editText}
           onundo={undo}
           onredo={redo}
+          hold={picking}
           ongodiag={(trackId, from, to) => (reveal = { trackId, from, to, focus: true, nonce: (reveal?.nonce ?? 0) + 1 })}
         >
           {#snippet top()}

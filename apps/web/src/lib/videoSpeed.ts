@@ -99,7 +99,31 @@ export function speedPickPress(
   return { consumed: true, step, firstY };
 }
 
-/** 재는 중에 영상이 없어지거나, 다른 영상으로 바뀌거나, 건반 맞춤이 꺼졌으면 재기를 그만둬야 한다 */
-export function speedPickLost(step: SpeedStep, pickUrl: string | undefined, video: { readonly url: string; readonly fit: boolean } | undefined): boolean {
-  return step !== 0 && (!video?.fit || video.url !== pickUrl);
+/**
+ * 재는 중에 영상이 없어지거나, 다른 영상으로 바뀌거나, 건반 맞춤이 꺼졌으면 재기를 그만둬야 한다.
+ * 곡이 바뀌어도(막지 못한 다른 길로 고쳤거나 다른 곡을 열었으면) 그만둔다: 재기는 시작할 때의 곡 위에서만 이어 간다
+ */
+export function speedPickLost<S>(
+  step: SpeedStep,
+  pick: { readonly url: string; readonly song: S } | undefined,
+  video: { readonly url: string; readonly fit: boolean } | undefined,
+  song: S,
+): boolean {
+  return step !== 0 && (!pick || !video?.fit || video.url !== pick.url || song !== pick.song);
+}
+
+/**
+ * 재는 동안(1·2·3단계)의 규칙 하나: 곡을 바꾸는 입구는 모두 닫는다 (단축키·메뉴·휠·더블클릭·롤 키·MIDI 건반·글 입력).
+ * 그동안에도 받는 명령은 곡도 화면도 바꾸지 않는 저장뿐이다. 그만두기는 Esc나 도구줄의 취소
+ */
+export function speedPickAllows(step: SpeedStep, command: string): boolean {
+  return step === 0 || command.startsWith("file.save");
+}
+
+/**
+ * 재는 중 휠: 볼륨·템포는 바꾸지 않는다. 첫 점을 고르기 전(1단계)에만 화면을 굴리거나 확대해 영상 속 음을 찾을 수 있고,
+ * 첫 점을 고른 뒤(2·3단계)에는 화면 자리 자체가 재는 값(0.5초)이라 휠을 버린다
+ */
+export function speedPickWheel(step: SpeedStep): "edit" | "view" | "none" {
+  return step === 0 ? "edit" : step === 1 ? "view" : "none";
 }

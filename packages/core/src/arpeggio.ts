@@ -5,13 +5,14 @@ import { replaceNotes } from "./note-edit.js";
 
 /**
  * 아르페지오 자동 만들기. 고른 음(한 트랙)에서 화음 칸을 모으고, 화음 음을 순서대로 펼쳐
- * 한 트랙에 넣거나(펼치기) 같은 악보 트랙을 돌아가며 깔면서 올라간다(깔기). 결과만 계산하고 곡은 바꾸지 않는다.
+ * 한 트랙에 넣거나(펼치기), 원래 음을 둔 채 시작만 늦춰 굴려 치거나(굴려 치기),
+ * 같은 악보 트랙을 돌아가며 다시 친다(되풀이). 결과만 계산하고 곡은 바꾸지 않는다.
  */
 
-/** 화음 음 가져오기: 같은 시간 음(같은 악보 다른 트랙에서 같은 자리에 시작하는 음) / 고른 음만 / 코드 이름 */
+/** 화음 음 가져오기: 같은 시간 음(고른 구간에서 같은 악보 트랙들이 같은 자리에 시작하는 음) / 고른 음만 / 코드 이름 */
 export type ArpSource = "together" | "selected" | "chord";
-/** 방식: 한 트랙에 펼치기 / 트랙을 깔면서 올라가기 */
-export type ArpStyle = "spread" | "strum";
+/** 방식: 한 트랙에 펼치기 / 굴려 치기(원래 음을 두고 시작만 늦춤) / 트랙 돌아가며 되풀이(새 음을 만들어 깔기) */
+export type ArpStyle = "spread" | "roll" | "strum";
 export type ArpOrder = "up" | "down" | "updown" | "random";
 
 /** 코드 종류: 근음에서 쌓는 반음 간격 */
@@ -50,6 +51,11 @@ export interface ArpOptions {
   readonly maxTracks: number;
   /** 잠근 트랙: 화음 음으로 읽기만 하고 바꾸지 않는다 */
   readonly locked?: ReadonlySet<string>;
+  /**
+   * 같은 시간 음(굴려 치기 포함)에서 화음에 넣을 같은 악보 트랙. 없으면 모두. 고른 트랙은 늘 들어간다.
+   * 빠진 트랙은 읽지도 바꾸지도 않는다 (되풀이에서 결과를 놓을 트랙으로도 쓰지 않는다)
+   */
+  readonly tracks?: ReadonlySet<string>;
 }
 
 /** 화음 칸 하나: 자리, 볼륨, 화음 음 높이(낮은 순), 화음 음으로 가져온 다른 트랙 음 */
@@ -83,7 +89,7 @@ export interface ArpResult {
   readonly trackLimit?: number;
   /** 굴려 치기에서 너무 짧아(늦춘 시작이 음 끝에 닿음) 그대로 둔 음 수 */
   readonly tooShort?: number;
-  /** 새 음을 만드는 깔기에서 원래 화음 음이 짧아지게 되어 만들지 않은 칸 수 */
+  /** 만들지 않은 칸 수: 되풀이(깔기)는 원래 화음 음이 짧아지게 되어, 펼치기는 새 음이 고른 트랙의 남는 음 안에서 시작해 빠지게 되어 (그 칸의 원래 음은 그대로) */
   readonly cutCells?: number;
   /** cutCells 가운데 고른 음이 한 트랙에 차례로 놓여(같은 시간에 시작하지 않아) 깔기로 원래 음을 지킬 수 없던 칸 수 */
   readonly sequential?: number;
@@ -94,8 +100,15 @@ const end = (n: { start: Rat; dur: Rat }) => add(n.start, n.dur);
 /** 칸의 음이 모두 칸 시작에 함께 시작하는 화음인지 (고른 음만으로 차례로 놓인 음은 아니다) */
 const together = (cell: Pick<ArpCell, "start" | "sources">) => cell.sources.every((x) => cmp(x.note.start, cell.start) === 0);
 
-/** 화음 칸 모으기. 칸마다 화음 음이 둘 이상인 것과, 하나뿐이라 건너뛴 칸 수 */
-export function arpCells(song: Song, trackId: string, picked: readonly Note[], options: Pick<ArpOptions, "source" | "chord">): { cells: ArpCell[]; single: number } {
+/** 화음에 넣는 트랙인지: 고른 트랙은 늘, 나머지는 tracks가 없거나 tracks에 있으면 */
+const included = (options: Pick<ArpOptions, "tracks">, trackId: string, id: string) => id === trackId || !options.tracks || options.tracks.has(id);
+
+/**
+ * 화음 칸 모으기. 칸마다 화음 음이 둘 이상인 것과, 하나뿐이라 건너뛴 칸 수.
+ * 같은 시간 음: 고른 음의 첫 시작부터 마지막 시작까지, 화음에 넣는 같은 악보 트랙 음이 시작하는 자리마다 칸 하나
+ * (고른 트랙에 그 자리 음이 없어도 칸이 된다)
+ */
+export function arpCells(song: Song, trackId: string, picked: readonly Note[], options: Pick<ArpOptions, "source" | "chord" | "tracks">): { cells: ArpCell[]; single: number } {
   const track = song.tracks.find((t) => t.id === trackId);
   if (!track || picked.length === 0) return { cells: [], single: 0 };
   const sorted = [...picked].sort((a, b) => cmp(a.start, b.start));
@@ -108,19 +121,28 @@ export function arpCells(song: Song, trackId: string, picked: readonly Note[], o
     const steps = CHORD_KINDS[options.chord];
     cells = sorted.map((n) => ({ start: n.start, end: end(n), vol: n.vol, pitches: uniq(steps.map((s) => n.pitch + s)), picked: [n.id], taken: [], sources: [{ trackId, note: n }] }));
   } else {
-    const others = song.tracks.filter((t) => t.playerId === track.playerId && t.id !== trackId);
-    cells = sorted.map((n) => {
-      const taken = others.flatMap((t) => t.notes.filter((o) => cmp(o.start, n.start) === 0).map((o) => ({ trackId: t.id, note: o })));
-      // 칸 끝은 고른 음과 가져온 음 가운데 가장 늦게 끝나는 음의 끝 (고른 음보다 긴 화음 음을 자르지 않게)
-      const last = taken.reduce((m, x) => (cmp(end(x.note), m) > 0 ? end(x.note) : m), end(n));
+    // 고른 트랙을 앞에 두고, 화음에 넣는 같은 악보 트랙만
+    const same = [track, ...song.tracks.filter((t) => t.playerId === track.playerId && t.id !== trackId && included(options, trackId, t.id))];
+    const from = sorted[0]!.start;
+    const to = sorted[sorted.length - 1]!.start;
+    const starts: Rat[] = [];
+    for (const t of same)
+      for (const o of t.notes) if (cmp(o.start, from) >= 0 && cmp(o.start, to) <= 0 && !starts.some((x) => cmp(x, o.start) === 0)) starts.push(o.start);
+    starts.sort(cmp);
+    cells = starts.map((at) => {
+      const here = same.flatMap((t) => t.notes.filter((o) => cmp(o.start, at) === 0).map((o) => ({ trackId: t.id, note: o })));
+      const mine = here.filter((x) => x.trackId === trackId);
+      const taken = here.filter((x) => x.trackId !== trackId);
+      // 칸 끝은 칸 음 가운데 가장 늦게 끝나는 음의 끝 (고른 음보다 긴 화음 음을 자르지 않게)
+      const last = here.reduce((m, x) => (cmp(end(x.note), m) > 0 ? end(x.note) : m), end(here[0]!.note));
       return {
-        start: n.start,
+        start: at,
         end: last,
-        vol: n.vol,
-        pitches: uniq([n.pitch, ...taken.map((x) => x.note.pitch)]),
-        picked: [n.id],
+        vol: (mine[0] ?? here[0]!).note.vol,
+        pitches: uniq(here.map((x) => x.note.pitch)),
+        picked: mine.map((x) => x.note.id),
         taken: taken.map((x) => ({ trackId: x.trackId, noteId: x.note.id })),
-        sources: [{ trackId, note: n }, ...taken],
+        sources: [...mine, ...taken],
       };
     });
   }
@@ -236,7 +258,8 @@ export function planArpeggio(song: Song, trackId: string, picked: readonly Note[
   const empty: ArpResult = { changes: [], newTracks: [], notes: 0, single: 0, outOfRange: 0, lockedSkipped: 0 };
   if (!track) return empty;
   const locked = options.locked ?? new Set<string>();
-  const { cells, single } = arpCells(song, trackId, picked, options);
+  // 굴려 치기는 같은 자리에 함께 시작하는 원래 음을 늦추는 것이라 늘 같은 시간 음으로 모은다
+  const { cells, single } = arpCells(song, trackId, picked, options.style === "roll" ? { ...options, source: "together" } : options);
   const seqs = cells.map((c) => ({ cell: c, ...arpSequence(c, options) })).filter((s) => s.pitches.length > 0);
   const outOfRange = seqs.reduce((s, x) => s + x.outOfRange, 0);
   const lockedTracks = new Set<string>();
@@ -251,14 +274,39 @@ export function planArpeggio(song: Song, trackId: string, picked: readonly Note[
 
   if (options.style === "spread") {
     if (locked.has(trackId)) return { ...empty, single, outOfRange, lockedSkipped: 1 };
-    const removed = new Set(seqs.flatMap((s) => s.cell.picked));
-    const added = seqs.flatMap(({ cell, pitches }) =>
-      arpTimes(cell, pitches.length, options.step, options.repeat).map((t) => fresh(cell, t.start, t.dur, pitches[t.index]!, trackId)),
-    );
-    const changes: { trackId: string; notes: Note[] }[] = [{ trackId, notes: rewrite(track.notes, removed, added) }];
-    if (options.clearChordTracks && options.source === "together") {
+    const planned = seqs.map(({ cell, pitches }) => ({
+      cell,
+      made: arpTimes(cell, pitches.length, options.step, options.repeat).map((t) => fresh(cell, t.start, t.dur, pitches[t.index]!, trackId)),
+    }));
+    // 한 규칙: 받아들인 칸 전체로 고른 트랙의 최종 음(rewrite 결과)을 먼저 만들고, 그 최종 음에서 칸마다 본다.
+    // 칸의 새 음이 하나도 남지 않거나, 지울 화음 트랙 음의 높이가 그 칸의 남은 새 음에 없으면 그 칸은 만들지 않는다
+    // (그 칸의 고른 음·화음 트랙 음도 지우지 않는다). 칸을 빼면 최종 음이 달라지니 그런 칸이 없을 때까지 다시 만든다.
+    // 칸이 하나씩 빠지므로 칸 수만큼 돌면 끝난다
+    const clearing = options.clearChordTracks && options.source === "together";
+    let accepted = planned;
+    let finalNotes: Note[] = [];
+    let survived = new Set<string>();
+    for (;;) {
+      const removedNow = new Set(accepted.flatMap((p) => p.cell.picked));
+      finalNotes = rewrite(track.notes, removedNow, accepted.flatMap((p) => p.made));
+      survived = new Set(finalNotes.filter((n) => cmp(n.dur, ZERO) > 0).map((n) => n.id));
+      const failed = accepted.find((p) => {
+        const kept = p.made.filter((n) => survived.has(n.id));
+        if (kept.length === 0) return true;
+        if (!clearing) return false;
+        const pitches = new Set(kept.map((n) => finalNotes.find((f) => f.id === n.id)!.pitch));
+        return p.cell.sources.some((x) => x.trackId !== trackId && !locked.has(x.trackId) && !pitches.has(x.note.pitch));
+      });
+      if (!failed) break;
+      accepted = accepted.filter((p) => p !== failed);
+    }
+    // 알리는 음 수는 최종 음에 실제로 남은 새 음
+    const placedCount = accepted.reduce((sum, p) => sum + p.made.filter((n) => survived.has(n.id)).length, 0);
+    const cutCells = planned.length - accepted.length;
+    const changes: { trackId: string; notes: Note[] }[] = accepted.length > 0 ? [{ trackId, notes: finalNotes }] : [];
+    if (clearing) {
       const byTrack = new Map<string, Set<string>>();
-      for (const { cell } of seqs) for (const x of cell.taken) byTrack.set(x.trackId, (byTrack.get(x.trackId) ?? new Set()).add(x.noteId));
+      for (const { cell } of accepted) for (const x of cell.taken) byTrack.set(x.trackId, (byTrack.get(x.trackId) ?? new Set()).add(x.noteId));
       for (const [id, ids] of byTrack) {
         if (locked.has(id)) {
           lockedTracks.add(id);
@@ -268,16 +316,16 @@ export function planArpeggio(song: Song, trackId: string, picked: readonly Note[
         changes.push({ trackId: id, notes: rewrite(other.notes, ids, []) });
       }
     }
-    return { changes, newTracks: [], notes: added.length, single, outOfRange, lockedSkipped: lockedTracks.size };
+    return { changes, newTracks: [], notes: placedCount, single, outOfRange, lockedSkipped: lockedTracks.size, ...(cutCells > 0 ? { cutCells } : {}) };
   }
 
-  // 굴려 치기 (기타 물결선 화음): 옥타브 넓이 1, 반복 끔이고 화음 음이 실제로 같은 시간에 시작하는 음이면,
-  // 음을 새로 만들지 않고 원래 음을 제자리(트랙·id·v·줄·&)에 둔 채 시작만 순서대로 늦춘다. 끝은 원래 끝 그대로.
-  // 차례로 놓인 음(고른 음만)은 늦출 것이 없으니 깔기로 보낸다
-  if (options.octaves <= 1 && !options.repeat && options.source !== "chord" && cells.every(together)) return rollChord(song, cells, single, options);
+  // 굴려 치기 (기타 물결선 화음): 음을 새로 만들지 않고 원래 음을 제자리(트랙·id·v·줄·&)에 둔 채 시작만 순서대로 늦춘다.
+  // 끝은 원래 끝 그대로. 옥타브 넓이·반복은 쓰지 않는다
+  if (options.style === "roll") return rollChord(song, cells, single, options);
 
-  // 깔기: 같은 악보 트랙을 고른 트랙부터 돌아가며 쓴다 (잠근 트랙은 건너뛴다)
-  const same = song.tracks.filter((t) => t.playerId === track.playerId);
+  // 되풀이(깔기): 같은 악보 트랙을 고른 트랙부터 돌아가며 쓴다 (잠근 트랙은 건너뛴다).
+  // 같은 시간 음에서 화음에 넣지 않은 트랙은 읽지도 쓰지도 않는다
+  const same = song.tracks.filter((t) => t.playerId === track.playerId && (options.source !== "together" || included(options, trackId, t.id)));
   const from = same.findIndex((t) => t.id === trackId);
   const rotated = [...same.slice(from), ...same.slice(0, from)];
   for (const t of rotated) if (locked.has(t.id)) lockedTracks.add(t.id);
@@ -285,7 +333,9 @@ export function planArpeggio(song: Song, trackId: string, picked: readonly Note[
   // 돌아가는 트랙 수: 한 번 도는 음 수와 트랙 한도 중 작은 것. 모자라면 같은 악보에 트랙을 더한다
   const need = Math.max(0, ...seqs.map((s) => s.pitches.length));
   const want = Math.min(need, options.maxTracks);
-  const room = Math.max(0, options.maxTracks - same.length);
+  // 더할 수 있는 트랙 수는 악보 전체 트랙 수로 센다 (화음에서 뺀 트랙도 악보 한도를 차지한다)
+  const scoreTracks = song.tracks.filter((t) => t.playerId === track.playerId).length;
+  const room = Math.max(0, options.maxTracks - scoreTracks);
   const extra = Math.max(0, Math.min(want - usable.length, room));
   const lanes = Math.min(want, usable.length + extra);
   if (lanes === 0) return { ...empty, single, outOfRange, lockedSkipped: lockedTracks.size };

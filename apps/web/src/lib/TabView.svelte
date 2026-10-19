@@ -16,6 +16,8 @@
   import { LANE_MAX, LANE_MIN, laneThickness, saveVolumeLane, volumeLane } from "./volumeLane.svelte";
   import type { RollView } from "./roll";
   import { tabTint } from "./tabTint.svelte";
+  import { padLengths, padPressed } from "./lengthPad";
+  import { fretPadPrefs } from "./fretPadPrefs.svelte";
   import { nextTabAlign, parseTabAlign, TAB_ALIGN_ICON, TAB_ALIGN_LABEL, type TabAlign } from "./tabAlign";
   import { coarsePointer } from "./mmlPad.svelte";
   import { carryViewStart, type ViewMemory } from "./viewCarry";
@@ -863,9 +865,12 @@
 
   function padFret(fret: number) {
     ensureCursorVisible();
-    // 한도로 거절된 음이면 커서를 그 자리에 둔다. 넘어갈 때는 그 자리 음의 길이만큼 (4분음표면 다음 4분음표 자리)
+    // 한도로 거절된 음이면 커서를 그 자리에 둔다. 넘어갈 때는 그 자리 음의 길이만큼 (4분음표면 다음 4분음표 자리).
+    // 설정 → 화면에서 "아래 줄로"를 골랐으면 같은 자리 한 줄 아래로 내려가 화음을 쌓는다 (맨 아래 줄이면 그대로)
     const dur = enterFret(fret);
-    if (dur && padAdvance && !padChord) moveCursor("right", dur);
+    if (!dur || !padAdvance || padChord) return;
+    if (fretPadPrefs.advance === "down") moveCursor("down");
+    else moveCursor("right", dur);
   }
 
   function onkeydown(e: KeyboardEvent) {
@@ -1415,6 +1420,17 @@
         {/if}
         <button class="close" title={t("ui.fretPadClose")} aria-label={t("ui.fretPadClose")} onclick={closePad}>×</button>
       </div>
+      {#if noteLength !== undefined && onnotelength}
+        <!-- 음표 입력판: 한 줄로 깔고 넘치면 옆으로 민다. 눌린 단추가 새 음 길이이고, 커서 음이 있으면 그 음에도 적용한다 -->
+        <div class="lengths" role="group" aria-label={t("ui.lengthPad")}>
+          {#each padLengths(noteLengths, fretPadPrefs.triplets) as l (l)}
+            {@const on = padPressed(l, noteLength)}
+            <button class:on aria-pressed={on} title={lengthLabel(l)} onclick={() => changeLength(l)}>
+              {l === "grid" ? t("ui.lengthPadGrid") : on && noteLength.endsWith(".") ? `${l}.` : l}
+            </button>
+          {/each}
+        </div>
+      {/if}
       <div class="frets">
         {#each Array.from({ length: tuning.maxFret + 1 }, (_, i) => i) as fret (fret)}
           <button onclick={() => padFret(fret)}>{fret}</button>
@@ -1613,6 +1629,25 @@
     min-height: 36px;
     font-size: 20px;
     line-height: 1;
+  }
+  .lengths {
+    display: flex;
+    gap: 3px;
+    max-width: 760px;
+    overflow-x: auto;
+  }
+  .lengths button {
+    flex: 1 0 auto;
+    min-width: 40px;
+    min-height: 34px;
+    padding-inline: 6px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .lengths button.on {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
   }
   /* 0~10, 11~20 두 줄: 폰 폭에서도 세 줄 이상 쌓이지 않는다 */
   .frets .dot {

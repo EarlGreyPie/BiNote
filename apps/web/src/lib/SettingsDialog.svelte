@@ -6,6 +6,7 @@
   import { MASTER_MAX } from "./engine";
   import { pwa } from "./pwa.svelte";
   import { setTabTint, tabTint } from "./tabTint.svelte";
+  import { fretPadPrefs, setLengthPadTriplets, setPadAdvanceDir, type PadAdvanceDir } from "./fretPadPrefs.svelte";
   import { setVolumeLabels, volumeLabels } from "./volumeLabels.svelte";
   import type { VolumeLabelMode } from "./volumeLabels";
   import { rollFlow, setRollFlow, type RollFlow } from "./rollFlow.svelte";
@@ -210,6 +211,17 @@
         <label class="row" title={t("ui.tabTrackTintHelp")}>
           <input type="checkbox" checked={tabTint.on} onchange={(e) => setTabTint(e.currentTarget.checked)} />
           <span>{t("ui.tabTrackTint")}</span>
+        </label>
+        <label class="row" title={t("ui.lengthPadTripletsHelp")}>
+          <input type="checkbox" checked={fretPadPrefs.triplets} onchange={(e) => setLengthPadTriplets(e.currentTarget.checked)} />
+          <span>{t("ui.lengthPadTriplets")}</span>
+        </label>
+        <label class="row" title={t("ui.padAdvanceDirHelp")}>
+          <span>{t("ui.padAdvanceDir")}</span>
+          <select value={fretPadPrefs.advance} onchange={(e) => setPadAdvanceDir(e.currentTarget.value as PadAdvanceDir)}>
+            <option value="right">{t("ui.padAdvanceRight")}</option>
+            <option value="down">{t("ui.padAdvanceDown")}</option>
+          </select>
         </label>
         <label class="row">
           <span>{t("ui.theme")}</span>

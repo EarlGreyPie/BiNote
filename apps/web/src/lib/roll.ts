@@ -354,8 +354,10 @@ export function isResizeGrab(n: { start: Rat; dur: Rat }, time: number, pxPerWho
  */
 export const NOTE_LENGTHS = ["grid", "1", "2", "2.", "4", "4.", "8", "8.", "16", "16.", "32", "32.", "64", "64.", "12", "24", "48"] as const;
 export type NoteLength = (typeof NOTE_LENGTHS)[number];
+/** 길이 표기 ("grid", "16", "8." 같은 것). 아르페지오 창처럼 NOTE_LENGTHS 밖 길이(l3·l6)를 쓰는 목록도 받는다 */
+export type LengthName = NoteLength | `${number}` | `${number}.`;
 
-export function noteLengthOf(length: NoteLength, division: number): Rat {
+export function noteLengthOf(length: LengthName, division: number): Rat {
   if (length === "grid") return rat(1, division);
   const dotted = length.endsWith(".");
   const n = Number(dotted ? length.slice(0, -1) : length);
@@ -363,14 +365,14 @@ export function noteLengthOf(length: NoteLength, division: number): Rat {
 }
 
 /** 길이 표기의 숫자와 점 수 ("32." → 32, 점 1). grid면 undefined */
-export function lengthParts(length: NoteLength): { length: number; dots: number } | undefined {
+export function lengthParts(length: LengthName): { length: number; dots: number } | undefined {
   if (length === "grid") return undefined;
   const dots = length.length - length.replace(/\.+$/, "").length;
   return { length: Number(length.slice(0, length.length - dots)), dots };
 }
 
 /** 길이 고르기 목록에서 게임이 받는 길이만 (grid는 늘 남는다). 게임 음길이 한도(GameProfile.length)를 따른다 */
-export function lengthsFor(limit: LengthLimit, list: readonly NoteLength[] = NOTE_LENGTHS): NoteLength[] {
+export function lengthsFor<L extends LengthName = NoteLength>(limit: LengthLimit, list: readonly L[] = NOTE_LENGTHS as readonly NoteLength[] as readonly L[]): L[] {
   return list.filter((l) => {
     const p = lengthParts(l);
     return !p || isGameLength(limit, p.length, p.dots);

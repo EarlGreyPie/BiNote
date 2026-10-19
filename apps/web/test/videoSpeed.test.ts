@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { axes, fillStretch, matchRollZoom, videoMatrix, type RollView } from "../src/lib/roll";
-import { fallShift, fallSpeed, speedPickLost, speedPickPress, toGray } from "../src/lib/videoSpeed";
+import { fallShift, fallSpeed, speedPickAllows, speedPickLost, speedPickPress, speedPickWheel, toGray } from "../src/lib/videoSpeed";
 
 /** 롤: 가로·세로, 건반 띠 44px */
 const roll = (orientation: "horizontal" | "vertical", width = 1000, height = 600): RollView => ({
@@ -108,16 +108,41 @@ describe("직접 재기 누름 판단 (PR #152 점검: 재기 중 누름이 음�
 
 describe("재는 중 영상이 없어지거나 바뀌면 그만두기", () => {
   const video = { url: "blob:a", fit: true };
+  const song = { id: "곡" };
+  const pick = { url: "blob:a", song };
   it("영상 지우기·다른 영상·건반 맞춤 끄기 → 그만둔다", () => {
-    expect(speedPickLost(2, "blob:a", undefined)).toBe(true);
-    expect(speedPickLost(1, "blob:a", { url: "blob:b", fit: true })).toBe(true);
-    expect(speedPickLost(3, "blob:a", { ...video, fit: false })).toBe(true);
+    expect(speedPickLost(2, pick, undefined, song)).toBe(true);
+    expect(speedPickLost(1, pick, { url: "blob:b", fit: true }, song)).toBe(true);
+    expect(speedPickLost(3, pick, { ...video, fit: false }, song)).toBe(true);
   });
   it("같은 영상이면 이어 간다. 재고 있지 않으면 상관없다", () => {
-    expect(speedPickLost(2, "blob:a", video)).toBe(false);
-    expect(speedPickLost(0, undefined, undefined)).toBe(false);
+    expect(speedPickLost(2, pick, video, song)).toBe(false);
+    expect(speedPickLost(0, undefined, undefined, song)).toBe(false);
+  });
+  it("곡이 바뀌면(다른 길로 고침·다른 곡 열기) 그만둔다. 시작 기록이 없는 단계(롤을 새로 만든 뒤)도 그만둔다", () => {
+    expect(speedPickLost(2, pick, video, { id: "곡" })).toBe(true);
+    expect(speedPickLost(1, undefined, video, song)).toBe(true);
   });
   it("그만둔 뒤(0단계)의 누름은 보통 편집으로 간다", () => {
     expect(speedPickPress(0, undefined, 50).consumed).toBe(false);
+  });
+});
+
+describe("직접 재기 중 곡을 바꾸는 입구 닫기 (지시서 34)", () => {
+  const commands = ["edit.paste", "edit.undo", "edit.redo", "note.delete", "note.volumeUp", "note.octaveUp", "edit.transpose", "event.tempo", "track.moveUp", "play.toggle", "view.tab", "view.orientation", "grid.16"];
+  it("재는 중(1·2·3단계)에는 저장 말고 어떤 명령도 받지 않는다", () => {
+    for (const step of [1, 2, 3] as const) {
+      for (const c of commands) expect(speedPickAllows(step, c), `${step}단계 ${c}`).toBe(false);
+      for (const c of ["file.saveProject", "file.saveProjectAs", "file.save3mle", "file.saveMmi"]) expect(speedPickAllows(step, c)).toBe(true);
+    }
+  });
+  it("재고 있지 않으면 모든 명령을 받는다", () => {
+    for (const c of commands) expect(speedPickAllows(0, c)).toBe(true);
+  });
+  it("휠: 재는 중에는 볼륨·템포를 바꾸지 않고, 첫 점 전에만 화면을 움직인다", () => {
+    expect(speedPickWheel(0)).toBe("edit");
+    expect(speedPickWheel(1)).toBe("view");
+    expect(speedPickWheel(2)).toBe("none");
+    expect(speedPickWheel(3)).toBe("none");
   });
 });

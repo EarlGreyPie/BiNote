@@ -42,11 +42,13 @@
     /** 잠근 트랙이면 글을 고칠 수 없다. 머리 줄 자물쇠로 풀고 잠근다 */
     locked?: boolean;
     onlock?: ((locked: boolean) => void) | undefined;
+    /** 잠시 글을 고칠 수 없게 (영상 속도를 직접 재는 동안). 자물쇠와 달리 트랙에 남지 않는다 */
+    hold?: boolean;
     /** 아래 편집기(편집기 둘 나란히)면 닫기 단추를 단다 */
     onclose?: (() => void) | undefined;
   }
 
-  let { track, index, text, diagnostics, color, instrument, instrumentLabel, pack, packLabels = [], charLimit, showListen, reveal, playing, follow = false, oninstrument, onpack, onlisten, onedit, onundo, onredo, ongodiag, onrename, onclose, locked = false, onlock }: Props = $props();
+  let { track, index, text, diagnostics, color, instrument, instrumentLabel, pack, packLabels = [], charLimit, showListen, reveal, playing, follow = false, oninstrument, onpack, onlisten, onedit, onundo, onredo, ongodiag, onrename, onclose, locked = false, onlock, hold = false }: Props = $props();
 
   const over = $derived(text.length > charLimit);
   const first = $derived(diagnostics[0]);
@@ -126,7 +128,7 @@
         {reveal}
         {playing}
         {follow}
-        readonly={locked}
+        readonly={locked || hold}
       />
     </div>
   {/key}

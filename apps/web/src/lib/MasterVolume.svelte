@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
+  import { portal } from "./portal";
 
   /**
    * 맨 위 재생 묶음의 전체 음량. 넓으면 아이콘 + 슬라이더, 좁으면(세로로 긴 창이거나 폭이 좁은 창) 음량 단추 하나로 줄이고
@@ -16,6 +17,8 @@
   let open = $state(false);
   let root: HTMLElement;
   let button = $state<HTMLButtonElement | undefined>(undefined);
+  /** 작은 판. 앱 맨 바깥으로 옮겨 띄우므로 root 안에 없다 */
+  let pop = $state<HTMLDivElement | undefined>(undefined);
   /** 판 자리 (위 띠가 옆으로 스크롤될 수 있어 화면 기준으로 둔다. 메뉴 판과 같다) */
   let place = $state({ left: 0, top: 0 });
 
@@ -29,7 +32,8 @@
   }
 
   function onwindowpointerdown(e: PointerEvent) {
-    if (open && !root.contains(e.target as Node)) open = false;
+    const target = e.target as Node;
+    if (open && !root.contains(target) && !pop?.contains(target)) open = false;
   }
 
   // Esc는 판을 닫는 데만 쓴다 (재생 멈춤 단축키로 넘기지 않는다)
@@ -54,7 +58,7 @@
     <Icon name="volume" />
   </button>
   {#if open}
-    <div class="pop" role="dialog" aria-label={title} style:left="{place.left}px" style:top="{place.top}px">
+    <div class="pop" role="dialog" bind:this={pop} use:portal aria-label={title} style:left="{place.left}px" style:top="{place.top}px">
       <!-- svelte-ignore a11y_autofocus -->
       <input type="range" min="0" {max} step="0.05" {value} aria-label={title} autofocus oninput={(e) => onchange(Number(e.currentTarget.value))} />
     </div>

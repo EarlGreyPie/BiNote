@@ -16,6 +16,7 @@
 
 <script lang="ts">
   import Icon, { type IconName } from "./Icon.svelte";
+  import { portal } from "./portal";
 
   /** 위쪽 메뉴 하나 (파일·편집·곡·보기). 누르면 펼치고, 바깥을 누르거나 Esc면 닫는다 */
   interface Props {
@@ -33,7 +34,9 @@
   let open = $state(false);
   let root: HTMLDivElement;
   let button: HTMLButtonElement;
-  /** 펼친 판의 화면 위치. 위 띠·도구줄은 가로 스크롤(overflow)이라 absolute면 잘리므로 fixed로 띄운다 */
+  /** 펼친 판. 앱 맨 바깥으로 옮겨 띄우므로 root 안에 없다 */
+  let panel = $state<HTMLDivElement | undefined>(undefined);
+  /** 펼친 판의 화면 위치. 위 띠·도구줄은 가로 스크롤(overflow)이라 absolute면 잘리므로 fixed로 띄우고 칸 밖으로 옮긴다 */
   let pos = $state({ top: 0, left: 0, right: 0, maxHeight: 400 });
 
   function place() {
@@ -51,8 +54,12 @@
     open = !open;
   }
 
+  function inside(node: Node): boolean {
+    return root.contains(node) || !!panel?.contains(node);
+  }
+
   function onwindowpointerdown(e: PointerEvent) {
-    if (open && !root.contains(e.target as Node)) open = false;
+    if (open && !inside(e.target as Node)) open = false;
   }
 
   /**
@@ -61,7 +68,7 @@
    */
   function onwindowscroll(e: Event) {
     const target = e.target;
-    if (!open || !(target instanceof Node) || root.contains(target)) return;
+    if (!open || !(target instanceof Node) || inside(target)) return;
     if (target === document || target.contains(root)) open = false;
   }
 
@@ -101,6 +108,10 @@
     <div
       class="menu-panel"
       role="menu"
+      tabindex="-1"
+      bind:this={panel}
+      use:portal
+      {onkeydown}
       style:top="{pos.top}px"
       style:left={align === "right" ? "auto" : `${pos.left}px`}
       style:right={align === "right" ? `${pos.right}px` : "auto"}

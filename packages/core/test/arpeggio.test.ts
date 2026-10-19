@@ -121,10 +121,11 @@ describe("방식 1: 한 트랙에 펼치기", () => {
   });
 });
 
-describe("방식 2: 트랙을 깔면서 올라가기", () => {
-  it("옥타브 1·반복 끔(굴려 치기): 원래 음을 제자리에 두고 시작만 늦춘다 (바뀌지 않는 음은 그대로)", () => {
+describe("방식 2·3: 굴려 치기와 트랙 돌아가며 되풀이", () => {
+  // 전에는 깔기 + 옥타브 1 + 반복 끔일 때 몰래 굴려 쳤다. 이제 굴려 치기는 방식(roll)으로 따로 고른다 (지시문 33)
+  it("굴려 치기: 원래 음을 제자리에 두고 시작만 늦춘다 (바뀌지 않는 음은 그대로)", () => {
     const s = chordSong();
-    const r = planArpeggio(s, "t1", [s.tracks[0]!.notes[0]!], { ...base, style: "strum", repeat: false }, newId);
+    const r = planArpeggio(s, "t1", [s.tracks[0]!.notes[0]!], { ...base, style: "roll", repeat: false }, newId);
     const of = (id: string) => shape(r.changes.find((c) => c.trackId === id)?.notes ?? s.tracks.find((t) => t.id === id)!.notes);
     expect(of("t1")).toEqual(["60@0/1+1/4"]);
     expect(of("t2")).toEqual(["64@1/16+3/16"]);
@@ -156,7 +157,7 @@ describe("방식 2: 트랙을 깔면서 올라가기", () => {
   it("굴려 치기: 잠근 트랙 음은 두고 그 순서 자리는 비워 둔다 (다른 음을 당기지 않는다)", () => {
     // 전에는 새 음을 만들어 잠그지 않은 트랙에 돌려 넣었다. 굴려 치기는 원래 음만 옮긴다 (지시문 22의 1번)
     const s = songOf({ t1: [n("c", 0, 4, 60)], t2: [n("e", 0, 4, 64)], t3: [n("g", 0, 4, 67), n("out", 4, 1, 50)] });
-    const r = planArpeggio(s, "t1", [s.tracks[0]!.notes[0]!], { ...base, style: "strum", repeat: false, locked: new Set(["t2"]) }, newId);
+    const r = planArpeggio(s, "t1", [s.tracks[0]!.notes[0]!], { ...base, style: "roll", repeat: false, locked: new Set(["t2"]) }, newId);
     expect(r.lockedSkipped).toBe(1);
     expect(r.changes.some((c) => c.trackId === "t2")).toBe(false);
     // g는 셋째 자리(2/16)에서 시작해 원래 끝 1/2까지. 뒤 음은 그대로
@@ -173,7 +174,7 @@ describe("굴려 치는 화음 (기타 물결선)", () => {
       b: [{ ...n("b1", 0, 4, 71, 9), tabString: 3 }],
       bass: [{ ...n("e1", 0, 6, 47, 11), tabString: 6 }],
     });
-  const roll = { ...base, style: "strum" as const, step: rat(1, 64), octaves: 1, repeat: false };
+  const roll = { ...base, style: "roll" as const, step: rat(1, 64), octaves: 1, repeat: false };
   const after = (s: Song, r: ReturnType<typeof planArpeggio>, id: string) => (r.changes.find((c) => c.trackId === id)?.notes ?? s.tracks.find((t) => t.id === id)!.notes)[0]!;
 
   it("위로 = 낮은 음부터: 끝은 각자 원래 끝, 트랙·id·v·줄은 그대로, 트랙을 더하지 않는다", () => {
@@ -289,7 +290,7 @@ describe("깔기: 잠근 기준 트랙 (PR #138 점검 5)", () => {
   });
   it("굴려 치기에서도 잠근 기준 트랙 음은 그대로", () => {
     const s = chordSong();
-    const r = planArpeggio(s, "t1", [s.tracks[0]!.notes[0]!], { ...base, style: "strum", octaves: 1, repeat: false, locked: new Set(["t1"]) }, newId);
+    const r = planArpeggio(s, "t1", [s.tracks[0]!.notes[0]!], { ...base, style: "roll", octaves: 1, repeat: false, locked: new Set(["t1"]) }, newId);
     expect(r.changes.find((c) => c.trackId === "t1")).toBeUndefined();
   });
 });
@@ -305,9 +306,9 @@ describe("고른 음만 + 깔기 (PR #138 점검 6)", () => {
       expect(r.cutCells).toBe(1);
     }
   });
-  it("같은 시간에 시작하는 화음은 지금처럼 굴려 친다", () => {
+  it("같은 시간에 시작하는 화음은 굴려 치기로 굴려 친다 (굴려 치기는 늘 같은 시간 음으로 모은다)", () => {
     const s = songOf({ t1: [n("c", 0, 2, 60), n("e", 0, 2, 64), n("g", 0, 2, 67)] });
-    const r = planArpeggio(s, "t1", s.tracks[0]!.notes, { ...base, source: "selected", style: "strum", octaves: 1, repeat: false }, newId);
+    const r = planArpeggio(s, "t1", s.tracks[0]!.notes, { ...base, source: "selected", style: "roll", octaves: 1, repeat: false }, newId);
     expect(r.notes).toBe(2);
     expect(r.newTracks).toEqual([]);
     expect(r.sequential).toBeUndefined();
@@ -406,4 +407,172 @@ describe("깔기 성질: 겹침 없음, 원래 음은 끝까지 남거나 그 �
         }
     });
   }
+});
+
+describe("방식 셋과 화음에 넣을 트랙 (지시문 33)", () => {
+  // 같은 자리(0)에서 시작하는 5음 화음, 트랙마다 길이·줄·v가 다르다
+  const five = () =>
+    songOf({
+      t1: [{ ...n("a", 0, 2, 72, 12), tabString: 1 }],
+      t2: [{ ...n("b", 0, 4, 67, 9), tabString: 2 }],
+      t3: [{ ...n("c", 0, 4, 64, 9), tabString: 3 }],
+      t4: [{ ...n("d", 0, 6, 60, 8), tabString: 4 }],
+      t5: [{ ...n("e", 0, 8, 48, 11), tabString: 6 }],
+    });
+  const after = (s: Song, r: ReturnType<typeof planArpeggio>, id: string) => (r.changes.find((c) => c.trackId === id)?.notes ?? s.tracks.find((t) => t.id === id)!.notes)[0]!;
+
+  it("굴려 치기는 반복 켬·옥타브 2를 줘도 원래 음을 늦추기만 한다 (낮은 음부터, 끝은 그대로)", () => {
+    const s = five();
+    const r = planArpeggio(s, "t1", s.tracks[0]!.notes, { ...base, style: "roll", step: rat(1, 64), repeat: true, octaves: 2 }, newId);
+    expect(r.newTracks).toEqual([]);
+    const order = ["t5", "t4", "t3", "t2", "t1"];
+    order.forEach((id, k) => {
+      const o = s.tracks.find((t) => t.id === id)!.notes[0]!;
+      const x = after(s, r, id);
+      expect([x.id, x.start, add(x.start, x.dur), x.vol, x.tabString]).toEqual([o.id, rat(k, 64), add(o.start, o.dur), o.vol, o.tabString]);
+    });
+  });
+
+  it("되풀이(strum)는 옥타브 1·반복 끔이어도 굴려 치기가 아니라 새 음을 만든다", () => {
+    const s = chordSong();
+    const r = planArpeggio(s, "t1", [s.tracks[0]!.notes[0]!], { ...base, style: "strum", octaves: 1, repeat: false }, newId);
+    const ids = r.changes.flatMap((c) => c.notes.map((x) => x.id));
+    expect(ids.some((id) => id.startsWith("x"))).toBe(true);
+  });
+
+  it("체크를 끈 트랙 음은 칸에 들지 않고 결과에서도 그대로", () => {
+    const s = songOf({ t1: [n("c", 0, 2, 60)], t2: [n("e", 0, 2, 64)], t3: [n("g", 0, 2, 67)], t4: [n("b", 0, 2, 71)] });
+    const tracks = new Set(["t1", "t2", "t4"]);
+    const { cells } = arpCells(s, "t1", [s.tracks[0]!.notes[0]!], { ...base, tracks });
+    expect(cells[0]!.pitches).toEqual([60, 64, 71]);
+    for (const style of ["spread", "roll", "strum"] as const) {
+      const r = planArpeggio(s, "t1", [s.tracks[0]!.notes[0]!], { ...base, style, tracks, repeat: style === "strum" }, newId);
+      expect(r.changes.some((c) => c.trackId === "t3"), style).toBe(false);
+    }
+  });
+
+  it("고른 트랙에 음이 없는 자리도 구간 안이면 칸이 된다", () => {
+    // 고른 트랙: 0, 1/2. 다른 두 트랙: 0과 1/4에 화음
+    const s = songOf({ t1: [n("c", 0, 2, 60), n("d", 4, 2, 62)], t2: [n("e", 0, 2, 64), n("f", 2, 2, 65)], t3: [n("g", 0, 2, 67), n("a", 2, 2, 69), n("b", 4, 2, 71)] });
+    const { cells } = arpCells(s, "t1", s.tracks[0]!.notes, base);
+    expect(cells.map((c) => c.start)).toEqual([rat(0), rat(1, 4), rat(1, 2)]);
+    expect(cells[1]!.picked).toEqual([]);
+    // 음 하나만 골라도 그 자리 화음 전체 (뒤 칸은 들지 않는다)
+    expect(arpCells(s, "t1", [s.tracks[0]!.notes[0]!], base).cells.map((c) => c.pitches)).toEqual([[60, 64, 67]]);
+  });
+
+  it("고른 트랙은 tracks에 빠져 있어도 늘 들어간다", () => {
+    const s = chordSong();
+    const { cells } = arpCells(s, "t1", [s.tracks[0]!.notes[0]!], { ...base, tracks: new Set(["t2"]) });
+    expect(cells[0]!.pitches).toEqual([60, 64]);
+  });
+
+  it("펼치기: 칸이 겹쳐도(앞 칸의 긴 화음 음이 다음 칸 뒤까지) 한 트랙에 겹치는 음이 없다", () => {
+    // 0의 화음 끝은 긴 t2(1/2)라 1/4 화음과 겹친다
+    const s = songOf({ t1: [n("c", 0, 2, 60), n("d", 2, 2, 62)], t2: [n("e", 0, 4, 64)], t3: [n("g", 2, 2, 67)] });
+    const r = planArpeggio(s, "t1", s.tracks[0]!.notes, { ...base, repeat: true }, newId);
+    expect(overlaps(r.changes.find((c) => c.trackId === "t1")!.notes)).toBe(false);
+  });
+});
+
+describe("펼치기: 넣지 못한 칸의 원래 음은 지우지 않는다 (PR #156 점검)", () => {
+  it("새 음이 고른 트랙의 긴 음 안에서 시작해 모두 빠지면, 화음 트랙 음도 그대로 두고 0개로 알린다", () => {
+    // 트랙 1: C4 [0, 1/2), D4 [1/2, 3/4). 트랙 2·3: E4·G4 [1/4, 1/2)
+    const s = songOf({ t1: [w("c", [0, 1], [1, 2], 60), w("d", [1, 2], [1, 4], 62)], t2: [w("e", [1, 4], [1, 4], 64)], t3: [w("g", [1, 4], [1, 4], 67)] });
+    const r = planArpeggio(s, "t1", s.tracks[0]!.notes, { ...base, step: rat(1, 16), repeat: true, clearChordTracks: true }, newId);
+    expect(r.notes).toBe(0);
+    expect(r.cutCells).toBe(1);
+    for (const t of applied(s, r)) expect(t.notes).toEqual(s.tracks.find((x) => x.id === t.id)!.notes);
+  });
+
+  it("넣을 수 있는 칸만 만들고 그 칸의 원래 음만 지운다", () => {
+    // 0의 화음(C4·E4)은 넣을 수 있고, 1/2의 화음(G4·B4)은 트랙 1의 긴 D4 안이라 넣을 수 없다 (트랙 1의 F4까지 골라 구간이 3/4까지)
+    const s = songOf({
+      t1: [w("c", [0, 1], [1, 4], 60), w("d", [1, 4], [1, 2], 62), w("f", [3, 4], [1, 8], 65)],
+      t2: [w("e", [0, 1], [1, 4], 64), w("g", [1, 2], [1, 4], 67)],
+      t3: [w("b", [1, 2], [1, 4], 71)],
+    });
+    const r = planArpeggio(s, "t1", s.tracks[0]!.notes, { ...base, step: rat(1, 16), repeat: true, clearChordTracks: true }, newId);
+    expect(r.cutCells).toBe(1);
+    const out = applied(s, r);
+    expect(out.find((t) => t.id === "t2")!.notes.map((x) => x.id)).toEqual(["g"]);
+    expect(out.find((t) => t.id === "t3")!.notes.map((x) => x.id)).toEqual(["b"]);
+    expect(r.notes).toBe(out.find((t) => t.id === "t1")!.notes.filter((x) => x.id.startsWith("x")).length);
+  });
+
+  it("다른 칸 새 음이 같은 자리에 놓여 덮이면 최종 음 기준으로 그 칸을 빼고 원래 음을 지킨다 (PR #156 재점검)", () => {
+    // 트랙 1: C4 [0, 1/8), D4 [1/2, 3/4). 트랙 2: E4 [0, 1/2). 트랙 3·4: G4·B4 [1/8, 3/8)
+    const s = songOf({
+      t1: [w("c", [0, 1], [1, 8], 60), w("d", [1, 2], [1, 4], 62)],
+      t2: [w("e", [0, 1], [1, 2], 64)],
+      t3: [w("g", [1, 8], [1, 4], 67)],
+      t4: [w("b", [1, 8], [1, 4], 71)],
+    });
+    const r = planArpeggio(s, "t1", s.tracks[0]!.notes, { ...base, step: rat(1, 8), repeat: false, clearChordTracks: true }, newId);
+    const out = applied(s, r);
+    const all = out.flatMap((t) => t.notes);
+    // 칸을 이루던 원래 음의 높이는 결과 어딘가에 남는다
+    for (const pitch of [60, 64, 67, 71]) expect(all.some((x) => x.pitch === pitch), String(pitch)).toBe(true);
+    // 알리는 수는 고른 트랙에 실제로 남은 새 음 수
+    expect(r.notes).toBe(out.find((t) => t.id === "t1")!.notes.filter((x) => x.id.startsWith("x")).length);
+    for (const t of out) expect(overlaps(t.notes), t.id).toBe(false);
+  });
+});
+
+describe("펼치기 성질: 지운 원래 음의 높이는 고른 트랙 새 음에 남고, 알리는 수는 실제 새 음 수", () => {
+  const rng = (seed: number) => () => ((seed = (Math.imul(seed, 1103515245) + 12345) >>> 0) / 4294967296);
+  for (const seed of [3, 7, 11, 19, 23, 42, 77, 101, 202, 303]) {
+    it(`시드 ${seed}`, () => {
+      const r0 = rng(seed);
+      let id = 0;
+      const tracks: Record<string, Note[]> = {};
+      for (const t of ["t1", "t2", "t3", "t4"]) {
+        const notes: Note[] = [];
+        let at = 0;
+        while (at < 16) {
+          at += Math.floor(r0() * 3);
+          const len = 1 + Math.floor(r0() * 6);
+          if (at + len > 20) break;
+          notes.push(w(`${t}n${id++}`, [at, 16], [len, 16], 55 + Math.floor(r0() * 20)));
+          at += len;
+        }
+        tracks[t] = notes;
+      }
+      const s = songOf(tracks);
+      const picked = s.tracks[0]!.notes;
+      if (picked.length === 0) return;
+      const options: ArpOptions = { ...base, step: [rat(1, 16), rat(1, 8), rat(1, 32)][Math.floor(r0() * 3)]!, repeat: r0() < 0.5, octaves: 1, clearChordTracks: true };
+      const r = planArpeggio(s, "t1", picked, options, newId);
+      const out = applied(s, r);
+      const t1 = out.find((t) => t.id === "t1")!.notes;
+      const made = t1.filter((x) => x.id.startsWith("x"));
+      expect(r.notes).toBe(made.length);
+      for (const t of out) expect(overlaps(t.notes), t.id).toBe(false);
+      for (const t of s.tracks.slice(1))
+        for (const o of t.notes)
+          if (!out.find((x) => x.id === t.id)!.notes.some((x) => x.id === o.id)) expect(made.some((x) => x.pitch === o.pitch), o.id).toBe(true);
+    });
+  }
+});
+
+describe("되풀이: 화음에서 뺀 트랙도 악보 트랙 한도를 차지한다 (PR #156 점검 다음 판 항목)", () => {
+  it("트랙 6개 중 2개만 체크하고 옥타브 2로 되풀이해도 새 트랙을 더하지 않는다 (한도 6)", () => {
+    const s = songOf({
+      t1: [w("c", [0, 1], [1, 2], 60)],
+      t2: [w("e", [0, 1], [1, 2], 64)],
+      t3: [w("x3", [1, 1], [1, 4], 50)],
+      t4: [w("x4", [1, 1], [1, 4], 52)],
+      t5: [w("x5", [1, 1], [1, 4], 53)],
+      t6: [w("x6", [1, 1], [1, 4], 55)],
+    });
+    const r = planArpeggio(s, "t1", [s.tracks[0]!.notes[0]!], { ...strum, maxTracks: 6, tracks: new Set(["t1", "t2"]) }, newId);
+    expect(s.tracks.length + r.newTracks.length).toBeLessThanOrEqual(6);
+    expect(r.newTracks).toEqual([]);
+    for (const id of ["t3", "t4", "t5", "t6"]) expect(r.changes.some((c) => c.trackId === id), id).toBe(false);
+  });
+  it("한도에 자리가 있으면 그만큼만 더한다", () => {
+    const s = songOf({ t1: [w("c", [0, 1], [1, 2], 60)], t2: [w("e", [0, 1], [1, 2], 64)], t3: [w("x3", [1, 1], [1, 4], 50)] });
+    const r = planArpeggio(s, "t1", [s.tracks[0]!.notes[0]!], { ...strum, maxTracks: 4, tracks: new Set(["t1", "t2"]) }, newId);
+    expect(s.tracks.length + r.newTracks.length).toBeLessThanOrEqual(4);
+  });
 });

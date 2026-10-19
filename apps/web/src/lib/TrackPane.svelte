@@ -54,9 +54,11 @@
     oncloseextra?: (index: number) => void;
     /** 머리 위에 끼우는 것 (악보책 나누기 결과 등) */
     top?: Snippet | undefined;
+    /** 잠시 모든 편집기 글을 고칠 수 없게 (영상 속도를 직접 재는 동안) */
+    hold?: boolean;
   }
 
-  let { song, groups, tracks, colors, activeTrackId, fileName, charLimit, dock, portrait, trackInstrument, trackInstrumentLabel, trackPack, packLabels, actions, reveal, playing, follow = false, moreItems, onedit, onundo, onredo, ongodiag, extraTrackIds = [], playingOf, oncloseextra, top }: Props = $props();
+  let { song, groups, tracks, colors, activeTrackId, fileName, charLimit, dock, portrait, trackInstrument, trackInstrumentLabel, trackPack, packLabels, actions, reveal, playing, follow = false, moreItems, onedit, onundo, onredo, ongodiag, extraTrackIds = [], playingOf, oncloseextra, top, hold = false }: Props = $props();
 
   let portraitView = $state<"structure" | "mml">("structure");
   // 세로 화면에서 롤의 음을 두 번 눌러(또는 검사로) 글 자리로 가라고 하면 편집기 쪽을 보여 준다
@@ -132,6 +134,7 @@
             onrename={(name) => actions.renameTrack(active.track.id, name)}
             locked={actions.viewOf(active.track.id).locked === true}
             onlock={(on) => actions.view(active.track.id, { locked: on })}
+            {hold}
           />
         </div>
         {#each extras as extra, i (extra.track.id)}
@@ -161,6 +164,7 @@
               onrename={(name) => actions.renameTrack(extra.track.id, name)}
               locked={actions.viewOf(extra.track.id).locked === true}
               onlock={(on) => actions.view(extra.track.id, { locked: on })}
+              {hold}
               onclose={() => oncloseextra?.(i)}
             />
           </div>

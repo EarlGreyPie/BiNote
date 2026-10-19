@@ -40,7 +40,7 @@
   import { LANE_MAX, LANE_MIN, laneThickness, saveVolumeLane, volumeLane } from "./volumeLane.svelte";
   import { laneItems, type LaneTrack } from "./volumeLaneEdit";
   import { LaneGesture } from "./laneGesture.svelte";
-  import { fallShift, fallSpeed, SPEED_FRAME_GAP, SPEED_FRAME_WIDTH, SPEED_PICK_GAP, speedPickLost, speedPickPress, toGray } from "./videoSpeed";
+  import { fallShift, fallSpeed, SPEED_FRAME_GAP, SPEED_FRAME_WIDTH, SPEED_PICK_GAP, speedPickLost, speedPickPress, speedPickWheel, toGray } from "./videoSpeed";
   import {
     bpmAt,
     clampPitchView,
@@ -500,21 +500,22 @@
     if (orientation === "horizontal") return m[2] === 0 ? undefined : (e.clientX - rect.left - m[4]) / m[2];
     return m[3] === 0 ? undefined : (e.clientY - rect.top - m[5]) / m[3];
   }
-  /** 직접 재기를 시작한 화면 자리(끝나면 되돌린다)와 그때의 영상, 첫 점 */
-  let pickFrom: { start: number; url: string; y?: number } | undefined;
+  /** 직접 재기를 시작한 화면 자리(끝나면 되돌린다)와 그때의 영상·곡, 첫 점 */
+  let pickFrom: { start: number; url: string; song: Song; y?: number } | undefined;
   /** 직접 재기 시작: 멈춘 화면에서 영상 속 한 음의 앞 끝을 누른다 */
   export function startSpeedPick() {
     if (!video?.fit || !videoSize) return;
     // 하던 편집 동작(끌기·고르기 상자 등)은 끝내고 재기로 들어간다
     cancelGesture();
     videoPlay = false;
-    pickFrom = { start, url: video.url };
+    pickFrom = { start, url: video.url, song: fullSong };
     speedStep = 1;
   }
   // 재는 중에 영상을 지우거나 다른 영상으로 바꾸거나 건반 맞춤을 끄면 재기를 그만둔다 (한 곳에서 지킨다).
-  // 그러지 않으면 단계가 남아 롤 누르기가 계속 재기로만 가고, 취소 단추도 영상 칸과 함께 사라진다
+  // 그러지 않으면 단계가 남아 롤 누르기가 계속 재기로만 가고, 취소 단추도 영상 칸과 함께 사라진다.
+  // 곡이 바뀌어도 그만둔다: 곡을 바꾸는 입구는 재는 동안 닫지만, 닫지 못한 길로 바뀌었으면 재기를 남기지 않는다
   $effect(() => {
-    if (speedPickLost(speedStep, pickFrom?.url, video)) untrack(() => cancelSpeedPick());
+    if (speedPickLost(speedStep, pickFrom, video, fullSong)) untrack(() => cancelSpeedPick());
   });
   /** 직접 재기: 영상(과 롤)을 0.5초 앞으로 */
   export function speedPickForward() {
@@ -527,6 +528,8 @@
     pickFrom = undefined;
     speedStep = 0;
   }
+  /** 직접 재기 누름을 받은 때 (뒤따르는 두 번 누름을 편집으로 보내지 않게) */
+  let lastPickPress = -Infinity;
   /** 직접 재기 중 롤을 누름: 첫 점, 0.5초 뒤 같은 음의 점 ("0.5초 앞으로"를 기다리는 동안의 누름은 아무것도 하지 않는다) */
   function speedPickDown(e: PointerEvent) {
     if (!pickFrom) return;
@@ -913,6 +916,7 @@
     // 영상 속도 직접 재기 중이면 누른 자리는 음을 찍지 않고 재기에 쓴다
     // 재는 중이면 어느 단계든 보통 편집(음 넣기·고르기)으로 가지 않는다
     if (speedStep !== 0) {
+      lastPickPress = e.timeStamp;
       speedPickDown(e);
       return;
     }
@@ -1447,6 +1451,9 @@
 
   /** 음을 두 번 누르면 MML 글의 그 자리로 가서 바로 입력할 수 있게 한다 */
   function ondblclick(e: MouseEvent) {
+    // 재는 중의 두 번 누름은 재기 누름이다: 이벤트 창·MML 편집기로 가지 않는다
+    // (마지막 점을 눌러 재기가 막 끝난 뒤 따라오는 두 번 누름도 재기 누름으로 친다)
+    if (speedStep !== 0 || e.timeStamp - lastPickPress < 1000) return;
     if (inLane(view, ...canvasXY(e))) return;
     if (showEvents) {
       // 이벤트 줄 두 번 누르기: 라벨을 고치거나 그 자리에 새로
@@ -1469,6 +1476,8 @@
   }
 
   function onkeydown(e: KeyboardEvent) {
+    // 재는 중에는 화살표로 음을 옮기지 않는다 (Esc는 앱이 받아 재기를 그만둔다)
+    if (speedStep !== 0) return;
     if (!active || activeLocked || selectedNotes.length === 0 || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
     // 화살표: 고른 음을 모두 반음·격자 한 칸씩 옮긴다
     const notes = selectedNotes;
@@ -1519,7 +1528,10 @@
   let wheelTempo = 0;
   function onwheel(e: WheelEvent) {
     e.preventDefault();
-    if (showEvents && ontempowheel && !e.altKey && !e.ctrlKey && !e.metaKey) {
+    // 재는 중: 볼륨·템포 휠은 받지 않고, 첫 점 전에만 화면을 움직인다
+    const wheel = speedPickWheel(speedStep);
+    if (wheel === "none") return;
+    if (wheel === "edit" && showEvents && ontempowheel && !e.altKey && !e.ctrlKey && !e.metaKey) {
       // 이벤트 줄(마디 번호 줄 포함) 위 휠: 마우스 아래 템포 라벨, 없으면 고른 템포를 ±1 (Shift ±10)
       const [x, y] = canvasXY(e);
       const along = orientation === "horizontal" ? y : x;
@@ -1537,6 +1549,7 @@
       }
     }
     if (e.altKey) {
+      if (wheel !== "edit") return;
       // Alt+휠: 고른 음 볼륨 (마비꼬와 같은 손). 고른 음이 없으면 마우스 아래 음을 골라서
       if (!active || activeLocked || !onvolume) return;
       if (selectedNotes.length === 0) {

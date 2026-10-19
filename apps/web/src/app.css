@@ -275,6 +275,10 @@ input[type="range"] {
   user-select: none;
   -webkit-touch-callout: none;
 }
+/* 아이패드 홈 화면 웹앱을 분할·창 모드로 띄웠을 때 왼쪽 위 창 단추(●●●)가 로고를 가리지 않게 비운다 (windowControls.ts) */
+.ipad-window-controls .topbar {
+  padding-left: 84px;
+}
 .topbar h1 {
   margin: 0 6px 0 0;
   font-size: 17px;
@@ -341,6 +345,16 @@ input[type="range"] {
 }
 .toolbar.compact .field > .muted {
   display: none;
+}
+/* 좁은 창: 긴 튜닝 이름("표준 (EADGBE)")이 도구줄을 밀어 격자·새 음 칸이 안 보이지 않게 줄이고 넘치는 글자는 …로 */
+.toolbar.compact select.tuning {
+  max-width: 9em;
+  text-overflow: ellipsis;
+}
+@media (max-width: 900px) {
+  .toolbar.compact select.tuning {
+    max-width: 6.5em;
+  }
 }
 .toolbar .group {
   display: inline-flex;

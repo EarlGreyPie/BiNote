@@ -6,9 +6,9 @@
   const CAPOS = Array.from({ length: 25 }, (_, c) => c);
 
   /** 새 음 길이 이름 (타브 숫자판도 쓴다) */
-  export function lengthLabel(l: NoteLength): string {
+  export function lengthLabel(l: LengthName): string {
     if (l === "grid") return t("ui.noteLengthGrid");
-    return ["12", "24", "48"].includes(l) ? t("ui.noteLengthTriplet", { n: l }) : `l${l}`;
+    return ["3", "6", "12", "24", "48"].includes(l) ? t("ui.noteLengthTriplet", { n: l }) : `l${l}`;
   }
 </script>
 
@@ -21,7 +21,7 @@
   import VolumeBox from "./VolumeBox.svelte";
   import { GRID_DIVISIONS } from "./keymap";
   import { TUNINGS, type TuningName } from "./tunings";
-  import { type NoteLength, type Orientation, type RollTool } from "./roll";
+  import { type LengthName, type NoteLength, type Orientation, type RollTool } from "./roll";
   import { coarsePointer } from "./mmlPad.svelte";
   import { nextTabAlign, TAB_ALIGN_ICON, TAB_ALIGN_LABEL, type TabAlign } from "./tabAlign";
 
@@ -292,7 +292,7 @@
   {:else}
     <label class="field" title={t("ui.tuningHelp")}>
       <span class="muted">{t("ui.tuning")}</span>
-      <select value={tuningName} onchange={(e) => ontuning(e.currentTarget.value as TuningName)}>
+      <select class="tuning" value={tuningName} onchange={(e) => ontuning(e.currentTarget.value as TuningName)}>
         {#each Object.entries(TUNINGS) as [name, info] (name)}<option value={name}>{t(info.key)}</option>{/each}
       </select>
     </label>
