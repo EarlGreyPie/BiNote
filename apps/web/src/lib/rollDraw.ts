@@ -19,8 +19,9 @@ import {
 import {
   BAR_ROW,
   BLACK_KEY_LENGTH,
-  EVENT_ROW,
+  eventFontSize,
   eventLabels,
+  eventRowSize,
   isBlackKey,
   noteRect,
   octaveOf,
@@ -397,7 +398,9 @@ export function drawRoll(canvas: HTMLCanvasElement, o: RollDrawOptions): void {
     });
     // 이벤트 줄 칸 경계 (가로 롤만 칸이 나뉜다)
     g.fillStyle = line;
-    if (horizontal) g.fillRect(v.keyboard, BAR_ROW + EVENT_ROW, v.width - v.keyboard, 1);
+    const row = eventRowSize(v);
+    const font = eventFontSize(v);
+    if (horizontal) g.fillRect(v.keyboard, BAR_ROW + row, v.width - v.keyboard, 1);
     const drawLabel = (l: EventLabel, p: number, dashed: boolean) => {
       const color = colorOf[l.kind];
       // 바뀌는 자리를 롤 전체에 점선으로
@@ -418,32 +421,37 @@ export function drawRoll(canvas: HTMLCanvasElement, o: RollDrawOptions): void {
       g.stroke();
       g.globalAlpha = alpha;
       g.setLineDash([]);
+      // 글자 자리: 라벨 자리(겹치면 밀어 쓴 자리)를 지금 그리는 시간 자리 p만큼 옮긴다 (끄는 중이면 p가 놓을 자리)
+      const shift = p - timeToScreen(v, toFloat(l.at));
+      const top = horizontal ? l.y : l.y + shift;
+      const left = horizontal ? l.x + shift : l.x;
       if (!dashed && sameEvent(l, o.pickedEvent)) {
         // 고른 라벨: 바탕을 칠하고 테두리를 둘러 보인다
-        const top = horizontal ? l.y : p + (l.y - timeToScreen(v, toFloat(l.at)));
-        const left = horizontal ? p : l.x;
         g.fillStyle = color;
         g.globalAlpha = 0.22;
-        g.fillRect(left, top + 1, l.w + 4, EVENT_ROW - 2);
+        g.fillRect(left, top + 1, l.w + 4, row - 2);
         g.globalAlpha = 1;
         g.lineWidth = 1;
-        g.strokeRect(left + 0.5, top + 1.5, l.w + 3, EVENT_ROW - 3);
+        g.strokeRect(left + 0.5, top + 1.5, l.w + 3, row - 3);
       }
       g.fillStyle = color;
-      if (horizontal) g.fillText(l.text, p + 3, l.y + 11);
-      else g.fillText(l.text, l.x + 1, p + (l.y - timeToScreen(v, toFloat(l.at))) + 11);
+      // 기준선: 칸 위에서 글자 크기만큼 (기본 11px 글자·14px 칸에서 11)
+      if (horizontal) g.fillText(l.text, left + 3, top + font);
+      else g.fillText(l.text, left + 1, top + font);
     };
     // 라벨 글자는 조금 크고 굵게 (작은 글자에 옅은 색이면 안 읽힌다)
-    const font = g.font;
-    g.font = 'bold 11px "D2Coding", ui-monospace, monospace';
+    const saved = g.font;
+    g.font = `bold ${font}px "D2Coding", ui-monospace, monospace`;
     for (const l of labels) {
       const moving = dragged && dragged.kind === l.kind && cmp(dragged.at, l.at) === 0 && dragged.id === l.id;
+      // 적지 않은 곡 처음 기본 템포는 옅게
       if (moving) g.globalAlpha = 0.35;
+      else if (l.implicit) g.globalAlpha = 0.55;
       drawLabel(l, timeToScreen(v, toFloat(l.at)), false);
       g.globalAlpha = 1;
     }
     if (o.eventDrag) drawLabel(o.eventDrag.label, timeToScreen(v, o.eventDrag.to), true);
-    g.font = font;
+    g.font = saved;
   }
 
   // 건반 띠: 실제 피아노처럼 흰건반은 넓게, 검은건반은 짧고 좁게 (롤 쪽에 붙임). 음 칸은 반음마다 같다

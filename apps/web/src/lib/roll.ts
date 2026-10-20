@@ -26,6 +26,8 @@ export interface RollView {
   readonly lane?: number;
   /** 레인 끝의 스크롤바 칸 (없으면 LANE_GUTTER) */
   readonly laneGutter?: number;
+  /** 이벤트 줄 한 칸 두께 (없으면 EVENT_ROW). 설정의 이벤트 줄 글자 크기를 따른다(eventRowFor) */
+  readonly eventRow?: number;
 }
 
 export interface Rect {
@@ -359,10 +361,10 @@ export function isResizeGrab(n: { start: Rat; dur: Rat }, time: number, pxPerWho
 
 /**
  * 새로 넣는 음 길이. "grid"면 격자 한 칸(지금까지의 동작), 아니면 MML 길이 표기(l4·l8. 의 숫자 부분).
- * 12·24·48은 셋잇단(8분·16분·32분 셋잇단). 사람이 고르기 좋은 목록이고, 게임이 받는지는 lengthsFor로 거른다
+ * 3·6·12·24·48은 셋잇단(2분·4분·8분·16분·32분 셋잇단). 사람이 고르기 좋은 목록이고, 게임이 받는지는 lengthsFor로 거른다
  * (점은 가장 짧은 길이에도 붙는다: 32. = 3/64, 64. = 3/128. 48.은 32와 같은 길이라 따로 두지 않는다)
  */
-export const NOTE_LENGTHS = ["grid", "1", "2", "2.", "4", "4.", "8", "8.", "16", "16.", "32", "32.", "64", "64.", "12", "24", "48"] as const;
+export const NOTE_LENGTHS = ["grid", "1", "2", "2.", "4", "4.", "8", "8.", "16", "16.", "32", "32.", "64", "64.", "3", "6", "12", "24", "48"] as const;
 /** 목록 길이 + 사용자가 정한 잇단음 길이 ("20" = 4분 5잇단, "20." = 점4분 5잇단, tuplet.ts) */
 export type NoteLength = (typeof NOTE_LENGTHS)[number] | `${number}` | `${number}.`;
 /** 길이 표기 ("grid", "16", "8." 같은 것). 아르페지오 창처럼 NOTE_LENGTHS 밖 길이(l3·l6)를 쓰는 목록도 받는다 */
@@ -390,10 +392,13 @@ export function lengthsFor<L extends LengthName = NoteLength>(limit: LengthLimit
   });
 }
 
-/** +/− 키: 길이 now를 두 배 / 반으로 한 음 길이 (격자 제외, 게임 한도 안 고르기 목록에서: 온음표 ~ 게임 최단 길이). 목록에 없으면 undefined */
-export function stepNoteLength(now: Rat, factor: 2 | 0.5, limit: LengthLimit = defaultLengthLimit()): Exclude<NoteLength, "grid"> | undefined {
+/**
+ * +/− 키: 길이 now를 두 배 / 반으로 한 음 길이 (격자 제외, 게임 한도 안 고르기 목록에서: 온음표 ~ 게임 최단 길이). 목록에 없으면 undefined.
+ * extra: 고르기 목록에 더 둔 길이 (사용자가 정한 잇단음 등). 게임 한도로 거른다
+ */
+export function stepNoteLength(now: Rat, factor: 2 | 0.5, limit: LengthLimit = defaultLengthLimit(), extra: readonly NoteLength[] = []): Exclude<NoteLength, "grid"> | undefined {
   const want = mul(now, factor === 2 ? rat(2) : rat(1, 2));
-  return lengthsFor(limit).find((l): l is Exclude<NoteLength, "grid"> => l !== "grid" && cmp(noteLengthOf(l, 1), want) === 0);
+  return [...lengthsFor(limit), ...lengthsFor(limit, extra)].find((l): l is Exclude<NoteLength, "grid"> => l !== "grid" && cmp(noteLengthOf(l, 1), want) === 0);
 }
 
 /** 이벤트 줄 라벨 종류 */
@@ -407,15 +412,48 @@ export interface EventLabel {
   /** 마커 id (템포·박자는 위치로 찾는다) */
   readonly id?: string;
   readonly text: string;
+  /** 곡 처음에 적은 템포가 없어 기본값(t120)을 보이는 라벨. 고치면 곡 처음에 t를 넣는다 */
+  readonly implicit?: boolean;
   readonly x: number;
   readonly y: number;
   readonly w: number;
   readonly h: number;
 }
 
+const ZERO_AT = rat(0);
+
+/** 이벤트 줄에 보일 템포: 곡 처음에 템포가 없으면 게임이 치는 기본값(t120)을 곡 처음 템포로 덧붙인다 (implicit) */
+export function shownTempo(tempo: readonly { at: Rat; bpm: number }[]): { at: Rat; bpm: number; implicit?: true }[] {
+  return tempo.some((e) => cmp(e.at, ZERO_AT) === 0) ? [...tempo] : [{ at: ZERO_AT, bpm: DEFAULT_BPM, implicit: true }, ...tempo];
+}
+
 /** 마디 번호 줄 두께. 이벤트 줄은 그 아래 두 칸(템포 / 박자·마커) */
 export const BAR_ROW = 14;
+/** 이벤트 줄 한 칸 기본 두께 (글자 굵게 11px) */
 export const EVENT_ROW = 14;
+
+/**
+ * 설정의 이벤트 줄 글자 크기(타브 기준 px, 기본 13)에 맞춘 롤 이벤트 칸 두께. 롤 글자는 굵게 써서 2px 작게(최소 10px)
+ * 쓰고 칸은 글자 + 3px: 기본 13 → 글자 11·칸 14(전과 같다), 16 → 14·17, 20 → 18·21
+ */
+export function eventRowFor(tabFont: number): number {
+  return Math.max(10, tabFont - 2) + 3;
+}
+
+/** 이벤트 줄 한 칸 두께 */
+export function eventRowSize(v: RollView): number {
+  return v.eventRow ?? EVENT_ROW;
+}
+
+/** 이벤트 줄 글자 크기 (칸보다 3px 작게) */
+export function eventFontSize(v: RollView): number {
+  return eventRowSize(v) - 3;
+}
+
+/** 마디 번호 줄 + 이벤트 줄 두 칸 두께 */
+export function eventsBottom(v: RollView): number {
+  return BAR_ROW + 2 * eventRowSize(v);
+}
 
 /**
  * 이벤트 줄 라벨 자리. 가로 롤: 마디 번호 아래 첫 칸에 템포, 둘째 칸에 박자·마커.
@@ -425,20 +463,43 @@ export function eventLabels(
   v: RollView,
   events: { readonly tempo: readonly { at: Rat; bpm: number }[]; readonly timeSig: readonly { at: Rat; beats: number; unit: number }[]; readonly markers: readonly { id: string; at: Rat; label: string }[] },
 ): EventLabel[] {
-  const width = (text: string) => Math.max(20, text.length * 6 + 6);
-  const place = (kind: EventKind, at: Rat, text: string, id?: string): EventLabel => {
+  // 글자 폭은 크기에 비례 (11px에서 한 글자 6px)
+  const size = eventRowSize(v);
+  const char = (eventFontSize(v) * 6) / 11;
+  const width = (text: string) => Math.max(20, Math.round(text.length * char + 6));
+  const place = (kind: EventKind, at: Rat, text: string, id?: string, implicit?: boolean): EventLabel => {
     const p = timeToScreen(v, toFloat(at));
     const row = kind === "tempo" ? 0 : 1;
     const w = width(text);
+    const extra = { ...(id ? { id } : {}), ...(implicit ? { implicit } : {}) };
     return v.orientation === "horizontal"
-      ? { kind, at, text, x: p, y: BAR_ROW + row * EVENT_ROW, w, h: EVENT_ROW, ...(id ? { id } : {}) }
-      : { kind, at, text, x: 2, y: p + row * EVENT_ROW, w, h: EVENT_ROW, ...(id ? { id } : {}) };
+      ? { kind, at, text, x: p, y: BAR_ROW + row * size, w, h: size, ...extra }
+      : { kind, at, text, x: 2, y: p + row * size, w, h: size, ...extra };
   };
-  return [
-    ...events.tempo.map((e) => place("tempo", e.at, `t${e.bpm}`)),
+  const labels = [
+    ...shownTempo(events.tempo).map((e) => place("tempo", e.at, `t${e.bpm}`, undefined, e.implicit)),
     ...events.timeSig.map((e) => place("meter", e.at, `${e.beats}/${e.unit}`)),
     ...events.markers.map((e) => place("marker", e.at, e.label, e.id)),
   ];
+  // 같은 칸에서 앞 라벨과 겹치면 밀어 쓴다 (같은 자리의 박자와 마커 등): 가로 롤은 오른쪽으로, 세로 롤은 아래로 한 칸씩.
+  // 그릴 때도 이 자리(x·y)를 쓰고, 바뀌는 자리 점선만 원래 시간 자리에 긋는다
+  const horizontal = v.orientation === "horizontal";
+  const order = labels.map((l, i) => ({ l, i, row: l.kind === "tempo" ? 0 : 1 })).sort((a, b) => a.row - b.row || cmp(a.l.at, b.l.at) || a.i - b.i);
+  const out = [...labels];
+  let last: EventLabel | undefined;
+  let lastRow = -1;
+  for (const { l, i, row } of order) {
+    let next = l;
+    if (last && row === lastRow) {
+      // 세로 롤은 시간이 위로 가므로 앞 라벨과 범위가 겹칠 때만 민다
+      if (horizontal && next.x < last.x + last.w + 2) next = { ...next, x: last.x + last.w + 2 };
+      else if (!horizontal && next.y < last.y + last.h && next.y + next.h > last.y) next = { ...next, y: last.y + last.h };
+    }
+    out[i] = next;
+    last = next;
+    lastRow = row;
+  }
+  return out;
 }
 
 /** 화면 점에 걸린 라벨 (터치는 넓게). 여럿이면 나중에 그린 것 */
@@ -465,8 +526,8 @@ export function sameEvent(a: EventRef | undefined, b: EventRef | undefined): boo
 /** 이벤트 줄의 몇째 칸인지 (가로 롤만 칸으로 나뉜다). 0 = 템포 칸, 1 = 박자·마커 칸, undefined = 마디 번호 줄이나 밖 */
 export function eventRow(v: RollView, x: number, y: number): 0 | 1 | undefined {
   const along = v.orientation === "horizontal" ? y : x;
-  if (along < BAR_ROW || along >= BAR_ROW + 2 * EVENT_ROW) return undefined;
-  return along < BAR_ROW + EVENT_ROW ? 0 : 1;
+  if (along < BAR_ROW || along >= eventsBottom(v)) return undefined;
+  return along < BAR_ROW + eventRowSize(v) ? 0 : 1;
 }
 
 /** 음량 레인 맨 끝의 시간 스크롤바 칸 (값 칸에서 뺀다) */

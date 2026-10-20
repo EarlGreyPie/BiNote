@@ -542,3 +542,21 @@ describe("템포 한꺼번에 바꾸기 점검 (지시문 9)", () => {
     expect(texts(changeTempos({ mode: "add", value: 10 }).apply(song))).toEqual(["t260t110v9c1"]);
   });
 });
+
+describe("곡 처음 t를 적지 않은 곡 (기본 t120)", () => {
+  // 게임은 맨 앞 t가 없으면 t120으로 친다. 템포 창과 이벤트 줄은 그 t120을 곡 처음 템포로 보인다
+  it("템포 한꺼번에 바꾸기 목록에 곡 처음 t120이 들어가고, 바꾸면 곡 처음에 t를 넣는다", () => {
+    const song = songOf("c4c4t90c4");
+    expect(tempoChangeTargets(song).bpms).toEqual([120, 90]);
+    const next = new History(song).run(changeTempos({ mode: "add", value: 10 }));
+    expect(texts(next)).toEqual(["t130c4c4t100c4"]);
+    expect(normalizeTempo(next.tempo)).toEqual([{ at: rat(0), bpm: 130 }, { at: rat(1, 2), bpm: 100 }]);
+    expect(mirrored(next)).toBe(true);
+  });
+  it("곡 처음 기본 템포를 고치면 곡 처음에 t를 넣는다 (뒤 t는 그대로)", () => {
+    const next = new History(songOf("c4c4t90c4", "e2r4e4")).run(setTempoAt(rat(0), 100));
+    expect(texts(next)[0]).toBe("t100c4c4t90c4");
+    expect(next.tempo).toEqual([{ at: rat(0), bpm: 100 }, { at: rat(1, 2), bpm: 90 }]);
+    expect(mirrored(next)).toBe(true);
+  });
+});

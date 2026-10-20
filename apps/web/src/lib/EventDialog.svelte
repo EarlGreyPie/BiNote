@@ -3,60 +3,62 @@
   import type { MessageKey } from "@mmlce/i18n";
   import { t } from "./i18n.svelte";
   import type { EventKind } from "./roll";
+  import { eventChanges, type EventChanges } from "./eventChanges";
 
   /**
-   * 템포·마커·박자를 넣거나 고치는 작은 창 (이벤트 줄 두 번 누르기·길게 누르기, Alt+B·Alt+M).
-   * existing이면 그 이벤트를 고치고 지울 수 있으며 종류는 바꿀 수 없다
+   * 템포·박자·마커를 한 자리에서 함께 넣거나 고치는 작은 창 (이벤트 줄 두 번 누르기·길게 누르기, Alt+B·Alt+M).
+   * 세 칸마다 체크로 켜고 끈다: 그 자리에 이미 있는 것은 켜진 채로 열리고, 끄면 지운다. 누른 칸(kind)은 켜진 채로 연다
    */
   interface Props {
+    /** 누른 칸·글자의 종류 (켜 두고 먼저 입력할 칸) */
     kind: EventKind;
-    existing: boolean;
     /** 위치 표시 (마디:박) */
     where: string;
-    bpm: number;
     tempoRange: { readonly min: number; readonly max: number };
-    marker: string;
-    beats: number;
-    unit: number;
-    /** 곡 처음 템포·박자는 지울 수 없다(박자) / 지우면 t120 (템포) */
+    /** 이 자리(또는 앞)의 템포. here = 바로 이 자리에 템포가 있다 */
+    tempo: { readonly bpm: number; readonly here: boolean };
+    /** 이 자리가 든 마디의 박자. here = 바로 이 자리에 박자가 있다 */
+    meter: { readonly beats: number; readonly unit: number; readonly here: boolean };
+    /** 고치는 마커 이름. here = 누른 마커를 고친다 (아니면 새 마커) */
+    marker: { readonly text: string; readonly here: boolean };
+    /** 곡 처음 박자는 지울 수 없다 / 곡 처음 템포를 지우면 t120 */
     atStart: boolean;
-    onapply: (change: { kind: "tempo"; bpm: number } | { kind: "marker"; text: string } | { kind: "meter"; beats: number; unit: number }) => void;
-    ondelete: () => void;
+    onapply: (changes: EventChanges) => void;
     onclose: () => void;
   }
 
-  let { kind: initialKind, existing, where, bpm: initialBpm, tempoRange, marker: initialMarker, beats: initialBeats, unit: initialUnit, atStart, onapply, ondelete, onclose }: Props = $props();
+  let { kind, where, tempoRange, tempo, meter, marker, atStart, onapply, onclose }: Props = $props();
 
   let dialog: HTMLDialogElement;
   // svelte-ignore state_referenced_locally
-  let kind = $state<EventKind>(initialKind);
+  let on = $state({ tempo: tempo.here || kind === "tempo", meter: meter.here || kind === "meter", marker: marker.here || kind === "marker" });
   // svelte-ignore state_referenced_locally
-  let bpm = $state(initialBpm);
+  let bpm = $state(tempo.bpm);
   // svelte-ignore state_referenced_locally
-  let marker = $state(initialMarker);
+  let text = $state(marker.text);
   // svelte-ignore state_referenced_locally
-  let beats = $state(initialBeats);
+  let beats = $state(meter.beats);
   // svelte-ignore state_referenced_locally
-  let unit = $state(initialUnit);
+  let unit = $state(meter.unit);
   $effect(() => {
     dialog.showModal();
   });
 
-  const KINDS: EventKind[] = ["tempo", "marker", "meter"];
+  const existing = $derived(tempo.here || meter.here || marker.here);
+  /** 곡 처음 박자는 늘 있다 (끌 수 없다) */
+  const meterLocked = $derived(atStart && meter.here);
+  const changes = $derived(eventChanges({ tempo, meter, marker }, { tempo: on.tempo, meter: on.meter || meterLocked, marker: on.marker }, { bpm, beats, unit, text }));
   const valid = $derived(
-    kind === "tempo" ? Number.isInteger(bpm) && bpm >= 1 : kind === "marker" ? marker.trim() !== "" : Number.isInteger(beats) && beats >= 1 && beats <= 32,
+    (!on.tempo || (Number.isInteger(bpm) && bpm >= 1)) &&
+      (!(on.meter || meterLocked) || (Number.isInteger(beats) && beats >= 1 && beats <= 32)) &&
+      (!on.marker || text.trim() !== "") &&
+      Object.keys(changes).length > 0,
   );
-  const outOfRange = $derived(kind === "tempo" && valid && (bpm < tempoRange.min || bpm > tempoRange.max));
-  const canDelete = $derived(existing && !(kind === "meter" && atStart));
+  const outOfRange = $derived(on.tempo && Number.isInteger(bpm) && (bpm < tempoRange.min || bpm > tempoRange.max));
 
   function apply() {
     if (!valid) return;
-    onapply(kind === "tempo" ? { kind, bpm } : kind === "marker" ? { kind, text: marker.trim() } : { kind, beats, unit });
-    dialog.close();
-  }
-
-  function remove() {
-    ondelete();
+    onapply(changes);
     dialog.close();
   }
 
@@ -66,36 +68,38 @@
       apply();
     }
   }
+  const label = (k: EventKind) => t(`ui.event.${k}` as MessageKey);
 </script>
 
 <dialog bind:this={dialog} {onclose}>
   <h2>{existing ? t("ui.eventEdit") : t("ui.eventAdd")} <span class="muted where">{where}</span></h2>
-  {#if !existing}
-    <div class="seg">
-      {#each KINDS as k (k)}
-        <button class:on={kind === k} onclick={() => (kind = k)}>{t(`ui.event.${k}` as MessageKey)}</button>
-      {/each}
-    </div>
-  {/if}
   <div class="row">
-    {#if kind === "tempo"}
-      <label>t <input class="num" type="number" min="1" max="999" bind:value={bpm} {onkeydown} /></label>
-    {:else if kind === "marker"}
-      <!-- svelte-ignore a11y_autofocus -->
-      <input type="text" bind:value={marker} placeholder={t("ui.markerPlaceholder")} {onkeydown} autofocus />
-    {:else}
-      <input class="num" type="number" min="1" max="32" bind:value={beats} {onkeydown} />
+    <label class="kind"><input type="checkbox" bind:checked={on.tempo} />{label("tempo")}</label>
+    <label class:off={!on.tempo}>t <input class="num" type="number" min="1" max="999" bind:value={bpm} oninput={() => (on.tempo = true)} {onkeydown} /></label>
+    {#if tempo.here && !on.tempo}<span class="muted gone">{t("ui.eventDelete")}</span>{/if}
+  </div>
+  <div class="row">
+    <label class="kind"><input type="checkbox" checked={on.meter || meterLocked} disabled={meterLocked} onchange={(e) => (on.meter = e.currentTarget.checked)} />{label("meter")}</label>
+    <span class="meter" class:off={!(on.meter || meterLocked)}>
+      <input class="num" type="number" min="1" max="32" bind:value={beats} oninput={() => (on.meter = true)} {onkeydown} />
       /
-      <select bind:value={unit}>
+      <select bind:value={unit} onchange={() => (on.meter = true)}>
         {#each METER_UNITS as u (u)}<option value={u}>{u}</option>{/each}
       </select>
-    {/if}
+    </span>
+    {#if meter.here && !on.meter && !meterLocked}<span class="muted gone">{t("ui.eventDelete")}</span>{/if}
+  </div>
+  <div class="row">
+    <label class="kind"><input type="checkbox" bind:checked={on.marker} />{label("marker")}</label>
+    <!-- svelte-ignore a11y_autofocus -->
+    <input class="text" class:off={!on.marker} type="text" bind:value={text} placeholder={t("ui.markerPlaceholder")} oninput={() => (on.marker = true)} {onkeydown} autofocus={kind === "marker"} />
+    {#if marker.here && !on.marker}<span class="muted gone">{t("ui.eventDelete")}</span>{/if}
   </div>
   {#if outOfRange}<p class="warn">{t("ui.tempoOutOfRange", { min: tempoRange.min, max: tempoRange.max })}</p>{/if}
-  {#if kind === "tempo" && existing && atStart}<p class="muted">{t("ui.tempoStartDelete")}</p>{/if}
-  {#if kind === "meter"}<p class="muted">{t("ui.meterHelpAt")}</p>{/if}
+  {#if tempo.here && atStart && !on.tempo}<p class="muted">{t("ui.tempoStartDelete")}</p>{/if}
+  {#if on.meter && !meter.here}<p class="muted">{t("ui.meterHelpAt")}</p>{/if}
+  <p class="muted">{t("ui.eventTogetherHelp")}</p>
   <div class="actions">
-    {#if canDelete}<button class="danger" onclick={remove}>{t("ui.eventDelete")}</button>{/if}
     <span class="spacer"></span>
     <button onclick={() => dialog.close()}>{t("ui.cancel")}</button>
     <button class="primary" disabled={!valid} onclick={apply}>{t("ui.eventApply")}</button>
@@ -123,17 +127,37 @@
     font-weight: normal;
     margin-left: 6px;
   }
-  .seg {
-    display: inline-flex;
-    margin-bottom: 8px;
-  }
   .row {
     display: flex;
     align-items: center;
     gap: 8px;
   }
-  .row input[type="text"] {
+  .row + .row {
+    margin-top: 6px;
+  }
+  .row .text {
     flex: 1;
+    min-width: 0;
+  }
+  .kind {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    width: 5.5em;
+    flex: none;
+  }
+  .meter {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  /* 체크를 끈 칸은 흐리게 (입력하면 다시 켜진다) */
+  .off {
+    opacity: 0.45;
+  }
+  .gone {
+    margin: 0;
+    color: var(--error, #d33);
   }
   /* 세 자리 템포와 위아래 화살표가 다 보이게 넉넉히 */
   .row .num {
@@ -156,8 +180,5 @@
   }
   .spacer {
     flex: 1;
-  }
-  .danger {
-    color: var(--error, #d33);
   }
 </style>

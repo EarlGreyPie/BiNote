@@ -20,6 +20,12 @@ import {
   noteLengthOf,
   eventLabels,
   eventAt,
+  eventRow,
+  eventRowFor,
+  eventFontSize,
+  eventsBottom,
+  BAR_ROW,
+  EVENT_ROW,
   axes,
   inLane,
   laneBarAt,
@@ -189,6 +195,46 @@ describe("eventLabels / eventAt", () => {
     expect(eventAt(labels, 10, 660)?.text).toBe("t90");
     expect(eventAt(labels, 10, 674)?.id).toBe("m1");
   });
+  it("같은 자리의 박자와 마커는 겹치지 않게 밀어 쓴다 (가로는 오른쪽, 세로는 아래)", () => {
+    const same = { tempo: [{ at: rat(1), bpm: 90 }], timeSig: [{ at: rat(1), beats: 3, unit: 4 }], markers: [{ id: "m1", at: rat(1), label: "Chorus" }] };
+    const h: RollView = { orientation: "horizontal", width: 800, height: 400, start: 0, pxPerWhole: 100, edgePitch: 84, pxPerKey: 12, keyboard: 44 };
+    const hl = eventLabels(h, same);
+    const meter = hl.find((l) => l.kind === "meter")!;
+    const marker = hl.find((l) => l.kind === "marker")!;
+    expect(meter.x).toBe(144);
+    expect(marker.x).toBe(meter.x + meter.w + 2);
+    expect(marker.y).toBe(meter.y);
+    expect(hl.find((l) => l.text === "t90")!.x).toBe(144);
+    expect(eventAt(hl, marker.x + 5, marker.y + 5)?.id).toBe("m1");
+    const vt: RollView = { ...h, orientation: "vertical", width: 400, height: 800, edgePitch: 36 };
+    const vl = eventLabels(vt, same);
+    const vm = vl.find((l) => l.kind === "meter")!;
+    expect(vl.find((l) => l.kind === "marker")!.y).toBe(vm.y + vm.h);
+  });
+  it("설정의 글자 크기를 따라 칸이 두꺼워지고, 누르는 칸도 그 자리를 따른다", () => {
+    // 기본(타브 13px)은 전과 같은 14px 칸
+    expect(eventRowFor(13)).toBe(EVENT_ROW);
+    expect(eventRowFor(10)).toBe(13);
+    expect(eventRowFor(20)).toBe(21);
+    const base: RollView = { orientation: "horizontal", width: 800, height: 400, start: 0, pxPerWhole: 100, edgePitch: 84, pxPerKey: 12, keyboard: 44 };
+    const v: RollView = { ...base, eventRow: eventRowFor(20) };
+    expect(eventFontSize(v)).toBe(18);
+    expect(eventsBottom(v)).toBe(BAR_ROW + 42);
+    const t90 = eventLabels(v, events).find((l) => l.text === "t90")!;
+    expect([t90.y, t90.h]).toEqual([14, 21]);
+    expect(t90.w).toBeGreaterThan(eventLabels(base, events).find((l) => l.text === "t90")!.w);
+    expect(eventRow(v, 300, 30)).toBe(0);
+    expect(eventRow(v, 300, 40)).toBe(1);
+    expect(eventRow(v, 300, BAR_ROW + 42)).toBeUndefined();
+    expect(eventRow(base, 300, 45)).toBeUndefined();
+    expect(eventRow(v, 300, 45)).toBe(1);
+  });
+  it("곡 처음에 템포가 없으면 기본값 t120을 옅은 곡 처음 라벨로 보인다", () => {
+    const v: RollView = { orientation: "horizontal", width: 800, height: 400, start: 0, pxPerWhole: 100, edgePitch: 84, pxPerKey: 12, keyboard: 44 };
+    const labels = eventLabels(v, { ...events, tempo: [{ at: rat(1), bpm: 90 }] }).filter((l) => l.kind === "tempo");
+    expect(labels.map((l) => [l.text, l.implicit ?? false])).toEqual([["t120", true], ["t90", false]]);
+    expect(eventLabels(v, events).some((l) => l.implicit)).toBe(false);
+  });
 });
 
 describe("음량 레인", () => {
@@ -242,6 +288,20 @@ describe("stepNoteLength: +/− 키 길이", () => {
   it("격자에서 출발하면 격자 한 칸 길이를 바꾼다", () => {
     expect(stepNoteLength(noteLengthOf("grid", 16), 2)).toBe("8");
     expect(stepNoteLength(noteLengthOf("grid", 12), 0.5)).toBe("24");
+  });
+
+  it("셋잇단은 12 → 6 → 3, 3 → 6 → 12", () => {
+    expect(stepNoteLength(rat(1, 12), 2)).toBe("6");
+    expect(stepNoteLength(rat(1, 6), 2)).toBe("3");
+    expect(stepNoteLength(rat(1, 3), 0.5)).toBe("6");
+    expect(stepNoteLength(rat(1, 6), 0.5)).toBe("12");
+  });
+
+  it("고르기 목록에 더 둔 길이(사용자가 정한 잇단음)로도 옮긴다. 게임 한도 밖이면 아니다", () => {
+    expect(stepNoteLength(rat(1, 20), 2)).toBeUndefined();
+    expect(stepNoteLength(rat(1, 20), 2, undefined, ["10"])).toBe("10");
+    expect(stepNoteLength(rat(1, 10), 0.5, undefined, ["20"])).toBe("20");
+    expect(stepNoteLength(rat(1, 20), 0.5, { min: 1, max: 32, dots: 1 }, ["40"])).toBeUndefined();
   });
 });
 

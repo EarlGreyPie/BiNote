@@ -3,6 +3,8 @@
   import {
     add,
     cmp,
+    DEFAULT_BPM,
+    normalizeTempo,
     getProfile,
     positionToSeconds,
     secondsToWhole,
@@ -25,6 +27,7 @@
     HALF,
     STANDARD_TUNING,
     trackInstrument,
+    replaceSong,
     type Note,
     type Rat,
     type Command,
@@ -170,6 +173,7 @@
   import { gridDivisions, isGridDivision, tupletFits, tupletGrid, tupletName, withLengths, type Tuplet } from "./lib/tuplet";
   import { setTuplet, tupletPrefs } from "./lib/tupletPrefs.svelte";
   import EventDialog from "./lib/EventDialog.svelte";
+  import type { EventChanges } from "./lib/eventChanges";
   import TempoChangeDialog from "./lib/TempoChangeDialog.svelte";
   import SettingsDialog from "./lib/SettingsDialog.svelte";
   import StatusBar, { type StatusPanel } from "./lib/StatusBar.svelte";
@@ -641,12 +645,13 @@
     return out;
   });
   const soundingNow = $derived(song && nowAt !== undefined ? soundingAt(song, nowAt) : undefined);
-  // 위쪽 시계: 지금 템포(재생선 또는 커서 자리)와 곡 전체 길이
+  // 위쪽 시계: 지금 템포(재생선 또는 커서 자리)와 곡 전체 길이.
+  // 첫 템포보다 앞(곡 처음에 t를 적지 않은 곡)은 게임처럼 기본 t120
   const tempoNow = $derived.by(() => {
     if (!song) return undefined;
     const at = nowAt ?? 0;
-    let bpm = song.tempo[0]?.bpm;
-    for (const e of song.tempo) if (toFloat(e.at) <= at + 1e-9) bpm = e.bpm;
+    let bpm = DEFAULT_BPM;
+    for (const e of normalizeTempo(song.tempo)) if (toFloat(e.at) <= at + 1e-9) bpm = e.bpm;
     return bpm;
   });
   const totalSeconds = $derived.by(() => {
@@ -1591,7 +1596,8 @@
     // 곡을 다시 연 뒤 옛 보기가 늦게 보낸 요청(길게 누르기 타이머 등)은 버린다 (onmemory와 같은 보기 세대 검사)
     if (!song || !fromCurrentView(request.work, viewGen)) return;
     const l = request.label;
-    eventEdit = l ? { kind: l.kind, at: l.at, existing: true, ...(l.id ? { id: l.id } : {}) } : { kind: request.kind, at: request.at, existing: false };
+    // 곡 처음 기본 템포(적지 않은 t120) 라벨은 새로 넣기로 연다 (지울 것이 없다)
+    eventEdit = l ? { kind: l.kind, at: l.at, existing: !l.implicit, ...(l.id ? { id: l.id } : {}) } : { kind: request.kind, at: request.at, existing: false };
   }
   /** 편집 커서(타브 보기면 타브 커서 먼저, 없으면 곡 처음) 자리 템포·마커 창. 그 자리에 템포가 있으면 고치기 */
   function openEventAtCursor(kind: EventKind) {
@@ -1607,28 +1613,36 @@
     const { bar, beat } = barBeatAt(song.timeSig, e.at);
     const tempoHere = [...song.tempo].filter((x) => cmp(x.at, e.at) <= 0).at(-1)?.bpm ?? 120;
     const meter = meterAt(song.timeSig, e.at);
+    // 고치는 마커: 누른 마커 글자 (템포·박자 글자를 눌렀으면 마커 칸은 새 마커)
+    const markerHere = e.kind === "marker" && e.id ? song.markers.find((m) => m.id === e.id) : undefined;
     return {
       where: `${bar}:${Number.isInteger(beat) ? beat : beat.toFixed(2)}`,
-      bpm: tempoHere,
-      marker: (e.id && song.markers.find((m) => m.id === e.id)?.label) || "",
-      beats: meter.beats,
-      unit: meter.unit,
+      tempo: { bpm: tempoHere, here: song.tempo.some((x) => cmp(x.at, e.at) === 0) },
+      meter: { beats: meter.beats, unit: meter.unit, here: song.timeSig.some((x) => cmp(x.at, e.at) === 0) },
+      marker: { text: markerHere?.label ?? "", here: !!markerHere },
+      markerId: markerHere?.id,
       atStart: cmp(e.at, rat(0)) === 0,
     };
   });
-  function applyEvent(change: { kind: "tempo"; bpm: number } | { kind: "marker"; text: string } | { kind: "meter"; beats: number; unit: number }) {
+  /** 템포·박자·마커 창의 바뀐 것을 한꺼번에 (실행 취소 한 칸). 하나만 바뀌면 그 명령 이름 그대로 */
+  function applyEvent(changes: EventChanges) {
     const e = eventEdit;
-    if (!history || !song || !e) return;
-    if (change.kind === "tempo") commit(setTempoAt(e.at, change.bpm, t("ui.tempoLabel")));
-    else if (change.kind === "marker") commit(setMarker(e.existing ? e.id : undefined, e.at, change.text, t("ui.markerLabel")));
-    else commit(meterEditAt(song.timeSig, e.at, change.beats, change.unit, t("ui.meter")));
-  }
-  function deleteEvent() {
-    const e = eventEdit;
-    if (!history || !e) return;
-    if (e.kind === "tempo") commit(removeTempoAt(e.at, t("ui.tempoDelete")));
-    else if (e.kind === "marker" && e.id) commit(removeMarker(e.id, t("ui.markerDelete")));
-    else if (e.kind === "meter") commit(removeMeter(e.at, t("ui.meterDelete")));
+    const info = eventInfo;
+    if (!history || !song || !e || !info) return;
+    const commands: Command[] = [];
+    if (changes.tempo === null) commands.push(removeTempoAt(e.at, t("ui.tempoDelete")));
+    else if (changes.tempo !== undefined) commands.push(setTempoAt(e.at, changes.tempo, t("ui.tempoLabel")));
+    if (changes.meter === null) commands.push(removeMeter(e.at, t("ui.meterDelete")));
+    else if (changes.meter) commands.push(meterEditAt(song.timeSig, e.at, changes.meter.beats, changes.meter.unit, t("ui.meter")));
+    if (changes.marker === null) {
+      if (info.markerId) commands.push(removeMarker(info.markerId, t("ui.markerDelete")));
+    } else if (changes.marker !== undefined) commands.push(setMarker(info.markerId, e.at, changes.marker, t("ui.markerLabel")));
+    if (commands.length === 1) commit(commands[0]!);
+    else if (commands.length > 1) {
+      // 박자 명령은 그 앞 박자 지도를 보고 만들었으므로, 차례로 적용한 결과를 한 명령으로 넣는다
+      const next = commands.reduce((s, c) => c.apply(s), history.song);
+      commit(replaceSong(t("ui.eventTogether"), next));
+    }
   }
   function moveEvent(label: EventLabel, to: Rat) {
     if (!history) return;
@@ -2274,7 +2288,7 @@
   }
   /** 고른 음이 없을 때: 새 음 길이를 ×2·½ (타브의 +/−와 같은 규칙. 격자면 격자 한 칸에서, 목록 밖이면 그대로) */
   function stepNewLength(factor: 2 | 0.5): boolean {
-    const length = stepNoteLength(noteLengthOf(noteLength, division), factor, profile.length);
+    const length = stepNoteLength(noteLengthOf(noteLength, division), factor, profile.length, noteLengths);
     if (length) noteLength = length;
     return true;
   }
@@ -3136,16 +3150,13 @@
 {#if eventEdit && eventInfo}
   <EventDialog
     kind={eventEdit.kind}
-    existing={eventEdit.existing}
     where={eventInfo.where}
-    bpm={eventInfo.bpm}
     tempoRange={profile.tempo}
+    tempo={eventInfo.tempo}
+    meter={eventInfo.meter}
     marker={eventInfo.marker}
-    beats={eventInfo.beats}
-    unit={eventInfo.unit}
     atStart={eventInfo.atStart}
     onapply={applyEvent}
-    ondelete={deleteEvent}
     onclose={() => (eventEdit = undefined)}
   />
 {/if}

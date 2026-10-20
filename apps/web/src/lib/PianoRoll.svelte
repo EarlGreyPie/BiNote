@@ -41,6 +41,7 @@
   import LaneTrackPicker from "./LaneTrackPicker.svelte";
   import { laneItems, type LaneTrack } from "./volumeLaneEdit";
   import { LaneGesture } from "./laneGesture.svelte";
+  import { tabEventPrefs } from "./tabEventPrefs.svelte";
   import { fallShift, fallSpeed, SPEED_FRAME_GAP, SPEED_FRAME_WIDTH, SPEED_PICK_GAP, speedPickLost, speedPickPress, speedPickWheel, toGray } from "./videoSpeed";
   import {
     bpmAt,
@@ -64,7 +65,8 @@
     noteNear,
     isResizeGrab,
     BAR_ROW,
-    EVENT_ROW,
+    eventRowFor,
+    eventsBottom,
     eventAt,
     eventLabels,
     eventRow,
@@ -332,6 +334,8 @@
     pxPerKey,
     keyboard: KEYBOARD,
     lane: laneReserved,
+    // 이벤트 줄 글자 크기 (설정 → 화면, 타브 변속 줄과 같은 설정)
+    eventRow: eventRowFor(tabEventPrefs.font),
   });
 
   // 음 높이 범위 밖(o19 같은)이 보이지 않게: 넓은 화면이면 칸을 키워 범위를 꽉 채운다
@@ -750,7 +754,7 @@
   const WAVE = 32;
   /** 마디 번호 줄 두께 (이벤트를 켜면 두 줄) */
   function eventsSize(): number {
-    return showEvents ? BAR_ROW + 2 * EVENT_ROW : BAR_ROW;
+    return showEvents ? eventsBottom(view) : BAR_ROW;
   }
 
   // 이벤트 줄 누르기: 라벨을 끌면 옮기고, 길게 누르면(터치·펜) 고치기 창, 그냥 떼면 그 자리로 커서

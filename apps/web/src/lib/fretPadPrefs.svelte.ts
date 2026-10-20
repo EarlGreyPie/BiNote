@@ -8,7 +8,7 @@ const TRIPLETS_KEY = "mmlce.lengthPadTriplets";
 const ADVANCE_KEY = "mmlce.fretPadAdvanceDir";
 
 export const fretPadPrefs = $state({
-  /** 음표 입력판에 셋잇단(12·24·48) 단추를 둘지. 기본은 끔 */
+  /** 음표 입력판에 셋잇단(3·6·12·24·48) 단추를 둘지. 기본은 끔 */
   triplets: loadStored(TRIPLETS_KEY, (raw) => raw === "1"),
   advance: loadStored(ADVANCE_KEY, parseAdvanceDir),
 });

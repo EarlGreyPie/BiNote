@@ -7,6 +7,8 @@
   import { pwa } from "./pwa.svelte";
   import { setTabTint, tabTint } from "./tabTint.svelte";
   import { fretPadPrefs, setLengthPadTriplets, setPadAdvanceDir, type PadAdvanceDir } from "./fretPadPrefs.svelte";
+  import { setTabEventFont, tabEventPrefs } from "./tabEventPrefs.svelte";
+  import { TAB_EVENT_FONT, TAB_EVENT_FONTS } from "./tabEvents";
   import { setLengthPadTuplet, tupletPrefs } from "./tupletPrefs.svelte";
   import { setVolumeLabels, volumeLabels } from "./volumeLabels.svelte";
   import type { VolumeLabelMode } from "./volumeLabels";
@@ -226,6 +228,12 @@
           <select value={fretPadPrefs.advance} onchange={(e) => setPadAdvanceDir(e.currentTarget.value as PadAdvanceDir)}>
             <option value="right">{t("ui.padAdvanceRight")}</option>
             <option value="down">{t("ui.padAdvanceDown")}</option>
+          </select>
+        </label>
+        <label class="row" title={t("ui.tabEventFontHelp")}>
+          <span>{t("ui.tabEventFont")}</span>
+          <select value={tabEventPrefs.font} onchange={(e) => setTabEventFont(Number(e.currentTarget.value))}>
+            {#each TAB_EVENT_FONTS as px (px)}<option value={px}>{t(px === TAB_EVENT_FONT ? "ui.tabEventFontDefault" : "ui.tabEventFontPx", { px })}</option>{/each}
           </select>
         </label>
         <label class="row">

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { rat } from "@mmlce/core";
-import { fretBoxLeft, fretCenter, inTabEventBand, layoutTabEvents, rulerRelease, TAB_EVENT_BOTTOM, TAB_EVENT_ROW_H, TAB_MARKER_CHARS, TAB_RULER, TAB_TOP, TAB_WAVE_TOP, tabEventAction, tabEventAt, tabEventRow, tabEventText, tabMarkerText, tabTop, tabZone } from "../src/lib/tabEvents";
+import { fretBoxLeft, fretCenter, inTabEventBand, layoutTabEvents, rulerRelease, TAB_EVENT_BOTTOM, TAB_EVENT_FONT, TAB_EVENT_FONTS, TAB_EVENT_ROW_H, TAB_MARKER_CHARS, TAB_RULER, TAB_TOP, TAB_WAVE_TOP, tabEventAction, tabEventAt, tabEventBottom, tabEventRow, tabEventRowH, tabEventText, tabMarkerText, tabTop, tabWaveTop, tabZone } from "../src/lib/tabEvents";
 import { WAVE_SIZE } from "../src/lib/waveDraw";
 
 // 온음표 = 100px, 글자 한 자 = 6px
@@ -98,6 +98,29 @@ describe("타브 변속 줄 두 칸 자리", () => {
     expect(down.bottom - down.top).toBe(up.bottom - up.top);
     expect(TAB_EVENT_BOTTOM).toBe(down.bottom);
     expect(TAB_TOP).toBeGreaterThan(TAB_EVENT_BOTTOM);
+  });
+
+  it("글자 크기를 고르면 칸 높이·파형 띠·첫 줄 자리가 함께 바뀌고, 누르는 칸도 그 자리를 따른다", () => {
+    for (const font of TAB_EVENT_FONTS) {
+      const up = tabEventText(0, font);
+      const down = tabEventText(1, font);
+      // 글자(기준선 위 font px)가 칸 안에 들어간다
+      expect(up.baseline - font).toBeGreaterThanOrEqual(up.top - 1);
+      expect(down.top).toBe(up.top + tabEventRowH(font));
+      expect(tabEventBottom(font)).toBe(down.bottom);
+      expect(tabWaveTop(font)).toBe(down.bottom);
+      expect(tabTop(false, font)).toBe(down.bottom + 11);
+      expect(tabTop(true, font)).toBe(down.bottom + 11 + WAVE_SIZE);
+      const first = tabTop(false, font);
+      expect(tabEventRow([], 300, up.baseline - 2, first, 11, font)).toBe(0);
+      expect(tabEventRow([], 300, down.baseline - 2, first, 11, font)).toBe(1);
+      expect(tabEventRow([], 300, down.bottom, first, 11, font)).toBeUndefined();
+      expect(tabZone([], 300, tabWaveTop(font) + 5, tabTop(true, font), 11, true, font)).toBe("wave");
+    }
+    // 기본값은 인자를 뺀 것과 같다
+    expect(tabTop(false, TAB_EVENT_FONT)).toBe(TAB_TOP);
+    expect(tabEventBottom(10)).toBeLessThan(TAB_EVENT_BOTTOM);
+    expect(tabEventBottom(20)).toBeGreaterThan(TAB_EVENT_BOTTOM);
   });
 });
 
