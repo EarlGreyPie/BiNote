@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { emptySong, MOBILE_PROFILE, planSlide, rat, type GameProfile, type Note, type Rat, type SlideOptions, type Song } from "../src/index.js";
+import { breakTimbreTies, crossesTimbre, emptySong, MOBILE_PROFILE, planSlide, planSlides, rat, timbreBoundaries, type GameProfile, type Note, type Rat, type SlideOptions, type Song } from "../src/index.js";
 
 const n = (id: string, start: Rat, dur: Rat, pitch: number, extra: Partial<Note> = {}): Note => ({ id, start, dur, pitch, vol: 10, tie: "none", ...extra });
 
@@ -148,5 +148,111 @@ describe("직접 정한 걸음의 남은 길이 (PR #138 점검 7)", () => {
     const { step: _step, ...auto } = custom;
     expect(shape(run(one(), ["c"], { ...auto, kind: "in" }).notes)).toEqual(["58@0/1+1/16&", "59@1/16+1/16&", "60@1/8+1/8"]);
     expect(shape(run(one(), ["c"], { ...auto, kind: "out" }).notes)).toEqual(["60@0/1+1/8&", "59@1/8+1/16&", "58@3/16+1/16"]);
+  });
+});
+
+describe("박 앞 들어가기 (꾸밈음과 같은 자리 계산)", () => {
+  const before = { kind: "in" as const, timing: "before" as const };
+  it("앞 음 꼬리에서 가져와 도착 음은 제 박에 그대로, 앞 음 &는 푼다", () => {
+    const r = run([n("p", rat(0), rat(1, 4), 55, { tie: "next" }), n("c", rat(1, 4), rat(1, 4), 60)], ["c"], before);
+    // p가 c에 &로 이어져 있으면 이미 이어진 음
+    expect(r.skipped.tied).toBe(1);
+    const ok = run([n("p", rat(0), rat(1, 4), 55), n("c", rat(1, 4), rat(1, 4), 60)], ["c"], before);
+    expect(shape(ok.notes)).toEqual(["55@0/1+3/16", "58@3/16+1/32&", "59@7/32+1/32&", "60@1/4+1/4"]);
+  });
+  it("앞이 쉼표면 쉼표가 줄고, 곡 처음보다 앞이면 건너뛴다", () => {
+    expect(shape(run([n("c", rat(1, 4), rat(1, 4), 60)], ["c"], before).notes)).toEqual(["58@3/16+1/32&", "59@7/32+1/32&", "60@1/4+1/4"]);
+    expect(run([n("c", rat(0), rat(1, 4), 60)], ["c"], before).skipped.short).toBe(1);
+  });
+  it("앞 음이 최단보다 짧게 남으면 건너뛴다", () => {
+    const r = run([n("p", rat(0), rat(1, 16), 55), n("c", rat(1, 16), rat(1, 4), 60)], ["c"], before);
+    expect([r.made, r.skipped.short]).toEqual([0, 1]);
+  });
+});
+
+describe("들어가고 나가기 (한 음에 / \\ 둘 다)", () => {
+  it("/14\\: 아래에서 들어와 아래로 나간다. 원래 시작·끝은 그대로", () => {
+    const r = run([n("c", rat(0), rat(1, 4), 60)], ["c"], { kind: "both", out: { direction: "down", semitones: 2, length: rat(1, 16) } });
+    expect(shape(r.notes)).toEqual(["58@0/1+1/32&", "59@1/32+1/32&", "60@1/16+1/8&", "59@3/16+1/32&", "58@7/32+1/32"]);
+    expect(r.chain).toHaveLength(5);
+  });
+  it("\\14/: 위에서 들어와 위로, 나가는 쪽 거리·길이는 따로", () => {
+    const r = run([n("c", rat(0), rat(1, 4), 60)], ["c"], { kind: "both", direction: "up", semitones: 1, out: { direction: "up", semitones: 3, length: rat(1, 16) } });
+    expect(shape(r.notes)).toEqual(["61@0/1+1/16&", "60@1/16+1/8&", "61@3/16+1/48&", "62@5/24+1/48&", "63@11/48+1/48"]);
+  });
+  it("박 앞 들어가기 + 나가기: 들어가는 쪽은 앞 쉼표에서", () => {
+    const r = run([n("c", rat(1, 4), rat(1, 4), 60)], ["c"], { kind: "both", timing: "before", semitones: 1, out: { direction: "down", semitones: 1, length: rat(1, 16) } });
+    expect(shape(r.notes)).toEqual(["59@3/16+1/16&", "60@1/4+3/16&", "59@7/16+1/16"]);
+  });
+  it("두 쪽 합이 음보다 길면 둘 다 줄인다 (원래 길이는 그대로)", () => {
+    const r = run([n("c", rat(0), rat(1, 8), 60)], ["c"], { kind: "both", semitones: 1, out: { direction: "down", semitones: 1, length: rat(1, 16) } });
+    expect(r.shortened).toBe(1);
+    expect(r.made).toBe(1);
+    const total = r.notes!.reduce((m, x) => m + x.dur.n / x.dur.d, 0);
+    expect(total).toBeCloseTo(1 / 8);
+  });
+});
+
+describe("음색 경계에서 끊기", () => {
+  it("포크 기타 경계는 실측 샘플 구간 시작 (o3e·o4e·o5f·o6f)", () => {
+    expect(timbreBoundaries(MOBILE_PROFILE, "folk-guitar")).toEqual([52, 64, 77, 89]);
+    expect(timbreBoundaries(MOBILE_PROFILE, "piano")).toEqual([52, 64, 77, 89]);
+    expect(crossesTimbre(MOBILE_PROFILE, "folk-guitar", 63, 64)).toBe(true);
+    expect(crossesTimbre(MOBILE_PROFILE, "folk-guitar", 64, 66)).toBe(false);
+  });
+  it("켜면 경계를 넘는 사이 음 앞에서 &를 빼고, 끄면 세기만 한다", () => {
+    const on = run(pair(62, 66), ["a", "b"], { breakAtZones: true });
+    expect(shape(on.notes)).toEqual(["62@0/1+3/16&", "63@3/16+1/48", "64@5/24+1/48&", "65@11/48+1/48&", "66@1/4+1/4"]);
+    expect([on.zoneBreaks, on.zoneCrossings, on.zoneAt.length]).toEqual([1, 0, 1]);
+    const off = run(pair(62, 66), ["a", "b"]);
+    expect([off.zoneBreaks, off.zoneCrossings]).toEqual([0, 1]);
+    expect(shape(off.notes)[1]).toBe("63@3/16+1/48&");
+  });
+  it("바로 잇는 두 음이 경계를 넘으면 끊기를 켠 때 건너뛴다 (원래 &는 그대로)", () => {
+    const r = run(pair(63, 64), ["a", "b"], { breakAtZones: true });
+    expect([r.made, r.skipped.zone]).toEqual([0, 1]);
+    const tied = run(pair(63, 64, { tie: "next" }), ["a", "b"], { breakAtZones: true });
+    expect(tied.notes).toBeUndefined();
+  });
+  it("들어가기가 경계를 넘으면 도착 음을 다시 친다", () => {
+    const r = run([n("c", rat(0), rat(1, 4), 64)], ["c"], { kind: "in", semitones: 2, breakAtZones: true });
+    expect(shape(r.notes)).toEqual(["62@0/1+1/32&", "63@1/32+1/32", "64@1/16+3/16"]);
+  });
+  it("모두 끊기: 경계를 넘는 &만 빼고, 잠근 트랙은 그대로", () => {
+    const s = songOf([n("a", rat(0), rat(1, 8), 63, { tie: "next" }), n("b", rat(1, 8), rat(1, 8), 64, { tie: "next" }), n("c", rat(1, 4), rat(1, 8), 66)]);
+    const fixed = breakTimbreTies(s, MOBILE_PROFILE, () => "folk-guitar");
+    expect(fixed.count).toBe(1);
+    expect(fixed.changes[0]!.notes.map((x) => x.tie)).toEqual(["none", "next", "none"]);
+    expect(breakTimbreTies(s, MOBILE_PROFILE, () => "folk-guitar", new Set(["t1"])).count).toBe(0);
+  });
+});
+
+describe("여러 줄 (화음)", () => {
+  function chordSong(t1: Note[], t2: Note[]): Song {
+    const s = songOf(t1);
+    return { ...s, tracks: [...s.tracks, { ...s.tracks[0]!, id: "t2", notes: t2 }] };
+  }
+  const opts = { ...base, instrumentOf: () => "folk-guitar" };
+  it("빈 자리에서 화음 전체로 들어가기: 줄마다 자기 트랙에서, 트랙은 늘지 않는다", () => {
+    const s = chordSong([n("a", rat(0), rat(1, 4), 59)], [n("b", rat(0), rat(1, 4), 55)]);
+    const r = planSlides(s, [...s.tracks[0]!.notes, ...s.tracks[1]!.notes], { ...opts, kind: "in", semitones: 1 }, MOBILE_PROFILE, (id) => `${id}.n${++k}`);
+    expect(r.changes.map((c) => [c.trackId, shape(c.notes)])).toEqual([
+      ["t1", ["58@0/1+1/16&", "59@1/16+3/16"]],
+      ["t2", ["54@0/1+1/16&", "55@1/16+3/16"]],
+    ]);
+    expect(r.made).toBe(2);
+    expect(r.chain.filter((id) => id.startsWith("t2."))).toHaveLength(1);
+  });
+  it("두 화음을 함께 고르면 줄마다 두 음 사이 (모양 → 모양), 잠근 줄은 센다", () => {
+    const s = chordSong([n("a", rat(0), rat(1, 4), 62), n("a2", rat(1, 4), rat(1, 4), 61)], [n("b", rat(0), rat(1, 4), 57), n("b2", rat(1, 4), rat(1, 4), 57)]);
+    const all = s.tracks.flatMap((t) => t.notes);
+    const r = planSlides(s, all, { ...opts, path: "direct" }, MOBILE_PROFILE, (id) => `${id}.n${++k}`);
+    expect([r.made, r.skipped.same, r.changes.length]).toEqual([1, 1, 1]);
+    const locked = planSlides(s, all, { ...opts, path: "direct", locked: new Set(["t1"]) }, MOBILE_PROFILE, (id) => `${id}.n${++k}`);
+    expect([locked.locked, locked.made]).toEqual([1, 0]);
+  });
+  it("타브 줄: 보이는 줄(stringOf)을 사이 음에 넣는다", () => {
+    const r = run([n("c", rat(0), rat(1, 4), 60)], ["c"], { kind: "in", semitones: 1, stringOf: () => 3 });
+    expect(r.notes!.map((x) => x.tabString)).toEqual([3, undefined]);
   });
 });

@@ -90,7 +90,8 @@ export interface TabMarks {
 /**
  * 타브에 쓸 숫자·이어 울림·× 자리. 그리는 쪽(TabView)과 테스트가 함께 쓴다: 곡의 모든 음이 이 가운데 하나로 보인다.
  * x는 시간(온음표 단위 실수) → 가로 px, textWidth는 글자 폭, tight는 이보다 가까운 두 숫자를 붙어 있다고 보는 px.
- * [from, to] 시간 밖의 숫자·괄호는 만들지 않는다 (화면 밖). 그리는 순서는 괄호 다음 숫자다: 친 음 숫자가 늘 위에 보인다
+ * [from, to] 시간 밖의 숫자·괄호는 만들지 않는다 (화면 밖). 그리는 순서는 괄호 다음 숫자다: 친 음 숫자가 늘 위에 보인다.
+ * labelOf가 글자를 주는 음은 프렛 숫자 대신 그 글자로 쓴다 (실험실 하모닉스 "<12>")
  */
 export function layoutTabMarks(
   events: readonly TabEvent[],
@@ -100,9 +101,17 @@ export function layoutTabMarks(
   tight: number,
   from = -Infinity,
   to = Infinity,
+  labelOf?: (note: Note, at: { readonly string: number; readonly fret: number }) => string | undefined,
 ): TabMarks {
   const placed = new Map<string, { string: number; fret: number; t: number }>();
-  for (const e of events) for (const { note, at } of e.notes) if (at) placed.set(note.id, { ...at, t: toFloat(e.start) });
+  /** 음 id → 숫자 칸에 쓸 글자 (보통은 프렛 숫자) */
+  const label = new Map<string, string>();
+  for (const e of events)
+    for (const { note, at } of e.notes) {
+      if (!at) continue;
+      placed.set(note.id, { ...at, t: toFloat(e.start) });
+      label.set(note.id, labelOf?.(note, at) ?? String(at.fret));
+    }
   const slideFrom = new Map<string, string>();
   for (const l of links) if (l.kind === "slide") slideFrom.set(l.to, l.from);
 
@@ -122,13 +131,13 @@ export function layoutTabMarks(
     let i = 0;
     while (i < list.length) {
       const first = list[i]!;
-      let text = String(first.fret);
+      let text = label.get(first.id)!;
       let j = i + 1;
       while (j < list.length) {
         const prev = list[j - 1]!;
         const cur = list[j]!;
         if (x(cur.t) - x(prev.t) >= tight || slideFrom.get(cur.id) !== prev.id) break;
-        text += (cur.fret > prev.fret ? "/" : "\\") + cur.fret;
+        text += (cur.fret > prev.fret ? "/" : "\\") + label.get(cur.id)!;
         grouped.add(cur.id);
         j++;
       }
@@ -155,7 +164,7 @@ export function layoutTabMarks(
     if (t1 < from - 0.5 || t1 > to) continue;
     const x0 = x(toFloat(l.prev));
     const x1 = x(t1);
-    const text = `(${a.fret})`;
+    const text = `(${label.get(l.from)!})`;
     const width = textWidth(text) + 4;
     const head = boxOf.get(l.from);
     const last = lastOf.get(l.from) ?? (head ? { right: head.left + head.width } : undefined);
@@ -170,7 +179,7 @@ export function layoutTabMarks(
       mark = { string: a.string, left: Math.max(base, (last?.right ?? base) + 1), width, text, ids: [l.to], x1 };
     } else {
       const fromX = x(toFloat(l.prev));
-      const startText = String(a.fret);
+      const startText = label.get(l.from)!;
       mark = {
         string: a.string,
         left: base,

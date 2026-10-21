@@ -20,6 +20,13 @@ export class Pinch {
   /** 터치가 닿음. 두 번째 손가락이면 true (집기 시작) */
   down(e: PointerEvent, at: [number, number]): boolean {
     if (e.pointerType !== "touch") return false;
+    // 첫 손가락(isPrimary)이 닿았는데 남은 손가락이 있으면, 떼는 신호를 못 받은 옛 손가락이다.
+    // 그대로 두면 한 손가락 누르기가 집기로 잡혀 숫자판이 안 뜨므로 비우고 새로 센다
+    if (e.isPrimary && this.touches.size > 0) {
+      this.touches.clear();
+      this.start = undefined;
+      this.active = false;
+    }
     this.touches.set(e.pointerId, at);
     if (this.touches.size === 2) {
       this.active = true;

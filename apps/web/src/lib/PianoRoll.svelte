@@ -30,6 +30,8 @@
   import { fonts } from "./fonts.svelte";
   import { noteClipboard } from "./noteClipboard.svelte";
   import { rollFlow } from "./rollFlow.svelte";
+  import { selectKeys } from "./selectKeys.svelte";
+  import { heldKeys } from "./selectKeys";
   import { t } from "./i18n.svelte";
   import { drawRoll } from "./rollDraw";
   import type { CanonicalOf } from "./instrumentRange";
@@ -126,9 +128,12 @@
     seconds?: number | undefined;
     /**
      * 도구. pen = 빈 곳을 눌러 음 넣기(음을 누르면 고르고 옮김), select = 빈 곳을 끌어 상자로 고르기(음은 안 넣음),
-     * eraser = 누르거나 문지르는 음 지우기 (터치·펜에서 오른쪽 클릭 대신), split = 누른 자리(격자)에서 음 자르기
+     * eraser = 누르거나 문지르는 음 지우기 (터치·펜에서 오른쪽 클릭 대신), split = 누른 자리(격자)에서 음 자르기,
+     * reverb = 실험실 울림 찍기 (누른 자리부터 꼬리를 쪼갠다. 계산은 onreverb를 받는 쪽이 한다)
      */
     tool?: RollTool;
+    /** 울림 찍기 도구로 음을 눌렀다: 그 음과 누른 자리(격자) */
+    onreverb?: (trackId: string, noteId: string, at: Rat) => void;
     /** 누르기만 해서 넣는 음 길이. 없으면 격자 한 칸 (끌면 끈 만큼) */
     noteDur?: Rat;
     /** 새로 넣는 음의 v. 없으면 앞 음 v를 이어받는다 */
@@ -163,6 +168,8 @@
     oneventmove?: (label: EventLabel, to: Rat) => void;
     /** 원곡 파형 띠에서 마디선을 끌어 놓았을 때: 그 마디(bar)가 곡 위치 to(지금 템포로, 파형의 그 박 자리)에 오게 */
     onalignbar?: (bar: Rat, to: number) => void;
+    /** 마디선을 끄는 동안 마디선 옆에 보여 줄 글 (바뀔 템포) */
+    bardragtext?: (bar: number, to: number) => string;
     /** 고른 이벤트 라벨. 누르면 고르고(onpickevent), 이벤트 줄에서 휠을 굴리면 그 템포를 바꾼다(ontempowheel, ±1·Shift ±10) */
     pickedEvent?: EventRef | undefined;
     onpickevent?: (event: EventRef | undefined) => void;
@@ -181,7 +188,7 @@
     onlanetoggle?: ((trackId: string) => void) | undefined;
   }
 
-  let { cursor, loop, oncursor, onloop, song: fullSong, activeTrackId, orientation, division, playhead, onnotes, onselecttrack, onpicknote, onpreview, onseek, showEvents = false, video = $bindable(), videoPlay = $bindable(false), speedStep = $bindable(0), onspeedpicked, pitchRange = [12, 119], wave, look, themeKey = "", seconds, colors, tool = "pen", noteDur, volume, onvolume, lightKeys = false, canonicalOf, memory, onmemory, work, visibleTrackIds, selectMove = false, locked, pickOthers = true, onevent, oneventmove, onalignbar, onwaveoffset, pickedEvent, onpickevent, ontempowheel, laneTrackIds, melodyIds, onvolumes, onclearlane, onlanetoggle }: Props =
+  let { cursor, loop, oncursor, onloop, song: fullSong, activeTrackId, orientation, division, playhead, onnotes, onselecttrack, onpicknote, onpreview, onseek, showEvents = false, video = $bindable(), videoPlay = $bindable(false), speedStep = $bindable(0), onspeedpicked, pitchRange = [12, 119], wave, look, themeKey = "", seconds, colors, tool = "pen", onreverb, noteDur, volume, onvolume, lightKeys = false, canonicalOf, memory, onmemory, work, visibleTrackIds, selectMove = false, locked, pickOthers = true, onevent, oneventmove, onalignbar, bardragtext, onwaveoffset, pickedEvent, onpickevent, ontempowheel, laneTrackIds, melodyIds, onvolumes, onclearlane, onlanetoggle }: Props =
     $props();
 
   /** 레이어: 고른 트랙이 든 보기만 그리고 다루는 곡 (나머지 트랙은 롤에서 보이지도 눌리지도 않는다) */
@@ -702,6 +709,14 @@
     };
   });
 
+  /** 고른 음 높이. 끄는 중이면 원래 자리 대신 끄는 자리 높이 */
+  function heldPitches(): number[] {
+    if (selectKeys.mode !== "select") return [];
+    const moving = drag ? (drag.mode === "move" ? [drag.note, ...drag.moved] : [drag.note]) : [];
+    const ids = new Set(moving.map((n) => n.id));
+    return [...selectedNotes.filter((n) => !ids.has(n.id)), ...moving.filter((n) => drag?.mode !== "create" || selected.has(n.id))].map((n) => n.pitch);
+  }
+
   function cssVar(name: string): string {
     return getComputedStyle(host).getPropertyValue(name).trim() || "#888";
   }
@@ -728,10 +743,11 @@
       look,
       wave: wave ? { ...wave, offset: waveDrag?.live ? waveDrag.offset : wave.offset, at: eventsSize(), size: WAVE } : undefined,
       showEvents,
-      barDrag: barDrag?.live ? { bar: barDrag.bar, to: barDrag.to } : undefined,
+      barDrag: barDrag?.live ? { bar: barDrag.bar, to: barDrag.to, text: bardragtext?.(barDrag.bar, barDrag.to) } : undefined,
       pickedEvent,
       eventDrag: eventPress?.live && eventPress.label && movable(eventPress.label) ? { label: eventPress.label, to: eventPress.to } : undefined,
       lightKeys,
+      heldKeys: heldKeys(selectKeys.mode, sounding, heldPitches(), active ? (colors?.get(active.id) ?? active.color) : "#888"),
       canonicalOf,
       volumeLabels: volumeLabels.mode,
       lane: laneReserved > 0 ? { ...lane.draw(laneList), label: t("ui.laneName") } : undefined,
@@ -852,7 +868,8 @@
   });
 
   /** 지금 미리듣기로 울리는 높이. 떼거나 다른 건반으로 옮기면 끈다 */
-  let sounding: number | undefined;
+  /** 미리듣기로 지금 누르고 있는 음 높이 (고른 음 건반 불에도 쓴다) */
+  let sounding = $state<number | undefined>(undefined);
   /** 건반 띠를 누르고 있는지 (끌면 건반을 따라 소리를 바꾼다) */
   let onKeys = false;
 
@@ -1020,6 +1037,12 @@
       // 가위: 누른 음을 가까운 격자에서 자른다. 음 밖을 누르면 아무것도 안 한다
       const own = hitNear(active.notes, at.time, at.pitch, e);
       if (own) splitNoteAt(own.id, snapNearest(at.time, division));
+      return;
+    }
+    if (tool === "reverb" && active && !activeLocked && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+      // 울림 찍기: 누른 음을 누른 자리(격자)부터 작아지는 조각으로 쪼갠다. 음 밖을 누르면 아무것도 안 한다
+      const own = hitNear(active.notes, at.time, at.pitch, e);
+      if (own) onreverb?.(active.id, own.id, snapNearest(at.time, division));
       return;
     }
     if ((e.ctrlKey || e.metaKey) && active) {
@@ -1223,7 +1246,7 @@
       const own = hitNear(active.notes, at.time, at.pitch, e);
       if (activeLocked) shape = own ? "pointer" : "crosshair";
       else if (tool === "select") shape = own ? (selectMove ? "move" : "pointer") : "crosshair";
-      else if (tool === "split") shape = own ? (orientation === "horizontal" ? "col-resize" : "row-resize") : "";
+      else if (tool === "split" || tool === "reverb") shape = own ? (orientation === "horizontal" ? "col-resize" : "row-resize") : "";
       else if (own) shape = onResizeEdge(own, at.time, e) ? (orientation === "horizontal" ? "ew-resize" : "ns-resize") : "move";
     }
     else if (at.time !== undefined && inWave(e)) {
@@ -1438,9 +1461,9 @@
    * 고른 음 길이 ×factor (첫 음 시작 기준으로 리듬 모양을 지킨다). 고르지 않은 음은 지우거나 줄이지 않는다:
    * 그 음 앞까지만 늘리고, 늘릴 자리가 없으면 바꾸지 않고 false
    */
-  export function scaleSelected(factor: Rat, label: string): boolean {
+  export function scaleSelected(factor: Rat, label: string, exact = false): boolean {
     if (!active || selectedNotes.length === 0) return false;
-    const scaled = scaleNotesIn(active.notes, selectedNotes, factor);
+    const scaled = scaleNotesIn(active.notes, selectedNotes, factor, undefined, exact);
     if (!scaled) return false;
     const byId = new Map(scaled.map((n) => [n.id, n]));
     return editSelected((n) => byId.get(n.id) ?? n, label);
@@ -1474,7 +1497,7 @@
         return;
       }
     }
-    if (!active || e.shiftKey || e.altKey || tool === "split") return;
+    if (!active || e.shiftKey || e.altKey || tool === "split" || tool === "reverb") return;
     const rect = canvas.getBoundingClientRect();
     const at = fromScreen(view, e.clientX - rect.left, e.clientY - rect.top);
     if (at.time === undefined) return;

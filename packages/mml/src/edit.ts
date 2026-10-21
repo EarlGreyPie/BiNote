@@ -210,7 +210,7 @@ export function setTrackNotes(trackId: string, notes: readonly Note[], label = "
   return {
     label,
     apply(song) {
-      return {
+      const next = {
         ...song,
         tracks: song.tracks.map((t) => {
           if (t.id !== trackId) return t;
@@ -218,6 +218,7 @@ export function setTrackNotes(trackId: string, notes: readonly Note[], label = "
           return { ...rest, notes };
         }),
       };
+      return keepTextEnd(song, next, [trackId]);
     },
     invert(before) {
       const track = before.tracks.find((t) => t.id === trackId);
@@ -334,7 +335,8 @@ export function compactSong(profile?: GameProfile, label = "글자 수 줄이기
   };
 }
 
-function restoreSong(song: Song): Command {
+/** 실행 취소용: 곡을 통째로 앞 곡으로 돌리는 명령 */
+export function restoreSong(song: Song): Command {
   return {
     label: "되돌리기",
     apply: () => song,
@@ -554,13 +556,68 @@ export function deleteTime(at: Rat, length: Rat, label = "마디 빼기"): Comma
   };
 }
 
+/** 음 목록의 끝 (마지막 음 끝) */
+function notesEnd(notes: readonly Note[]): Rat {
+  let end: Rat = ZERO;
+  for (const n of notes) {
+    const e = add(n.start, n.dur);
+    if (cmp(e, end) > 0) end = e;
+  }
+  return end;
+}
+
+/**
+ * 악보 글에 적힌 템포로 at 자리(at에 적힌 템포 포함)의 빠르기. 길이를 지키려고 끝에 붙이는 템포가
+ * 같은 자리에 다른 트랙이 적은 템포(예: 다른 트랙의 t90)를 덮어쓰지 않게, 그 자리 템포를 그대로 쓴다.
+ * 이 트랙은 text(새로 쓴 글)로 본다. 같은 자리에 템포가 여럿이면 곡 템포 지도와 같은 규칙(normalizeTempo:
+ * 악보 트랙 순서에서 뒤 트랙 것)으로 고른다
+ */
+function writtenBpmAt(song: Song, trackId: string, text: string, at: Rat): number {
+  const score = songScores(song).find((ids) => ids.includes(trackId)) ?? [trackId];
+  const written = normalizeTempo(
+    score.flatMap((tid) => {
+      if (tid === trackId) return parseTrackText(trackId, { text }).tempo;
+      const t = song.tracks.find((x) => x.id === tid);
+      return t ? parseTrackText(t.id, trackSource(song, t)).tempo : [];
+    }),
+  );
+  let bpm = DEFAULT_BPM;
+  for (const e of written) if (cmp(e.at, at) <= 0) bpm = e.bpm;
+  return bpm;
+}
+
+/**
+ * 음을 직접 고치는 편집(원문을 지움)에서 원문 끝 쉼표로 지키던 트랙 길이를 지킨다 (score-end.ts).
+ * 원문이 있던 트랙의 마지막 음 끝이 그대로인데(볼륨·높이만 바꿈 등) 원문 게임 길이가 더 길면, 출력기로 다시 쓴 글에
+ * 모자란 쉼표와 그 자리 템포를 붙여 원문으로 남긴다. 음 끝이 바뀐 편집(끝 음을 지우거나 늘림)은 전처럼 음 끝이 길이다.
+ * 다시 읽은 음이 고친 음과 다르면(출력기가 쓸 수 없는 길이 등) 전처럼 원문 없이 둔다
+ */
+function keepTextEnd(before: Song, after: Song, trackIds: readonly string[]): Song {
+  const lengths = (PROFILES[after.meta.profileId] ?? getProfile("mobile")).length;
+  let out = after;
+  for (const id of trackIds) {
+    const old = before.tracks.find((t) => t.id === id);
+    const now = out.tracks.find((t) => t.id === id);
+    if (!old?.mml || !now || now.mml) continue;
+    const end = textEnd(old.mml);
+    const last = notesEnd(now.notes);
+    if (!eq(notesEnd(old.notes), last) || cmp(end, last) <= 0) continue;
+    const base = trackSource(out, now).text;
+    const text = padScore([base], end, writtenBpmAt(out, id, base, end), lengths)[0]!;
+    const mml: TrackText = { text };
+    if (!eq(textEnd(mml), end) || !sameSound(now.notes, parseTrackText(id, mml).notes)) continue;
+    out = { ...out, tracks: out.tracks.map((t) => (t.id === id ? { ...now, mml } : t)) };
+  }
+  return out;
+}
+
 /** 여러 트랙의 음을 한 번에 바꾸는 명령 (MIDI 건반 화음 입력 등). 실행 취소 한 칸 */
 export function setTracksNotes(changes: readonly { trackId: string; notes: readonly Note[] }[], label = "음 넣기"): Command {
   const byId = new Map(changes.map((c) => [c.trackId, c.notes]));
   return {
     label,
     apply(song) {
-      return {
+      const next = {
         ...song,
         tracks: song.tracks.map((t) => {
           const notes = byId.get(t.id);
@@ -569,6 +626,7 @@ export function setTracksNotes(changes: readonly { trackId: string; notes: reado
           return { ...rest, notes };
         }),
       };
+      return keepTextEnd(song, next, [...byId.keys()]);
     },
     invert: (before) => restoreSong(before),
   };

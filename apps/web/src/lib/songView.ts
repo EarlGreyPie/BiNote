@@ -26,13 +26,19 @@ export interface SongViewReset {
   readonly arpeggio: undefined;
   readonly slide: undefined;
   readonly grace: undefined;
+  readonly labDialog: undefined;
+  readonly reverbDialog: undefined;
   readonly transposing: undefined;
   readonly voicing: undefined;
   readonly tempoChangeOpen: false;
   readonly meterOpen: false;
+  /** 어긋난 길이 찾기 창 (옛 곡의 고칠 자리를 들고 있다) */
+  readonly offgridOpen: false;
   /** 악보책 나누기 결과, 글자 수 줄이기 결과 글 */
   readonly split: undefined;
   readonly compactNote: "";
+  /** MML로 내보내기 창에서 복사한 트랙 표시 (옛 트랙 id) */
+  readonly exportCopied: undefined;
 }
 
 /** 곡을 열 때 새 곡에 남으면 안 되는 상태 (지금 세대 번호 → 다음 번호와 빈 값들) */
@@ -53,11 +59,15 @@ export function freshSongView(viewGen: number): SongViewReset {
     arpeggio: undefined,
     slide: undefined,
     grace: undefined,
+    labDialog: undefined,
+    reverbDialog: undefined,
     transposing: undefined,
     voicing: undefined,
     tempoChangeOpen: false,
     meterOpen: false,
+    offgridOpen: false,
     split: undefined,
     compactNote: "",
+    exportCopied: undefined,
   };
 }

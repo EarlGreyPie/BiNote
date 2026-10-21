@@ -7,6 +7,7 @@ import {
   type InstrumentRef,
   type Marker,
   type Note,
+  type NoteLab,
   type Player,
   type PlayerTab,
   type Rat,
@@ -378,7 +379,8 @@ function readNotes(
     if (!id || usedIds.has(id)) id = freshId(`${trackId}.n${notes.length + 1}`, usedIds);
     usedIds.add(id);
     const tabString = Number.isInteger(n.tabString) && (n.tabString as number) >= 1 && (n.tabString as number) <= 12 ? (n.tabString as number) : undefined;
-    notes.push({ id, start, dur, pitch: pitch as number, vol: v, tie: n.tie === "next" ? "next" : "none", ...(tabString ? { tabString } : {}) });
+    const lab = readLab(n.lab, volume);
+    notes.push({ id, start, dur, pitch: pitch as number, vol: v, tie: n.tie === "next" ? "next" : "none", ...(tabString ? { tabString } : {}), ...(lab ? { lab } : {}) });
   }
   // 한 트랙은 한 번에 한 음: 시작 순으로 두고 앞 음과 겹치는 음은 뺀다
   notes.sort((a, b) => cmp(a.start, b.start));
@@ -397,6 +399,18 @@ function readNotes(
   if (clamped > 0) warn(diagnostics, "project-volume-clamped", where, { count: clamped });
   // 마지막 음의 &는 이을 음이 없으므로 풀지 않고 그대로 둔다 (편집기에서 보이는 그대로)
   return out;
+}
+
+/** 실험실 표시 (Note.lab). 모르는 모양이면 버린다: 표시가 없어도 음은 그대로 들린다 */
+function readLab(v: unknown, volume: { readonly min: number; readonly max: number }): NoteLab | undefined {
+  if (!isObject(v)) return undefined;
+  const vol = (x: unknown): x is number => Number.isInteger(x) && (x as number) >= volume.min && (x as number) <= volume.max;
+  if (v.kind === "ghost") return vol(v.vol) ? { kind: "ghost", vol: v.vol } : undefined;
+  if (v.kind !== "harmonic" || (v.type !== "natural" && v.type !== "artificial") || !vol(v.vol)) return undefined;
+  if (!Number.isInteger(v.pitch) || (v.pitch as number) < 0 || (v.pitch as number) > 127) return undefined;
+  const string = Number.isInteger(v.string) && (v.string as number) >= 1 && (v.string as number) <= 12 ? (v.string as number) : undefined;
+  const fret = Number.isInteger(v.fret) && (v.fret as number) >= 0 && (v.fret as number) <= 36 ? (v.fret as number) : undefined;
+  return { kind: "harmonic", type: v.type, pitch: v.pitch as number, vol: v.vol, ...(string !== undefined && fret !== undefined ? { string, fret } : {}) };
 }
 
 function readSpelling(v: unknown): SpellingHints {

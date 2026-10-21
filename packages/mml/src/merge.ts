@@ -137,11 +137,11 @@ export function mergeVoices(tracks: readonly (readonly Note[])[], options: Merge
     // 묶음마다 받을 트랙을 정한다 (아직 옮기지 않음. 앞서 정한 묶음도 받는 트랙의 자리를 차지한다)
     const planned = new Map<number, Note[]>(targets.map((to) => [to, [...out[to]!]]));
     const plan: { unit: Note[]; to: number }[] = [];
-    for (const unit of chains(out[from]!)) {
+    for (const unit of noteChains(out[from]!)) {
       let best: number | undefined;
       let bestCost = Infinity;
       for (const to of targets) {
-        const cost = fit(planned.get(to)!, unit);
+        const cost = mergeFit(planned.get(to)!, unit);
         if (cost < bestCost) {
           bestCost = cost;
           best = to;
@@ -220,7 +220,7 @@ function insert(track: readonly Note[], unit: readonly Note[]): Note[] {
 }
 
 /** &로 이어진 음(앞 음 끝 = 다음 음 시작)은 한 묶음 */
-function chains(notes: readonly Note[]): Note[][] {
+export function noteChains(notes: readonly Note[]): Note[][] {
   const out: Note[][] = [];
   let chain: Note[] = [];
   notes.forEach((n, i) => {
@@ -236,9 +236,10 @@ function chains(notes: readonly Note[]): Note[][] {
 /**
  * 묶음을 이 트랙에 넣을 수 있으면 가까운 앞뒤 음과의 평균 높이 차, 없으면 Infinity.
  * 겹치거나, &가 새로 이어지거나, 가까운 앞뒤 음과 MERGE_MAX_JUMP보다 멀면 넣지 않는다.
- * 가까운 앞뒤 음이 없으면(그 트랙이 오래 쉬는 자리) 넣을 수는 있지만 가장 나중에 고른다
+ * 가까운 앞뒤 음이 없으면(그 트랙이 오래 쉬는 자리) 넣을 수는 있지만 가장 나중에 고른다.
+ * maxJump: 화음 병합 창처럼 음을 빼는 것보다 튀는 편이 나을 때는 Infinity를 준다
  */
-function fit(track: readonly Note[], unit: readonly Note[]): number {
+export function mergeFit(track: readonly Note[], unit: readonly Note[], maxJump = MERGE_MAX_JUMP): number {
   const start = unit[0]!.start;
   const last = unit[unit.length - 1]!;
   const end = add(last.start, last.dur);
@@ -259,7 +260,7 @@ function fit(track: readonly Note[], unit: readonly Note[]): number {
   const near: number[] = [];
   if (prev && cmp(sub(start, add(prev.start, prev.dur)), NEAR) <= 0) near.push(Math.abs(prev.pitch - unit[0]!.pitch));
   if (next && cmp(sub(next.start, end), NEAR) <= 0) near.push(Math.abs(next.pitch - last.pitch));
-  if (near.some((d) => d > MERGE_MAX_JUMP)) return Infinity;
+  if (near.some((d) => d > maxJump)) return Infinity;
   // 앞 음과 v가 다르면 v 명령이 붙으니 같은 높이 차면 v가 같은 트랙을 고른다
   const vol = prev && prev.vol !== unit[0]!.vol ? 0.5 : 0;
   return (near.length === 0 ? 100 : near.reduce((a, b) => a + b, 0) / near.length) + vol;

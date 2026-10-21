@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { add, assignTab, clipLayers, cmp, gridLines, mul, pasteClip, rat, splitNote, sub, toFloat, type LengthLimit, type Note, type Rat, type Song, type TabPosition, type TabTuning } from "@mmlce/core";
+  import { add, assignTab, clipLayers, cmp, gridLines, harmonicLabel, isGhost, mul, pasteClip, rat, splitNote, sub, toFloat, type LengthLimit, type Note, type Rat, type Song, type TabPosition, type TabTuning } from "@mmlce/core";
   import { t } from "./i18n.svelte";
   import { Pinch, pinchRatio } from "./pinch";
   import { typeFretDigit, type DigitNote, pinShownStrings, placeTabNote, removeTabNote, setTabNoteLength, shownStrings, tieTabNote, type TabEdit } from "./tabInput";
@@ -28,6 +28,7 @@
   import { volumeLabels } from "./volumeLabels.svelte";
   import { labelFits, volumeLabelNotes } from "./volumeLabels";
   import { layoutTabMarks, struckNotes, tieLinks } from "./tabMarks";
+  import { labs } from "./labs.svelte";
   import { fretBoxLeft, fretCenter, layoutTabEvents, rulerRelease, TAB_RULER, TAB_RULER_BASELINE, tabEventAction, tabEventBottom, tabEventAt, tabEventRow, tabEventText, tabMarkerText, tabTop, tabWaveTop, tabZone, type TabEventRow, type TabEventSpot } from "./tabEvents";
   import { drawWaveStrip, noteStarts, WAVE_SIZE } from "./waveDraw";
   import { wholeToSecondsFn, type Peaks } from "./waveform";
@@ -801,9 +802,9 @@
     return true;
   }
 
-  /** 고른 음(ids를 주면 그 음) 길이 ×factor (트랙마다, 같은 기준). 늘릴 자리가 없으면 바꾸지 않고 false */
-  export function scaleSelected(factor: Rat, label: string, ids?: readonly string[]): boolean {
-    const changes = scalePicked(tracks, ids ? new Set(ids) : selected, factor);
+  /** 고른 음(ids를 주면 그 음) 길이 ×factor (트랙마다, 같은 기준). 늘릴 자리가 없으면(exact면 정확히 못 늘리면) 바꾸지 않고 false */
+  export function scaleSelected(factor: Rat, label: string, ids?: readonly string[], exact = false): boolean {
+    const changes = scalePicked(tracks, ids ? new Set(ids) : selected, factor, exact);
     return !!changes && commit(changes, label);
   }
 
@@ -869,6 +870,17 @@
     anchor = undefined;
     cursor = undefined;
     digits = "";
+  }
+
+  /**
+   * 숫자판을 다시 연다 (도구줄 단추). 커서가 없으면 지금 화면에 보이는 첫 칸·첫 줄에 둔다.
+   * 지판을 손가락으로 누르기 어려울 때(트랙패드·마우스를 붙인 아이패드 등)도 닫은 숫자판을 되살릴 수 있게 한다
+   */
+  function openPad() {
+    touchPad = true;
+    cursor ??= { at: firstVisibleCell(start, division, (width - LEFT) / pxPerWhole), string: 1 };
+    digits = "";
+    host.focus();
   }
 
   // 보기 메뉴에서 타브 숫자판을 끄면 열려 있던 숫자판도 닫는다
@@ -1227,7 +1239,9 @@
     // 프렛 숫자·이어 울림 괄호·× 자리 (tabMarks: 곡의 모든 음이 이 가운데 하나로 보인다).
     // 같은 줄에서 슬라이드로 이어진 음이 너무 붙어 있으면(48분음표 꾸밈음 등) "7\6\5"처럼 한 덩어리로 쓴다
     const tight = fontPx * 1.4;
-    const marks = layoutTabMarks(events, links, x, (text) => g.measureText(text).width, tight, start, end);
+    // 실험실을 켰으면 하모닉스 표시가 붙은 음을 "<12>"처럼 쓰고, 고스트 노트 숫자는 흐리게 쓴다
+    const marks = layoutTabMarks(events, links, x, (text) => g.measureText(text).width, tight, start, end, labs.on ? harmonicLabel : undefined);
+    const ghosts = labs.on ? new Set(tracks.flatMap((tr) => tr.notes.filter(isGhost).map((n) => n.id))) : undefined;
     const { placed, grouped } = marks;
     const box = (string: number, left: number, w: number) => g.fillRect(left, y(string) - fontPx / 2 - 1, w, fontPx + 2);
     // 이어 울림: 숫자보다 먼저 그린다 (괄호가 넓어 뒤에 친 음 숫자를 덮지 않게 숫자가 위에 온다).
@@ -1268,7 +1282,7 @@
         box(f.string, f.left, f.width);
         g.globalAlpha = 1;
       }
-      g.fillStyle = css(tint && owner !== activeTrackId ? "--muted" : "--text");
+      g.fillStyle = css((tint && owner !== activeTrackId) || f.ids.every((id) => ghosts?.has(id)) ? "--muted" : "--text");
       g.fillText(f.text, f.left + 2, y(f.string) + fontPx * 0.36);
     }
     g.textAlign = "center";
@@ -1427,8 +1441,8 @@
           {#if ondot}<button class="dot" title={t("ui.dotToggleHelp")} aria-label={t("ui.dotToggle")} onclick={ondot}>.</button>{/if}
         </div>
       {/if}
-      <!-- 두 줄로 나눈다: 24프렛이면 0~12, 13~24 -->
-      <div class="frets" style:grid-template-columns="repeat({Math.ceil((tuning.maxFret + 2) / 2)}, minmax(0, 1fr))">
+      <!-- 좁으면 두 줄로 나눈다(24프렛이면 0~12, 13~24). 넓은 화면(아이패드 가로 전체화면 등)은 한 줄에 모두 -->
+      <div class="frets" style:--fret-cols-2={Math.ceil((tuning.maxFret + 2) / 2)} style:--fret-cols-1={tuning.maxFret + 1 + (ondot && (noteLength === undefined || !onnotelength) ? 1 : 0)}>
         {#each Array.from({ length: tuning.maxFret + 1 }, (_, i) => i) as fret (fret)}
           <button onclick={() => padFret(fret)}>{fret}</button>
         {/each}
@@ -1468,6 +1482,8 @@
         <button class="small" title={t("ui.laneCollapse")} onclick={() => saveVolumeLane({ state: "collapsed" })}>×</button>
       {/if}
     </span>
+    <!-- 닫은 숫자판을 다시 연다 (숫자판이 떠 있는 동안은 이 줄이 숨는다) -->
+    <button class="small open-pad" title={t("ui.fretPadOpenHelp")} aria-label={t("ui.fretPadOpen")} onclick={openPad}>{t("ui.fretPadOpen")}</button>
     <!-- 확대·타브 크기·지판 위치: 터치는 엄지가 닿는 여기, PC(마우스)는 피아노롤처럼 위 도구줄에 있다 -->
     {#if coarsePointer}
       <span class="zoom">
@@ -1564,6 +1580,8 @@
     touch-action: pan-y;
   }
   .pad {
+    /* 숫자판 폭으로 프렛 줄 수를 정한다 (아래 @container) */
+    container-type: inline-size;
     /* 남는 높이만 쓰고, 넘치면 숫자판 안에서 굴린다 (지판 칸은 canvas-wrap의 min-height로 지킨다) */
     flex: 0 1 auto;
     min-height: 0;
@@ -1656,8 +1674,19 @@
   }
   .frets {
     display: grid;
+    grid-template-columns: repeat(var(--fret-cols-2), minmax(0, 1fr));
     gap: 3px;
     max-width: 880px;
+  }
+  /* 넓은 숫자판: 프렛을 한 줄로 펴고 폭을 다 쓴다 (24프렛이면 칸 하나 약 34px 이상). 음표 입력판도 폭을 다 쓴다 */
+  @container (min-width: 860px) {
+    .frets {
+      grid-template-columns: repeat(var(--fret-cols-1), minmax(0, 1fr));
+      max-width: none;
+    }
+    .lengths {
+      max-width: none;
+    }
   }
   .frets button,
   .moves button {

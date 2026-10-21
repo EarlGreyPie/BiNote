@@ -28,6 +28,7 @@ export const COMMANDS = [
   "edit.lengthHalf",
   "edit.dotToggle",
   "edit.transpose",
+  "edit.volume",
   "note.delete",
   "note.octaveUp",
   "note.octaveDown",

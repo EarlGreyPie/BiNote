@@ -158,22 +158,40 @@ function room(
     }
     return { ok: true, main, edits: voices.map((v) => ({ trackId: v.trackId, note: { ...v.note, start: add(v.note.start, total), dur: sub(v.note.dur, total) } })) };
   }
-  // 박 앞에서: 꾸밈음이 [본음 시작 − total, 본음 시작)을 차지한다. 그 자리의 앞 음은 꼬리를 깎고, 쉼표는 줄어든다
+  // 박 앞에서: 꾸밈음이 [본음 시작 − total, 본음 시작)을 차지한다
+  const fit = roomBefore(own, main, total, options.canWrite, shortest);
+  if (!fit.ok) return fit;
+  return { ok: true, main, edits: fit.prev ? [{ trackId: target.trackId, note: fit.prev }] : [] };
+}
+
+/**
+ * 박 앞 자리: 음 main 바로 앞 [main 시작 − total, main 시작)을 비운다 (꾸밈음·슬라이드가 함께 쓴다). 그 자리의 앞 음은 꼬리를 깎고,
+ * 쉼표는 줄어든다. 깎고 남는 앞 음은 최단 길이 이상이고, 남는 앞 음·쉼표는 정확히 써져야 한다. own은 시작 순으로 놓은 트랙 음.
+ * prev는 꼬리를 깎은 앞 음 (쉼표에서 가져오면 없음)
+ */
+export function roomBefore(
+  own: readonly Note[],
+  main: Note,
+  total: Rat,
+  canWrite: (dur: Rat) => boolean,
+  shortest: Rat,
+): { ok: true; prev?: Note } | { ok: false; why: "short" | "unwritable" } {
   const from = sub(main.start, total);
   if (cmp(from, ZERO) < 0) return { ok: false, why: "short" };
   const prev = before(own, main);
   if (!prev || cmp(end(prev), from) <= 0) {
     // 앞이 쉼표: 남는 쉼표도 정확히 써져야 한다 (0이면 쉼표가 없어진다)
     const gap = sub(from, prev ? end(prev) : ZERO);
-    if (gap.n !== 0 && !options.canWrite(gap)) return { ok: false, why: "unwritable" };
-    return { ok: true, main, edits: [] };
+    if (gap.n !== 0 && !canWrite(gap)) return { ok: false, why: "unwritable" };
+    return { ok: true };
   }
-  // 앞 음이 꾸밈음 자리에 걸친다. 그 앞 음보다 더 앞까지 먹으면(앞 음 시작이 자리 안) 모자람
+  // 앞 음이 자리에 걸친다. 그 앞 음보다 더 앞까지 먹으면(앞 음 시작이 자리 안) 모자람
   if (cmp(prev.start, from) >= 0) return { ok: false, why: "short" };
-  const fit = keep(sub(from, prev.start));
-  if (!fit.ok) return fit;
-  // 앞 음은 이제 꾸밈음과 붙지 않으므로 &를 풀지 않아도 되지만(& 뒤가 떨어지면 잇지 않는다), 이어지는 오해가 없게 푼다
-  return { ok: true, main, edits: [{ trackId: target.trackId, note: { ...prev, dur: sub(from, prev.start), tie: "none" } }] };
+  const left = sub(from, prev.start);
+  if (cmp(left, shortest) < 0) return { ok: false, why: "short" };
+  if (!canWrite(left)) return { ok: false, why: "unwritable" };
+  // 앞 음은 이제 뒤와 붙지 않으므로 &를 풀지 않아도 되지만(& 뒤가 떨어지면 잇지 않는다), 이어지는 오해가 없게 푼다
+  return { ok: true, prev: { ...prev, dur: left, tie: "none" } };
 }
 
 /**

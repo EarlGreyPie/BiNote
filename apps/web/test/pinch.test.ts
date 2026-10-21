@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Pinch, pinchRatio } from "../src/lib/pinch";
 
-const touch = (pointerId: number) => ({ pointerId, pointerType: "touch" }) as PointerEvent;
+const touch = (pointerId: number, isPrimary = false) => ({ pointerId, pointerType: "touch", isPrimary }) as PointerEvent;
 
 describe("두 손가락 집기", () => {
   it("두 번째 손가락부터 집기를 시작하고, 모두 뗄 때까지 이어진다", () => {
@@ -23,5 +23,18 @@ describe("두 손가락 집기", () => {
     const p = new Pinch();
     expect(p.down({ pointerId: 1, pointerType: "mouse" } as PointerEvent, [0, 0])).toBe(false);
     expect(pinchRatio(10, 80)).toBe(1);
+  });
+
+  it("떼는 신호를 놓친 손가락이 남아도, 다음 첫 손가락은 집기가 아니라 한 손가락 누르기", () => {
+    const p = new Pinch();
+    expect(p.down(touch(1, true), [100, 100])).toBe(false);
+    // 1번 손가락의 pointerup을 받지 못했다
+    expect(p.down(touch(2, true), [200, 100])).toBe(false);
+    expect(p.active).toBe(false);
+    p.up(touch(2, true));
+    expect(p.active).toBe(false);
+    // 두 손가락 집기는 그대로 된다
+    expect(p.down(touch(3, true), [100, 100])).toBe(false);
+    expect(p.down(touch(4), [200, 100])).toBe(true);
   });
 });

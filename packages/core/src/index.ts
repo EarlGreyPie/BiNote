@@ -12,3 +12,6 @@ export * from "./arpeggio.js";
 export * from "./note-length.js";
 export * from "./slide.js";
 export * from "./grace.js";
+export * from "./volume.js";
+export * from "./lab.js";
+export * from "./reverb.js";

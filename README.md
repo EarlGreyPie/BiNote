@@ -15,7 +15,7 @@
 
 ## 사용법
 
-[가이드북](docs/가이드북.md)에 화면, 음 넣기, 게임에 넣기, 저장 형식, 단축키를 정리해 두었습니다.
+[가이드북](docs/가이드북.md)에 화면, 음 넣기, MML로 내보내기, 저장 형식, 단축키를 정리해 두었습니다.
 
 다른 언어: [English](docs/guide/en.md) · [日本語](docs/guide/ja.md) · [繁體中文](docs/guide/zh-TW.md) · [简体中文](docs/guide/zh-Hans.md)
 

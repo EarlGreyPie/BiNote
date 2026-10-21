@@ -15,6 +15,11 @@ interface Entry {
   readonly backward: Command;
   /** 이 단계를 실행 취소해 사라진 악보의 타브 튜닝. 다시 실행해 그 악보가 돌아오면 되살린다 */
   gone?: Map<string, PlayerTab | undefined>;
+  /**
+   * 이 단계가 직접 바꾼 악보 튜닝 (악보 id → 바꾸기 전·뒤). 튜닝은 보통 기록 밖이지만, 타브 숫자를 지키며 튜닝을 바꾸는
+   * 단계처럼 음 높이와 튜닝을 함께 바꾼 단계는 실행 취소·다시 실행이 둘을 같이 되돌려야 타브가 어긋나지 않는다
+   */
+  tabs?: ReadonlyMap<string, { readonly before: PlayerTab | undefined; readonly after: PlayerTab | undefined }>;
 }
 
 /**
@@ -80,7 +85,8 @@ export class History {
     // 새로 생긴 트랙은 같은 id를 쓰던 예전 트랙의 음소거·솔로를 물려받지 않는다
     const existed = new Set(before.tracks.map((t) => t.id));
     for (const t of this.current.tracks) if (!existed.has(t.id)) this.listening.set(t.id, { mute: t.mute, solo: t.solo });
-    this.undoStack.push({ forward: command, backward: command.invert(before) });
+    const tabs = changedTabs(before, after);
+    this.undoStack.push({ forward: command, backward: command.invert(before), ...(tabs ? { tabs } : {}) });
     this.redoStack = [];
     this.rememberTabs();
     return this.current;
@@ -101,6 +107,7 @@ export class History {
     const entry = this.undoStack.pop();
     if (!entry) return this.current;
     const next = keepListening(this.current, entry.backward.apply(this.current), this.listening);
+    for (const [id, { before }] of entry.tabs ?? []) this.tabs.set(id, before);
     // 이 단계가 만든 악보는 실행 취소로 사라진다: 그 튜닝은 이 단계에 맡겨 두고, 같은 id의 옛 악보가 돌아오면 그 악보 것을 쓴다
     const live = new Set(next.players.map((p) => p.id));
     for (const p of this.current.players) {
@@ -119,6 +126,7 @@ export class History {
     if (!entry) return this.current;
     for (const [id, tab] of entry.gone ?? []) this.tabs.set(id, tab);
     delete entry.gone;
+    for (const [id, { after }] of entry.tabs ?? []) this.tabs.set(id, after);
     this.current = keepTabs(keepListening(this.current, entry.forward.apply(this.current), this.listening), this.tabs);
     this.rememberTabs();
     this.undoStack.push(entry);
@@ -140,6 +148,18 @@ function keepListening(now: Song, next: Song, remembered: ReadonlyMap<string, { 
     return { ...t, mute: cur.mute, solo: cur.solo };
   });
   return changed ? { ...next, tracks } : next;
+}
+
+/** 명령 하나가 바꾼 악보 튜닝 (앞뒤 곡에 다 있는 악보만). 없으면 undefined */
+function changedTabs(before: Song, after: Song): Entry["tabs"] {
+  const old = new Map(before.players.map((p) => [p.id, p.tab]));
+  const out = new Map<string, { before: PlayerTab | undefined; after: PlayerTab | undefined }>();
+  for (const p of after.players) {
+    if (!old.has(p.id)) continue;
+    const was = old.get(p.id);
+    if (was?.tuning !== p.tab?.tuning || was?.capo !== p.tab?.capo) out.set(p.id, { before: was, after: p.tab });
+  }
+  return out.size ? out : undefined;
 }
 
 /** 기억한 타브 튜닝을 악보에 다시 얹는다 (기억이 없는 악보는 그대로) */

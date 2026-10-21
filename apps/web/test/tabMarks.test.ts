@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assignTab, STANDARD_TUNING, type Note } from "@mmlce/core";
+import { assignTab, harmonicLabel, rat, STANDARD_TUNING, type Note } from "@mmlce/core";
 import { parseMml } from "@mmlce/mml";
 import { layoutTabMarks, struckNotes, tieLinks } from "../src/lib/tabMarks";
 
@@ -82,5 +82,23 @@ describe("타브에 안 나오는 음이 없다", () => {
     expect(m.holds[0]!.arc).toBeUndefined();
     const wide = marksOf(tracksOf(["o4l4c&c"]), 220);
     expect(wide.holds[0]!.arc).toBeDefined();
+  });
+});
+
+describe("실험실 하모닉스 글자", () => {
+  it("하모닉스 표시가 맞는 줄·프렛이면 숫자 대신 <7>, 이어 울림 괄호도 같은 글자", () => {
+    const lab = { kind: "harmonic", type: "natural", pitch: 47, vol: 10, string: 6, fret: 7 } as const;
+    const notes: Note[] = [
+      { id: "a", start: rat(0), dur: rat(1, 4), pitch: 59, vol: 8, tie: "next", tabString: 6, lab },
+      { id: "b", start: rat(1, 4), dur: rat(1, 4), pitch: 59, vol: 8, tie: "none", tabString: 6, lab },
+      { id: "c", start: rat(1, 2), dur: rat(1, 4), pitch: 59, vol: 8, tie: "none" },
+    ];
+    const links = tieLinks([notes]);
+    const events = assignTab(struckNotes(notes), STANDARD_TUNING);
+    const m = layoutTabMarks(events, links, (t) => t * 400, (text) => text.length * 7, 18, -Infinity, Infinity, harmonicLabel);
+    expect(m.frets.find((f) => f.ids.includes("a"))?.text).toBe("<7>");
+    expect(m.holds[0]?.text).toBe("(<7>)");
+    // 표시 없는 같은 높이 음은 보통 숫자
+    expect(m.frets.find((f) => f.ids.includes("c"))?.text).not.toContain("<");
   });
 });

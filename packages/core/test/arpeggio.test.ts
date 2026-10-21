@@ -576,3 +576,58 @@ describe("되풀이: 화음에서 뺀 트랙도 악보 트랙 한도를 차지�
     expect(s.tracks.length + r.newTracks.length).toBeLessThanOrEqual(4);
   });
 });
+
+describe("여러 트랙에서 고른 음 (타브: 줄마다 다른 트랙)", () => {
+  // t1 c, t2 e, t3 g (0에서 함께 시작), t2에 뒤 음 하나
+  const tabSong = () => songOf({ t1: [n("c", 0, 2, 60)], t2: [n("e", 0, 2, 64), n("late", 2, 2, 65)], t3: [n("g", 0, 2, 67)] });
+  const picks = (s: Song, ...ids: string[]) => s.tracks.flatMap((t) => t.notes).filter((x) => ids.includes(x.id));
+
+  it("고른 음만: 다른 트랙에서 고른 음도 칸에 넣고, 고르지 않은 음은 보지 않는다", () => {
+    const s = tabSong();
+    const { cells } = arpCells(s, "t1", picks(s, "c", "g"), { ...base, source: "selected" });
+    expect(cells).toHaveLength(1);
+    expect(cells[0]!.pitches).toEqual([60, 67]);
+    expect(cells[0]!.picked).toEqual(["c"]);
+    expect(cells[0]!.taken).toEqual([{ trackId: "t3", noteId: "g" }]);
+  });
+
+  it("고른 음만 + 펼치기: 고른 트랙에 펼치고, 화음 트랙 음 지우기를 켜면 다른 트랙에서 고른 음만 지운다", () => {
+    const s = tabSong();
+    const r = planArpeggio(s, "t1", picks(s, "c", "g"), { ...base, source: "selected", step: rat(1, 8) }, newId);
+    expect(r.notes).toBe(2);
+    const t3 = r.changes.find((c) => c.trackId === "t3");
+    expect(t3?.notes).toEqual([]);
+    expect(r.changes.find((c) => c.trackId === "t2")).toBeUndefined();
+  });
+
+  it("코드 이름: 자리마다 가장 낮은 고른 음을 근음으로 칸 하나", () => {
+    const s = tabSong();
+    const { cells } = arpCells(s, "t1", picks(s, "c", "e", "g", "late"), { source: "chord", chord: "minor" });
+    expect(cells.map((c) => c.pitches)).toEqual([
+      [60, 63, 67],
+      [65, 68, 72],
+    ]);
+    expect(cells[0]!.taken.map((x) => x.noteId)).toEqual(["e", "g"]);
+  });
+
+  it("굴려 치기 + 고른 음만: 고른 음만 늦추고 같은 자리 다른 음은 그대로 둔다", () => {
+    const s = tabSong();
+    const r = planArpeggio(s, "t1", picks(s, "c", "g"), { ...base, source: "selected", style: "roll", step: rat(1, 16) }, newId);
+    expect(r.notes).toBe(1);
+    expect(r.changes.map((c) => c.trackId)).toEqual(["t3"]);
+    expect(r.changes[0]!.notes[0]!.start).toEqual(rat(1, 16));
+  });
+
+  it("굴려 치기 + 같은 시간 음: 음 하나만 골라도 그 자리 화음 전체를 굴린다", () => {
+    const s = tabSong();
+    const r = planArpeggio(s, "t1", picks(s, "c"), { ...base, style: "roll", step: rat(1, 16) }, newId);
+    expect(r.notes).toBe(2);
+  });
+
+  it("굴려 치기 + 코드 이름: 새 음을 만들지 않고 같은 시간 음으로 굴린다", () => {
+    const s = tabSong();
+    const r = planArpeggio(s, "t1", picks(s, "c"), { ...base, source: "chord", style: "roll", step: rat(1, 16) }, newId);
+    expect(r.notes).toBe(2);
+    expect(r.newTracks).toEqual([]);
+  });
+});

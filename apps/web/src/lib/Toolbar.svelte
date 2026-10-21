@@ -28,6 +28,7 @@
   import { t } from "./i18n.svelte";
   import { mediaAccept } from "./fileAccept";
   import Icon from "./Icon.svelte";
+  import { labs } from "./labs.svelte";
   import Menu, { type MenuItem } from "./Menu.svelte";
   import VolumeBox from "./VolumeBox.svelte";
   import { lengthNumber, tupletName, TUPLET_PICK } from "./tuplet";
@@ -92,6 +93,8 @@
     onlayer: (layer: RollLayer) => void;
     ontuning: (name: TuningName) => void;
     oncapo: (capo: number) => void;
+    /** 타브 그대로 튜닝 바꾸기 창 열기. 없으면 단추를 숨긴다 (고른 트랙이 없을 때) */
+    onretune?: (() => void) | undefined;
     ontoggleevents: () => void;
     ontoggleorientation: () => void;
     /** 트랙 패널 자리: 옆(가로) / 아래(세로). 세로 화면에서는 늘 아래라 단추를 숨긴다 */
@@ -144,6 +147,7 @@
     onlayer,
     ontuning,
     oncapo,
+    onretune,
     ontoggleevents,
     ontoggleorientation,
     dock,
@@ -259,6 +263,11 @@
     <button class="icon" class:on={tool === "split"} title={t("ui.toolSplitHelp")} aria-label={t("ui.toolSplit")} aria-pressed={tool === "split"} onclick={() => ontool("split")}>
       <Icon name="scissors" />
     </button>
+    {#if labs.on}
+      <button class="icon" class:on={tool === "reverb"} title={t("ui.toolReverbHelp")} aria-label={t("ui.toolReverb")} aria-pressed={tool === "reverb"} onclick={() => ontool("reverb")}>
+        <Icon name="reverb" />
+      </button>
+    {/if}
     <span class="sep"></span>
     {@render meterField()}
     <label class="field">
@@ -329,6 +338,9 @@
         {#each CAPOS as c (c)}<option value={c}>{c}</option>{/each}
       </select>
     </label>
+    {#if onretune}
+      <button title={t("ui.retuneHelp")} onclick={onretune}>{t("ui.retune")}…</button>
+    {/if}
     {@render meterField()}
     <label class="field">
       <span class="muted">{t("ui.grid")}</span>

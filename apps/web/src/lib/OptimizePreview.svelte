@@ -3,8 +3,8 @@
   import type { PreviewRow } from "./output";
 
   /**
-   * 화음 분산·글자 수 줄이기를 하기 전에 결과를 보여 준다: 트랙별 글자 수 전후, 옮기는 음 수,
-   * 그래도 한도를 넘는 트랙. 두 명령 모두 소리는 바꾸지 않으므로 미리 듣기는 두지 않는다
+   * 글자 수 줄이기를 하기 전에 결과를 보여 준다: 트랙별 글자 수 전후, 그래도 한도를 넘는 트랙.
+   * 소리는 바꾸지 않으므로 미리 듣기는 두지 않는다 (화음 분산·병합은 SpreadDialog·MergeDialog)
    */
   interface Props {
     title: string;
@@ -16,18 +16,11 @@
     blocked: boolean;
     /** 트랙 이름 앞에 붙일 악보 이름 */
     where: (trackId: string) => string;
-    /** 바꾼 뒤에도 한도를 넘는 트랙 수. 주지 않으면 표에서 센다 (표가 비어도 알리려고 화음 분산이 준다) */
-    stillOver?: number | undefined;
-    /**
-     * 화음 분산 뒤에도 넘칠 때 트랙을 더해 다시 분산하는 권유. added = 이미 더해 본 트랙 수,
-     * newScores = 트랙을 더하면 악보가 하나 더 생기는(같이 칠 사람이 느는) 연주자 수
-     */
-    addTrack?: { added: number; newScores: number; onadd: () => void; onsplit: () => void } | undefined;
     onapply: () => void;
     onclose: () => void;
   }
 
-  let { title, summary, rows, limit, blocked, where, stillOver: given, addTrack, onapply, onclose }: Props = $props();
+  let { title, summary, rows, limit, blocked, where, onapply, onclose }: Props = $props();
 
   let dialog: HTMLDialogElement;
   $effect(() => {
@@ -35,7 +28,7 @@
   });
 
   const total = $derived(rows.reduce((sum, r) => ({ before: sum.before + r.before, after: sum.after + r.after }), { before: 0, after: 0 }));
-  const stillOver = $derived(given ?? rows.filter((r) => r.after > limit).length);
+  const stillOver = $derived(rows.filter((r) => r.after > limit).length);
 
   function apply() {
     if (blocked) return;
@@ -69,16 +62,6 @@
     </table>
   {/if}
   {#if stillOver > 0}<p class="warn">{t("ui.previewStillOver", { count: stillOver, limit })}</p>{/if}
-  {#if addTrack}
-    <div class="suggest">
-      {#if addTrack.added > 0}<p class="muted">{t("ui.previewAddedTracks", { count: addTrack.added })}</p>{/if}
-      <p>{t(addTrack.newScores > 0 ? "ui.previewAddTrackNewScore" : "ui.previewAddTrackHelp")}</p>
-      <div class="row">
-        <button onclick={addTrack.onadd}>{t("ui.previewAddTrack")}</button>
-        <button onclick={addTrack.onsplit}>{t("ui.split")}…</button>
-      </div>
-    </div>
-  {/if}
   <div class="actions">
     <button onclick={() => dialog.close()}>{t("ui.cancel")}</button>
     <button class="primary" disabled={blocked} onclick={apply}>{t("ui.apply")}</button>
@@ -126,20 +109,6 @@
   .full,
   .warn {
     color: var(--danger);
-  }
-  .suggest {
-    margin-top: 8px;
-    padding: 8px 10px;
-    border: 1px solid var(--line);
-    border-radius: 6px;
-  }
-  .suggest p {
-    margin: 0 0 6px;
-  }
-  .suggest .row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
   }
   .actions {
     display: flex;

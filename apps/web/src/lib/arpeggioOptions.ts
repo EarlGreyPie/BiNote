@@ -53,9 +53,10 @@ export function parseArpChoice(raw: unknown): ArpChoice {
 }
 
 /**
- * 타브 보기에서 아르페지오에 넘길 화음. 타브에서 고른 음이 있으면 첫 고른 음의 트랙에서 고른 음을 쓴다.
- * 없으면 타브 커서 자리(at)에서 시작하는 같은 악보(소리 끄지 않은 트랙, 타브에 보이는 트랙)의 음:
- * 고른 트랙에 있으면 그 음, 없으면 위쪽 트랙의 그 자리 음. 하나도 없으면 undefined
+ * 타브 보기에서 아르페지오에 넘길 화음. 타브는 화음 음이 줄마다 다른 트랙에 있어서 같은 악보의 여러 트랙 음을 함께 넘긴다.
+ * 고른 음이 있으면 첫 고른 음의 트랙을 고른 트랙으로, 그 악보에서 고른 음 전부.
+ * 없으면 타브 커서 자리(at)에서 시작하는 같은 악보(소리 끄지 않은 트랙, 타브에 보이는 트랙)의 음 전부:
+ * 고른 트랙에 그 자리 음이 있으면 고른 트랙, 없으면 그 자리 음이 있는 위쪽 트랙이 고른 트랙. 하나도 없으면 undefined
  */
 export function tabArpPick(
   song: Pick<Song, "tracks">,
@@ -66,14 +67,16 @@ export function tabArpPick(
   if (selected.length > 0) {
     const ids = new Set(selected.map((n) => n.id));
     const track = song.tracks.find((t) => t.notes.some((n) => n.id === selected[0]!.id));
-    if (track) return { trackId: track.id, picked: track.notes.filter((n) => ids.has(n.id)) };
+    if (track) {
+      const score = song.tracks.filter((t) => t.playerId === track.playerId);
+      return { trackId: track.id, picked: score.flatMap((t) => t.notes.filter((n) => ids.has(n.id))) };
+    }
   }
   const active = song.tracks.find((t) => t.id === activeTrackId);
   if (!active || !at) return undefined;
   const same = song.tracks.filter((t) => t.playerId === active.playerId && !t.mute);
-  for (const t of [active, ...same.filter((x) => x.id !== active.id)]) {
-    const hit = t.notes.find((n) => cmp(n.start, at) === 0);
-    if (hit) return { trackId: t.id, picked: [hit] };
-  }
-  return undefined;
+  const order = [active, ...same.filter((x) => x.id !== active.id)];
+  const hits = order.map((t) => ({ t, notes: t.notes.filter((n) => cmp(n.start, at) === 0) })).filter((x) => x.notes.length > 0);
+  if (hits.length === 0) return undefined;
+  return { trackId: hits[0]!.t.id, picked: hits.flatMap((x) => x.notes) };
 }

@@ -1,4 +1,4 @@
-import { add, chainSampleEnd, cmp, eq, foldPitch, isSoloInstrument, positionToSeconds, soundingRangeOf, TIE_BEND_LIMIT, trackInstrument, type GameProfile, type Note, type Rat, type Song, type Track } from "@mmlce/core";
+import { add, chainSampleEnd, cmp, crossesTimbre, eq, foldPitch, isSoloInstrument, positionToSeconds, soundingRangeOf, TIE_BEND_LIMIT, trackInstrument, type GameProfile, type Note, type Rat, type Song, type Track } from "@mmlce/core";
 import { type Diagnostic, type ParseResult } from "./parser.js";
 import { tempoMismatch } from "./tempo-text.js";
 
@@ -157,16 +157,13 @@ export function validateSong(song: Song, profile: GameProfile, options: Validate
     }
 
     for (const track of tracks) {
-      const boundaries = profile.sampleBoundaries[instrumentOf(track)] ?? [];
+      const instrument = instrumentOf(track);
       const notes = [...track.notes].sort((a, b) => cmp(a.start, b.start));
       for (let i = 0; i + 1 < notes.length; i++) {
         const a = notes[i]!;
         const b = notes[i + 1]!;
         if (a.tie !== "next" || a.pitch === b.pitch || cmp(end(a), b.start) !== 0) continue;
-        const lo = Math.min(a.pitch, b.pitch);
-        const hi = Math.max(a.pitch, b.pitch);
-        const crossed = boundaries.find((x) => lo < x && x <= hi);
-        if (crossed !== undefined) {
+        if (crossesTimbre(profile, instrument, a.pitch, b.pitch)) {
           out.push({
             level: "warning",
             code: "tie-across-boundary",

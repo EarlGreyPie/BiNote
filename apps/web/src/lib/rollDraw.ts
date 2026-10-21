@@ -56,7 +56,8 @@ export interface RollDrawOptions {
   readonly ruler: number;
   readonly showEvents: boolean;
   /** 파형 띠에서 끄는 마디선: 원래 자리와 놓을 자리(온음표 단위) */
-  readonly barDrag?: { readonly bar: number; readonly to: number } | undefined;
+  /** 끄는 마디선: 원래 자리, 놓을 자리, 옆에 보여 줄 글 (바뀔 템포) */
+  readonly barDrag?: { readonly bar: number; readonly to: number; readonly text?: string | undefined } | undefined;
   /** 끌어서 옮기는 중인 이벤트 라벨과 갈 자리(온음표 단위) */
   readonly eventDrag?: { readonly label: EventLabel; readonly to: number } | undefined;
   /** 고른 이벤트 라벨 (휠로 템포 바꾸기·Del로 지우기) */
@@ -72,6 +73,8 @@ export interface RollDrawOptions {
   readonly lane?: LaneDraw | undefined;
   /** 재생 중 지금 울리는 음의 건반에 트랙 색 불 켜기 */
   readonly lightKeys?: boolean;
+  /** 누르거나 고른 음의 건반 (높이 → 색, selectKeys.ts). 재생 중 울리는 건반이 위에 덮는다 */
+  readonly heldKeys?: ReadonlyMap<number, string> | undefined;
   /** 번호로만 아는 악기의 실제 악기 (접힘 표식을 재생과 같은 음역으로) */
   readonly canonicalOf?: CanonicalOf | undefined;
   /** 음표 볼륨 숫자 (설정 → 화면). 고르는 트랙 음 옆에 v12처럼 쓴다. 없으면 끔 */
@@ -388,6 +391,19 @@ export function drawRoll(canvas: HTMLCanvasElement, o: RollDrawOptions): void {
     g.globalAlpha = 1;
     if (horizontal) g.fillRect(b - 1, 0, 2, v.height);
     else g.fillRect(0, b - 1, v.width, 2);
+    // 끄는 동안 바뀔 템포 (파형 띠 위에)
+    if (o.barDrag.text && o.wave) {
+      g.save();
+      g.font = 'bold 11px "D2Coding", ui-monospace, monospace';
+      const w = g.measureText(o.barDrag.text).width;
+      const x = horizontal ? b + 4 : o.wave.at + 2;
+      const y = horizontal ? o.wave.at + 12 : b - 4;
+      g.fillStyle = o.css("--bg");
+      g.fillRect(x - 2, y - 11, w + 4, 14);
+      g.fillStyle = o.css("--accent");
+      g.fillText(o.barDrag.text, x, y);
+      g.restore();
+    }
   }
   if (o.showEvents) {
     const colorOf = { tempo: o.css("--ev-tempo"), meter: o.css("--ev-meter"), marker: o.css("--ev-marker") };
@@ -461,7 +477,7 @@ export function drawRoll(canvas: HTMLCanvasElement, o: RollDrawOptions): void {
   g.fillStyle = "#f4f5f7";
   g.fillRect(strip.x, strip.y, strip.w, strip.h);
   // 재생 중 울리는 건반: 높이 → 트랙 색 (음소거 트랙 제외)
-  const lit = new Map<number, string>();
+  const lit = new Map<number, string>(o.heldKeys);
   if (o.lightKeys && head !== undefined) {
     // 솔로가 있으면 솔로 트랙만, 끄기 트랙과 v0 음은 빼고 (실제로 들리는 음만)
     const solo = s.tracks.some((tr) => tr.solo);

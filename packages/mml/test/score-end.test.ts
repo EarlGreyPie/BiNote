@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { emptySong, History, MOBILE_PROFILE, normalizeTempo, rat, type Player, type Rat, type Song, type Track } from "@mmlce/core";
-import { changeTempos, compactSong, distributeSong, fewerBooks, gameScores, padScore, parseMml, parseTrackText, planBooks, splitSong, trackSource } from "../src/index.js";
+import { changeTempos, compactSong, distributeSong, fewerBooks, gameScores, padScore, parseMml, parseTrackText, planBooks, setTrackNotes, setTracksNotes, splitSong, trackSource } from "../src/index.js";
 
 /** 악보 길이 지키기: 다시 쓰는 출력도 원문의 게임 길이(끝 쉼표 포함)를 지킨다 */
 
@@ -179,5 +179,58 @@ describe("PR #122 점검", { timeout: 60_000 }, () => {
     const r = splitSong(s, { ...MOBILE_PROFILE, charLimitPerScore: 24 }, { gapMs: null });
     expect(r.parts.length).toBeGreaterThan(1);
     for (const part of r.parts) expect(part.lossy).toEqual([]);
+  });
+});
+
+describe("음을 직접 고쳐 원문을 지워도 원문 끝 쉼표 길이를 지킨다", () => {
+  it("볼륨만 바꾸면(음 끝 그대로) 원문 끝 쉼표까지의 악보 길이가 남는다", () => {
+    const s = song([track("a", "p1", "v8c4r4r4")]);
+    expect(pasteEnd(s)).toEqual(rat(1, 2));
+    const louder = s.tracks[0]!.notes.map((n) => ({ ...n, vol: 9 }));
+    const next = setTracksNotes([{ trackId: "a", notes: louder }]).apply(s);
+    expect(pasteEnd(next)).toEqual(rat(1, 2));
+    expect(next.tracks[0]!.notes).toEqual(louder);
+    expect(parseTrackText("a", next.tracks[0]!.mml!).notes.map((n) => n.vol)).toEqual([9]);
+    // 한 트랙 명령도 같다
+    expect(pasteEnd(setTrackNotes("a", louder).apply(s))).toEqual(rat(1, 2));
+  });
+
+  it("끝 음을 지우거나 늘리면(음 끝이 바뀜) 전처럼 음 끝이 길이다", () => {
+    const s = song([track("a", "p1", "c4d4r4r4")]);
+    const cut = setTrackNotes("a", s.tracks[0]!.notes.slice(0, 1)).apply(s);
+    expect(cut.tracks[0]!.mml).toBeUndefined();
+    expect(pasteEnd(cut)).toEqual(rat(1, 4));
+  });
+
+  it("템포가 있는 원문도 다시 쓴 글에 템포를 지키고 소리는 그대로다", () => {
+    const s = song([track("a", "p1", "t90v8c4t100d4r2r4")]);
+    const louder = s.tracks[0]!.notes.map((n) => ({ ...n, vol: 10 }));
+    const next = setTracksNotes([{ trackId: "a", notes: louder }]).apply(s);
+    expect(pasteEnd(next)).toEqual(rat(1));
+    const back = parseTrackText("a", next.tracks[0]!.mml!);
+    expect(normalizeTempo(back.tempo).map((e) => e.bpm).slice(0, 2)).toEqual([90, 100]);
+  });
+
+  it("끝에 붙이는 템포는 같은 악보 다른 트랙이 그 자리에 적은 템포를 따른다 (덮어쓰지 않는다)", () => {
+    const s = song([track("a", "p1", "t60a1"), track("b", "p2", "t120e2t90g2"), track("c", "p2", "v8c4r4r4")]);
+    const c = s.tracks.find((t) => t.id === "c")!;
+    const next = setTracksNotes([{ trackId: "c", notes: c.notes.map((n) => ({ ...n, vol: 9 })) }]).apply(s);
+    const text = next.tracks.find((t) => t.id === "c")!.mml!;
+    expect(parseMml(text.text).gameEnd).toEqual(rat(1, 2));
+    // 이 글이 1/2 자리에 적는 템포는 다른 트랙의 t90과 같아야 한다
+    const atEnd = parseTrackText("c", text).tempo.filter((e) => e.at.n * 2 === e.at.d);
+    expect(atEnd.map((e) => e.bpm)).toEqual([90]);
+  });
+
+  it("같은 자리에 두 트랙이 다른 템포를 적은 악보에서도 끝에 붙이는 템포는 곡 템포 지도가 쓰는 템포를 따른다", () => {
+    const s = song([track("a", "p1", "t120e4t80f2g4"), track("b", "p1", "v8c4t90r4r4")]);
+    const b = s.tracks.find((t) => t.id === "b")!;
+    const next = setTracksNotes([{ trackId: "b", notes: b.notes.map((n) => ({ ...n, vol: 9 })) }]).apply(s);
+    const text = next.tracks.find((t) => t.id === "b")!.mml!;
+    expect(parseMml(text.text).gameEnd).toEqual(rat(1, 2));
+    const playing = normalizeTempo(next.tempo).filter((e) => e.at.n * 4 <= e.at.d).at(-1)!.bpm;
+    const atEnd = parseTrackText("b", text).tempo.filter((e) => e.at.n * 2 === e.at.d);
+    expect(atEnd.map((e) => e.bpm)).toEqual([playing]);
+    expect(playing).toBe(90);
   });
 });

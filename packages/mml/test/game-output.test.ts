@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { emptySong, eq, MOBILE_PROFILE, rat, type Player, type Song, type Track } from "@mmlce/core";
-import { gameScores, parseMml, parseTrackText, splitSong } from "../src/index.js";
+import { gamePaste, gameScores, parseMml, parseTrackText, pasteTempoChoices, splitSong } from "../src/index.js";
 
 const piano: Player = { id: "p1", name: "피아노", instrument: { canonical: "piano" } };
 const flute: Player = { id: "p2", name: "플루트", instrument: { canonical: "flute" } };
@@ -116,3 +116,81 @@ describe("gameScores 오르골·축음기 붙여넣기", () => {
   });
 });
 
+
+describe("gamePaste 여러 악보에서 고른 트랙", () => {
+  const box: Player = { id: "pb", name: "오르골", instrument: { canonical: "music-box" } };
+  const many = () => ({
+    ...emptySong({ title: "", author: "", profileId: "mobile" }),
+    players: [piano, flute],
+    tracks: [
+      ...["a", "b", "c", "d", "e", "f"].map((id, k) => track(id, "p1", `c${k + 1}`)),
+      ...["u", "v", "w", "x", "y", "z"].map((id, k) => track(id, "p2", `g${k + 1}`)),
+    ],
+    tempo: [{ at: rat(0), bpm: 150 }, { at: rat(2), bpm: 90 }],
+  });
+  const channels = (text: string) => text.slice(4, -1).split(",");
+
+  it("두 악보에서 고른 6트랙을 곡 트랙 순서대로 한 글에 쓰고 템포를 넣는다", () => {
+    const p = gamePaste(many(), ["w", "a", "u", "b", "c", "z"], 6, 6, { tempo: true });
+    expect(p.trackIds).toEqual(["a", "b", "c", "u", "w", "z"]);
+    expect(p.pasted).toEqual(p.trackIds);
+    expect(channels(p.text)).toHaveLength(6);
+    expect(tempoOf(p.texts.map((x) => x.text))).toEqual(["0/1:150"]);
+    // 음은 그대로
+    for (const { trackId, text } of p.texts) {
+      const orig = many().tracks.find((t) => t.id === trackId)!.notes;
+      expect(parseTrackText(trackId, { text }).notes.map((n) => [n.start, n.dur, n.pitch])).toEqual(orig.map((n) => [n.start, n.dur, n.pitch]));
+    }
+  });
+
+  it("템포를 끄면 t를 하나도 쓰지 않는다", () => {
+    const p = gamePaste(many(), ["a", "u"], 6, 6, { tempo: false });
+    expect(tempoOf(p.texts.map((x) => x.text))).toEqual([]);
+  });
+
+  it("곡에 템포가 없어도 템포를 넣으면 t120부터 쓴다 (붙여넣기마다 템포로 시작)", () => {
+    const p = gamePaste({ ...many(), tempo: [] }, ["a"], 6, 6, { tempo: true });
+    expect(tempoOf(p.texts.map((x) => x.text))).toEqual(["0/1:120"]);
+  });
+
+  it("고른 트랙 길이까지의 템포만, 고른 템포 지도를 주면 그것을 쓴다", () => {
+    const s = many();
+    const longSong = { ...s, tracks: s.tracks.map((t) => (t.id === "z" ? track("z", "p2", "g1g1g1") : t)) };
+    expect(tempoOf(gamePaste(longSong, ["a", "b"], 6, 6, { tempo: true }).texts.map((x) => x.text))).toEqual(["0/1:150"]);
+    const long = gamePaste(longSong, ["a", "z"], 6, 6, { tempo: true });
+    expect(tempoOf(long.texts.map((x) => x.text))).toEqual(["0/1:150", "2/1:90"]);
+    const picked = gamePaste(many(), ["f"], 6, 6, { tempo: true, tempoMap: [{ at: rat(0), bpm: 100 }] });
+    expect(tempoOf(picked.texts.map((x) => x.text))).toEqual(["0/1:100"]);
+  });
+
+  it("원문 끝 쉼표로 늘인 길이를 지킨다 (템포를 꺼도 끝 쉼표 뒤 t는 게임 기본 t120)", () => {
+    const s = many();
+    const a: Track = { ...s.tracks[0]!, mml: { text: "c1r1t120" } };
+    const p = gamePaste({ ...s, tracks: [a, ...s.tracks.slice(1)] }, ["a", "b"], 6, 6, { tempo: false });
+    expect(p.texts.some((x) => x.text.endsWith("t120"))).toBe(true);
+    const ends = p.texts.map((x) => parseMml(x.text).gameEnd);
+    expect(ends.some((e) => eq(e, rat(2)))).toBe(true);
+  });
+
+  it("오르골 악보 하나를 통째로 고르면 소리 없는 나머지 트랙을 전처럼 붙인다", () => {
+    const s = { ...many(), players: [box, flute], tracks: many().tracks.map((t) => (t.playerId === "p1" ? { ...t, playerId: "pb" } : t)) };
+    const chords = (id: string) => (id === "pb" ? 3 : 6);
+    const whole = gamePaste(s, ["d", "e", "f"], chords, 6, { tempo: true });
+    expect(whole.pasted).toEqual(["d", "e", "f", "a", "b", "c"]);
+    expect(whole.texts.map((x) => x.trackId)).toEqual(["d", "e", "f"]);
+    const mixed = gamePaste(s, ["d", "u"], chords, 6, { tempo: true });
+    expect(mixed.pasted).toEqual(["d", "u"]);
+  });
+
+  it("원문 템포가 다른 악보를 섞어 고르면 고를 템포를 돌려주고, 같으면 빈 목록", () => {
+    const s = many();
+    expect(pasteTempoChoices(s, ["a", "u"], 6)).toEqual([]);
+    const own: Track = { ...s.tracks[6]!, mml: { text: "t100g1" } };
+    const mixed = { ...s, tracks: s.tracks.map((t) => (t.id === "u" ? own : t)) };
+    const choices = pasteTempoChoices(mixed, ["a", "u"], 6);
+    expect(choices.map((c) => [c.key, c.scores, c.tempo.map((e) => e.bpm)])).toEqual([
+      ["song", [0], [150]],
+      ["u", [1], [100]],
+    ]);
+  });
+});

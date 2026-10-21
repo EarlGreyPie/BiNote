@@ -1,10 +1,11 @@
-import { cmp, getProfile, type Song } from "@mmlce/core";
+import { cmp, DEFAULT_BPM, getProfile, ZERO, type Song, type TempoEvent, type TrackText } from "@mmlce/core";
 import { mmlAt, pasteTrackIds, scoreChunks, type ScoreChunk } from "./clipboard.js";
 import { sameSound } from "./compare.js";
 import { parseTrackText, trackSource } from "./edit.js";
 import { optimizeMml } from "./optimizer.js";
-import { placeTempoByScore, type TempoMove } from "./tempo-placement.js";
-import { bpmBefore, padScore, scoreEnd } from "./score-end.js";
+import { placeTempo, placeTempoByScore, type TempoMove } from "./tempo-placement.js";
+import { bpmBefore, padScore, scoreEnd, tempoBefore } from "./score-end.js";
+import { audibleTempo, sameTempo, spliceText, surgicalSource, tempoTokens } from "./tempo-text.js";
 
 /** 게임에 붙여넣을 악보 하나 */
 export interface GameScore extends ScoreChunk {
@@ -60,4 +61,119 @@ export function gameScores(
     const pasted = pasteTrackIds(song, chunk, maxChords, pasteLimit);
     return { ...chunk, texts, text: mmlAt(pasted.map((id) => (id === null ? "" : written.get(id)!.text))), pasted, asIs, moved: moved.get(chunk.trackIds[0]!) ?? [] };
   });
+}
+
+/** 고른 트랙을 한 번에 붙여넣는 글 (MML로 내보내기 창) */
+export interface GamePaste {
+  /** 고른 트랙 (곡 트랙 순서) */
+  readonly trackIds: readonly string[];
+  /** 고른 트랙마다 넣을 글 */
+  readonly texts: readonly { readonly trackId: string; readonly text: string }[];
+  /** 붙여넣을 글 전체 (MML@...;) */
+  readonly text: string;
+  /** 붙여넣는 글의 채널 (null은 빈 채널). 오르골·축음기 악보 하나를 통째로 고르면 소리 없는 나머지 트랙도 붙는다 */
+  readonly pasted: readonly (string | null)[];
+  /** 붙여넣는 모든 채널의 글 (소리 없는 트랙 포함) */
+  readonly written: ReadonlyMap<string, string>;
+  readonly asIs: readonly string[];
+  readonly moved: readonly TempoMove[];
+}
+
+export interface GamePasteOptions {
+  /** 템포를 넣는다. 끄면 t를 하나도 쓰지 않는다 (게임은 t120으로 친다). 끝 쉼표를 길이에 넣는 t도 t120으로 쓴다 */
+  readonly tempo: boolean;
+  /** 넣을 템포 지도 (생략하면 곡 템포). 고른 악보끼리 원문 템포가 다를 때 사용자가 고른 것 */
+  readonly tempoMap?: readonly TempoEvent[] | undefined;
+  /** 트랙당 글자 한도 (끝 채움을 한도 안 글에 먼저 붙인다) */
+  readonly charLimit?: number;
+}
+
+/** 원문에서 t를 모두 지운다 (문법 오류가 있어 손댈 수 없으면 그대로) */
+function withoutTempo(source: TrackText): string {
+  const s = surgicalSource(source);
+  return s ? spliceText(source.text, s.tokens.map((t) => ({ span: t.span, text: "" }))) : source.text;
+}
+
+/**
+ * 여러 악보에서 고른 트랙(최대 pasteLimit개)을 붙여넣는 글 하나로 쓴다. 게임은 붙여넣은 글 하나를 악보 하나로 친다:
+ * 템포는 이 글 안에서만 읽고(없으면 t120, 다른 붙여넣기에서 이어받지 않는다), 길이는 가장 긴 채널로 정한다.
+ * 그래서 템포를 넣으면 곡 처음 템포(없으면 t120)부터 고른 트랙에 모두 넣고, 길이는 고른 트랙 중 가장 긴 트랙에 맞춘다(padScore).
+ * 고른 트랙이 오르골·축음기 악보 하나와 똑같으면 지금까지처럼 나머지 트랙을 소리 없는 채널로 붙인다 (pasteTrackIds)
+ */
+export function gamePaste(
+  song: Song,
+  selected: readonly string[],
+  maxChords: number | ((playerId: string) => number),
+  pasteLimit: number,
+  options: GamePasteOptions,
+): GamePaste {
+  const lengths = getProfile(song.meta.profileId).length;
+  const order = song.tracks.map((t) => t.id);
+  const trackIds = order.filter((id) => selected.includes(id));
+  const chunk = scoreChunks(song, maxChords).find((c) => c.trackIds.length === trackIds.length && c.trackIds.every((id, k) => id === trackIds[k]));
+  const pasted = chunk ? pasteTrackIds(song, chunk, maxChords, pasteLimit) : trackIds;
+  const ids = pasted.filter((id): id is string => id !== null);
+  const tracks = ids.map((id) => song.tracks.find((t) => t.id === id)!);
+  const end = scoreEnd(tracks);
+  const map = audibleTempo(options.tempoMap ?? song.tempo);
+  const startsAtZero = map.length > 0 && cmp(map[0]!.at, ZERO) === 0;
+  const tempo = options.tempo ? tempoBefore(startsAtZero ? map : [{ at: ZERO, bpm: DEFAULT_BPM }, ...map], cmp(end, ZERO) > 0 ? end : { n: 1, d: 1 }) : [];
+  const moved: TempoMove[] = [];
+  const placed = placeTempo(tracks.map((t) => t.notes), tempo, moved);
+  const written = new Map<string, string>();
+  const asIs: string[] = [];
+  tracks.forEach((t, k) => {
+    const notes = [...t.notes].sort((a, b) => cmp(a.start, b.start));
+    const text = optimizeMml(notes, { tempo: placed[k] ?? [], lengths }).text;
+    if (sameSound(parseTrackText(t.id, { text }).notes, notes)) written.set(t.id, text);
+    else {
+      const source = trackSource(song, t);
+      written.set(t.id, options.tempo ? source.text : withoutTempo(source));
+      asIs.push(t.id);
+    }
+  });
+  const padded = padScore(ids.map((id) => written.get(id)!), end, options.tempo ? bpmBefore(tempo, end) : DEFAULT_BPM, lengths, undefined, options.charLimit);
+  ids.forEach((id, k) => written.set(id, padded[k]!));
+  return {
+    trackIds,
+    texts: trackIds.map((trackId) => ({ trackId, text: written.get(trackId)! })),
+    text: mmlAt(pasted.map((id) => (id === null ? "" : written.get(id)!))),
+    pasted,
+    written,
+    asIs: trackIds.filter((id) => asIs.includes(id)),
+    moved,
+  };
+}
+
+/** 고른 트랙에 넣을 수 있는 템포 하나 (어느 악보의 원문 템포인지) */
+export interface PasteTempoChoice {
+  /** "song"은 곡 템포, 그 밖은 악보 첫 트랙 id */
+  readonly key: string;
+  /** 이 템포를 쓰는 악보 (scoreChunks 순서, 0부터) */
+  readonly scores: readonly number[];
+  readonly tempo: readonly TempoEvent[];
+}
+
+/**
+ * 고른 트랙이 든 악보들의 템포가 서로 다른지. 곡 템포 지도는 곡에 하나지만, 원문에 t가 적힌 악보는
+ * 그 원문 템포가 곡 템포와 다를 수 있다 (다른 템포로 쓴 MML을 모은 곡 등. 곡 검사 tempo-mismatch).
+ * 악보마다 원문 t가 있으면 그 템포, 없으면 곡 템포를 고른 트랙의 길이까지 견주어, 둘 이상이면 고를 거리를 돌려준다.
+ * 하나뿐이면 빈 목록
+ */
+export function pasteTempoChoices(song: Song, selected: readonly string[], maxChords: number | ((playerId: string) => number)): PasteTempoChoice[] {
+  const chunks = scoreChunks(song, maxChords);
+  const picked = song.tracks.filter((t) => selected.includes(t.id));
+  const end = scoreEnd(picked);
+  const songTempo = audibleTempo(tempoBefore(song.tempo, end));
+  const out: { key: string; scores: number[]; tempo: TempoEvent[] }[] = [];
+  chunks.forEach((chunk, k) => {
+    if (!chunk.trackIds.some((id) => selected.includes(id))) return;
+    const tracks = chunk.trackIds.map((id) => song.tracks.find((t) => t.id === id)!);
+    const own = audibleTempo(tempoBefore(tracks.flatMap((t) => (t.mml ? tempoTokens(t.mml).map(({ at, bpm }) => ({ at, bpm })) : [])), scoreEnd(tracks)));
+    const tempo = own.length > 0 ? tempoBefore(own, end) : songTempo;
+    const same = out.find((c) => sameTempo(c.tempo, tempo));
+    if (same) same.scores.push(k);
+    else out.push({ key: own.length > 0 && !sameTempo(own, songTempo) ? chunk.trackIds[0]! : "song", scores: [k], tempo });
+  });
+  return out.length > 1 ? out : [];
 }

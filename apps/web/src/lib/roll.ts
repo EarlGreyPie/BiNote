@@ -309,7 +309,7 @@ export function keyAt(v: RollView, x: number, y: number): number {
 }
 
 /** 피아노롤 도구: 넣기(펜) · 고르기(상자) · 지우개 · 가위(음 자르기) */
-export type RollTool = "pen" | "select" | "eraser" | "split";
+export type RollTool = "pen" | "select" | "eraser" | "split" | "reverb";
 
 /** 음 끝에서 이만큼 안쪽을 잡으면 길이 바꾸기 (손가락·펜은 넓게). 음 폭의 1/3을 넘지 않는다 */
 const EDGE_PX = 6;

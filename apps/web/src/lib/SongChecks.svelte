@@ -12,9 +12,12 @@
     diagnostics: readonly SongDiagnostic[];
     /** 경고 위치로 가기 */
     ongo: (track: Track, note: Note) => void;
+    /** 음색 경계를 넘는 &를 모두 끊기 (실행 취소 한 칸) */
+    onbreaktimbre?: () => void;
   }
 
-  let { song, diagnostics, ongo }: Props = $props();
+  let { song, diagnostics, ongo, onbreaktimbre }: Props = $props();
+  const timbreCount = $derived(diagnostics.filter((d) => d.code === "tie-across-boundary").length);
 
   function noteOf(d: SongDiagnostic): { track: Track; note: Note } | undefined {
     const track = song.tracks.find((tr) => tr.id === d.trackId);
@@ -29,12 +32,12 @@
   }
 
   const groups = $derived.by(() => {
-    const out = new Map<string, { key: string; level: string; where: string; text: string; items: { d: SongDiagnostic; label: string }[] }>();
+    const out = new Map<string, { key: string; level: string; code: string; where: string; text: string; items: { d: SongDiagnostic; label: string }[] }>();
     for (const d of diagnostics) {
       const text = diag(d);
       const key = `${d.level}|${d.trackId ?? d.playerId ?? ""}|${text}`;
       let g = out.get(key);
-      if (!g) out.set(key, (g = { key, level: d.level, where: whereOf(d), text, items: [] }));
+      if (!g) out.set(key, (g = { key, level: d.level, code: d.code, where: whereOf(d), text, items: [] }));
       const hit = noteOf(d);
       const at = hit ? barBeatAt(song.timeSig, hit.note.start) : undefined;
       g.items.push({ d, label: at ? t("ui.checkPlace", { bar: at.bar, beat: at.beat }) : "" });
@@ -62,6 +65,9 @@
             {#if item.label}<button class="small place" title={t("ui.checkGo")} onclick={() => go(item.d)}>{item.label}</button>{/if}
           {/each}
           {#if g.items.length > 12}<span class="muted">…</span>{/if}
+          {#if g.code === "tie-across-boundary" && onbreaktimbre}
+            <button class="small" title={t("ui.breakTimbreTiesHelp")} onclick={onbreaktimbre}>{t("ui.breakTimbreTiesAll", { n: timbreCount })}</button>
+          {/if}
         </li>
       {/each}
     </ul>

@@ -13,10 +13,13 @@
   import { setVolumeLabels, volumeLabels } from "./volumeLabels.svelte";
   import type { VolumeLabelMode } from "./volumeLabels";
   import { rollFlow, setRollFlow, type RollFlow } from "./rollFlow.svelte";
+  import { selectKeys, setSelectKeys } from "./selectKeys.svelte";
+  import type { SelectKeysMode } from "./selectKeys";
   import { chordPrefs, setMidiMerge } from "./chordPrefs.svelte";
   import { setSplitSpread, splitPrefs } from "./splitPrefs.svelte";
   import { canAskSave, canPickFolder, canShareFiles, pickSaveFolder, saveTarget, setSaveMode, setSaveShare } from "./saveTarget.svelte";
   import { LANE_MAX, LANE_MIN, saveVolumeLane, volumeLane, type LaneState } from "./volumeLane.svelte";
+  import { LAB_FEATURES, labs, setLabs } from "./labs.svelte";
 
   import Icon from "./Icon.svelte";
   import PackBar from "./PackBar.svelte";
@@ -59,7 +62,7 @@
     onclose: () => void;
   }
 
-  type Section = "packs" | "playback" | "display" | "chords" | "save" | "language" | "keys";
+  type Section = "packs" | "playback" | "display" | "chords" | "save" | "labs" | "language" | "keys";
 
   let {
     packs,
@@ -107,14 +110,14 @@
     dialog.showModal();
   });
 
-  const SECTIONS: readonly Section[] = ["packs", "playback", "display", "chords", "save", "language", "keys"];
+  const SECTIONS: readonly Section[] = ["packs", "playback", "display", "chords", "save", "labs", "language", "keys"];
   /** 언어 칸은 글자를 못 읽는 언어로 바뀌어도 찾을 수 있게 영어 "Language"를 늘 같이 적는다 */
   const sectionLabel = (s: Section) =>
     s === "language"
       ? i18n.locale === "en"
         ? t("ui.language")
         : `${t("ui.language")} · Language`
-      : t(s === "packs" ? "ui.settingsPacks" : s === "playback" ? "ui.settingsPlayback" : s === "display" ? "ui.settingsDisplay" : s === "chords" ? "ui.settingsChords" : s === "save" ? "ui.settingsSave" : "ui.settingsKeys");
+      : t(s === "packs" ? "ui.settingsPacks" : s === "playback" ? "ui.settingsPlayback" : s === "display" ? "ui.settingsDisplay" : s === "chords" ? "ui.settingsChords" : s === "save" ? "ui.settingsSave" : s === "labs" ? "ui.settingsLabs" : "ui.settingsKeys");
 </script>
 
 <dialog bind:this={dialog} {onclose}>
@@ -146,6 +149,15 @@
           <input type="checkbox" checked={lightKeys} onchange={onlightkeys} />
           <span>{t("ui.lightKeys")}</span>
         </label>
+        <label class="row" title={t("ui.selectKeysHelp")}>
+          <span>{t("ui.selectKeys")}</span>
+          <select value={selectKeys.mode} onchange={(e) => setSelectKeys(e.currentTarget.value as SelectKeysMode)}>
+            <option value="off">{t("ui.selectKeysOff")}</option>
+            <option value="press">{t("ui.selectKeysPress")}</option>
+            <option value="select">{t("ui.selectKeysSelect")}</option>
+          </select>
+        </label>
+        <p class="muted help">{t("ui.selectKeysHelp")}</p>
         <label class="row" title={t("ui.midiKeysVelocityHelp")}>
           <input type="checkbox" checked={midiKeys.velocity} onchange={(e) => midiKeys.setVelocity(e.currentTarget.checked)} />
           <span>{t("ui.midiKeys")}: {t("ui.midiKeysVelocity")}</span>
@@ -369,6 +381,17 @@
         {:else}
           <p class="muted help">{t("ui.saveDownloadOnly")}</p>
         {/if}
+      {:else if section === "labs"}
+        <label class="row">
+          <input type="checkbox" checked={labs.on} onchange={(e) => setLabs(e.currentTarget.checked)} />
+          <span>{t("ui.labsOn")}</span>
+        </label>
+        <p class="muted help">{t("ui.labsHelp")}</p>
+        <ul class="labs">
+          {#each LAB_FEATURES as f (f.id)}
+            <li class:off={!labs.on}><b>{t(f.label)}</b> <span class="muted">{t(f.help)}</span></li>
+          {/each}
+        </ul>
       {:else if section === "language"}
         <div class="langs" role="radiogroup" aria-label={t("ui.language")}>
           {#each LOCALES as l (l)}
@@ -398,6 +421,16 @@
 </dialog>
 
 <style>
+  .labs {
+    margin: 4px 0;
+    padding-left: 1.2em;
+  }
+  .labs li {
+    margin: 4px 0;
+  }
+  .labs li.off {
+    opacity: 0.6;
+  }
   dialog {
     width: min(720px, calc(100vw - 32px));
     max-height: calc(100dvh - 48px);

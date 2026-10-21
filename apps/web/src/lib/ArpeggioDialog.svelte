@@ -1,6 +1,6 @@
 <script lang="ts">
   import { CHORD_KIND_IDS, cmp, planArpeggio, toFloat, type ArpResult, type ArpSource, type GameProfile, type Note, type PitchRange, type Rat, type Song } from "@mmlce/core";
-  import { untrack } from "svelte";
+  import { setNotesAndAddTracks } from "@mmlce/mml";
   import { t } from "./i18n.svelte";
   import { lengthLabel } from "./Toolbar.svelte";
   import { lengthsFor, noteLengthOf } from "./roll";
@@ -9,13 +9,15 @@
   import { loadStored, parseJson, saveStored } from "./persist";
 
   /**
-   * 아르페지오 창 (편집 메뉴): 고른 음(한 트랙)의 화음을 순서대로 펼쳐 한 트랙에 넣거나, 원래 음을 둔 채 굴려 치거나,
+   * 아르페지오 창 (편집 메뉴): 고른 음(같은 악보, 타브는 여러 트랙)의 화음을 순서대로 펼쳐 한 트랙에 넣거나, 원래 음을 둔 채 굴려 치거나,
    * 같은 악보 트랙을 돌아가며 되풀이한다. 같은 시간 음은 화음에 넣을 트랙을 체크로 고른다.
    * 고르기를 바꿀 때마다 결과를 다시 계산해 미리 보여 주고, 적용하면 그 결과를 명령 하나로 넣는다
    */
   interface Props {
     song: Song;
+    /** 고른 트랙: 펼치기 결과를 넣는 트랙 */
     trackId: string;
+    /** 고른 음 (같은 악보의 여러 트랙 음이어도 된다) */
     picked: readonly Note[];
     division: number;
     /** 게임이 받는 음 길이 범위 (GameProfile.length) */
@@ -27,19 +29,17 @@
     /** 한 악보 트랙 한도 (maxChordsOf) */
     maxTracks: number;
     locked: ReadonlySet<string>;
-    /** 처음 고를 화음 음 가져오기 (타브 커서 자리 화음은 같은 시간 음). 없으면 지난번 값 */
-    source?: ArpSource | undefined;
+    /** 곡의 트랙 색 (트랙 바와 같은 색: 색 방식·테마). 미리 보기는 넣은 뒤 곡으로 불러 새 트랙 색도 맞춘다 */
+    colorsFor: (song: Song) => ReadonlyMap<string, string>;
     onapply: (result: ArpResult) => void;
     onclose: () => void;
   }
 
-  let { song, trackId, picked, division, lengthRange, tupletLength, range, maxTracks, locked, source, onapply, onclose }: Props = $props();
+  let { song, trackId, picked, division, lengthRange, tupletLength, range, maxTracks, locked, colorsFor, onapply, onclose }: Props = $props();
 
   let dialog: HTMLDialogElement;
   const stored = loadStored(ARP_KEY, (raw) => parseArpChoice(parseJson(raw)));
-  // 처음 고를 값만 쓴다 (창은 열 때마다 새로 만든다)
-  const first = untrack(() => source);
-  let choice = $state<ArpChoice>(first ? { ...stored, source: first } : stored);
+  let choice = $state<ArpChoice>(stored);
   function set(change: Partial<ArpChoice>) {
     choice = { ...choice, ...change };
     saveStored(ARP_KEY, storeArpChoice(choice));
@@ -53,8 +53,8 @@
   /** 기억해 둔 길이가 게임 한도 밖이면 격자 */
   const length = $derived(lengths.includes(choice.length) ? choice.length : "grid");
 
-  /** 실제로 쓰는 화음 음 가져오기: 굴려 치기는 늘 같은 시간 음 */
-  const src = $derived<ArpSource>(choice.style === "roll" ? "together" : choice.source);
+  /** 실제로 쓰는 화음 음 가져오기: 굴려 치기는 원래 음을 늦추기만 해서 코드 이름이면 같은 시간 음 */
+  const src = $derived<ArpSource>(choice.style === "roll" && choice.source === "chord" ? "together" : choice.source);
   /** 같은 악보 트랙 (미리 보기 줄 순서와 같다) */
   const sameTracks = $derived.by(() => {
     const player = song.tracks.find((tr) => tr.id === trackId)?.playerId;
@@ -102,16 +102,23 @@
     );
   });
 
-  // 미리 보기: 고른 음 구간의 결과 음을 작은 롤로 (트랙마다 색)
+  /** 넣은 뒤 같은 악보 트랙 (새 트랙 포함, 트랙 바 순서)과 그 색 */
+  const after = $derived.by(() => {
+    const player = song.tracks.find((tr) => tr.id === trackId)?.playerId;
+    const next = player === undefined ? song : setNotesAndAddTracks(player, result.changes, result.newTracks, (n) => String(n), "").apply(song);
+    return { tracks: next.tracks.filter((tr) => tr.playerId === player), colors: colorsFor(next) };
+  });
+  const colorOf = (id: string) => after.colors.get(id) ?? song.tracks.find((tr) => tr.id === id)?.color ?? "var(--muted)";
+
+  // 미리 보기: 고른 음 구간의 결과 음을 작은 롤로 (트랙마다 트랙 바와 같은 색)
   const W = 400;
   const H = 120;
   const preview = $derived.by(() => {
     const from = picked.reduce<Rat>((m, n) => (cmp(n.start, m) < 0 ? n.start : m), picked[0]!.start);
     // 보이는 구간: 고른 음과, 고른 음 자리에서 시작한 결과 음이 끝나는 곳까지 (고른 음보다 긴 화음 음도 보이게)
     const head = Math.max(...picked.map((n) => toFloat(n.start) + toFloat(n.dur)));
-    // 같은 악보 트랙 (바뀐 트랙은 결과로). 굴려 치기에서 그대로 둔 음도 보인다
-    const changed = new Map(result.changes.map((c) => [c.trackId, c.notes]));
-    const lanes = [...sameTracks.map((tr) => changed.get(tr.id) ?? tr.notes), ...result.newTracks];
+    // 넣은 뒤 같은 악보 트랙 (바뀐 트랙은 결과로, 새 트랙 포함). 굴려 치기에서 그대로 둔 음도 보인다
+    const lanes = after.tracks.map((tr) => tr.notes);
     const to = Math.max(head, ...lanes.flat().filter((n) => toFloat(n.start) >= toFloat(from) && toFloat(n.start) < head).map((n) => toFloat(n.start) + toFloat(n.dur)));
     const notes = lanes.flatMap((list, lane) =>
       list.filter((n) => toFloat(n.start) < to && toFloat(n.start) + toFloat(n.dur) > toFloat(from)).map((n) => ({ n, lane })),
@@ -126,7 +133,7 @@
       w: Math.max(1, x(Math.min(to, toFloat(n.start) + toFloat(n.dur))) - x(toFloat(n.start)) - 1),
       y: (hi - n.pitch) * row,
       h: Math.max(2, row - 1),
-      hue: (lane * 67) % 360,
+      color: colorOf(after.tracks[lane]!.id),
     }));
   });
 
@@ -146,8 +153,8 @@
     <span>{t("ui.arpSource")}</span>
     <span class="row">
       {#each [["together", "ui.arpSourceTogether"], ["selected", "ui.arpSourceSelected"], ["chord", "ui.arpSourceChord"]] as const as [id, key] (id)}
-        <label title={choice.style === "roll" && id !== "together" ? t("ui.arpRollTogether") : undefined}>
-          <input type="radio" name="arp-source" checked={src === id} disabled={choice.style === "roll" && id !== "together"} onchange={() => set({ source: id })} />
+        <label>
+          <input type="radio" name="arp-source" checked={choice.source === id} onchange={() => set({ source: id })} />
           {t(key)}
         </label>
       {/each}
@@ -157,6 +164,10 @@
         </select>
       {/if}
     </span>
+    {#if choice.style === "roll" && choice.source === "chord"}
+      <span></span>
+      <span class="muted help">{t("ui.arpRollTogether")}</span>
+    {/if}
     <span>{t("ui.arpStyle")}</span>
     <span class="row">
       {#each [["spread", "ui.arpStyleSpread", "ui.arpStyleSpreadHelp"], ["roll", "ui.arpStyleRoll", "ui.arpStyleRollHelp"], ["strum", "ui.arpStyleStrum", "ui.arpStyleStrumHelp"]] as const as [id, key, help] (id)}
@@ -188,8 +199,8 @@
       <label><input type="checkbox" checked={choice.repeat} onchange={(e) => set({ repeat: e.currentTarget.checked })} /> {t("ui.arpRepeat")}</label>
     {/if}
     {#if choice.style === "spread"}
-      <label title={choice.source !== "together" ? t("ui.arpClearOff") : undefined}>
-        <input type="checkbox" checked={choice.clear && choice.source === "together"} disabled={choice.source !== "together"} onchange={(e) => set({ clear: e.currentTarget.checked })} />
+      <label>
+        <input type="checkbox" checked={choice.clear} onchange={(e) => set({ clear: e.currentTarget.checked })} />
         {t("ui.arpClear")}
       </label>
     {/if}
@@ -197,17 +208,17 @@
   {#if src === "together"}
     <div class="row tracks" role="group" aria-label={t("ui.arpTracks")}>
       <span>{t("ui.arpTracks")}</span>
-      {#each sameTracks as tr, lane (tr.id)}
+      {#each sameTracks as tr (tr.id)}
         <label>
           <input type="checkbox" checked={chordTracks.has(tr.id)} disabled={tr.id === trackId} onchange={(e) => toggleTrack(tr.id, e.currentTarget.checked)} />
-          <span class="dot" style="background: hsl({(lane * 67) % 360} 65% 55%)"></span>{tr.name}
+          <span class="dot" style:background={colorOf(tr.id)}></span>{tr.name}
         </label>
       {/each}
     </div>
   {/if}
   <svg class="preview" viewBox="0 0 {W} {H}" role="img" aria-label={t("ui.arpPreview")}>
     {#if preview}
-      {#each preview as r, i (i)}<rect x={r.x} y={r.y} width={r.w} height={r.h} rx="1.5" fill="hsl({r.hue} 65% 55%)" />{/each}
+      {#each preview as r, i (i)}<rect x={r.x} y={r.y} width={r.w} height={r.h} rx="1.5" style:fill={r.color} />{/each}
     {/if}
   </svg>
   <p class="muted">{t("ui.arpSummary", { notes: result.notes, tracks: result.newTracks.length, dropped: result.outOfRange })}</p>

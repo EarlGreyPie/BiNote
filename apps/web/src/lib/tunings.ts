@@ -6,6 +6,8 @@ export const TUNINGS = {
   standard: { key: "ui.tuningStandard", strings: STANDARD_TUNING.strings },
   dropD: { key: "ui.tuningDropD", strings: [64, 59, 55, 50, 45, 38] },
   dadgad: { key: "ui.tuningDadgad", strings: [62, 57, 55, 50, 45, 38] },
+  // 내슈빌(하이 스트렁): 표준 기타의 3~6번 줄에 12현의 가는 옥타브 줄을 걸어 한 옥타브 위 (E A d g B E)
+  nashville: { key: "ui.tuningNashville", strings: [64, 59, 67, 62, 57, 52] },
   // 바리톤: 표준보다 완전4도(B)·완전5도(A) 아래
   baritoneB: { key: "ui.tuningBaritoneB", strings: [59, 54, 50, 45, 40, 35] },
   baritoneA: { key: "ui.tuningBaritoneA", strings: [57, 52, 48, 43, 38, 33] },

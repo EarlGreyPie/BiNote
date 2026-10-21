@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { emptySong, MOBILE_PROFILE, rat, type Song, type Track } from "@mmlce/core";
 import { parseTrackText } from "@mmlce/mml";
 import { analyzeSong } from "../src/lib/analysis";
-import { outputRows, previewRows, tempoAdvice } from "../src/lib/output";
+import { isCopied, nextExportPick, outputRows, previewRows, tempoAdvice, trackStamp } from "../src/lib/output";
 
 function track(id: string, playerId: string, text: string): Track {
   return { id, playerId, name: id, color: "", role: "free", mute: false, solo: false, notes: parseTrackText(id, { text }).notes, spelling: {} };
@@ -84,5 +84,37 @@ describe("previewRows", () => {
       ["c", rows.find((r) => r.trackId === "c")!.before],
     ]);
     expect(rows[0]!.before).toBeGreaterThan(3);
+  });
+});
+
+describe("MML로 내보내기: 다음에 복사할 트랙", () => {
+  const scores = [{ trackIds: ["a1", "a2", "a3", "a4", "a5", "a6"] }, { trackIds: ["b1", "b2", "b3", "b4", "b5", "b6"] }];
+
+  it("처음엔 첫 악보만 (손대지 않은 악보는 섞지 않는다)", () => {
+    expect(nextExportPick(scores, () => false, 6)).toEqual(["a1", "a2", "a3", "a4", "a5", "a6"]);
+    const small = [{ trackIds: ["a1", "a2"] }, { trackIds: ["b1"] }];
+    expect(nextExportPick(small, () => false, 6)).toEqual(["a1", "a2"]);
+  });
+
+  it("두 악보에서 일부씩 복사했으면 남은 트랙을 함께 고른다", () => {
+    const done = new Set(["a1", "a2", "a3", "b1", "b3", "b6"]);
+    expect(nextExportPick(scores, (id) => done.has(id), 6)).toEqual(["a4", "a5", "a6", "b2", "b4", "b5"]);
+  });
+
+  it("한도를 넘는 악보 나머지는 더하지 않고, 다 복사했으면 빈 목록", () => {
+    const done = new Set(["a1", "b1"]);
+    expect(nextExportPick(scores, (id) => done.has(id), 6)).toEqual(["a2", "a3", "a4", "a5", "a6"]);
+    expect(nextExportPick(scores, () => true, 6)).toEqual([]);
+  });
+
+  it("복사 뒤 트랙을 고치면 복사됨이 풀린다", () => {
+    const s = song([track("a", "p1", "c4"), track("b", "p1", "d4")]);
+    const copied = new Map([["a", trackStamp(s.tracks[0]!)]]);
+    expect(isCopied(s, copied, "a")).toBe(true);
+    expect(isCopied(s, copied, "b")).toBe(false);
+    const edited = { ...s, tracks: [track("a", "p1", "c8"), s.tracks[1]!] };
+    expect(isCopied(edited, copied, "a")).toBe(false);
+    // 같은 음으로 다시 만든 트랙(실행 취소 등)은 복사됨 그대로
+    expect(isCopied({ ...s, tracks: [track("a", "p1", "c4"), s.tracks[1]!] }, copied, "a")).toBe(true);
   });
 });

@@ -42,6 +42,20 @@ describe("writeProject / readProject", () => {
     expect(all.slice(1).every((x) => x.tabString === undefined)).toBe(true);
   });
 
+  it("실험실 표시(lab)는 저장했다 다시 열어도 남고, 모르는 모양이면 버린다 (음은 그대로)", () => {
+    const song = sample();
+    const labs: unknown[] = [
+      { kind: "ghost", vol: 9 },
+      { kind: "harmonic", type: "natural", pitch: 47, vol: 10, string: 6, fret: 7 },
+      { kind: "harmonic", type: "weird", pitch: 47, vol: 10 },
+      { kind: "ghost", vol: 99 },
+    ];
+    const tracks = song.tracks.map((t, i) => (i === 0 ? { ...t, notes: t.notes.map((x, j) => ({ ...x, lab: labs[j] as never })) } : t));
+    const back = readProject(writeProject({ ...song, tracks })).song.tracks[0]!.notes;
+    expect(back.map((x) => x.lab)).toEqual([labs[0], labs[1], undefined, undefined].slice(0, back.length));
+    expect(back.length).toBe(song.tracks[0]!.notes.length);
+  });
+
   it("악보 타브 튜닝은 카포가 0~24 정수일 때만 읽는다", () => {
     const song = sample();
     const bad = writeProject({ ...song, players: song.players.map((p) => ({ ...p, tab: { tuning: "dropD", capo: 30 } })) });

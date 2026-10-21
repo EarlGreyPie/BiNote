@@ -147,9 +147,10 @@ export function scaleNotes(notes: readonly Note[], factor: Rat, from?: Rat): Not
 /**
  * 한 트랙(notes)에서 고른 음(picked)만 길이 factor배 (scaleNotes와 같은 리듬 모양). 고르지 않은 음은 지우거나 줄이지 않는다:
  * 늘어난 음이 고르지 않은 다음 음과 겹치면 그 음 시작 앞까지만 늘린다 (타브의 길이 바꾸기와 같다).
- * 바꾼 고른 음만 돌려준다. 바뀌는 것이 없거나(늘릴 자리가 없음) 고른 음이 고르지 않은 음 자리로 옮겨 가 겹치면 undefined
+ * 바꾼 고른 음만 돌려준다. 바뀌는 것이 없거나(늘릴 자리가 없음) 고른 음이 고르지 않은 음 자리로 옮겨 가 겹치면 undefined.
+ * exact면 다음 음 앞에서 잘리는 음이 하나라도 있을 때 바꾸지 않는다 (점 붙이기처럼 정확한 길이가 아니면 뜻이 없는 경우)
  */
-export function scaleNotesIn(notes: readonly Note[], picked: readonly Note[], factor: Rat, from?: Rat): Note[] | undefined {
+export function scaleNotesIn(notes: readonly Note[], picked: readonly Note[], factor: Rat, from?: Rat, exact = false): Note[] | undefined {
   const ids = new Set(picked.map((n) => n.id));
   const others = notes.filter((n) => !ids.has(n.id));
   const out: Note[] = [];
@@ -157,7 +158,9 @@ export function scaleNotesIn(notes: readonly Note[], picked: readonly Note[], fa
     // 옮겨 간 시작이 고르지 않은 음 안(또는 같은 자리)이면 그 음을 지우게 되므로 하지 않는다
     if (others.some((o) => cmp(o.start, n.start) <= 0 && cmp(n.start, end(o)) < 0)) return undefined;
     const next = others.filter((o) => cmp(o.start, n.start) > 0).reduce<Rat | undefined>((m, o) => (m === undefined || cmp(o.start, m) < 0 ? o.start : m), undefined);
-    out.push(next !== undefined && cmp(end(n), next) > 0 ? { ...n, dur: sub(next, n.start) } : n);
+    const cut = next !== undefined && cmp(end(n), next) > 0;
+    if (cut && exact) return undefined;
+    out.push(cut ? { ...n, dur: sub(next, n.start) } : n);
   }
   const before = new Map(picked.map((n) => [n.id, n]));
   const changed = out.some((n) => {

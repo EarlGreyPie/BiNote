@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assignTab, History, MOBILE_PROFILE, planSlide, rat, trackInstrument } from "@mmlce/core";
+import { assignTab, History, MOBILE_PROFILE, planSlide, rat, replaceSong, trackInstrument, type Command } from "@mmlce/core";
 import { addPlayer, addTrack, addTrackWithNotes, duplicateTrack, duplicateTrackToNewPlayer, moveTrack, moveTrackToNewPlayer, newSong, shiftTrack, trackMoveBlock, planMergeTracks, planMoveNotes, planVoiceByPitch, removeTrack, renamePlayer, renameTrack, setMeter, setPlayerInstrument, setPlayerTab, setTrackInstrument, setTrackPack, setNotesAndAddTracks, blockedSplitBack } from "../src/index.js";
 import { optimizeMml, setTracksNotes } from "../src/index.js";
 
@@ -538,6 +538,26 @@ describe("악보 타브 튜닝 (기록 밖 상태, beta.11)", () => {
     h.redo();
     expect(h.song.players.some((p) => p.id === "p2")).toBe(false);
     expect(tabOf(h.undo(), "p2")).toEqual({ tuning: "bass4", capo: 4 });
+  });
+
+  it("한 단계에서 음과 튜닝을 함께 바꾸면(타브 그대로 튜닝 바꾸기) 실행 취소·다시 실행이 튜닝도 같이 되돌린다", () => {
+    const h = new History(base());
+    tune(h, "p1", "standard", 0);
+    const both: Command = {
+      label: "타브 그대로 튜닝 바꾸기",
+      apply: (s) => setPlayerTab("p1", { tuning: "dropD", capo: 1 }).apply(renamePlayer("p1", "기타").apply(s)),
+      invert: (before) => replaceSong("되돌리기", before),
+    };
+    h.run(both);
+    expect(tabOf(h.song, "p1")).toEqual({ tuning: "dropD", capo: 1 });
+    expect(tabOf(h.undo(), "p1")).toEqual({ tuning: "standard", capo: 0 });
+    expect(tabOf(h.redo(), "p1")).toEqual({ tuning: "dropD", capo: 1 });
+    // 그 뒤 기록 밖에서 바꾼 튜닝은 앞 편집을 되돌려도 지킨다
+    h.run(addTrack("p1", "트랙 2"));
+    tune(h, "p1", "bass4", 0);
+    expect(tabOf(h.undo(), "p1")).toEqual({ tuning: "bass4", capo: 0 });
+    // 튜닝을 함께 바꾼 단계를 되돌리면 그 단계 앞 튜닝으로 돌아간다
+    expect(tabOf(h.undo(), "p1")).toEqual({ tuning: "standard", capo: 0 });
   });
 
   it("같은 값이면 곡을 그대로 둔다", () => {

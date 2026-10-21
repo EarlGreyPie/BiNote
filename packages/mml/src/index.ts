@@ -15,3 +15,6 @@ export * from "./game-output.js";
 export * from "./structure.js";
 export * from "./tempo-text.js";
 export * from "./score-end.js";
+export * from "./offgrid.js";
+export * from "./spread.js";
+export * from "./merge-tracks.js";

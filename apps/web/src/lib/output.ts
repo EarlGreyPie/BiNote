@@ -1,4 +1,4 @@
-import { barBeatAt, maxChordsOf, type GameProfile, type Rat, type Song } from "@mmlce/core";
+import { barBeatAt, maxChordsOf, type GameProfile, type Rat, type Song, type Track } from "@mmlce/core";
 import { gameScores, trackSource, type Diagnostic, type SongDiagnostic } from "@mmlce/mml";
 
 /** 출력 점검판의 악보 한 줄 */
@@ -132,4 +132,31 @@ export function previewRows(before: Song, after: Song, limit: number): PreviewRo
   return [...after.tracks, ...gone]
     .map((t) => ({ trackId: t.id, name: t.name, before: length(before, t.id), after: length(after, t.id) }))
     .filter((r) => r.before !== r.after || r.after > limit);
+}
+
+/** 복사한 뒤 트랙이 바뀌었는지 알아보는 도장: 음과 원문 */
+export function trackStamp(track: Track): string {
+  return JSON.stringify([track.notes.map((n) => [n.start.n, n.start.d, n.dur.n, n.dur.d, n.pitch, n.vol, n.tie]), track.mml ?? null, track.instrument ?? null]);
+}
+
+/** 이 트랙을 복사한 뒤 그대로인지 (copied: 트랙 id → 복사할 때 도장) */
+export function isCopied(song: Song, copied: ReadonlyMap<string, string> | undefined, trackId: string): boolean {
+  const stamp = copied?.get(trackId);
+  if (stamp === undefined) return false;
+  const track = song.tracks.find((t) => t.id === trackId);
+  return track !== undefined && trackStamp(track) === stamp;
+}
+
+/**
+ * 다음에 복사할 트랙 (MML로 내보내기 창에 미리 체크). 아직 복사하지 않은 트랙이 남은 첫 악보의 남은 트랙,
+ * 그다음 한도 안에서 일부만 복사한 다른 악보의 남은 트랙을 악보째 더한다 (악보 1의 1·2·3과 악보 2의 1·3·6을 복사했으면
+ * 악보 1의 4·5·6 + 악보 2의 2·4·5). 손대지 않은 악보는 섞지 않는다: 처음엔 전처럼 악보 하나씩
+ */
+export function nextExportPick(scores: readonly { readonly trackIds: readonly string[] }[], copied: (trackId: string) => boolean, limit: number): string[] {
+  const left = scores.map((s) => ({ rest: s.trackIds.filter((id) => !copied(id)), partial: s.trackIds.some(copied) }));
+  const first = left.findIndex((s) => s.rest.length > 0);
+  if (first < 0) return [];
+  const out = left[first]!.rest.slice(0, limit);
+  for (const s of left.slice(first + 1)) if (s.partial && s.rest.length > 0 && out.length + s.rest.length <= limit) out.push(...s.rest);
+  return out;
 }

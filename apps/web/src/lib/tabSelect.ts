@@ -68,15 +68,16 @@ export function editPicked(tracks: readonly TabTrack[], ids: ReadonlySet<string>
 
 /**
  * 고른 음 길이 ×factor (피아노롤과 같은 scaleNotesIn 규칙, 트랙마다). 모든 트랙이 고른 음 가운데 가장 앞 음을 기준으로 해
- * 화음의 리듬이 어긋나지 않는다. 어느 트랙이든 자리가 없으면 아무것도 바꾸지 않는다(undefined)
+ * 화음의 리듬이 어긋나지 않는다. 어느 트랙이든 자리가 없으면 아무것도 바꾸지 않는다(undefined).
+ * exact면 다음 음 앞에서 잘려야 하는 음이 있어도 바꾸지 않는다 (점 붙이기)
  */
-export function scalePicked(tracks: readonly TabTrack[], ids: ReadonlySet<string>, factor: Rat): TrackChanges | undefined {
+export function scalePicked(tracks: readonly TabTrack[], ids: ReadonlySet<string>, factor: Rat, exact = false): TrackChanges | undefined {
   const picked = tracks.map((t) => ({ t, notes: t.notes.filter((n) => ids.has(n.id)) })).filter((x) => x.notes.length > 0);
   if (picked.length === 0) return undefined;
   const origin = picked.flatMap((x) => x.notes).reduce((m, n) => (cmp(n.start, m) < 0 ? n.start : m), picked[0]!.notes[0]!.start);
   const out: TrackChanges = [];
   for (const { t, notes } of picked) {
-    const scaled = scaleNotesIn(t.notes, notes, factor, origin);
+    const scaled = scaleNotesIn(t.notes, notes, factor, origin, exact);
     if (!scaled) {
       // 이 트랙은 바뀌는 것이 없을 수도 있다 (모두 자리가 없어 그대로). 다른 트랙만 바뀌면 리듬이 어긋나므로 통째로 그만둔다
       return undefined;

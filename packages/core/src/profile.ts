@@ -187,6 +187,25 @@ export function sampleSecondsAt(profile: GameProfile, instrument: string | undef
   return zone.seconds * 2 ** (-(pitch - zone.from) / 12);
 }
 
+/**
+ * 이 악기에서 게임이 샘플(음색)을 바꾸는 경계 (경계 바로 위 음의 MIDI 번호, 작은 순). 실측한 샘플 길이 구간의 시작(sampleSeconds)과
+ * 음색 경계(sampleBoundaries)를 합친다. &로 이은 음이 경계를 넘으면 게임은 새 구간 샘플로 바꿔 타서 음색이 튄다
+ */
+export function timbreBoundaries(profile: GameProfile, instrument: string | undefined): number[] {
+  if (instrument === undefined) return [];
+  const zones = profile.sampleSeconds[instrument] ?? [];
+  const all = new Set([...zones.slice(1).map((z) => z.from), ...(profile.sampleBoundaries[instrument] ?? [])]);
+  return [...all].sort((a, b) => a - b);
+}
+
+/** 두 높이(접기 전)를 &로 이으면 음색 경계를 넘는지. 재생처럼 악기 범위로 접은 높이로 잰다 */
+export function crossesTimbre(profile: GameProfile, instrument: string | undefined, a: number, b: number): boolean {
+  const range = soundingRangeOf(profile, instrument);
+  const lo = Math.min(foldPitch(a, range), foldPitch(b, range));
+  const hi = Math.max(foldPitch(a, range), foldPitch(b, range));
+  return timbreBoundaries(profile, instrument).some((x) => lo < x && x <= hi);
+}
+
 /** 다른 음 붙임을 다시 치지 않고 높이만 옮기는 최대 거리(반음). 더 멀면 새로 친다 (재생의 벤드 범위) */
 export const TIE_BEND_LIMIT = 24;
 

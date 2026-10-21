@@ -64,7 +64,24 @@ export interface Note {
   readonly tie: "none" | "next";
   /** 타브에서 고른 줄 (1 = 가장 높은 줄). 타브 자동 배정이 이 줄을 먼저 지킨다. 소리·출력과는 상관없다 */
   readonly tabString?: number;
+  /** 실험실 입력으로 만든 음의 표시 (프로젝트 파일에만 저장. 출력은 보통 v·높이 그대로). 풀면 처음 값으로 돌아간다 */
+  readonly lab?: NoteLab;
 }
+
+/**
+ * 실험실 표시. vol·pitch는 실험실 입력 전의 값 (풀기로 되돌린다).
+ * 하모닉스 string·fret은 타브에서 만들었을 때 그 줄과 누른(자연이면 짚은) 프렛
+ */
+export type NoteLab =
+  | { readonly kind: "ghost"; readonly vol: number }
+  | {
+      readonly kind: "harmonic";
+      readonly type: "natural" | "artificial";
+      readonly pitch: number;
+      readonly vol: number;
+      readonly string?: number;
+      readonly fret?: number;
+    };
 
 /** 출력할 때 존중할 사용자 표기 습관. 비어 있으면 최적화기가 마음대로 고른다. */
 export interface SpellingHints {

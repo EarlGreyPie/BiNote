@@ -1,5 +1,5 @@
 import type { Unresolved } from "@mmlce/audio/browser";
-import { positionToSeconds, rat, secondsToWhole, type Song } from "@mmlce/core";
+import { positionToSeconds, rat, secondsToWhole, type Song, type TempoEvent } from "@mmlce/core";
 import type { Engine } from "./engine";
 
 const asRat = (time: number) => rat(Math.round(time * 960), 960);
@@ -18,6 +18,8 @@ export class Playback {
   unresolved = $state.raw<Unresolved[]>([]);
   /** 재생을 새로 시작할 때마다 하나씩 는다 (자리를 옮겨 다시 재생했는지 알아보는 데 쓴다) */
   runs = $state(0);
+  /** 이번 재생에 쓴 템포 지도 (재생 중에 곡 템포를 바꿔도 소리는 이 템포로 난다. 탭 템포가 쓴다) */
+  tempo: readonly TempoEvent[] = [];
   private generation = 0;
 
   constructor(private readonly engine: Engine) {
@@ -50,6 +52,7 @@ export class Playback {
     if (generation !== this.generation) return;
     this.unresolved = result;
     this.from = fromSeconds;
+    this.tempo = song.tempo;
     this.position = 0;
     this.playing = true;
     this.runs++;
