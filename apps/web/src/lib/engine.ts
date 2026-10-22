@@ -385,8 +385,9 @@ export class Engine {
   }
 
   /** 재생을 시작하고, 사운드팩에서 찾지 못한 악기를 돌려준다 */
-  /** loop: 반복할 길이(초). 주면 시작 자리부터 그 길이를 끊김 없이 되풀이한다 */
-  async play(song: Song, from?: Rat, loop?: number): Promise<Unresolved[]> {
+  /** loop: 반복할 길이(초). 주면 시작 자리부터 그 길이를 끊김 없이 되풀이한다. rate: 재생 속도 (원곡도 같은 속도로).
+   * offset: from에서 이만큼(곡 초) 뒤부터 소리를 낸다 (반복 구간 가운데서 이어 재생) */
+  async play(song: Song, from?: Rat, loop?: number, rate = 1, offset = 0): Promise<Unresolved[]> {
     const request = ++this.playRequest;
     await this.live();
     const context = this.context!;
@@ -417,7 +418,7 @@ export class Engine {
     if (!ready) return last;
     const { schedule, patches, unresolved } = ready;
     this.playingPatches = patches;
-    this.player!.start(schedule, patches, { ...(loop ? { loop } : {}), ...(cold ? { delay: COLD_START_DELAY } : {}) });
+    this.player!.start(schedule, patches, { ...(loop ? { loop } : {}), ...(cold ? { delay: COLD_START_DELAY } : {}), ...(rate !== 1 ? { rate } : {}), ...(offset > 0 ? { offset } : {}) });
     this.fromSeconds = from ? positionToSeconds(song.tempo, from) : 0;
     this.startReference();
     return unresolved;
@@ -663,14 +664,17 @@ export class Engine {
     const origin = wrapAt ?? this.player?.startTime;
     if (!context || !this.reference || origin === undefined) return;
     const out = this.referenceOut(context);
-    // 지금(아직 시작 전이면 곡 시작 시각) 곡이 있을 자리에 원곡을 맞춘다. 반복으로 돌아갈 때는 그 경계 시각에 맞춘다
+    // 지금(아직 시작 전이면 곡 시작 시각) 곡이 있을 자리에 원곡을 맞춘다. 반복으로 돌아갈 때는 그 경계 시각에 맞춘다.
+    // 느리게 재생하면 원곡도 같은 속도로 돈다 (테이프처럼 음 높이도 내려가지만, 박 자리는 샘플 단위로 맞는다)
+    const rate = this.player?.speed ?? 1;
     const at = wrapAt ?? Math.max(context.currentTime, origin);
-    const want = this.fromSeconds + (at - origin) + this.referenceOffset;
+    const want = this.fromSeconds + (at - origin) * rate + this.referenceOffset;
     const source = context.createBufferSource();
     source.buffer = this.reference;
+    source.playbackRate.value = rate;
     source.connect(out);
     if (want >= 0) source.start(at, want);
-    else source.start(at - want, 0);
+    else source.start(at - want / rate, 0);
     this.referenceSource = source;
   }
 

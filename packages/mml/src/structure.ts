@@ -1,4 +1,5 @@
 import { add, cmp, div, emptySong, fitNotes, INSTRUMENTS, tieChains, removeNotes, replaceNotes, meterGrid, trackInstrument, rat, sub, ZERO, type Command, type InstrumentRef, type Note, type Player, type PlayerTab, type Rat, type Song, type Track, type TrackRole } from "@mmlce/core";
+import { setTracksNotes } from "./edit.js";
 
 /** 트랙 색 (3MLE·마비꼬와 비슷한 6색을 차례로) */
 const TRACK_COLORS = ["#4f8cff", "#ff7a59", "#2bb673", "#b061ff", "#f2b705", "#00b8d9"];
@@ -266,6 +267,30 @@ export function addTrackWithNotes(
         return { ...rest, notes: [...notes], ...(instrument ? { instrument } : {}) };
       }),
     };
+  });
+}
+
+/**
+ * MIDI 건반 화음: 여러 트랙 음 바꾸기(setTracksNotes처럼 원문 끝 쉼표를 지킨다)와 같은 악보에 트랙 더하기를 실행 취소 한 칸으로.
+ * newTracks: playerId 악보에 더할 트랙의 음, trackName(n): 그 악보의 n번째 트랙이 될 새 트랙 이름,
+ * instrument: 새 트랙에 줄 악기 (고른 트랙만 악기를 바꾼 경우)
+ */
+export function setTracksNotesAddingTracks(
+  playerId: string,
+  changes: readonly { readonly trackId: string; readonly notes: readonly Note[] }[],
+  newTracks: readonly (readonly Note[])[],
+  trackName: (n: number) => string,
+  label: string,
+  instrument?: InstrumentRef,
+): Command {
+  if (newTracks.length === 0) return setTracksNotes(changes, label);
+  return replaceWith(label, (song) => {
+    let next = changes.length > 0 ? setTracksNotes(changes).apply(song) : song;
+    for (const notes of newTracks) {
+      const n = next.tracks.filter((t) => t.playerId === playerId).length + 1;
+      next = addTrackWithNotes(playerId, trackName(n), notes, label, instrument).apply(next);
+    }
+    return next;
   });
 }
 

@@ -134,9 +134,17 @@ export function previewRows(before: Song, after: Song, limit: number): PreviewRo
     .filter((r) => r.before !== r.after || r.after > limit);
 }
 
-/** 복사한 뒤 트랙이 바뀌었는지 알아보는 도장: 음과 원문 */
-export function trackStamp(track: Track): string {
-  return JSON.stringify([track.notes.map((n) => [n.start.n, n.start.d, n.dur.n, n.dur.d, n.pitch, n.vol, n.tie]), track.mml ?? null, track.instrument ?? null]);
+/**
+ * 복사한 뒤 트랙이 바뀌었는지 알아보는 도장: 음과 원문, 곡 템포. 템포를 넣어 복사하면 곡 템포가 글에 들어가므로
+ * 곡 템포를 바꾸면 그 트랙도 "복사 뒤 바뀜"이 된다
+ */
+export function trackStamp(song: Song, track: Track): string {
+  return JSON.stringify([
+    track.notes.map((n) => [n.start.n, n.start.d, n.dur.n, n.dur.d, n.pitch, n.vol, n.tie]),
+    track.mml ?? null,
+    track.instrument ?? null,
+    song.tempo.map((e) => [e.at.n, e.at.d, e.bpm]),
+  ]);
 }
 
 /** 이 트랙을 복사한 뒤 그대로인지 (copied: 트랙 id → 복사할 때 도장) */
@@ -144,7 +152,7 @@ export function isCopied(song: Song, copied: ReadonlyMap<string, string> | undef
   const stamp = copied?.get(trackId);
   if (stamp === undefined) return false;
   const track = song.tracks.find((t) => t.id === trackId);
-  return track !== undefined && trackStamp(track) === stamp;
+  return track !== undefined && trackStamp(song, track) === stamp;
 }
 
 /**

@@ -86,9 +86,11 @@ function optimizeText(
   const segments = (from: Rat, to: Rat): Rat[] => {
     const cuts: Rat[] = [];
     let cursor = from;
+    // 템포는 자리 순이라 to에 닿으면 멈춘다 (템포가 많은 곡에서 음마다 남은 템포를 모두 훑지 않게)
     for (let k = tempoIndex; k < tempo.length; k++) {
       const at = tempo[k]!.at;
-      if (cmp(at, cursor) > 0 && cmp(at, to) < 0) {
+      if (cmp(at, to) >= 0) break;
+      if (cmp(at, cursor) > 0) {
         cuts.push(sub(at, cursor));
         cursor = at;
       }

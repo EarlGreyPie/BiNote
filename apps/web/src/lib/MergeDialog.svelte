@@ -216,6 +216,9 @@
           <p class="muted small">
             {droppedBy.map((x) => t("ui.mergeDroppedFrom", { name: name(x.id), count: x.count })).join(" · ")}
           </p>
+          {#if (result.louder?.length ?? 0) > 0}
+            <p class="muted small">{t("ui.mergeLouder", { count: result.louder!.length })}</p>
+          {/if}
           <ul class="gone-list">
             {#each dropped as d, i (i)}
               <li>

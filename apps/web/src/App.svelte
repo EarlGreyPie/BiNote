@@ -101,6 +101,7 @@
     setPlayerTab,
     setTrackInstrument,
     setNotesAndAddTracks,
+    setTracksNotesAddingTracks,
     setTrackPack,
     type ProgramForPack,
     type SoloSplit,
@@ -1502,7 +1503,7 @@
     if (playing) void play();
   }
 
-  // MIDI 건반 입력: 커서 자리에 격자 길이로 넣고 커서를 민다. 첫 건반부터 60ms 안에 누른 건반은 화음 하나
+  // MIDI 건반 입력: 커서 자리에 격자 길이로 넣고 커서를 민다. 함께 누른 건반은 하나를 뗄 때 화음 하나로 넣는다
   const midiKeys = new MidiKeys({
     previewOn: (pitch, velocity) => {
       const track = song?.tracks.find((tr) => tr.id === activeTrackId);
@@ -1528,14 +1529,31 @@
     const at = editCursor() ?? notesEnd(active.notes);
     const dur = newNoteDur;
     const useVelocity = midiKeys.velocity;
-    const changes = placeChord(s, groups, activeTrackId, at, dur, chord, (notes, where, vel) =>
-      useVelocity ? volumeForVelocity(profile, vel) : previousVolume(notes, where),
+    const limit = maxChordsOf(profile, s.players.find((p) => p.id === active.playerId)?.instrument.canonical);
+    // 잠긴 트랙은 건너뛰고, 다음 트랙이 모자라면 악보 트랙 한도까지 트랙을 더한다
+    const plan = placeChord(
+      s,
+      groups,
+      activeTrackId,
+      at,
+      dur,
+      chord,
+      (notes, where, vel) => (useVelocity ? volumeForVelocity(profile, vel) : previousVolume(notes, where)),
+      limit,
+      lockedIds,
     );
-    // 화음을 나눠 넣을 다른 트랙이 잠겼으면 그 트랙 몫은 버린다
-    const open = changes.filter((c) => !lockedIds.has(c.trackId));
-    if (open.length === 0) return;
-    if (!commit(setTracksNotes(open, t("ui.midiKeysInput")))) return;
+    if (plan.changes.length === 0 && plan.newTracks.length === 0) return;
+    const command = setTracksNotesAddingTracks(
+      active.playerId,
+      plan.changes,
+      plan.newTracks,
+      (n) => t("ui.newTrackName", { n }),
+      t("ui.midiKeysInput"),
+      active.instrument,
+    );
+    if (!commit(command)) return;
     setCursor(add(at, dur));
+    if (plan.dropped > 0) error = t("ui.midiChordFull", { limit, n: plan.dropped });
   }
 
   // 피아노롤에서 고른 음을 MML 글에서 보여 준다. 고른 트랙만 보는 중이 아니면 그 트랙이 보이게 고른다
@@ -1717,6 +1735,45 @@
     tapSnap = n;
     saveStored(TAP_SNAP_KEY, String(n));
   }
+  /**
+   * 탭 재생 속도 (1 = 원래). 빠른 곡은 느리게 틀어 찍는다. 탭 줄이 열려 있을 때만 쓰고, 닫으면 원래 속도로 재생한다.
+   * 탭 시각은 곡 시간으로 재므로 찍은 간격은 따로 바꾸지 않아도 원래 빠르기의 템포가 된다. 기억한다
+   */
+  const TAP_SPEED = [1, 0.85, 0.75, 0.6, 0.5] as const;
+  const TAP_SPEED_KEY = "mmlce.tapSpeed";
+  let tapSpeed = $state(loadStored(TAP_SPEED_KEY, (raw) => (raw !== null && [0, 1, 2, 3, 4].includes(Number(raw)) ? Number(raw) : 0)));
+  const playRate = $derived(tapOpen ? (TAP_SPEED[tapSpeed] ?? 1) : 1);
+  function setTapSpeed(n: number) {
+    tapSpeed = n;
+    saveStored(TAP_SPEED_KEY, String(n));
+    respeed();
+  }
+  /**
+   * 재생 중에 속도가 바뀌면(속도를 고르거나 탭 줄을 열고 닫으면) 찍은 것을 먼저 넣고 지금 자리부터 새 속도로 다시 재생한다.
+   * 자리는 곡 시각(초)으로 잡아 두었다가 탭을 넣은 뒤의 템포 지도로 잰다 (원곡이 건너뛰지 않게). 반복 구간이면 그 안에서 이어 간다.
+   * 아직 준비 중인 재생은 같은 요청을 새 속도로 다시 한다
+   */
+  function respeed() {
+    const rate = untrack(() => playRate);
+    if (!playback.playing) {
+      const p = playback.pending;
+      if (p && p.rate !== rate) void playback.play(p.song, p.start, p.loop, rate);
+      return;
+    }
+    const seconds = playback.now();
+    if (playback.rate === rate || seconds === undefined) return;
+    if (tapSession) finishTap();
+    const s = history?.song;
+    if (!s) return;
+    void playback.play(s, secondsToWhole(s.tempo, seconds), loop, rate, seconds);
+  }
+  /** 탭 줄을 닫을 때 아직 넣지 않은 탭 (0 버리기 = 기본 · 1 물어보기 · 2 넣기). 잘못 찍었을 수도 있어 기본은 버린다. 기억한다 */
+  const TAP_CLOSE_KEY = "mmlce.tapClose";
+  let tapClose = $state(loadStored(TAP_CLOSE_KEY, (raw) => (raw !== null && [0, 1, 2].includes(Number(raw)) ? Number(raw) : 0)));
+  function setTapClose(n: number) {
+    tapClose = n;
+    saveStored(TAP_CLOSE_KEY, String(n));
+  }
   function clearTaps() {
     tapSession = undefined;
     tapAnchor = undefined;
@@ -1753,7 +1810,7 @@
     tapResumeBar = Math.floor(bar);
     tapResult = "";
     tapReview = undefined;
-    await playback.play(s, toFloat(from), undefined);
+    await playback.play(s, toFloat(from), undefined, playRate);
     if (!playback.playing) return;
     const atSeconds = positionToSeconds(s.tempo, at);
     tapAnchor = { run: playback.runs, at, early: atSeconds - (atSeconds - positionToSeconds(s.tempo, from)) / 2 };
@@ -1817,10 +1874,14 @@
     if (!playing && tapSession) untrack(finishTap);
   });
   function toggleTap() {
+    // 닫을 때 넣지 않은 탭(2개 이상)은 설정대로 넣거나 버린다
+    if (tapOpen && tapSession && tapSession.times.length >= 2 && (tapClose === 2 || (tapClose === 1 && confirm(t("ui.tapCloseConfirm", { n: tapSession.times.length })))))
+      finishTap();
     tapOpen = !tapOpen;
     clearTaps();
     tapResult = "";
     tapReview = undefined;
+    respeed();
   }
 
   /** 이벤트 줄에서 누른 라벨: 휠로 템포 바꾸기, Del로 지우기 */
@@ -2640,7 +2701,7 @@
     let count = 0;
     let changed = 0;
     let clamped = 0;
-    let tiedOnly = 0;
+    let viaTie = 0;
     let before: [number, number] | undefined;
     let after: [number, number] | undefined;
     const widen = (a: [number, number] | undefined, b: readonly [number, number] | undefined): [number, number] | undefined =>
@@ -2650,11 +2711,11 @@
       count += r.count;
       changed += r.changed;
       clamped += r.clamped;
-      tiedOnly += r.tiedOnly;
+      viaTie += r.viaTie;
       before = widen(before, volumeSpan(notes, picked));
       after = widen(after, volumeSpan(r.notes, picked));
     }
-    return { count, changed, clamped, tiedOnly, before, after };
+    return { count, changed, clamped, viaTie, before, after };
   }
 
   function applyVolume(scope: TransposeScope, change: VolumeChange) {
@@ -2825,7 +2886,7 @@
 
   /** 커서(없으면 처음)부터 재생. 반복 구간이 있으면 그 시작부터 끝까지를 끊김 없이 되풀이한다 */
   async function play() {
-    if (song) await playback.play(song, cursor, loop);
+    if (song) await playback.play(song, cursor, loop, playRate);
   }
 
   function stop() {
@@ -3699,6 +3760,11 @@
         snap={tapSnap}
         snapReady={!!reference && !!referencePeaks}
         onsnap={setTapSnap}
+        speed={tapSpeed}
+        speeds={TAP_SPEED}
+        onspeed={setTapSpeed}
+        close={tapClose}
+        onclosemode={setTapClose}
         review={tapReview}
         onjump={seek}
         onclose={toggleTap}
@@ -3768,6 +3834,7 @@
           wave={showWave && reference && referencePeaks ? { peaks: referencePeaks, offset: reference.offsetMs / 1000 } : undefined}
           {colors}
           seconds={playing ? songSeconds : undefined}
+          rate={playback.rate}
           {cursor}
           {loop}
           oncursor={(t) => (cursor = t)}

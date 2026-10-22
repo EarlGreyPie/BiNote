@@ -556,8 +556,9 @@ describe("악보 타브 튜닝 (기록 밖 상태, beta.11)", () => {
     h.run(addTrack("p1", "트랙 2"));
     tune(h, "p1", "bass4", 0);
     expect(tabOf(h.undo(), "p1")).toEqual({ tuning: "bass4", capo: 0 });
-    // 튜닝을 함께 바꾼 단계를 되돌리면 그 단계 앞 튜닝으로 돌아간다
-    expect(tabOf(h.undo(), "p1")).toEqual({ tuning: "standard", capo: 0 });
+    // 튜닝을 함께 바꾼 단계를 되돌려도, 그 뒤에 따로 고른 보기 튜닝은 지킨다 (음만 되돌린다)
+    expect(tabOf(h.undo(), "p1")).toEqual({ tuning: "bass4", capo: 0 });
+    expect(tabOf(h.redo(), "p1")).toEqual({ tuning: "bass4", capo: 0 });
   });
 
   it("같은 값이면 곡을 그대로 둔다", () => {

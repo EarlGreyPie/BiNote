@@ -107,6 +107,17 @@ describe("타브 줄 옮겨 받기 (carryTabStrings)", () => {
   it("높이가 다르거나 옛 음이 없는 자리는 받지 않는다", () => {
     expect(carryTabStrings([note("a", 0, 1, 63, 1)], [note("x", 0, 1, 64), note("y", 1, 1, 63)]).map((n) => n.tabString)).toEqual([undefined, undefined]);
   });
+
+  it("실험실 표시는 합쳐진 음이 덮는 조각의 표시가 모두 같을 때만 옮긴다", () => {
+    const harm = { kind: "harmonic" as const, type: "artificial" as const, pitch: 48, vol: 8 };
+    const labbed = (id: string, start: number) => ({ ...note(id, start, 1, 60), lab: harm });
+    // 첫 조각에만 표시: 합친 음(1/2)에 붙이면 뒤 조각까지 표시가 걸린다
+    expect(carryTabStrings([labbed("a", 0), note("b", 1, 1, 60)], [note("x", 0, 2, 60)]).map((n) => n.lab)).toEqual([undefined]);
+    expect(carryTabStrings([note("a", 0, 1, 60), labbed("b", 1)], [note("x", 0, 2, 60)]).map((n) => n.lab)).toEqual([undefined]);
+    // 모든 조각이 같은 표시면 옮기고, 나뉜 조각은 모두 받는다
+    expect(carryTabStrings([labbed("a", 0), labbed("b", 1)], [note("x", 0, 2, 60)]).map((n) => n.lab)).toEqual([harm]);
+    expect(carryTabStrings([{ ...note("a", 0, 2, 60), lab: harm }], [note("x", 0, 1, 60), note("y", 1, 1, 60)]).map((n) => n.lab)).toEqual([harm, harm]);
+  });
 });
 
 describe("타브에서 고른 줄은 칠 수 있으면 지킨다 (두 자리 프렛 화음 입력)", () => {

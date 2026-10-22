@@ -1,6 +1,7 @@
 import { add, cmp, mul, rat, sub, type Rat } from "./rat.js";
 import type { Note, Song } from "./model.js";
 import type { GameProfile } from "./profile.js";
+import { chainVolumes } from "./note-edit.js";
 
 /**
  * 실험실 울림 (게임에는 이펙트가 없어 음표로 흉내 낸다). 결과는 늘 보통 MML이라 게임과 다른 앱이 그대로 읽는다.
@@ -80,7 +81,7 @@ export function reverbLevel(level: number, base: number, profile: GameProfile): 
 type Split = { ok: true; notes: Note[] } | { ok: false; why: "short" | "unwritable" };
 
 /** 음을 from에서부터 꼬리 조각으로 쪼갠다. 조각 수는 levels 길이까지 */
-function splitTail(n: Note, from: Rat, tail: ReverbTail, profile: GameProfile, ctx: ReverbContext): Split {
+function splitTail(n: Note, base: number, from: Rat, tail: ReverbTail, profile: GameProfile, ctx: ReverbContext): Split {
   const stop = end(n);
   if (cmp(from, n.start) <= 0 || cmp(from, stop) >= 0 || tail.levels.length === 0) return { ok: false, why: "short" };
   const head = sub(from, n.start);
@@ -102,7 +103,7 @@ function splitTail(n: Note, from: Rat, tail: ReverbTail, profile: GameProfile, c
   at = from;
   lens.forEach((dur, i) => {
     const { lab: _lab, ...plain } = n;
-    notes.push({ ...plain, id: ctx.newId(), start: at, dur, tie: "none", vol: reverbLevel(tail.levels[i]!, n.vol, profile) });
+    notes.push({ ...plain, id: ctx.newId(), start: at, dur, tie: "none", vol: reverbLevel(tail.levels[i]!, base, profile) });
     at = add(at, dur);
   });
   return { ok: true, notes };
@@ -142,9 +143,12 @@ export function planReverbStamp(song: Song, trackId: string, noteId: string, at:
     skipped.locked++;
     return none();
   }
-  const n = sortedTrack(song, trackId).find((x) => x.id === noteId);
+  const sorted = sortedTrack(song, trackId);
+  const n = sorted.find((x) => x.id === noteId);
   if (!n) return none();
-  if (n.vol <= 0) {
+  // & 사슬 뒤 조각은 게임에서 사슬 첫 음 v로 난다 (뒤에 적은 v는 무시): 그 v로 판단하고 줄인다
+  const base = chainVolumes(sorted).get(n.id) ?? n.vol;
+  if (base <= 0) {
     skipped.silent++;
     return none();
   }
@@ -153,7 +157,7 @@ export function planReverbStamp(song: Song, trackId: string, noteId: string, at:
     return none();
   }
   const from = cmp(at, n.start) <= 0 ? autoFrom(n, tail.keep, tail) : at;
-  const split = from ? splitTail(n, from, tail, profile, ctx) : ({ ok: false, why: "short" } as const);
+  const split = from ? splitTail(n, base, from, tail, profile, ctx) : ({ ok: false, why: "short" } as const);
   if (!split.ok) {
     skipped[split.why]++;
     return none();
@@ -174,7 +178,9 @@ export function planReverbBatch(song: Song, picked: readonly Note[], options: Re
   const changedIds: string[] = [];
   for (const tr of song.tracks) {
     const sorted = sortedTrack(song, tr.id);
+    const vols = chainVolumes(sorted);
     sorted.forEach((n, i) => {
+      const base = vols.get(n.id) ?? n.vol;
       if (!ids.has(n.id)) return;
       if (ctx.locked?.has(tr.id)) {
         skipped.locked++;
@@ -194,13 +200,13 @@ export function planReverbBatch(song: Song, picked: readonly Note[], options: Re
         skipped.tied++;
         return;
       }
-      if (n.vol <= 0) {
+      if (base <= 0) {
         skipped.silent++;
         return;
       }
       if (cmp(n.dur, options.minLength) >= 0 && (!options.beforeRest || restAfter)) {
         const from = autoFrom(n, options.keep, options);
-        const split = from ? splitTail(n, from, options, profile, ctx) : ({ ok: false, why: "short" } as const);
+        const split = from ? splitTail(n, base, from, options, profile, ctx) : ({ ok: false, why: "short" } as const);
         if (split.ok) {
           put(split.notes);
           counts.tails++;
@@ -215,7 +221,7 @@ export function planReverbBatch(song: Song, picked: readonly Note[], options: Re
           return;
         }
         const { lab: _lab, ...plain } = n;
-        put([n, { ...plain, id: ctx.newId(), start: end(n), dur, tie: "none", vol: reverbLevel(options.fillLevel, n.vol, profile) }]);
+        put([n, { ...plain, id: ctx.newId(), start: end(n), dur, tie: "none", vol: reverbLevel(options.fillLevel, base, profile) }]);
         counts.fills++;
         return;
       }

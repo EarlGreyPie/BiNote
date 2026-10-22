@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { rat, type Song } from "@mmlce/core";
-import { parseMml } from "@mmlce/mml";
+import { parseMml, setTracksNotes } from "@mmlce/mml";
 import { decodeText, encode3mle, encodeCp949, read3mle, readMmi, write3mle, writeMmi } from "../src/index.js";
 
 const SAMPLE = [
@@ -198,3 +198,21 @@ describe("write3mle: 악보마다 템포 (공개 전 점검)", () => {
   });
 });
 
+
+describe("저장하고 다시 열어도 같은 빠르기 템포가 늘지 않는다", () => {
+  const file = (chs: string[]) => ["[Settings]", "Encoding=utf-8", "TimeBase=960", ...chs.flatMap((c, k) => [`[ChannelProperty${k + 1}]`, "Patch=0", `[Channel${k + 1}]`, c])].join("\r\n");
+  it("끝 쉼표 길이를 지키려고 글 맨 끝에 붙인 같은 빠르기 t는 곡 템포 지도에 넣지 않는다", () => {
+    for (const chs of [["t100c4r4r4", "e4"], ["t100c4d4t120e4r4r4", "e4"], ["t90c4", "t90e4r2r4"]]) {
+      const a = read3mle(file(chs)).song;
+      const t0 = a.tracks[0]!;
+      const edited = setTracksNotes([{ trackId: t0.id, notes: t0.notes.map((n) => ({ ...n, vol: 9 })) }]).apply(a);
+      let s = edited;
+      for (let k = 0; k < 3; k++) s = read3mle(write3mle(s).text).song;
+      expect(s.tempo, chs.join(",")).toEqual(a.tempo);
+    }
+  });
+
+  it("글 가운데에 일부러 다시 적은 같은 빠르기 t는 그대로 둔다", () => {
+    expect(read3mle(file(["t100c4t100d4"])).song.tempo.map((e) => e.bpm)).toEqual([100, 100]);
+  });
+});

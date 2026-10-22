@@ -1,11 +1,8 @@
-import { connectMidi } from "./midiInput";
+import { ChordCollector, connectMidi } from "./midiInput";
 import { loadStored, saveStored } from "./persist";
 
 /** 건반 세기 → v 사용 여부와, 처음 켤 때 물어봤는지 (이 브라우저에 기억) */
 const VELOCITY_KEY = "mmlce.midiVelocity";
-
-/** 첫 건반부터 이 시간 안에 누른 건반은 화음 하나 */
-const CHORD_WINDOW_MS = 60;
 
 export interface MidiKeysHandlers {
   /** 누른 건반을 들려준다 */
@@ -31,8 +28,8 @@ export class MidiKeys {
   private disconnect: (() => void) | undefined;
   /** 연결 세대 */
   private session = 0;
-  private pending: { pitches: number[]; velocity: number } | undefined;
-  private timer: ReturnType<typeof setTimeout> | undefined;
+  /** 누른 채인 건반들을 화음 하나로 모은다 (화음 건반 하나를 떼면 넣는다) */
+  private chords = new ChordCollector();
   private held = new Set<number>();
 
   constructor(private readonly on: MidiKeysHandlers) {}
@@ -51,15 +48,13 @@ export class MidiKeys {
 
   /** 기다리던 화음을 지금 넣는다 (저장 직전 등) */
   flushPending(): void {
-    clearTimeout(this.timer);
-    this.flush();
+    const chord = this.chords.take();
+    if (chord) this.on.chord({ pitches: [...chord.pitches], velocity: chord.velocity });
   }
 
   /** 기다리던 화음을 버린다 (새 곡을 열 때 등) */
   dropPending(): void {
-    clearTimeout(this.timer);
-    this.timer = undefined;
-    this.pending = undefined;
+    this.chords.take();
   }
 
   stop(): void {
@@ -86,6 +81,9 @@ export class MidiKeys {
         onNoteOff: (pitch) => {
           this.held.delete(pitch);
           this.on.previewOff(pitch);
+          if (session !== this.session || this.paused) return;
+          const chord = this.chords.up(pitch);
+          if (chord) this.on.chord({ pitches: [...chord.pitches], velocity: chord.velocity });
         },
         onDevices: (names) => {
           if (session === this.session && this.status) this.status = { ...this.status, devices: names };
@@ -104,19 +102,6 @@ export class MidiKeys {
     if (this.paused) return;
     this.held.add(pitch);
     this.on.previewOn(pitch, velocity);
-    // 창은 첫 건반에서 한 번만 연다. 뒤 건반이 창을 늘리지 않아 빠른 단음 연주가 화음으로 뭉치지 않는다
-    if (this.pending) {
-      this.pending = { pitches: [...this.pending.pitches, pitch], velocity: Math.max(this.pending.velocity, velocity) };
-      return;
-    }
-    this.pending = { pitches: [pitch], velocity };
-    this.timer = setTimeout(() => this.flush(), CHORD_WINDOW_MS);
-  }
-
-  private flush(): void {
-    const chord = this.pending;
-    this.pending = undefined;
-    this.timer = undefined;
-    if (chord) this.on.chord(chord);
+    this.chords.down(pitch, velocity);
   }
 }

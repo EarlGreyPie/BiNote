@@ -104,10 +104,12 @@ const E_BOUNDARIES = [52, 64, 77];
  *   반음마다 2^(-1/12)배 짧아지고 음색 경계(o3e·o4e·o5f)에서 다시 길어진다. 식과 실측 차이 0.1초 이내.
  *   이음 길이나 템포와 상관없이 첫 음을 친 때부터 샘플 길이에서 끝난다(같은 음 20초 이음도 o4c 피아노 3.3초).
  *   고양이 하모니카는 샘플이 0.4~0.7초로 아주 짧다. 오르골(하우징 가구로 직접 재생해 녹음)은 o1e~o7e, 샘플 1.8~5초.
+ *   샬루모는 o2f·o2f+가 같은 샘플이라 맨 아래 구간이 o2f+(42) 샘플이다 (6초 녹음, 2026-10-22). 축음기 o4f·o5g 경계도 이날 녹음으로 확인.
+ *   오르골 맨 위 구간은 o6f(89)부터 (녹음 다시 확인, 2026-10-22). 처음 o6f+(90)로 넣어 1.97초는 o6f+ 값이라 o6f 기준 2.09초로 옮김.
  * - 음색 경계 위 e를 붙이면 한 번만 치고 이어진다 (튐 없음).
  * - 축음기(하우징 가구, 2026-10-16 직접 재생해 녹음): 오르골처럼 악보 하나에 3트랙. o1e~o7e(28~100), 범위 밖은 옥타브째 접힌다.
  *   줄지 않는 지속음인데 샘플이 끝나면 끊긴다(4.5~5.3초). 구간 경계 51|52·88|89는 반음씩 친 녹음의 음색 변화로,
- *   64|66·78|80은 6초 녹음 길이로 확인했다. 65·79는 녹음에 없어 위 구간에 넣었다(미확인). 식과 실측 차이 0.01초 이내.
+ *   64|66·78|80은 6초 녹음 길이로 확인했다. 65·79는 위 구간 첫 음이 맞다(2026-10-22 녹음으로 확인). 식과 실측 차이 0.01초 이내.
  */
 export const MOBILE_PROFILE: GameProfile = {
   id: "mobile",
@@ -141,9 +143,9 @@ export const MOBILE_PROFILE: GameProfile = {
     xylophone: [{ from: 28, seconds: 5.26 }, { from: 52, seconds: 2.66 }, { from: 66, seconds: 2.26 }, { from: 80, seconds: 2.08 }],
     flute: [{ from: 52, seconds: 5.35 }, { from: 76, seconds: 5.39 }, { from: 88, seconds: 5.37 }],
     violin: [{ from: 50, seconds: 5.49 }, { from: 60, seconds: 4.58 }, { from: 66, seconds: 4.9 }, { from: 74, seconds: 4.45 }],
-    chalumeau: [{ from: 30, seconds: 5.67 }, { from: 42, seconds: 5.67 }, { from: 56, seconds: 5.1 }, { from: 70, seconds: 4.57 }, { from: 82, seconds: 4.56 }],
+    chalumeau: [{ from: 42, seconds: 5.67 }, { from: 56, seconds: 5.1 }, { from: 70, seconds: 4.57 }, { from: 82, seconds: 4.56 }],
     harmonica: [{ from: 40, seconds: 5.25 }, { from: 52, seconds: 5.28 }, { from: 64, seconds: 5.27 }, { from: 77, seconds: 4.97 }, { from: 89, seconds: 4.99 }],
-    "music-box": [{ from: 28, seconds: 5.05 }, { from: 52, seconds: 2.24 }, { from: 66, seconds: 2.05 }, { from: 80, seconds: 1.79 }, { from: 90, seconds: 1.97 }],
+    "music-box": [{ from: 28, seconds: 5.05 }, { from: 52, seconds: 2.24 }, { from: 66, seconds: 2.05 }, { from: 80, seconds: 1.79 }, { from: 89, seconds: 2.09 }],
     gramophone: [{ from: 40, seconds: 5.33 }, { from: 52, seconds: 5.33 }, { from: 65, seconds: 5.02 }, { from: 79, seconds: 4.47 }, { from: 89, seconds: 5.02 }],
     "cat-harmonica": [{ from: 28, seconds: 0.47 }, { from: 32, seconds: 0.74 }, { from: 44, seconds: 0.73 }, { from: 56, seconds: 0.72 }, { from: 68, seconds: 0.74 }, { from: 80, seconds: 0.47 }, { from: 84, seconds: 0.49 }],
   },

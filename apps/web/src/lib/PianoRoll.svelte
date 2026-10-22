@@ -27,6 +27,7 @@
   import { onMount, untrack } from "svelte";
   import Icon from "./Icon.svelte";
   import { volumeLabels } from "./volumeLabels.svelte";
+  import { timbreZones } from "./timbreZones.svelte";
   import { fonts } from "./fonts.svelte";
   import { noteClipboard } from "./noteClipboard.svelte";
   import { rollFlow } from "./rollFlow.svelte";
@@ -126,6 +127,8 @@
     pitchRange?: readonly [number, number];
     /** 재생 중 곡 시간(초). 배경 영상을 맞춘다 */
     seconds?: number | undefined;
+    /** 곡 재생 속도 (탭 템포를 느리게 찍을 때). 배경 영상도 이 속도로 돌린다 */
+    rate?: number;
     /**
      * 도구. pen = 빈 곳을 눌러 음 넣기(음을 누르면 고르고 옮김), select = 빈 곳을 끌어 상자로 고르기(음은 안 넣음),
      * eraser = 누르거나 문지르는 음 지우기 (터치·펜에서 오른쪽 클릭 대신), split = 누른 자리(격자)에서 음 자르기,
@@ -188,7 +191,7 @@
     onlanetoggle?: ((trackId: string) => void) | undefined;
   }
 
-  let { cursor, loop, oncursor, onloop, song: fullSong, activeTrackId, orientation, division, playhead, onnotes, onselecttrack, onpicknote, onpreview, onseek, showEvents = false, video = $bindable(), videoPlay = $bindable(false), speedStep = $bindable(0), onspeedpicked, pitchRange = [12, 119], wave, look, themeKey = "", seconds, colors, tool = "pen", onreverb, noteDur, volume, onvolume, lightKeys = false, canonicalOf, memory, onmemory, work, visibleTrackIds, selectMove = false, locked, pickOthers = true, onevent, oneventmove, onalignbar, bardragtext, onwaveoffset, pickedEvent, onpickevent, ontempowheel, laneTrackIds, melodyIds, onvolumes, onclearlane, onlanetoggle }: Props =
+  let { cursor, loop, oncursor, onloop, song: fullSong, activeTrackId, orientation, division, playhead, onnotes, onselecttrack, onpicknote, onpreview, onseek, showEvents = false, video = $bindable(), videoPlay = $bindable(false), speedStep = $bindable(0), onspeedpicked, pitchRange = [12, 119], wave, look, themeKey = "", seconds, rate = 1, colors, tool = "pen", onreverb, noteDur, volume, onvolume, lightKeys = false, canonicalOf, memory, onmemory, work, visibleTrackIds, selectMove = false, locked, pickOthers = true, onevent, oneventmove, onalignbar, bardragtext, onwaveoffset, pickedEvent, onpickevent, ontempowheel, laneTrackIds, melodyIds, onvolumes, onclearlane, onlanetoggle }: Props =
     $props();
 
   /** 레이어: 고른 트랙이 든 보기만 그리고 다루는 곡 (나머지 트랙은 롤에서 보이지도 눌리지도 않는다) */
@@ -210,10 +213,13 @@
     const el = videoEl;
     if (!el || !video) return;
     if (seconds !== undefined) {
+      // 곡을 느리게 재생하면 영상도 같은 속도로 (안 그러면 0.15초마다 되감겨 끊긴다)
+      if (el.playbackRate !== rate) el.playbackRate = rate;
       const want = seconds + video.offset;
       if (Math.abs(el.currentTime - want) > 0.15) el.currentTime = Math.max(0, want);
       if (el.paused) void el.play().catch(() => {});
     } else if (videoPlay) {
+      if (el.playbackRate !== 1) el.playbackRate = 1;
       if (el.paused) void el.play().catch(() => (videoPlay = false));
     } else {
       if (!el.paused) el.pause();
@@ -750,6 +756,7 @@
       heldKeys: heldKeys(selectKeys.mode, sounding, heldPitches(), active ? (colors?.get(active.id) ?? active.color) : "#888"),
       canonicalOf,
       volumeLabels: volumeLabels.mode,
+      timbreZones: timbreZones.on,
       lane: laneReserved > 0 ? { ...lane.draw(laneList), label: t("ui.laneName") } : undefined,
       css: cssVar,
     });

@@ -11,6 +11,7 @@
   import { TAB_EVENT_FONT, TAB_EVENT_FONTS } from "./tabEvents";
   import { setLengthPadTuplet, tupletPrefs } from "./tupletPrefs.svelte";
   import { setVolumeLabels, volumeLabels } from "./volumeLabels.svelte";
+  import { setTimbreZones, timbreZones } from "./timbreZones.svelte";
   import type { VolumeLabelMode } from "./volumeLabels";
   import { rollFlow, setRollFlow, type RollFlow } from "./rollFlow.svelte";
   import { selectKeys, setSelectKeys } from "./selectKeys.svelte";
@@ -290,6 +291,11 @@
           </select>
         </label>
         <p class="muted help">{t("ui.volumeLabelsHelp")}</p>
+        <label class="row" title={t("ui.timbreZonesHelp")}>
+          <span>{t("ui.timbreZones")}</span>
+          <input type="checkbox" checked={timbreZones.on} onchange={(e) => setTimbreZones(e.currentTarget.checked)} />
+        </label>
+        <p class="muted help">{t("ui.timbreZonesHelp")}</p>
         <div class="row">
           <span>{t("ui.editorFont")}</span>
           <span class="checks">

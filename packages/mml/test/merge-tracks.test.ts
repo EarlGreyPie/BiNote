@@ -55,6 +55,30 @@ describe("2단계 (겹친 음만 뺌)", () => {
     expect(r.dropped[0]!.trackId).toBe("c");
   });
 
+  it("화음 음이 빠지면 같은 자리에서 함께 치던 같은 손의 남은 음 v를 올려 화음 크기를 맞춘다", () => {
+    // 0박: a o5c(v8)·c o5c(v8)가 오른손 두 음, b o4c는 왼손. c를 빼면 오른손이 두 음 → 한 음: v8 → v10 (3 dB)
+    const s = song([track("a", busy), track("b", middle), track("c", "o5 c4")]);
+    const r = mergeTracksResult(s, MOBILE_PROFILE, { keep: ["a", "b"], remove: ["c"], level: 2 });
+    expect(r.louder?.map((x) => [x.note.pitch, x.note.vol, x.vol])).toEqual([[72, 8, 10]]);
+    const a = r.song.tracks.find((t) => t.id === "a")!;
+    expect(a.notes.map((n) => n.vol)).toEqual([10, 8, 8, 8, 8, 8, 8, 8]);
+    // 왼손(b)은 그대로
+    expect(r.song.tracks.find((t) => t.id === "b")!.notes.every((n) => n.vol === 8)).toBe(true);
+    // 잠근 트랙 음은 v를 바꾸지 않는다
+    const lockedA = mergeTracksResult(s, MOBILE_PROFILE, { keep: ["a", "b"], remove: ["c"], level: 2 }, new Set(["a"]));
+    expect(lockedA.louder ?? []).toEqual([]);
+  });
+
+  it("v를 올린 트랙이 원문 끝 쉼표로 길이를 지키고 있어도 거절하지 않는다", () => {
+    const s = song([track("a", `${busy} r1r1`, { mml: { text: `${busy} r1r1` } }), track("b", middle), track("c", "o5 c4")]);
+    const r = mergeTracksResult(s, MOBILE_PROFILE, { keep: ["a", "b"], remove: ["c"], level: 2 });
+    expect(r.kept).toBeUndefined();
+    expect(r.louder?.map((x) => x.vol)).toEqual([10]);
+    // 악보 끝(원문 끝 쉼표로 지킨 길이)이 병합 전과 같다
+    const end = (x: Song) => gameTimeline(x, MOBILE_PROFILE).split("\n")[0]!.split(" ").pop();
+    expect(end(r.song)).toBe(end(s));
+  });
+
   it("겹치지 않는 음은 남길 트랙의 겹친 음을 대신 빼고 넣는다. 그런 음도 없으면 그대로 둔다", () => {
     // o5g는 겹치지 않는다. 그 자리 a의 o5c는 b의 o4c와 옥타브로 겹치니 그 음을 대신 뺀다
     const s = song([track("a", busy), track("b", middle), track("c", "o5 g4")]);
@@ -97,13 +121,20 @@ describe("3단계 (자리 없는 음은 뺌, 바깥 음 지킴)", () => {
     expect(r2.dropped.map((d) => d.trackId)).toEqual(["m"]);
   });
 
-  it("게임 출력은 원래 곡에서 뺀 음만 지운 것과 같다", () => {
+  it("게임 출력은 원래 곡에서 뺀 음만 지우고 남은 화음 v를 다시 맞춘 것과 같다", () => {
     const s = song([track("a", "o5 c2 d2 e2 f2"), track("b", "o3 c1 c1"), track("c", "o4 e4 g4 e4 g4 e4 g4 e4 g4")]);
     const r = mergeTracksResult(s, MOBILE_PROFILE, { keep: ["a", "b"], remove: ["c"], level: 3 });
     expect(r.kept).toBeUndefined();
     expect(r.dropped.length).toBe(8);
     const gone = new Set(r.dropped.map((d) => d.note));
-    const expected = { ...s, tracks: s.tracks.filter((t) => t.id !== "c").map((t) => ({ ...t, notes: t.notes.filter((n) => !gone.has(n)) })) };
+    const louder = new Map((r.louder ?? []).map((x) => [x.note, x.vol]));
+    // 0·1 자리(b o3c가 함께 시작)에서 a의 위 음과 c의 가운데 음이 오른손 두 음이었다: c를 빼면 a 음 v8 → v10.
+    // 1/2·3/2 자리는 a 음과 c 음이 10반음 넘게 떨어져 다른 손으로 본다
+    expect([...louder.values()]).toEqual([10, 10]);
+    const expected = {
+      ...s,
+      tracks: s.tracks.filter((t) => t.id !== "c").map((t) => ({ ...t, notes: t.notes.filter((n) => !gone.has(n)).map((n) => ({ ...n, vol: louder.get(n) ?? n.vol })) })),
+    };
     expect(gameTimeline(r.song, MOBILE_PROFILE)).toBe(gameTimeline(expected, MOBILE_PROFILE));
   });
 });

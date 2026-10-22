@@ -37,17 +37,25 @@
     /** 원곡 파형이 있어야 맞출 수 있다 */
     snapReady: boolean;
     onsnap: (n: number) => void;
+    /** 재생 속도 고르기 (speeds의 번호). 느리게 틀어도 탭은 원래 빠르기의 템포로 들어간다 */
+    speed: number;
+    speeds: readonly number[];
+    onspeed: (n: number) => void;
+    /** 닫을 때 넣지 않은 탭 (0 버리기 · 1 물어보기 · 2 넣기) */
+    close: number;
+    onclosemode: (n: number) => void;
     /** 넣은 뒤 다시 볼 것 */
     review: TapReview | undefined;
     /** 튀는 자리로 가기 (온음표) */
     onjump: (at: number) => void;
   }
 
-  let { playing, count, key, result, merge, onmerge, unit, onunit, ontap, onfinish, onclear, onclose, resumeBar, resuming, canResume, onresume, flag, onflag, snap, snapReady, onsnap, review, onjump }: Props = $props();
+  let { playing, count, key, result, merge, onmerge, unit, onunit, ontap, onfinish, onclear, onclose, resumeBar, resuming, canResume, onresume, flag, onflag, snap, snapReady, onsnap, speed, speeds, onspeed, close, onclosemode, review, onjump }: Props = $props();
 
   const MERGE_LABELS = ["ui.tapMergeOff", "ui.tapMergeWeak", "ui.tapMergeNormal", "ui.tapMergeStrong"] as const;
   const FLAG_PERCENT = [0, 10, 20, 35] as const;
   const SNAP_MS = [0, 30, 60] as const;
+  const CLOSE_LABELS = ["ui.tapCloseDiscard", "ui.tapCloseAsk", "ui.tapCloseApply"] as const;
 
   // 이어 찍을 마디: 넣은 뒤에는 마지막으로 찍은 마디로 따라간다 (직접 고칠 수 있다)
   let bar = $state(1);
@@ -71,6 +79,15 @@
   <button class="tap primary" disabled={!playing} onpointerdown={press} onclick={(e) => e.preventDefault()} tabindex="-1">
     {t("ui.tap")}{key ? ` (${key})` : ""}
   </button>
+  <label title={t("ui.tapSpeedHelp")}>
+    {t("ui.tapSpeed")}
+    <select value={speed} onchange={(e) => {
+        onspeed(Number(e.currentTarget.value));
+        e.currentTarget.blur();
+      }}>
+      {#each speeds as rate, n (n)}<option value={n}>{Math.round(rate * 100)}%</option>{/each}
+    </select>
+  </label>
   <span class="count">{t("ui.tapCount", { n: count })}</span>
   <button class="small" disabled={count < 2} onpointerdown={(e) => e.preventDefault()} onclick={onfinish}>{t("ui.tapFinish")}</button>
   <button class="small" disabled={count === 0} onpointerdown={(e) => e.preventDefault()} onclick={onclear}>{t("ui.tapClear")}</button>
@@ -115,6 +132,15 @@
         e.currentTarget.blur();
       }}>
       {#each [0, 1, 2] as n (n)}<option value={n}>{n === 0 ? t("ui.tapMergeOff") : t("ui.tapSnapWindow", { n: SNAP_MS[n]! })}</option>{/each}
+    </select>
+  </label>
+  <label title={t("ui.tapCloseHelp")}>
+    {t("ui.tapClose")}
+    <select value={close} onchange={(e) => {
+        onclosemode(Number(e.currentTarget.value));
+        e.currentTarget.blur();
+      }}>
+      {#each CLOSE_LABELS as label, n (n)}<option value={n}>{t(label)}</option>{/each}
     </select>
   </label>
   {#if result}<span class="muted">{result}</span>{/if}

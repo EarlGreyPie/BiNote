@@ -109,12 +109,19 @@ describe("MML로 내보내기: 다음에 복사할 트랙", () => {
 
   it("복사 뒤 트랙을 고치면 복사됨이 풀린다", () => {
     const s = song([track("a", "p1", "c4"), track("b", "p1", "d4")]);
-    const copied = new Map([["a", trackStamp(s.tracks[0]!)]]);
+    const copied = new Map([["a", trackStamp(s, s.tracks[0]!)]]);
     expect(isCopied(s, copied, "a")).toBe(true);
     expect(isCopied(s, copied, "b")).toBe(false);
     const edited = { ...s, tracks: [track("a", "p1", "c8"), s.tracks[1]!] };
     expect(isCopied(edited, copied, "a")).toBe(false);
     // 같은 음으로 다시 만든 트랙(실행 취소 등)은 복사됨 그대로
     expect(isCopied({ ...s, tracks: [track("a", "p1", "c4"), s.tracks[1]!] }, copied, "a")).toBe(true);
+  });
+
+  it("복사 뒤 곡 템포를 바꾸면 복사됨이 풀린다 (템포를 넣어 복사한 글이 달라진다)", () => {
+    const s = song([track("a", "p1", "c4")]);
+    const copied = new Map([["a", trackStamp(s, s.tracks[0]!)]]);
+    expect(isCopied(s, copied, "a")).toBe(true);
+    expect(isCopied({ ...s, tempo: [{ at: rat(0), bpm: 90 }] }, copied, "a")).toBe(false);
   });
 });

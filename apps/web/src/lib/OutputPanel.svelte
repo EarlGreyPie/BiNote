@@ -130,7 +130,7 @@
     const stamps = new Map(copied ?? []);
     for (const id of sent.trackIds) {
       const track = song.tracks.find((tr) => tr.id === id);
-      if (track) stamps.set(id, trackStamp(track));
+      if (track) stamps.set(id, trackStamp(song, track));
     }
     oncopied(stamps);
     if (mixedTempo) keptTempo = mixedTempo;

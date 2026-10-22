@@ -11,6 +11,7 @@ import {
   PROFILES,
   type Command,
   type GameProfile,
+  type LengthLimit,
   type Note,
   type Rat,
   type Song,
@@ -20,7 +21,7 @@ import {
 } from "@mmlce/core";
 import { parseMml, type ParseResult } from "./parser.js";
 import { optimizeMml } from "./optimizer.js";
-import { lengthPieces } from "./printer.js";
+import { lengthPieces, restText } from "./printer.js";
 import { bpmBefore, padScore, scoreEnd, tempoBefore, textEnd, trackEnd } from "./score-end.js";
 import { placeTempo, placeTempoByScore, scoreTrackIds, type TempoMove } from "./tempo-placement.js";
 import { chordsPerScore } from "./clipboard.js";
@@ -574,11 +575,16 @@ function notesEnd(notes: readonly Note[]): Rat {
  */
 function writtenBpmAt(song: Song, trackId: string, text: string, at: Rat): number {
   const score = songScores(song).find((ids) => ids.includes(trackId)) ?? [trackId];
+  // 원문 없는 트랙의 템포는 출력기가 그 트랙에 쓰는 템포(scoreTempo)다. 글을 다시 쓰고 읽지 않고 악보마다 한 번 계산한다
+  let generated: Map<string, TempoEvent[]> | undefined;
   const written = normalizeTempo(
     score.flatMap((tid) => {
       if (tid === trackId) return parseTrackText(trackId, { text }).tempo;
       const t = song.tracks.find((x) => x.id === tid);
-      return t ? parseTrackText(t.id, trackSource(song, t)).tempo : [];
+      if (!t) return [];
+      if (t.mml) return textTempo(t.id, t.mml);
+      generated ??= scoreTempo(song, score).generated;
+      return generated.get(t.id) ?? [];
     }),
   );
   let bpm = DEFAULT_BPM;
@@ -586,13 +592,23 @@ function writtenBpmAt(song: Song, trackId: string, text: string, at: Rat): numbe
   return bpm;
 }
 
+/** 원문의 템포 (곡 위치). 원문 글은 바뀌지 않는 값이라 글마다 한 번만 읽는다 (여러 트랙 일괄 편집에서 같은 글을 되풀이해 읽지 않게) */
+const textTempoCache = new WeakMap<TrackText, TempoEvent[]>();
+function textTempo(trackId: string, mml: TrackText): TempoEvent[] {
+  let tempo = textTempoCache.get(mml);
+  if (!tempo) textTempoCache.set(mml, (tempo = parseTrackText(trackId, mml).tempo));
+  return tempo;
+}
+
 /**
  * 음을 직접 고치는 편집(원문을 지움)에서 원문 끝 쉼표로 지키던 트랙 길이를 지킨다 (score-end.ts).
  * 원문이 있던 트랙의 마지막 음 끝이 그대로인데(볼륨·높이만 바꿈 등) 원문 게임 길이가 더 길면, 출력기로 다시 쓴 글에
- * 모자란 쉼표와 그 자리 템포를 붙여 원문으로 남긴다. 음 끝이 바뀐 편집(끝 음을 지우거나 늘림)은 전처럼 음 끝이 길이다.
+ * 모자란 쉼표와 그 자리 템포를 붙여 원문으로 남긴다. 마지막 음 끝과 지킨 끝 사이에 이 트랙이 적은 템포
+ * (예: `t60c4t80r4r4`의 t80)도 같은 자리에 쉼표로 띄워 다시 적는다 (빠지면 끝 쉼표의 시간이 달라진다).
+ * 음 끝이 바뀐 편집(끝 음을 지우거나 늘림)은 전처럼 음 끝이 길이다.
  * 다시 읽은 음이 고친 음과 다르면(출력기가 쓸 수 없는 길이 등) 전처럼 원문 없이 둔다
  */
-function keepTextEnd(before: Song, after: Song, trackIds: readonly string[]): Song {
+export function keepTextEnd(before: Song, after: Song, trackIds: readonly string[]): Song {
   const lengths = (PROFILES[after.meta.profileId] ?? getProfile("mobile")).length;
   let out = after;
   for (const id of trackIds) {
@@ -602,11 +618,34 @@ function keepTextEnd(before: Song, after: Song, trackIds: readonly string[]): So
     const end = textEnd(old.mml);
     const last = notesEnd(now.notes);
     if (!eq(notesEnd(old.notes), last) || cmp(end, last) <= 0) continue;
-    const base = trackSource(out, now).text;
+    const base = withTailTempo(trackSource(out, now).text, textTempo(id, old.mml), end, lengths);
     const text = padScore([base], end, writtenBpmAt(out, id, base, end), lengths)[0]!;
     const mml: TrackText = { text };
     if (!eq(textEnd(mml), end) || !sameSound(now.notes, parseTrackText(id, mml).notes)) continue;
     out = { ...out, tracks: out.tracks.map((t) => (t.id === id ? { ...now, mml } : t)) };
+  }
+  return out;
+}
+
+/**
+ * 다시 쓴 글 끝(마지막 음 뒤)부터 end 앞까지, 원문이 적었던 템포를 그 자리에 다시 적는다 (모자란 만큼 쉼표를 띄운다).
+ * 다시 쓴 글이 그 자리에 같은 빠르기를 이미 적었으면 두 번 적지 않는다. 한 자리에 여럿 적힌 템포는 마지막 것만 다시 적는다
+ */
+function withTailTempo(text: string, own: readonly TempoEvent[], end: Rat, lengths: LengthLimit): string {
+  const parsed = parseMml(text);
+  let at = parsed.end;
+  let out = text;
+  // 같은 자리에 둘 이상 적혔으면 마지막 것이 그 자리 빠르기다 (적힌 순서를 지키는 정렬 뒤 자리마다 마지막만)
+  const sorted = [...own].sort((a, b) => cmp(a.at, b.at));
+  const last = sorted.filter((e, i) => !(sorted[i + 1] && eq(sorted[i + 1]!.at, e.at)));
+  // 다시 쓴 글 끝 자리에 이미 적힌 빠르기 (그 자리 마지막 t)
+  const written = parsed.tempo.filter((t) => eq(t.at, parsed.end)).pop()?.bpm;
+  for (const e of last) {
+    if (cmp(e.at, at) < 0 || cmp(e.at, end) >= 0) continue;
+    if (eq(e.at, parsed.end) && written === e.bpm) continue;
+    const gap = sub(e.at, at);
+    out += (gap.n > 0 ? restText(gap, lengths) : "") + `t${e.bpm}`;
+    at = e.at;
   }
   return out;
 }

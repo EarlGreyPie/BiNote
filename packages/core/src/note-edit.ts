@@ -203,6 +203,16 @@ export function tieChains(notes: readonly Note[]): Note[][] {
 }
 
 /**
+ * 음마다 실제로 나는 볼륨. &로 바로 이은 음은 게임에서 첫 음 v로 이어 나므로 사슬 첫 음 v를 쓴다
+ * (뒤 조각의 v는 무시된다)
+ */
+export function chainVolumes(notes: readonly Note[]): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const chain of tieChains(notes)) for (const n of chain) out.set(n.id, chain[0]!.vol);
+  return out;
+}
+
+/**
  * 고른 음(한 트랙)을 복사한다. &로 이은 짝이 함께 복사되지 않은 음은 &를 풀어,
  * 붙여넣은 트랙에 우연히 바로 뒤에 있는 다른 음과 이어지지 않게 한다
  */

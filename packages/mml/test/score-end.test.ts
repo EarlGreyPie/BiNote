@@ -222,6 +222,46 @@ describe("음을 직접 고쳐 원문을 지워도 원문 끝 쉼표 길이를 �
     expect(atEnd.map((e) => e.bpm)).toEqual([90]);
   });
 
+  it("원문 없는 트랙이 같은 악보에 있으면 그 트랙에 출력기가 쓸 템포를 따른다", () => {
+    const free = track("a", "p1", "t120e2t90g2");
+    const { mml: _m, ...noText } = free;
+    const s = song([free, track("c", "p1", "v8c4r4r4")]);
+    const s2 = { ...s, tracks: [noText, s.tracks[1]!] };
+    const c = s2.tracks[1]!;
+    const next = setTracksNotes([{ trackId: "c", notes: c.notes.map((n) => ({ ...n, vol: 9 })) }]).apply(s2);
+    const text = next.tracks.find((t) => t.id === "c")!.mml!;
+    expect(parseMml(text.text).gameEnd).toEqual(rat(1, 2));
+    expect(parseTrackText("c", text).tempo.filter((e) => e.at.n * 2 === e.at.d).map((e) => e.bpm)).toEqual([90]);
+    // 고치기 전에는 그 t90을 원문 없는 트랙 a가 쓴다
+    expect(trackSource(s2, noText).text).toContain("t90");
+  });
+
+  it("마지막 음과 지킨 끝 사이에 이 트랙이 적은 템포도 같은 자리에 다시 적는다 (끝 쉼표 시간이 그대로)", () => {
+    for (const [text, want] of [
+      ["t60c4t80r4r4", [[0, 60], [1 / 4, 80]]],
+      ["t60c4r8t80r8t70r4r4", [[0, 60], [3 / 8, 80], [1 / 2, 70]]],
+    ] as const) {
+      const s = song([track("a", "p1", text)]);
+      const next = setTracksNotes([{ trackId: "a", notes: s.tracks[0]!.notes.map((n) => ({ ...n, vol: 9 })) }]).apply(s);
+      const mml = next.tracks[0]!.mml!;
+      expect(parseMml(mml.text).gameEnd, text).toEqual(end(text));
+      const tempo = normalizeTempo(parseTrackText("a", mml).tempo).map((e) => [e.at.n / e.at.d, e.bpm]);
+      expect(tempo.slice(0, want.length), text).toEqual(want);
+      // 끝에 붙인 템포는 그 자리 빠르기 그대로라 들리는 템포 지도는 원문과 같다
+      expect(normalizeTempo(parseTrackText("a", mml).tempo).filter((e) => e.at.n / e.at.d < end(text).n / end(text).d)).toEqual(normalizeTempo(parseTrackText("a", { text }).tempo));
+    }
+  });
+
+  it("마지막 음 뒤 같은 자리에 템포가 둘 적힌 원문은 마지막 것이 그 자리 빠르기로 남는다", () => {
+    const text = "t60c4t90t80r4r4";
+    const s = song([track("a", "p1", text), track("b", "p1", "g1")]);
+    const next = setTracksNotes([{ trackId: "a", notes: s.tracks[0]!.notes.map((n) => ({ ...n, vol: 9 })) }]).apply(s);
+    const mml = next.tracks[0]!.mml!;
+    expect(parseMml(mml.text).gameEnd).toEqual(end(text));
+    const at = (t: string) => normalizeTempo(parseTrackText("a", { text: t }).tempo).filter((e) => e.at.n / e.at.d < 1 / 2);
+    expect(at(mml.text)).toEqual(at(text));
+  });
+
   it("같은 자리에 두 트랙이 다른 템포를 적은 악보에서도 끝에 붙이는 템포는 곡 템포 지도가 쓰는 템포를 따른다", () => {
     const s = song([track("a", "p1", "t120e4t80f2g4"), track("b", "p1", "v8c4t90r4r4")]);
     const b = s.tracks.find((t) => t.id === "b")!;

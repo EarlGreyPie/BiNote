@@ -165,6 +165,21 @@ describe("앱의 곡 바꾸기 길 목록 (새 길이 검사를 건너뛰지 않
     expect(h.undo()).toEqual(s);
   });
 
+  it("타브 그대로 튜닝 바꾸기 뒤 보기 튜닝을 따로 고르면, 실행 취소·다시 실행은 음만 되돌리고 나중에 고른 보기 튜닝을 지킨다", () => {
+    const s = song([note("a", [0, 1], [1, 4], 40)], [note("c", [0, 1], [1, 4], 64)]);
+    const h = guarded(s);
+    const r = retuneKeepingTab(s.tracks, { strings: TUNINGS.standard.strings, capo: 0, maxFret: 24 }, { strings: TUNINGS.dropD.strings, capo: 0, maxFret: 24 });
+    h.run(retuneCommand("p1", { tuning: "dropD", capo: 0 }, r.changes, "튜닝"));
+    const view = { tuning: "bass4", capo: 3 };
+    h.amend({ ...h.song, players: h.song.players.map((p) => ({ ...p, tab: view })) });
+    h.undo();
+    expect(h.song.tracks.map((t) => t.notes.map((n) => n.pitch))).toEqual(s.tracks.map((t) => t.notes.map((n) => n.pitch)));
+    expect(h.song.players[0]!.tab).toEqual(view);
+    h.redo();
+    expect(h.song.tracks[0]!.notes[0]!.pitch).toBe(38);
+    expect(h.song.players[0]!.tab).toEqual(view);
+  });
+
   it("실험실 고스트 노트·하모닉스·풀기는 v·높이만 바꿔 검사를 지나고, 실행 취소 한 번에 돌아간다", () => {
     const s = song([note("a", [0, 1], [1, 4]), note("b", [1, 4], [1, 4], 64), note("c", [1, 2], [1, 4], 67)]);
     const h = guarded(s);

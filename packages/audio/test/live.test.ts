@@ -116,6 +116,72 @@ describe("실시간 재생 예약", () => {
     expect(player.position).toBeCloseTo(0.05);
   });
 
+  it("느리게 재생하면 음 사이가 늘어나고 위치는 곡 시간으로 잰다 (탭 템포 느리게 찍기)", () => {
+    const sink = new FakeSink();
+    const player = new LivePlayer(sink, { lookahead: 0.3, startDelay: 0.1, timers: manualTimers });
+    const ends: number[] = [];
+    player.onEnd = () => ends.push(sink.currentTime);
+    player.start(schedule, patches, { rate: 0.5 });
+    expect(player.speed).toBe(0.5);
+    // 곡 0.5초 자리 음은 오디오로 1초 뒤에 난다
+    sink.currentTime = 10.85;
+    player.tick();
+    expect(sink.log.slice(4)).toEqual(["off 0 60 @11.10", "on 0 62 100 @11.10"]);
+    // 오디오 1초가 흐르면 곡은 0.5초
+    sink.currentTime = 11.1;
+    expect(player.position).toBeCloseTo(0.5);
+    expect(player.positionLagged(0.2)).toBeCloseTo(0.4);
+    // 곡 길이 1초 = 오디오 2초 뒤에 끝난다
+    sink.currentTime = 12.0;
+    player.tick();
+    expect(ends).toEqual([]);
+    sink.currentTime = 12.15;
+    player.tick();
+    expect(ends).toEqual([12.15]);
+    expect(player.speed).toBe(1);
+  });
+
+  it("느리게 반복하면 경계도 그 속도로 늘어난다", () => {
+    const sink = new FakeSink();
+    const player = new LivePlayer(sink, { lookahead: 0.5, startDelay: 0.1, timers: manualTimers });
+    const wraps: number[] = [];
+    player.onWrap = (at) => wraps.push(at);
+    player.start(schedule, patches, { loop: 0.75, rate: 0.5 });
+    sink.currentTime = 11.2;
+    player.tick();
+    expect(wraps).toEqual([11.6]);
+    sink.currentTime = 11.7;
+    expect(player.position).toBeCloseTo(0.05);
+  });
+
+  it("반복 구간 가운데(offset)부터 이어 재생하고, 다음 회차는 처음부터 (속도 바꾸기)", () => {
+    const sink = new FakeSink();
+    const player = new LivePlayer(sink, { lookahead: 0.3, startDelay: 0.1, timers: manualTimers });
+    const wraps: number[] = [];
+    player.onWrap = (at) => wraps.push(at);
+    player.start(schedule, patches, { loop: 0.75, rate: 0.5, offset: 0.5 });
+    // 0.5초 앞 음(60)은 다시 치지 않고, 0.5초 자리 음(62)이 시작 시각(10.1)에 난다
+    expect(sink.log.filter((l) => l.startsWith("on"))).toEqual(["on 0 62 100 @10.10"]);
+    sink.currentTime = 10.1;
+    expect(player.position).toBeCloseTo(0.5);
+    expect(player.startTime).toBeCloseTo(9.1);
+    // 남은 0.25초 = 오디오 0.5초 뒤 경계
+    sink.currentTime = 10.5;
+    player.tick();
+    expect(wraps).toEqual([10.6]);
+    sink.currentTime = 10.7;
+    expect(player.position).toBeCloseTo(0.05);
+  });
+
+  it("속도가 0 이하거나 숫자가 아니면 원래 속도로 재생한다", () => {
+    const sink = new FakeSink();
+    const player = new LivePlayer(sink, { lookahead: 0.3, startDelay: 0.1, timers: manualTimers });
+    player.start(schedule, patches, { rate: 0 });
+    expect(player.speed).toBe(1);
+    player.start(schedule, patches, { rate: Number.NaN });
+    expect(player.speed).toBe(1);
+  });
+
   it("반복이 짧아도 화면 위치는 실제로 들리는 회차 기준이다", () => {
     const sink = new FakeSink();
     const player = new LivePlayer(sink, { lookahead: 0.3, startDelay: 0.1, timers: manualTimers });

@@ -3,15 +3,19 @@ import { chainVolumes } from "./scores";
 import { drawVolumeLane, type LaneDraw } from "./laneDraw";
 import { type Peaks } from "./waveform";
 import { drawWaveStrip, noteStarts } from "./waveDraw";
-import { trackSoundingRange, type CanonicalOf } from "./instrumentRange";
+import { trackSoundingInstrument, trackSoundingRange, type CanonicalOf } from "./instrumentRange";
+import { zoneRows } from "./timbreZones";
 import { labelFits, volumeLabelNotes, type VolumeLabelMode } from "./volumeLabels";
 import {
   add,
   cmp,
+  crossesTimbre,
   foldPitch,
   gridLines,
   MOBILE_PROFILE,
   PROFILES,
+  soundingRangeOf,
+  timbreBoundaries,
   toFloat,
   type Note,
   type Song,
@@ -79,6 +83,8 @@ export interface RollDrawOptions {
   readonly canonicalOf?: CanonicalOf | undefined;
   /** 음표 볼륨 숫자 (설정 → 화면). 고르는 트랙 음 옆에 v12처럼 쓴다. 없으면 끔 */
   readonly volumeLabels?: VolumeLabelMode | undefined;
+  /** 음색 경계 표시 (설정 → 화면). 고르는 트랙 악기의 경계선·구간 바탕, 경계를 넘는 & 선을 경고 색으로 */
+  readonly timbreZones?: boolean | undefined;
   /** CSS 변수 값 (테마 색) */
   readonly css: (name: string) => string;
 }
@@ -135,6 +141,46 @@ export function drawRoll(canvas: HTMLCanvasElement, o: RollDrawOptions): void {
     }
   }
 
+  // 음색 경계: 고르는 트랙 악기의 샘플 구간을 한 칸 건너 옅게 칠하고, 바뀌는 자리에 강조색 선을 긋는다 (음보다 아래).
+  // 범위 밖 줄은 접혀 나는 높이의 구간을 따르고, 그쪽 경계선은 옅은 점선 (접혀 되풀이되는 경계)
+  const profile = PROFILES[s.meta.profileId] ?? MOBILE_PROFILE;
+  const activeTrack = activeId ? s.tracks.find((t) => t.id === activeId) : undefined;
+  /** 악기 범위 안 음색 경계 (경계 바로 위 음). 건반 띠에도 짧게 표시한다 */
+  const zoneEdges: number[] = [];
+  if (o.timbreZones && activeTrack) {
+    const instrument = trackSoundingInstrument(s, activeTrack, o.canonicalOf);
+    const rows = zoneRows(timbreBoundaries(profile, instrument), soundingRangeOf(profile, instrument), low, high);
+    const accent = o.css("--accent");
+    g.fillStyle = accent;
+    g.globalAlpha = 0.06;
+    for (const [p, row] of rows) {
+      if (row.zone % 2 === 0) continue;
+      const r = noteRect(v, from, to - from, p);
+      g.fillRect(r.x, r.y, r.w, r.h);
+    }
+    g.strokeStyle = accent;
+    g.lineWidth = 1;
+    for (const [p, row] of rows) {
+      if (!row.edge) continue;
+      if (row.inside) zoneEdges.push(p);
+      const r = noteRect(v, from, to - from, p);
+      g.globalAlpha = row.inside ? 0.5 : 0.25;
+      g.setLineDash(row.inside ? [] : [4, 4]);
+      g.beginPath();
+      // 아래 줄(한 반음 아래)과의 사이: 가로 롤은 칸 아래 끝, 세로 롤은 칸 왼쪽 끝
+      if (horizontal) {
+        g.moveTo(r.x, r.y + r.h - 0.5);
+        g.lineTo(r.x + r.w, r.y + r.h - 0.5);
+      } else {
+        g.moveTo(r.x + 0.5, r.y);
+        g.lineTo(r.x + 0.5, r.y + r.h);
+      }
+      g.stroke();
+    }
+    g.setLineDash([]);
+    g.globalAlpha = 1;
+  }
+
   // 격자·박·마디선 (박자표를 따르고, 곡 중간 박자 바뀜도 그 자리부터)
   const step = 1 / div;
   const drawTimeLine = (t: number, color: string, w: number) => {
@@ -155,7 +201,6 @@ export function drawRoll(canvas: HTMLCanvasElement, o: RollDrawOptions): void {
 
   // 음: 고르는 트랙은 진하게(맨 위), 다른 트랙은 채움만 옅게 하고 테두리는 남긴다.
   // 끈 트랙은 사선, v0(이음 사슬은 첫 음 v)은 테두리만, 악기 범위 밖이라 접혀 나는 음은 트랙 색 위에 회색 사선
-  const profile = PROFILES[s.meta.profileId] ?? MOBILE_PROFILE;
   // 접힘 표식은 회색 사선. 어두운 바탕에서도 보이게 글자 보조색(--muted)으로 긋는다
   const folded = o.css("--muted");
   const look = o.look ?? DEFAULT_APPEARANCE.note;
@@ -187,6 +232,7 @@ export function drawRoll(canvas: HTMLCanvasElement, o: RollDrawOptions): void {
   const tracks = [...s.tracks].sort((a, b) => Number(a.id === activeId) - Number(b.id === activeId));
   for (const track of tracks) {
     const range = trackSoundingRange(profile, s, track, o.canonicalOf);
+    const instrument = o.timbreZones ? trackSoundingInstrument(s, track, o.canonicalOf) : undefined;
     const isActive = track.id === activeId;
     let notes: readonly Note[] = track.notes;
     if (isActive && o.dragNotes.length > 0) {
@@ -271,9 +317,10 @@ export function drawRoll(canvas: HTMLCanvasElement, o: RollDrawOptions): void {
     }
     g.globalAlpha = isActive ? 0.95 : track.mute ? 0.3 : 0.5;
     // &로 이은 음: 앞 음 끝 가운데에서 뒤 음 시작 가운데로 선을 긋는다 (다른 음이면 비스듬히 = 슬라이딩)
+    // 음색 경계 표시를 켜면 경계를 넘는 &(게임에서 음색이 튄다)는 경고 색으로, 이음 자리에 작은 점을 찍는다
     const sorted = [...notes].sort((a, b) => cmp(a.start, b.start));
-    g.strokeStyle = o.css("--text");
-    g.lineWidth = isActive ? 2 : 1;
+    const tieColor = o.css("--text");
+    const warnColor = o.css("--danger");
     sorted.forEach((n, i) => {
       const next = sorted[i + 1];
       if (n.tie !== "next" || !next || cmp(add(n.start, n.dur), next.start) !== 0) return;
@@ -282,6 +329,9 @@ export function drawRoll(canvas: HTMLCanvasElement, o: RollDrawOptions): void {
       const a = noteRect(v, toFloat(n.start), toFloat(n.dur), n.pitch);
       const b = noteRect(v, at, toFloat(next.dur), next.pitch);
       const half = Math.min(6, (horizontal ? a.w : a.h) / 2);
+      const warn = instrument !== undefined && n.pitch !== next.pitch && crossesTimbre(profile, instrument, n.pitch, next.pitch);
+      g.strokeStyle = warn ? warnColor : tieColor;
+      g.lineWidth = isActive ? 2 : 1;
       g.beginPath();
       if (horizontal) {
         g.moveTo(a.x + a.w - half, a.y + a.h / 2);
@@ -291,6 +341,13 @@ export function drawRoll(canvas: HTMLCanvasElement, o: RollDrawOptions): void {
         g.lineTo(b.x + b.w / 2, b.y + b.h - Math.min(6, b.h / 2));
       }
       g.stroke();
+      if (warn) {
+        g.fillStyle = warnColor;
+        g.beginPath();
+        if (horizontal) g.arc(b.x, b.y + b.h / 2, isActive ? 3 : 2, 0, Math.PI * 2);
+        else g.arc(b.x + b.w / 2, b.y + b.h, isActive ? 3 : 2, 0, Math.PI * 2);
+        g.fill();
+      }
     });
   }
   g.globalAlpha = 1;
@@ -298,7 +355,6 @@ export function drawRoll(canvas: HTMLCanvasElement, o: RollDrawOptions): void {
   // 음표 볼륨 숫자: 고르는 트랙 음을 다 그린 뒤(고른 음 고리 위)에. 가로 롤은 음 시작 위쪽 바깥, 세로 롤은 음 시작(아래 끝) 오른쪽 바깥.
   // 음을 그리는 영역 밖(마디 번호·이벤트 줄·파형 띠·건반·음량 레인)으로 넘어가지 않게 자른다
   const labelMode = o.volumeLabels ?? "off";
-  const activeTrack = activeId ? s.tracks.find((t) => t.id === activeId) : undefined;
   if (labelMode !== "off" && activeTrack && (!horizontal || v.pxPerKey >= 8)) {
     let notes: readonly Note[] = activeTrack.notes;
     if (o.dragNotes.length > 0) {
@@ -513,6 +569,15 @@ export function drawRoll(canvas: HTMLCanvasElement, o: RollDrawOptions): void {
     g.fillStyle = lit.get(p) ?? "#2a2f3a";
     if (horizontal) g.fillRect(v.keyboard - blackLen, a, blackLen, k * 0.8);
     else g.fillRect(a, strip.y, k * 0.8, blackLen);
+  }
+  // 음색 경계: 건반 띠 롤 쪽 끝에 강조색 짧은 선 (흰건반 이름 글자를 가리지 않게 띠 절반만)
+  if (zoneEdges.length > 0) {
+    g.fillStyle = o.css("--accent");
+    for (const p of zoneEdges) {
+      const a = along(p);
+      if (horizontal) g.fillRect(v.keyboard / 2, a - 1, v.keyboard / 2, 2);
+      else g.fillRect(a - 1, strip.y, 2, v.keyboard / 2);
+    }
   }
   g.fillStyle = line;
   if (horizontal) g.fillRect(v.keyboard - 1, 0, 1, v.height);

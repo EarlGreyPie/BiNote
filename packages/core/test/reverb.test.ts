@@ -38,6 +38,26 @@ describe("울림 v 단계", () => {
   });
 });
 
+describe("& 사슬 볼륨", () => {
+  it("v0으로 시작한 & 사슬은 뒤 조각에 v15를 적어도 무음이라 울림을 넣지 않는다 (게임은 & 뒤 v를 무시)", () => {
+    const s = songOf([n("a", rat(0), rat(1, 4), 60, 0, { tie: "next" }), n("b", rat(1, 4), rat(1), 60, 15)]);
+    const stamp = planReverbStamp(s, "t1", "b", rat(3, 4), tail, MOBILE_PROFILE, ctx());
+    expect(stamp.changes).toHaveLength(0);
+    expect(stamp.skipped.silent).toBe(1);
+    const all = planReverbBatch(s, s.tracks[0]!.notes, batch, MOBILE_PROFILE, ctx());
+    expect(all.changes).toHaveLength(0);
+    expect(all.skipped.silent).toBe(1);
+    expect(all.skipped.tied).toBe(1);
+  });
+
+  it("v15로 시작한 & 사슬 뒤 조각이 v0으로 적혀 있어도 사슬 v15 기준으로 꼬리를 낸다", () => {
+    const s = songOf([n("a", rat(0), rat(1, 4), 60, 15, { tie: "next" }), n("b", rat(1, 4), rat(1), 60, 0)]);
+    const r = planReverbStamp(s, "t1", "b", rat(3, 4), tail, MOBILE_PROFILE, ctx());
+    expect(r.tails).toBe(1);
+    expect(notesOf(r).slice(2).map((x) => x.vol)).toEqual([6, 3, 2, 1]);
+  });
+});
+
 describe("울림 찍기", () => {
   it("누른 자리부터 조각으로 쪼개고, v 단계를 다 쓰면 마지막 조각이 남은 길이를 가진다. &로 잇지 않는다", () => {
     const s = songOf([n("a", rat(0), rat(1), 60, 15)]);

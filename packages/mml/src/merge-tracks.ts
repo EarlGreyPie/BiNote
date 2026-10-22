@@ -1,5 +1,5 @@
-import { add, cmp, type Command, type GameProfile, type Note, type Rat, type Song, type Track } from "@mmlce/core";
-import { compactResult, restoreSong } from "./edit.js";
+import { add, cmp, tieChains, type Command, type GameProfile, type Note, type Rat, type Song, type Track } from "@mmlce/core";
+import { compactResult, keepTextEnd, restoreSong } from "./edit.js";
 import { gameTimeline } from "./game-timeline.js";
 import { mergeFit, noteChains } from "./merge.js";
 import { trackEnd } from "./score-end.js";
@@ -15,7 +15,10 @@ import { trackEnd } from "./score-end.js";
  * - 우선 트랙: 이 트랙 음은 어느 단계에서도 빼지 않는다. 비울 트랙이면 남길 트랙의 (단계가 허락하는) 음을 대신 빼고 넣는다.
  * - 옮기는 단위는 음 하나 또는 &로 이은 묶음 전체. 겹치거나 &가 새로 이어지는 자리에는 넣지 않는다.
  *
- * 받아들이는 기준: 게임 출력을 다시 읽은 결과가 "원래 곡에서 뺀 음만 지운 곡"과 같아야 한다.
+ * - 화음 감쇠 다시 맞추기: 2·3단계로 화음 음이 빠지면, 같은 자리에서 함께 시작하던 같은 손의 남은 음 v를 올려
+ *   화음 전체 크기를 빼기 전과 맞춘다 (같은 v로 n음을 치면 perDoublingDb × log2(n) dB 커진다, 인게임 실측).
+ *
+ * 받아들이는 기준: 게임 출력을 다시 읽은 결과가 "원래 곡에서 뺀 음만 지우고 남은 화음 v를 다시 맞춘 곡"과 같아야 한다.
  */
 
 export type MergeLevel = 1 | 2 | 3;
@@ -190,6 +193,90 @@ export function planTrackMerge(song: Song, options: MergeTracksOptions, keepEmpt
 export interface MergeTracksResult extends MergeTracksPlan {
   /** 곡을 그대로 둔 까닭: notes·tempo = 글자 수 정리를 못 함, sound = 게임 소리가 뺀 음 말고도 달라짐 */
   readonly kept?: "notes" | "tempo" | "sound";
+  /** 화음 음이 빠져 v를 올린 음 (& 사슬은 첫 음만 센다) */
+  readonly louder?: readonly { readonly note: Note; readonly vol: number }[];
+}
+
+/**
+ * 손 나누기: 화음 음 높이에서 가장 넓은 틈(5반음 이상)의 위쪽 음부터 오른손. 틈이 좁으면 가운데 도(60)로 나눈다
+ * (MIDI 가져오기의 화음 감쇠와 같은 규칙)
+ */
+function handSplit(pitches: readonly number[]): number {
+  const p = [...new Set(pitches)].sort((a, b) => a - b);
+  let best = -1;
+  let at = 60;
+  for (let i = 1; i < p.length; i++) {
+    const gap = p[i]! - p[i - 1]!;
+    if (gap >= 5 && gap > best) {
+      best = gap;
+      at = p[i]!;
+    }
+  }
+  return at;
+}
+
+/** 화음이 count음에서 left음으로 줄었을 때 남은 음 v: 화음 전체 크기가 같게 (v보다 작아지지 않고 v최대에서 멈춘다) */
+export function chordVolumeAfterDrop(vol: number, count: number, left: number, profile: Pick<GameProfile, "volume" | "volumeCurve" | "chordAttenuation">): number {
+  if (left < 1 || left >= count || vol <= 0) return vol;
+  const { min, max } = profile.volume;
+  const dbOf = (v: number) => profile.volumeCurve[v - min] ?? -Infinity;
+  const target = dbOf(vol) + profile.chordAttenuation.perDoublingDb * Math.log2(count / left);
+  let best = vol;
+  for (let v = vol; v <= max; v++) if (Math.abs(dbOf(v) - target) < Math.abs(dbOf(best) - target)) best = v;
+  return best;
+}
+
+/**
+ * 뺀 음과 같은 자리에서 시작하던 같은 손의 남은 음(& 사슬 첫 음) v를 올린다. 화음은 같은 악보 묶음 트랙에서 같은 자리에 시작하는
+ * 소리 나는 음으로 본다. 원래 곡 음 객체 → 새 v
+ */
+function louderAfterDrop(song: Song, group: readonly string[], dropped: readonly DroppedNote[], profile: GameProfile): Map<Note, number> {
+  const out = new Map<Note, number>();
+  if (dropped.length === 0) return out;
+  const gone = new Set(dropped.map((d) => d.note));
+  const heads: Note[] = [];
+  for (const t of song.tracks) if (group.includes(t.id)) for (const c of tieChains(t.notes)) if (c[0]!.vol > 0) heads.push(c[0]!);
+  const byStart = new Map<string, Note[]>();
+  for (const n of heads) {
+    const key = `${n.start.n}/${n.start.d}`;
+    byStart.set(key, [...(byStart.get(key) ?? []), n]);
+  }
+  for (const chord of byStart.values()) {
+    if (!chord.some((n) => gone.has(n)) || chord.length < 2) continue;
+    const split = handSplit(chord.map((n) => n.pitch));
+    for (const right of [true, false]) {
+      const hand = chord.filter((n) => n.pitch >= split === right);
+      const left = hand.filter((n) => !gone.has(n));
+      for (const n of left) {
+        const vol = chordVolumeAfterDrop(n.vol, hand.length, left.length, profile);
+        if (vol !== n.vol) out.set(n, vol);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * 곡의 음 v를 바꾼다 (& 사슬 첫 음을 주면 사슬 전체). 원문 끝 쉼표로 지키던 트랙 길이는 볼륨 편집과 같이 지킨다
+ * (원문을 그냥 지우면 끝 쉼표가 빠져, 받아들이는 기준과 비교할 때 악보 끝이 달라 "소리 바뀜"으로 거절된다)
+ */
+function withVolumes(song: Song, louder: ReadonlyMap<Note, number>): Song {
+  if (louder.size === 0) return song;
+  const changed = song.tracks.filter((t) => t.notes.some((n) => louder.has(n))).map((t) => t.id);
+  return keepTextEnd(song, {
+    ...song,
+    tracks: song.tracks.map((t) => {
+      if (!t.notes.some((n) => louder.has(n))) return t;
+      const set = new Map<Note, number>();
+      for (const c of tieChains(t.notes)) {
+        const v = louder.get(c[0]!);
+        if (v !== undefined) for (const n of c) set.set(n, v);
+      }
+      const notes = t.notes.map((n) => (set.has(n) ? { ...n, vol: set.get(n)! } : n));
+      const { mml: _mml, ...rest } = t;
+      return { ...rest, notes };
+    }),
+  }, changed);
 }
 
 /** 원래 곡에서 뺀 음만 지운 곡 (받아들이는 기준과 비교할 곡) */
@@ -215,10 +302,14 @@ export function mergeTracksResult(song: Song, profile: GameProfile, options: Mer
   for (const keepEmpty of [false, true]) {
     const plan = planTrackMerge(song, safe, keepEmpty);
     if (plan.emptied.length === 0) return plan;
-    const compact = compactResult(plan.song, profile, locked, ends);
+    // 잠근 트랙 음은 v도 바꾸지 않는다
+    const lockedNotes = new Set(song.tracks.filter((t) => locked?.has(t.id)).flatMap((t) => t.notes));
+    const louder = new Map([...louderAfterDrop(song, [...new Set([...safe.keep, ...safe.remove])], plan.dropped, profile)].filter(([n]) => !lockedNotes.has(n)));
+    const compact = compactResult(withVolumes(plan.song, louder), profile, locked, ends);
     if (compact.kept) return { ...plan, song, moved: 0, dropped: [], moves: [], emptied: [], kept: compact.kept };
-    const expected = withoutDropped(song, plan.dropped);
-    if (players.every((p) => gameTimeline(compact.song, profile, p) === gameTimeline(expected, profile, p))) return { ...plan, song: compact.song };
+    const expected = withVolumes(withoutDropped(song, plan.dropped), louder);
+    const changed = { louder: [...louder].map(([note, vol]) => ({ note, vol })) };
+    if (players.every((p) => gameTimeline(compact.song, profile, p) === gameTimeline(expected, profile, p))) return { ...plan, ...changed, song: compact.song };
     last = { ...plan, song, moved: 0, dropped: [], moves: [], emptied: [], kept: "sound" };
   }
   return last!;

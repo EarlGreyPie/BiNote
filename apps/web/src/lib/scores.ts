@@ -1,4 +1,7 @@
-import { add, cmp, type Note, type Rat, type Song } from "@mmlce/core";
+import { add, chainVolumes, cmp, type Note, type Rat, type Song } from "@mmlce/core";
+
+/** 사슬 볼륨은 core 한곳에서 계산한다 (울림·재생·표시가 같은 판정) */
+export { chainVolumes };
 
 /** 게임에 붙여넣는 단위 하나: 연주자 한 명의 트랙 최대 maxChords개 */
 export interface ScoreGroup {
@@ -103,23 +106,6 @@ function soundingNotes(notes: readonly Note[]): { start: Rat; end: Rat }[] {
     .sort((a, b) => cmp(a.start, b.start))
     .filter((n) => (vols.get(n.id) ?? 0) > 0)
     .map((n) => ({ start: n.start, end: add(n.start, n.dur) }));
-}
-
-/**
- * 음마다 실제로 나는 볼륨. &로 바로 이은 음은 게임에서 첫 음 v로 이어 나므로 사슬 첫 음 v를 쓴다
- * (뒤 조각의 v는 무시된다)
- */
-export function chainVolumes(notes: readonly Note[]): Map<string, number> {
-  const sorted = [...notes].sort((a, b) => cmp(a.start, b.start));
-  const out = new Map<string, number>();
-  let vol = 0;
-  sorted.forEach((n, i) => {
-    const prev = sorted[i - 1];
-    const joined = prev && prev.tie === "next" && cmp(add(prev.start, prev.dur), n.start) === 0;
-    if (!joined) vol = n.vol;
-    out.set(n.id, vol);
-  });
-  return out;
 }
 
 /** 재생에서 소리 나는 트랙인지 (음소거 제외, 솔로가 있으면 솔로만) */

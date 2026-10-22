@@ -43,14 +43,17 @@ describe("볼륨 일괄 조정", () => {
     expect(r.notes[1]).toMatchObject({ start: base[1]!.start, dur: base[1]!.dur, pitch: 60, tie: "none" });
   });
 
-  it("& 사슬은 첫 음 v로 함께 바꾸고, 사슬 가운데 음만 고르면 바꾸지 않는다 (게임은 & 뒤 v를 읽지 않음)", () => {
+  it("& 사슬은 첫 음 v로 함께 바꾸고, 사슬 가운데 음만 골라도 사슬 전체를 바꾼다 (게임은 & 뒤 v를 읽지 않음)", () => {
     const tied = [note("a", 0, 9, "next"), note("b", 1, 9, "next"), note("c", 2, 9), note("d", 3, 9)];
     const whole = changeVolumes(tied, { kind: "shift", by: 3 }, MOBILE_PROFILE, new Set(["a"]));
     expect(vols(whole.notes)).toBe("a12 b12 c12 d9");
     expect([whole.count, whole.changed]).toEqual([1, 1]);
     const tail = changeVolumes(tied, { kind: "set", vol: 4 }, MOBILE_PROFILE, new Set(["b", "d"]));
-    expect(vols(tail.notes)).toBe("a9 b9 c9 d4");
-    expect([tail.count, tail.tiedOnly]).toEqual([1, 1]);
+    expect(vols(tail.notes)).toBe("a4 b4 c4 d4");
+    expect([tail.count, tail.viaTie, tail.changed]).toEqual([2, 1, 2]);
+    const shifted = changeVolumes(tied, { kind: "shift", by: -2 }, MOBILE_PROFILE, new Set(["c"]));
+    expect(vols(shifted.notes)).toBe("a7 b7 c7 d9");
+    expect(volumeSpan([note("a", 0, 9, "next"), note("b", 1, 3)], new Set(["b"]))).toEqual([9, 9]);
   });
 
   it("v 범위: 사슬 첫 음만 센다", () => {

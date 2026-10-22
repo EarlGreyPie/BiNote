@@ -36,6 +36,8 @@ export interface ChannelInput {
 /** 파일에서 읽은 템포와 그 템포를 적은 채널 */
 export interface ChannelTempo extends TempoEvent {
   readonly channel: number;
+  /** 채널 글 맨 끝(뒤에 음도 쉼표도 없음)에 적힌 템포. 끝 쉼표를 길이에 넣으려고 붙인 t(padScore)가 여기 든다 */
+  readonly atEnd?: boolean;
 }
 
 /** MML 채널 하나를 트랙으로. 채널 안의 템포는 곡 템포 지도로 모은다 */
@@ -49,7 +51,7 @@ export function channelToTrack(
   const parsed = parseMml(input.text, input.parse);
   for (const d of parsed.diagnostics) diagnostics.push({ ...d, where: input.name });
   const shift = (r: Rat) => (input.offset ? add(r, input.offset) : r);
-  for (const t of parsed.tempo) tempoOut.push({ at: shift(t.at), bpm: t.bpm, channel: index });
+  for (const t of parsed.tempo) tempoOut.push({ at: shift(t.at), bpm: t.bpm, channel: index, ...(cmp(t.at, parsed.end) >= 0 ? { atEnd: true } : {}) });
   const notes: Note[] = parsed.notes.map((n) => ({
     id: nextNoteId(),
     start: shift(n.start),
@@ -75,7 +77,9 @@ export function channelToTrack(
 /**
  * 채널마다 적힌 템포를 곡 템포 지도 하나로. 같은 자리 템포는 하나로 합친다.
  * 다른 채널이 이미 바꾼 빠르기를 조금 늦은 자리에 다시 적은 t(출력기가 악보마다 템포를 넣다 음 경계로 옮겨 적은 t)는
- * 소리를 바꾸지 않으므로 지도에 넣지 않는다. 한 채널 안에서 같은 빠르기를 일부러 다시 적은 t는 둔다
+ * 소리를 바꾸지 않으므로 지도에 넣지 않는다. 한 채널 안에서 같은 빠르기를 일부러 다시 적은 t는 둔다.
+ * 다만 채널 글 맨 끝에 같은 빠르기로 적은 t(끝 쉼표 길이를 지키려고 저장할 때 붙인 t)는 지도에 넣지 않는다:
+ * 소리도 길이도 바꾸지 않는데, 넣으면 저장하고 다시 열 때마다 같은 빠르기 템포가 하나씩 늘어난다
  */
 export function mergeTempo(events: readonly ChannelTempo[]): TempoEvent[] {
   const sorted = [...events].sort((a, b) => cmp(a.at, b.at) || a.channel - b.channel);
@@ -89,7 +93,7 @@ export function mergeTempo(events: readonly ChannelTempo[]): TempoEvent[] {
       out[out.length - 1] = { at: e.at, bpm: e.bpm };
       continue;
     }
-    if (current && current.bpm === e.bpm && own !== e.bpm) continue;
+    if (current && current.bpm === e.bpm && (own !== e.bpm || e.atEnd)) continue;
     out.push({ at: e.at, bpm: e.bpm });
   }
   return out;

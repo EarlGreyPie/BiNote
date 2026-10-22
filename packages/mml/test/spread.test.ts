@@ -141,3 +141,21 @@ describe("autoSpreadSpans (넘친 만큼 자동으로 고르기)", () => {
     expect(autoSpreadSpans(s, MOBILE_PROFILE, "a", findSpreadSpans(s, "a", ["b"]))).toEqual([]);
   });
 });
+
+describe("다시 쓰는 편집에서 실험실 표시를 지킨다", () => {
+  it("화음 분산으로 옮긴 음과 그대로 둔 음 모두 실험실 표시(고스트·하모닉스)가 남는다", () => {
+    const a = track("a", melody);
+    const marked = a.notes.map((n, k) =>
+      k === 3 ? { ...n, lab: { kind: "ghost" as const, vol: 8 } } : k === 20 ? { ...n, lab: { kind: "harmonic" as const, type: "artificial" as const, pitch: n.pitch - 12, vol: 8 } } : n,
+    );
+    const s = song([{ ...a, notes: marked }, track("b", accomp)]);
+    const span = findSpreadSpans(s, "a", ["b"]).find((x) => x.take === 0)!;
+    const r = spreadResult(s, MOBILE_PROFILE, "a", [span]);
+    expect(r.moved).toBeGreaterThan(0);
+    const labs = r.song.tracks.flatMap((t) => t.notes.filter((n) => n.lab).map((n) => `${t.id}:${n.start.n}/${n.start.d}:${n.lab!.kind}`));
+    const want = marked.filter((n) => n.lab).map((n) => `${n.lab!.kind}@${n.start.n}/${n.start.d}`);
+    expect(labs.map((x) => x.split(":").slice(2)[0] + "@" + x.split(":")[1]).sort()).toEqual(want.sort());
+    // 옮긴 음(3·4마디)은 받는 트랙에서 표시를 가진다
+    expect(labs.some((x) => x.startsWith("b:"))).toBe(true);
+  });
+});

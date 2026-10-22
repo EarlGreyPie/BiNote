@@ -223,13 +223,14 @@ export function assignTab(
 }
 
 /**
- * MML 글을 다시 읽어 음을 바꿔 끼울 때, 옛 음에 적힌 타브 줄(tabString)을 새 음으로 옮긴다.
- * 글에는 줄 정보가 없어 그대로 두면 다시 읽은 음이 줄을 잃는다. 다시 쓰면 음이 합쳐지거나 나뉘므로 순서가 아니라
- * 시간과 높이로 맞춘다: 새 음의 시작이 옛 음이 울리는 동안 안에 있고 높이가 같으면 그 줄을 받는다.
- * 한 트랙은 한 번에 한 음이라 둘 다 시작 순으로 훑는다
+ * MML 글을 다시 읽어 음을 바꿔 끼울 때, 옛 음에 적힌 글 밖 표시(타브 줄 tabString, 실험실 표시 lab)를 새 음으로 옮긴다.
+ * 글에는 이 정보가 없어 그대로 두면 다시 읽은 음이 잃는다 (글자 수 줄이기·화음 분산·병합처럼 다시 쓰는 편집 모두 여기를 지난다).
+ * 다시 쓰면 음이 합쳐지거나 나뉘므로 순서가 아니라 시간과 높이로 맞춘다: 새 음의 시작이 옛 음이 울리는 동안 안에 있고
+ * 높이가 같으면 그 표시를 받는다. 실험실 표시는 새 음이 덮는 같은 높이 옛 음의 표시가 모두 같을 때만 받는다
+ * (조각마다 다르면 붙이지 않는다). 한 트랙은 한 번에 한 음이라 둘 다 시작 순으로 훑는다
  */
 export function carryTabStrings(old: readonly Note[], next: readonly Note[]): Note[] {
-  if (!old.some((n) => n.tabString !== undefined)) return [...next];
+  if (!old.some((n) => n.tabString !== undefined || n.lab !== undefined)) return [...next];
   const from = [...old].sort((a, b) => cmp(a.start, b.start));
   const order = next.map((_, i) => i).sort((a, b) => cmp(next[a]!.start, next[b]!.start));
   const out = [...next];
@@ -241,9 +242,25 @@ export function carryTabStrings(old: readonly Note[], next: readonly Note[]): No
     for (let k = j; k < from.length && cmp(from[k]!.start, n.start) <= 0; k++) {
       const o = from[k]!;
       if (o.pitch !== n.pitch || cmp(add(o.start, o.dur), n.start) <= 0) continue;
-      if (o.tabString !== undefined && n.tabString === undefined) out[i] = { ...n, tabString: o.tabString };
+      const tab = o.tabString !== undefined && n.tabString === undefined;
+      const lab = o.lab !== undefined && n.lab === undefined && sameLabOver(from, k, n);
+      if (tab || lab) out[i] = { ...n, ...(tab ? { tabString: o.tabString } : {}), ...(lab ? { lab: o.lab } : {}) };
       break;
     }
   }
   return out;
+}
+
+/**
+ * 새 음 n이 덮는 같은 높이 옛 음(from[k]부터)이 모두 같은 실험실 표시를 가졌는지. 다시 쓰며 여러 조각이 한 음으로 합쳐졌을 때
+ * 첫 조각 표시를 통째로 주면 표시 없던 조각까지 표시가 걸린다 (표시를 풀면 그 자리 높이·볼륨이 틀리게 바뀜). 다르면 표시를 옮기지 않는다
+ */
+function sameLabOver(from: readonly Note[], k: number, n: Note): boolean {
+  const lab = JSON.stringify(from[k]!.lab);
+  const stop = add(n.start, n.dur);
+  for (let m = k + 1; m < from.length && cmp(from[m]!.start, stop) < 0; m++) {
+    const o = from[m]!;
+    if (o.pitch === n.pitch && JSON.stringify(o.lab) !== lab) return false;
+  }
+  return true;
 }

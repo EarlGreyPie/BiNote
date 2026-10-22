@@ -61,8 +61,10 @@ export class LivePlayer {
   private firstOrigin = 0;
   /** 신스에 넣은 예약 가운데 가장 늦은 시각. 신스 큐는 지울 수 없으니, 다시 재생할 때는 그 뒤에서 시작한다 */
   private quietAfter = 0;
-  /** 반복 길이(초). 있으면 이 길이마다 처음으로 돌아가 이어 예약한다 */
+  /** 반복 길이(곡 시간 초). 있으면 이 길이마다 처음으로 돌아가 이어 예약한다 */
   private loop: number | undefined;
+  /** 재생 속도 (1 = 원래, 0.5 = 절반). 곡 시간 = 흐른 오디오 시간 × 속도 */
+  private rate = 1;
   private handle: unknown;
   /** 소리가 켜진(또는 켜지도록 예약된) 음: 채널:음 → 켠 시각 */
   private sounding = new Map<string, { channel: number; note: number; at: number }>();
@@ -97,6 +99,11 @@ export class LivePlayer {
     return this.schedule ? this.origin : undefined;
   }
 
+  /** 지금 재생 속도 (정지 중이면 1) */
+  get speed(): number {
+    return this.schedule ? this.rate : 1;
+  }
+
   /** 재생 시작(반복이면 이번 회차 처음) 뒤 흐른 곡 시간(초). 정지 중이면 0 */
   get position(): number {
     return this.positionLagged(0);
@@ -106,28 +113,37 @@ export class LivePlayer {
   positionLagged(lag: number): number {
     if (!this.schedule) return 0;
     if (this.loop !== undefined) {
-      const t = this.sink.currentTime - lag - this.firstOrigin;
+      const t = (this.sink.currentTime - lag - this.firstOrigin) * this.rate;
       return t <= 0 ? 0 : t % this.loop;
     }
-    const t = this.sink.currentTime - lag - this.origin;
+    const t = (this.sink.currentTime - lag - this.origin) * this.rate;
     return Math.min(Math.max(0, t), this.schedule.duration);
   }
 
   /**
    * loop: 반복 길이(초). 일정의 0부터 이 길이까지를 끊김 없이 되풀이한다.
-   * delay: 이번만 시작을 이만큼(초) 늦춘다 (오디오가 막 깨어나 첫 음이 늦게 나는 기기용)
+   * delay: 이번만 시작을 이만큼(초) 늦춘다 (오디오가 막 깨어나 첫 음이 늦게 나는 기기용).
+   * rate: 재생 속도 (0.5면 곡을 절반 빠르기로). 음 높이는 그대로이고 음 사이 간격만 늘어난다.
+   * offset: 일정의 이 곡 시각(초)부터 시작한다 (반복 구간 가운데서 이어 재생). 그 앞에서 시작해 울리던 음은 다시 치지 않는다
    */
-  start(schedule: Schedule, patches: readonly SlotPatch[], options: { loop?: number; delay?: number } = {}): void {
+  start(schedule: Schedule, patches: readonly SlotPatch[], options: { loop?: number; delay?: number; rate?: number; offset?: number } = {}): void {
     this.stop();
     this.schedule = schedule;
+    this.rate = options.rate !== undefined && options.rate > 0 && Number.isFinite(options.rate) ? options.rate : 1;
     this.loop = options.loop !== undefined && options.loop > 0 ? options.loop : undefined;
     this.bySlot = new Map(patches.map((p) => [p.slot, p]));
+    const end = this.loop ?? schedule.duration;
+    const offset = options.offset !== undefined && options.offset > 0 && options.offset < end ? options.offset : 0;
+    // 건너뛴 자리 앞의 이벤트는 보내지 않는다
     this.index = 0;
+    while (this.index < schedule.events.length && schedule.events[this.index]!.time < offset) this.index++;
     // 앞 재생이 미리 넣어 둔 끄기·높이 되돌리기가 새 음을 건드리지 않게, 그 예약이 다 지난 뒤에 시작한다
-    this.origin = Math.max(this.sink.currentTime + (options.delay ?? this.startDelay), this.quietAfter + 0.005);
+    const begin = Math.max(this.sink.currentTime + (options.delay ?? this.startDelay), this.quietAfter + 0.005);
+    // offset부터 시작하면 일정 0초는 그만큼 앞선 오디오 시각이다
+    this.origin = begin - offset / this.rate;
     this.firstOrigin = this.origin;
     // 악기는 첫 음보다 먼저 바꿔 둔다 (신스가 샘플을 준비할 틈). 앞 재생의 끄기 예약이 끝난 뒤로
-    const patchAt = Math.min(this.origin, Math.max(this.sink.currentTime, this.quietAfter + 0.001));
+    const patchAt = Math.min(begin, Math.max(this.sink.currentTime, this.quietAfter + 0.001));
     for (const p of patches) {
       this.sink.setPatch(p.channel, p.bank, p.program, patchAt);
       this.sink.setGain?.(p.channel, p.gain ?? 1);
@@ -180,14 +196,15 @@ export class LivePlayer {
     this.future = this.future.filter((f) => f.at > now);
     const events = schedule.events;
     for (;;) {
-      const horizon = now - this.origin + this.lookahead;
+      // 미리 예약할 범위는 곡 시간으로 잰다 (느리게 재생하면 오디오 시간 lookahead 안에 드는 곡 시간이 줄어든다)
+      const horizon = (now - this.origin + this.lookahead) * this.rate;
       const end = this.loop ?? Infinity;
       while (this.index < events.length && events[this.index]!.time <= horizon && events[this.index]!.time < end) {
         this.send(events[this.index++]!);
       }
       if (this.loop === undefined || horizon < this.loop) break;
       // 반복 끝: 울리던 음을 끊고, 높이를 되돌리고, 같은 오디오 시계에서 처음부터 이어 예약한다
-      const boundary = this.origin + this.loop;
+      const boundary = this.origin + this.loop / this.rate;
       this.quietAfter = Math.max(this.quietAfter, boundary);
       for (const s of this.sounding.values()) this.sink.noteOff(s.channel, s.note, boundary);
       for (const ch of this.bent) this.sink.pitchBend(ch, 0, boundary);
@@ -197,7 +214,7 @@ export class LivePlayer {
       this.index = 0;
       this.onWrap?.(boundary);
     }
-    if (this.loop === undefined && this.index >= events.length && now - this.origin >= schedule.duration) {
+    if (this.loop === undefined && this.index >= events.length && (now - this.origin) * this.rate >= schedule.duration) {
       if (this.handle !== undefined) this.timers.clearInterval(this.handle);
       this.handle = undefined;
       this.schedule = undefined;
@@ -210,7 +227,7 @@ export class LivePlayer {
   private send(e: Schedule["events"][number]): void {
     const patch = this.bySlot.get(e.slot);
     if (!patch) return;
-    const at = this.origin + e.time;
+    const at = this.origin + e.time / this.rate;
     this.quietAfter = Math.max(this.quietAfter, at);
     const key = `${patch.channel}:${e.note}`;
     if (e.type === "bend") {

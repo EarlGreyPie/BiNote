@@ -44,13 +44,13 @@ export interface VolumeResult {
   readonly count: number;
   /** ±로 옮기다 범위 끝(v최소·v최대)에서 멈춘 소리 수 */
   readonly clamped: number;
-  /** & 뒤에 이어진 음만 골라 바꾸지 않은 수 (게임은 & 뒤 v를 읽지 않는다) */
-  readonly tiedOnly: number;
+  /** & 뒤에 이어진 음만 골라 사슬 첫 음부터 함께 바꾼 소리 수 (게임은 & 뒤 v를 읽지 않는다) */
+  readonly viaTie: number;
 }
 
 /**
  * 트랙 음(notes) 가운데 picked(없으면 모두)의 v를 바꾼다. 게임은 & 뒤 v를 무시하므로 & 사슬은 첫 음 v로 함께 바꾼다:
- * 첫 음을 고르면 사슬 전체가 그 v가 되고, 사슬 가운데 음만 고르면 바꾸지 않는다(tiedOnly로 센다).
+ * 사슬의 어느 음을 골라도 사슬 전체가 첫 음 v를 바꾼 값이 된다 (가운데·끝 음만 고른 사슬은 viaTie로 센다).
  * 음 자리·길이·높이는 건드리지 않는다
  */
 export function changeVolumes(
@@ -64,12 +64,12 @@ export function changeVolumes(
   let changed = 0;
   let count = 0;
   let clamped = 0;
-  let tiedOnly = 0;
+  let viaTie = 0;
   for (const chain of tieChains(notes)) {
     const head = chain[0]!;
     if (picked && !picked.has(head.id)) {
-      if (chain.some((n) => picked.has(n.id))) tiedOnly++;
-      continue;
+      if (!chain.some((n) => picked.has(n.id))) continue;
+      viaTie++;
     }
     count++;
     let vol: number;
@@ -83,16 +83,16 @@ export function changeVolumes(
     if (vol !== head.vol) changed++;
     byHead.set(head.id, vol);
   }
-  return { notes: applyVolumes(notes, byHead), changed, count, clamped, tiedOnly };
+  return { notes: applyVolumes(notes, byHead), changed, count, clamped, viaTie };
 }
 
-/** 소리마다(& 사슬은 첫 음) v의 [가장 작은 값, 가장 큰 값]. 고른 소리가 없으면 undefined */
+/** 소리마다(& 사슬은 첫 음) v의 [가장 작은 값, 가장 큰 값]. 사슬의 어느 음을 골라도 그 사슬을 센다. 고른 소리가 없으면 undefined */
 export function volumeSpan(notes: readonly Note[], picked?: ReadonlySet<string>): readonly [number, number] | undefined {
   let lo = Infinity;
   let hi = -Infinity;
   for (const chain of tieChains(notes)) {
     const head = chain[0]!;
-    if (picked && !picked.has(head.id)) continue;
+    if (picked && !chain.some((n) => picked.has(n.id))) continue;
     lo = Math.min(lo, head.vol);
     hi = Math.max(hi, head.vol);
   }

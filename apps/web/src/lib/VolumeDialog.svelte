@@ -9,7 +9,7 @@
     /** ±로 옮기다 v0·v15에서 멈춘 소리 수 */
     readonly clamped: number;
     /** & 뒤 이어진 음만 골라 바꾸지 않은 수 */
-    readonly tiedOnly: number;
+    readonly viaTie: number;
     /** 지금 / 바꾼 뒤 v [최소, 최대] */
     readonly before: readonly [number, number] | undefined;
     readonly after: readonly [number, number] | undefined;
@@ -136,8 +136,8 @@
   {#if result.clamped > 0}
     <p class="warn">{t("ui.volumeClamped", { count: result.clamped, min, max })}</p>
   {/if}
-  {#if result.tiedOnly > 0}
-    <p class="muted small">{t("ui.volumeTiedOnly", { count: result.tiedOnly })}</p>
+  {#if result.viaTie > 0}
+    <p class="muted small">{t("ui.volumeTiedOnly", { count: result.viaTie })}</p>
   {/if}
   <footer>
     <span class="spacer"></span>

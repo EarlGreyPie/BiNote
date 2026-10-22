@@ -107,7 +107,8 @@ export class History {
     const entry = this.undoStack.pop();
     if (!entry) return this.current;
     const next = keepListening(this.current, entry.backward.apply(this.current), this.listening);
-    for (const [id, { before }] of entry.tabs ?? []) this.tabs.set(id, before);
+    // 그 단계 뒤에 보기 튜닝을 따로 고르지 않았을 때만 되돌린다 (나중에 고른 보기는 기록 밖 상태라 그대로 둔다)
+    for (const [id, { before, after }] of entry.tabs ?? []) if (sameTab(this.tabs.get(id), after)) this.tabs.set(id, before);
     // 이 단계가 만든 악보는 실행 취소로 사라진다: 그 튜닝은 이 단계에 맡겨 두고, 같은 id의 옛 악보가 돌아오면 그 악보 것을 쓴다
     const live = new Set(next.players.map((p) => p.id));
     for (const p of this.current.players) {
@@ -126,7 +127,7 @@ export class History {
     if (!entry) return this.current;
     for (const [id, tab] of entry.gone ?? []) this.tabs.set(id, tab);
     delete entry.gone;
-    for (const [id, { after }] of entry.tabs ?? []) this.tabs.set(id, after);
+    for (const [id, { before, after }] of entry.tabs ?? []) if (sameTab(this.tabs.get(id), before)) this.tabs.set(id, after);
     this.current = keepTabs(keepListening(this.current, entry.forward.apply(this.current), this.listening), this.tabs);
     this.rememberTabs();
     this.undoStack.push(entry);
@@ -150,6 +151,8 @@ function keepListening(now: Song, next: Song, remembered: ReadonlyMap<string, { 
   return changed ? { ...next, tracks } : next;
 }
 
+const sameTab = (a: PlayerTab | undefined, b: PlayerTab | undefined) => a?.tuning === b?.tuning && a?.capo === b?.capo;
+
 /** 명령 하나가 바꾼 악보 튜닝 (앞뒤 곡에 다 있는 악보만). 없으면 undefined */
 function changedTabs(before: Song, after: Song): Entry["tabs"] {
   const old = new Map(before.players.map((p) => [p.id, p.tab]));
@@ -157,7 +160,7 @@ function changedTabs(before: Song, after: Song): Entry["tabs"] {
   for (const p of after.players) {
     if (!old.has(p.id)) continue;
     const was = old.get(p.id);
-    if (was?.tuning !== p.tab?.tuning || was?.capo !== p.tab?.capo) out.set(p.id, { before: was, after: p.tab });
+    if (!sameTab(was, p.tab)) out.set(p.id, { before: was, after: p.tab });
   }
   return out.size ? out : undefined;
 }
@@ -168,7 +171,7 @@ function keepTabs(next: Song, remembered: ReadonlyMap<string, PlayerTab | undefi
   const players = next.players.map((p) => {
     if (!remembered.has(p.id)) return p;
     const tab = remembered.get(p.id);
-    if (tab?.tuning === p.tab?.tuning && tab?.capo === p.tab?.capo) return p;
+    if (sameTab(tab, p.tab)) return p;
     changed = true;
     if (tab) return { ...p, tab };
     const { tab: _tab, ...rest } = p;
