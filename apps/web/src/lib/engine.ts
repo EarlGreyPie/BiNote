@@ -21,7 +21,7 @@ import { previewPitch } from "./instrumentRange";
 import { PreviewVoices } from "./previewVoices";
 import { preparePlay } from "./playPlan";
 import type { WavRequest } from "./jobs";
-import { clockMoves, needsRebuild, settlesWithin } from "./audioHealth";
+import { clockMoves, isTouchWebKit, needsRebuild, settlesWithin, staleAfterReturn } from "./audioHealth";
 
 /** CC 0 = 뱅크 선택(MSB) */
 const BANK_SELECT = 0;
@@ -39,6 +39,8 @@ export const MASTER_MAX = 4;
 
 /** 오디오가 막 깨어났을 때 첫 음 앞에 두는 여유(초). 그동안 신스가 악기 샘플을 준비한다 */
 const COLD_START_DELAY = 0.4;
+/** 보통 재생 시작 여유(초). LivePlayer 기본값과 같다 */
+const START_DELAY = 0.1;
 
 /** CC 120 = 소리 모두 끄기 (끝소리 없이) */
 const ALL_SOUND_OFF = 120;
@@ -47,6 +49,11 @@ const ALL_SOUND_OFF = 120;
 const RESUME_TIMEOUT = 800;
 /** 깨운 뒤 오디오 시계가 흐르는지 보는 시간(ms) */
 const CLOCK_TIMEOUT = 400;
+
+/** 브라우저가 알려 주는 출력 지연(초). 모르는 브라우저는 0 */
+function reportedLatency(context: AudioContext): number {
+  return (context.outputLatency || 0) + (context.baseLatency || 0);
+}
 
 /** 오디오 시계가 실제로 흐르기 시작할 때까지 기다린다 (최대 1초) */
 async function waitForClock(context: AudioContext): Promise<void> {
@@ -81,6 +88,16 @@ export class Engine {
    * 다시 켜지지 않을 때가 있어(소리 없음, 사운드팩 다시 올리기도 멈춤), 다음에 쓸 때 살아 있는지 확인한다
    */
   private suspect = false;
+  /** 화면이 가려진 시각(performance.now). 보이는 동안은 undefined */
+  private hiddenAt: number | undefined;
+  /** 마지막으로 오디오를 확인한 뒤 가장 오래 가려져 있던 시간(ms) */
+  private hiddenMs = 0;
+  /** 가려진 사이 시스템이 오디오를 멈췄다 (아이패드 화면 잠금 등). 다시 켜졌어도 소리가 밀릴 수 있어 새로 만든다 */
+  private interrupted = false;
+  /** 소리를 처음 낼 때 브라우저가 알려 준 출력 지연(초). 돌아온 뒤 크게 늘었으면 오디오를 새로 만든다 */
+  private latencyBefore = 0;
+  /** 아이패드·아이폰인지 (화면 잠금 뒤 오디오를 새로 만들지 정할 때 쓴다) */
+  private readonly touchWebKit = typeof navigator !== "undefined" && isTouchWebKit(navigator.userAgent, navigator.maxTouchPoints ?? 0);
   /** 오디오를 새로 만드는 중 */
   private reviving: Promise<WorkletSynthesizer> | undefined;
   /** 지금 신스를 버리면 풀리는 약속. 버린 신스의 응답을 기다리던 작업(팩 올리기 등)이 멈춰 있지 않게 한다 */
@@ -95,16 +112,28 @@ export class Engine {
   constructor() {
     if (typeof document === "undefined") return;
     document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "hidden") this.suspect = true;
+      if (document.visibilityState === "hidden") {
+        this.suspect = true;
+        this.hiddenAt ??= performance.now();
+        return;
+      }
+      if (this.hiddenAt !== undefined) this.hiddenMs = Math.max(this.hiddenMs, performance.now() - this.hiddenAt);
+      this.hiddenAt = undefined;
+      // 돌아왔는데 오디오가 멈춰 있으면 가려진 사이 시스템이 멈춘 것이다 (onstatechange가 늦게 오거나 안 올 때)
+      const c = this.context;
+      if (c && this.warmed && c.state !== "running") this.interrupted = true;
     });
     // 뒤로 가기 캐시에서 돌아온 페이지도 오디오가 멈춰 있을 수 있다
     window.addEventListener("pageshow", (e) => {
-      if (e.persisted) this.suspect = true;
+      if (!e.persisted) return;
+      this.suspect = true;
+      if (this.warmed) this.interrupted = true;
     });
-    // 한 번 소리를 낸 뒤 멈춘 오디오는 화면을 누를 때 바로 깨운다. 아이패드는 누른 그 순간에만 깨울 수 있다
+    // 한 번 소리를 낸 뒤 멈춘 오디오는 화면을 누를 때 바로 깨운다. 아이패드는 누른 그 순간에만 깨울 수 있다.
+    // 화면 잠금 뒤처럼 새로 만들 오디오는 깨우지 않는다 (재생·미리듣기를 누를 때 새로 만든다)
     const wake = () => {
       const c = this.context;
-      if (c && this.warmed && c.state !== "running" && c.state !== "closed") void c.resume().catch(() => {});
+      if (c && this.warmed && c.state !== "running" && c.state !== "closed" && !this.stale()) void c.resume().catch(() => {});
     };
     document.addEventListener("pointerdown", wake, true);
     document.addEventListener("keydown", wake, true);
@@ -153,7 +182,9 @@ export class Engine {
     if (node) node.onprocessorerror = () => (this.broken = true);
     // 소리를 낸 뒤 오디오가 멈추면(잠자기·다른 앱이 오디오를 가져감) 다음에 쓸 때 살아 있는지 확인한다
     context.onstatechange = () => {
-      if (this.context === context && context.state !== "running" && this.warmed) this.suspect = true;
+      if (this.context !== context || context.state === "running" || !this.warmed) return;
+      this.suspect = true;
+      if (document.visibilityState === "hidden") this.interrupted = true;
     };
     // 전체 음량: 신스 → 음량 → 스피커 (미리듣기 대체 소리도 같은 음량을 지난다)
     const master = context.createGain();
@@ -232,15 +263,33 @@ export class Engine {
     // 닫혔거나 멈췄거나, 재운 뒤 "중단됨"으로 남아 있으면 바로 새로 만든다 (누른 그 순간에 만들어야 소리가 켜진다)
     if (this.broken || state === "closed" || (this.suspect && state === "interrupted")) return this.rebuild();
     if (!this.suspect) return this.synth;
+    // 화면 잠금 뒤처럼 시계는 흘러도 소리가 밀리는 경우: 누른 그 순간에 새로 만든다
+    if (this.stale()) return this.rebuild();
     // 의심스러우면 깨워 보고 시계가 흐르는지 확인한다
     await settlesWithin(context.resume(), RESUME_TIMEOUT);
     const clockMoved = context.state === "running" && (await clockMoves(() => context.currentTime, CLOCK_TIMEOUT));
     if (this.context !== context) return this.live();
     if (!needsRebuild({ state: context.state, broken: this.broken, suspect: this.suspect, clockMoved })) {
       this.suspect = false;
+      this.interrupted = false;
+      this.hiddenMs = 0;
       return this.synth!;
     }
     return this.rebuild();
+  }
+
+  /** 화면을 가렸다 돌아온 뒤 시계가 흘러도 오디오를 새로 만들어야 하는지 (staleAfterReturn) */
+  private stale(): boolean {
+    const c = this.context;
+    if (!c || !this.suspect) return false;
+    return staleAfterReturn({
+      warmed: this.warmed,
+      interrupted: this.interrupted,
+      hiddenMs: this.hiddenMs,
+      touchWebKit: this.touchWebKit,
+      latencyBefore: this.latencyBefore,
+      latencyNow: reportedLatency(c),
+    });
   }
 
   /** 지금 오디오를 버리고 새로 만든다 (사운드팩은 create가 다시 올린다) */
@@ -289,6 +338,9 @@ export class Engine {
     this.warmed = false;
     this.broken = false;
     this.suspect = false;
+    this.interrupted = false;
+    this.hiddenMs = 0;
+    this.latencyBefore = 0;
     this.preparedVoices.clear();
     this.previewKey = "";
     this.packVersion++;
@@ -374,8 +426,7 @@ export class Engine {
    */
   get outputLag(): number {
     const c = this.context;
-    const reported = c ? (c.outputLatency || 0) + (c.baseLatency || 0) : 0;
-    return reported + this.limiterLag + this.syncOffset;
+    return (c ? reportedLatency(c) : 0) + this.limiterLag + this.syncOffset;
   }
 
   /** 지금 들리는 곡 위치(초). 출력 지연만큼 늦춰 재생선이 소리와 맞게 한다 */
@@ -386,8 +437,9 @@ export class Engine {
 
   /** 재생을 시작하고, 사운드팩에서 찾지 못한 악기를 돌려준다 */
   /** loop: 반복할 길이(초). 주면 시작 자리부터 그 길이를 끊김 없이 되풀이한다. rate: 재생 속도 (원곡도 같은 속도로).
-   * offset: from에서 이만큼(곡 초) 뒤부터 소리를 낸다 (반복 구간 가운데서 이어 재생) */
-  async play(song: Song, from?: Rat, loop?: number, rate = 1, offset = 0): Promise<Unresolved[]> {
+   * offset: from에서 이만큼(곡 초) 뒤부터 소리를 낸다 (반복 구간 가운데서 이어 재생).
+   * record: MIDI 건반 녹음. leadIn초(오디오 시간) 예비박을 두고 시작하며, 곡이 끝나도 정지할 때까지 멈추지 않는다 */
+  async play(song: Song, from?: Rat, loop?: number, rate = 1, offset = 0, record?: { leadIn: number }): Promise<Unresolved[]> {
     const request = ++this.playRequest;
     await this.live();
     const context = this.context!;
@@ -397,6 +449,8 @@ export class Engine {
     await settlesWithin(context.resume(), RESUME_TIMEOUT);
     if (request !== this.playRequest || this.context !== context) return [];
     if (cold) await waitForClock(context);
+    // 처음 소리를 낼 때의 출력 지연을 기억해 둔다 (돌아온 뒤 크게 늘었는지 보려고)
+    if (!this.warmed) this.latencyBefore = reportedLatency(context);
     this.warmed = true;
     // 예열을 기다리는 사이 팩 구성이 바뀌면 패치를 다시 정하고, 시작 직전 악기별 음량은 최신 값으로 (preparePlay)
     let last: Unresolved[] = [];
@@ -416,9 +470,13 @@ export class Engine {
       gainOf: (packId, program) => this.registry.gainOf(packId, program, this.gains),
     });
     if (!ready) return last;
-    const { schedule, patches, unresolved } = ready;
+    const { patches, unresolved } = ready;
+    const schedule = record ? { ...ready.schedule, duration: Infinity } : ready.schedule;
     this.playingPatches = patches;
-    this.player!.start(schedule, patches, { ...(loop ? { loop } : {}), ...(cold ? { delay: COLD_START_DELAY } : {}), ...(rate !== 1 ? { rate } : {}), ...(offset > 0 ? { offset } : {}) });
+    const delay = record ? (cold ? COLD_START_DELAY : START_DELAY) + Math.max(0, record.leadIn) : cold ? COLD_START_DELAY : undefined;
+    // 앞 재생이 여기서 멈춘다: 그 순간 들리던 자리를 알린다 (녹음)
+    this.noticeStopping();
+    this.player!.start(schedule, patches, { ...(loop ? { loop } : {}), ...(delay !== undefined ? { delay } : {}), ...(rate !== 1 ? { rate } : {}), ...(offset > 0 ? { offset } : {}) });
     this.fromSeconds = from ? positionToSeconds(song.tempo, from) : 0;
     this.startReference();
     return unresolved;
@@ -507,8 +565,72 @@ export class Engine {
 
   stop(): void {
     this.playRequest++;
+    this.noticeStopping();
     this.player?.stop();
     this.stopReference();
+    this.stopClicks();
+  }
+
+  /**
+   * 녹음: 지금 들리는 곡 시각(초). 예비박 동안은 시작 자리보다 앞(작은 값)을 돌려준다. 재생 중이 아니면 undefined.
+   * 들리는 소리에 맞춰 누르므로 출력 지연만큼 앞당겨 잰다
+   */
+  heardSeconds(): number | undefined {
+    const start = this.player?.startTime;
+    const context = this.context;
+    if (start === undefined || !context || !this.player) return undefined;
+    return this.fromSeconds + (context.currentTime - this.outputLag - start) * this.player.speed;
+  }
+
+  /** 재생이 멈추거나 다른 재생으로 바뀌기 바로 전, 그때 들리던 곡 시각(초)을 받는다 (녹음이 누른 채 멈춘 음의 끝으로 쓴다) */
+  onStopping: ((heardSeconds: number) => void) | undefined;
+
+  private noticeStopping(): void {
+    if (!this.player?.playing) return;
+    const heard = this.heardSeconds();
+    if (heard !== undefined) this.onStopping?.(heard);
+  }
+
+  /** 예약해 둔 메트로놈 소리 */
+  private clicks = new Set<OscillatorNode>();
+
+  /**
+   * 메트로놈 딸깍 하나를 곡 시각(초)에 예약한다 (녹음). 곡 소리와 같은 오디오 시계로 맞춘다.
+   * 이미 지난 시각이면 넣지 않는다. 정지하면 아직 안 난 딸깍도 끈다
+   */
+  click(songSeconds: number, accent: boolean): void {
+    const start = this.player?.startTime;
+    const context = this.context;
+    if (start === undefined || !context || !this.player) return;
+    const at = start + (songSeconds - this.fromSeconds) / this.player.speed;
+    if (at < context.currentTime) return;
+    const osc = context.createOscillator();
+    const gain = context.createGain();
+    osc.type = "square";
+    osc.frequency.value = accent ? 1760 : 1320;
+    const peak = accent ? 0.18 : 0.11;
+    gain.gain.setValueAtTime(0, at);
+    gain.gain.linearRampToValueAtTime(peak, at + 0.002);
+    gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.05);
+    osc.connect(gain).connect(this.master ?? context.destination);
+    osc.start(at);
+    osc.stop(at + 0.06);
+    this.clicks.add(osc);
+    osc.onended = () => {
+      this.clicks.delete(osc);
+      osc.disconnect();
+    };
+  }
+
+  private stopClicks(): void {
+    for (const osc of this.clicks) {
+      try {
+        osc.stop();
+      } catch {
+        // 이미 멈춘 소리
+      }
+    }
+    this.clicks.clear();
   }
 
   /** 건반 입력 미리듣기 전용 채널 (재생 트랙 채널과 겹치지 않게 맨 끝) */

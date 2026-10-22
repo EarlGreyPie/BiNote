@@ -250,6 +250,10 @@
   export function revealCursor() {
     ensureCursorVisible();
   }
+  /** 타브 커서를 그 시각으로 옮긴다 (줄은 그대로, 커서가 없었으면 맨 위 줄). MIDI 건반 스텝 입력이 음·쉼표 뒤로 커서를 민다 */
+  export function moveCursorTo(at: Rat) {
+    cursor = { at, string: cursor?.string ?? 1 };
+  }
   /** 이 시각(performance.now, ms)까지 재생선 따라가기를 쉰다 */
   let playheadHoldUntil = 0;
   /** 마우스·손가락으로 커서를 놓았다 (다음 한 번은 따라가지 않는다) */

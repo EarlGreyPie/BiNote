@@ -21,14 +21,22 @@
     /** 타브에서 열면 음이 보이는 줄 (사이 음도 그 줄에) */
     stringOf?: (note: Note) => number | undefined;
     locked: ReadonlySet<string>;
-    onapply: (result: SlidesResult) => void;
+    /** 다시 고치기: 만들 때 고른 것 (없으면 이 브라우저에 기억해 둔 값) */
+    initial?: SlideChoice | undefined;
+    /** 창 제목 (다시 고치기) */
+    title?: string | undefined;
+    /** 다시 고치기: 창을 닫고 원래 음으로 되돌린다 (있으면 "원래대로" 버튼) */
+    onrestore?: (() => void) | undefined;
+    /** 적용: 결과와 만든 기록에 남길 고른 것 */
+    onapply: (result: SlidesResult, choice: SlideChoice) => void;
     onclose: () => void;
   }
 
-  let { song, picked, profile, instrumentOf, stringOf, locked, onapply, onclose }: Props = $props();
+  let { song, picked, profile, instrumentOf, stringOf, locked, initial, title, onrestore, onapply, onclose }: Props = $props();
 
   let dialog: HTMLDialogElement;
-  let choice = $state<SlideChoice>(loadStored(SLIDE_KEY, (raw) => parseSlideChoice(parseJson(raw))));
+  // svelte-ignore state_referenced_locally
+  let choice = $state<SlideChoice>(initial ?? loadStored(SLIDE_KEY, (raw) => parseSlideChoice(parseJson(raw))));
   function set(change: Partial<SlideChoice>) {
     choice = { ...choice, ...change };
     saveStored(SLIDE_KEY, JSON.stringify(choice));
@@ -131,7 +139,7 @@
   const ok = $derived(result.made > 0 && result.changes.length > 0);
   function apply() {
     if (!ok) return;
-    onapply(result);
+    onapply(result, choice);
     dialog.close();
   }
   const s = $derived(result.skipped);
@@ -139,7 +147,7 @@
 </script>
 
 <dialog bind:this={dialog} {onclose}>
-  <h2>{t("ui.slide")}</h2>
+  <h2>{title ?? t("ui.slide")}</h2>
   <div class="grid">
     <span>{t("ui.slideKind")}</span>
     <span class="row">
@@ -235,6 +243,15 @@
   {#if result.sampleCut > 0}<p class="warn">{t("ui.slideSampleCut", { n: result.sampleCut })}</p>{/if}
   <footer>
     <span class="spacer"></span>
+    {#if onrestore}
+      <button
+        title={t("ui.madeRestoreHelp")}
+        onclick={() => {
+          onrestore?.();
+          dialog.close();
+        }}>{t("ui.madeRestoreButton")}</button
+      >
+    {/if}
     <button onclick={() => dialog.close()}>{t("ui.cancel")}</button>
     <button class="primary" disabled={!ok} onclick={apply}>{t("ui.apply")}</button>
   </footer>

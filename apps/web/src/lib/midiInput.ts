@@ -114,6 +114,22 @@ export class ChordCollector {
   }
 }
 
+/** MIDI 건반 스텝 입력에서 숫자 키가 고르는 새 음 길이 (키 표기 "1"·"Num1" 등). 0은 쉼표, 다른 키는 undefined */
+const STEP_LENGTHS: Readonly<Record<string, "1" | "2" | "4" | "8" | "16" | "32" | "12" | "24">> = { 1: "1", 2: "2", 3: "4", 4: "8", 5: "16", 6: "32", 7: "12", 8: "24" };
+export function midiStepLength(key: string): (typeof STEP_LENGTHS)[string] | "rest" | undefined {
+  const m = /^(?:Num)?(\d)$/.exec(key);
+  if (!m) return undefined;
+  return m[1] === "0" ? "rest" : STEP_LENGTHS[m[1]!];
+}
+
+/**
+ * MIDI 건반 스텝 입력 자리: 타브 보기면 타브 커서, 아니면 편집(롤) 커서. 타브에서 롤 커서를 쓰면 보이지 않는 자리에 들어간다.
+ * 타브 커서가 없으면 undefined (고른 트랙 끝에 넣는다)
+ */
+export function stepCursorFor(view: "roll" | "tab", tabCursor: Rat | undefined, editCursor: Rat | undefined): Rat | undefined {
+  return view === "tab" ? tabCursor : editCursor;
+}
+
 /** 이 트랙에서 넣을 자리의 기본 v (세기를 쓰지 않을 때): 앞 음 v, 없으면 8 */
 export function previousVolume(notes: readonly Note[], at: Rat): number {
   return noteBefore(notes, at)?.vol ?? 8;

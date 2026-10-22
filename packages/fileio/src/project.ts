@@ -5,6 +5,11 @@ import {
   rat,
   ZERO,
   type InstrumentRef,
+  MADE_TOOLS,
+  pruneMade,
+  type MadeNotes,
+  type MadeRecord,
+  type MadeTool,
   type Marker,
   type Note,
   type NoteLab,
@@ -87,7 +92,8 @@ export function projectObject(song: Song, options: ProjectWriteOptions = {}): Pr
     version: PROJECT_VERSION,
     ...(options.app ? { app: options.app } : {}),
     savedAt: (options.savedAt ?? new Date()).toISOString(),
-    song,
+    // 붙은 음이 없는 만든 기록은 적지 않는다
+    song: pruneMade(song),
     ...(options.editor ? { editor: options.editor } : {}),
   };
 }
@@ -334,7 +340,48 @@ function readSong(raw: Obj, diagnostics: FileDiagnostic[]): Song {
     else warn(diagnostics, "project-dropped", "sources");
   }
 
-  return { meta, tempo, timeSig, markers, players, tracks, sources };
+  const made = readMade(raw.made, profile.volume);
+  return pruneMade({ meta, tempo, timeSig, markers, players, tracks, sources, ...(made.length > 0 ? { made } : {}) });
+}
+
+/**
+ * 만든 기록 (Song.made). 모르는 모양은 조용히 버린다: 기록이 없어도 음은 그대로 들리고, 되돌리기·다시 고치기만 안 된다.
+ * 기록이 가리키는 트랙·음은 되돌릴 때 다시 본다
+ */
+function readMade(raw: unknown, volume: { readonly min: number; readonly max: number }): MadeRecord[] {
+  const out: MadeRecord[] = [];
+  const ids = new Set<string>();
+  const strings = (v: unknown) => (Array.isArray(v) && v.every((x) => typeof x === "string") ? (v as string[]) : undefined);
+  const groups = (v: unknown): MadeNotes[] | undefined => {
+    if (!Array.isArray(v)) return undefined;
+    const list: MadeNotes[] = [];
+    for (const g of v) {
+      if (!isObject(g) || typeof g.trackId !== "string" || !g.trackId) return undefined;
+      // 기록 안의 음은 곡 음과 따로 읽는다 (id가 곡 음과 같아도 된다). 문제는 진단으로 남기지 않는다
+      list.push({ trackId: g.trackId, notes: readNotes(g.notes, g.trackId, g.trackId, new Set(), volume, []) });
+    }
+    return list;
+  };
+  for (const r of list(raw)) {
+    if (!isObject(r) || typeof r.id !== "string" || !r.id || ids.has(r.id) || !MADE_TOOLS.includes(r.tool as MadeTool)) continue;
+    const picked = strings(r.picked);
+    const before = groups(r.before);
+    const after = groups(r.after);
+    const added = r.addedTracks === undefined ? [] : strings(r.addedTracks);
+    if (!picked || !before || !after || !added) continue;
+    ids.add(r.id);
+    out.push({
+      id: r.id,
+      tool: r.tool as MadeTool,
+      options: r.options ?? null,
+      ...(typeof r.trackId === "string" ? { trackId: r.trackId } : {}),
+      picked,
+      before,
+      after,
+      ...(added.length > 0 ? { addedTracks: added } : {}),
+    });
+  }
+  return out;
 }
 
 function freshId(base: string, used: ReadonlySet<string>): string {
@@ -380,7 +427,18 @@ function readNotes(
     usedIds.add(id);
     const tabString = Number.isInteger(n.tabString) && (n.tabString as number) >= 1 && (n.tabString as number) <= 12 ? (n.tabString as number) : undefined;
     const lab = readLab(n.lab, volume);
-    notes.push({ id, start, dur, pitch: pitch as number, vol: v, tie: n.tie === "next" ? "next" : "none", ...(tabString ? { tabString } : {}), ...(lab ? { lab } : {}) });
+    const made = typeof n.made === "string" && n.made ? n.made : undefined;
+    notes.push({
+      id,
+      start,
+      dur,
+      pitch: pitch as number,
+      vol: v,
+      tie: n.tie === "next" ? "next" : "none",
+      ...(tabString ? { tabString } : {}),
+      ...(lab ? { lab } : {}),
+      ...(made ? { made } : {}),
+    });
   }
   // 한 트랙은 한 번에 한 음: 시작 순으로 두고 앞 음과 겹치는 음은 뺀다
   notes.sort((a, b) => cmp(a.start, b.start));

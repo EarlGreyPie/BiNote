@@ -1,4 +1,5 @@
 import type { Rat } from "./rat.js";
+import type { MadeRecord } from "./made.js";
 
 /** 곡 전체 하나의 템포 지도에 들어가는 변화. 편집기 안에서는 범위 제한이 없다. */
 export interface TempoEvent {
@@ -66,6 +67,8 @@ export interface Note {
   readonly tabString?: number;
   /** 실험실 입력으로 만든 음의 표시 (프로젝트 파일에만 저장. 출력은 보통 v·높이 그대로). 풀면 처음 값으로 돌아간다 */
   readonly lab?: NoteLab;
+  /** 아르페지오·꾸밈음·슬라이드 창이 만들거나 바꾼 음이면 그 만든 기록 id (Song.made, 프로젝트 파일에만 저장. 출력과는 상관없다) */
+  readonly made?: string;
 }
 
 /**
@@ -148,6 +151,8 @@ export interface Song {
   readonly players: readonly Player[];
   readonly tracks: readonly Track[];
   readonly sources: readonly SourceRef[];
+  /** 창으로 만든 기록 (만든 순서). 원래대로 되돌리기·다시 고치기에 쓴다 (made.ts, 프로젝트 파일에만 저장) */
+  readonly made?: readonly MadeRecord[];
 }
 
 /** 트랙이 실제로 쓰는 악기: 트랙에 따로 정했으면 그것, 아니면 악보 악기, 둘 다 없으면 피아노 */

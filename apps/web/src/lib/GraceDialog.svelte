@@ -22,14 +22,22 @@
     stringOf?: (note: Note) => number | undefined;
     /** 트랙이 실제로 소리 내는 악기 */
     instrumentOf: (trackId: string) => string | undefined;
-    onapply: (result: GraceResult) => void;
+    /** 다시 고치기: 만들 때 고른 것 (없으면 이 브라우저에 기억해 둔 값) */
+    initial?: GraceChoice | undefined;
+    /** 창 제목 (다시 고치기) */
+    title?: string | undefined;
+    /** 다시 고치기: 창을 닫고 원래 음으로 되돌린다 (있으면 "원래대로" 버튼) */
+    onrestore?: (() => void) | undefined;
+    /** 적용: 결과와 만든 기록에 남길 고른 것 */
+    onapply: (result: GraceResult, choice: GraceChoice) => void;
     onclose: () => void;
   }
 
-  let { song, picked, profile, locked, tab, stringOf, instrumentOf, onapply, onclose }: Props = $props();
+  let { song, picked, profile, locked, tab, stringOf, instrumentOf, initial, title, onrestore, onapply, onclose }: Props = $props();
 
   let dialog: HTMLDialogElement;
-  let choice = $state<GraceChoice>(loadStored(GRACE_KEY, (raw) => parseGraceChoice(parseJson(raw))));
+  // svelte-ignore state_referenced_locally
+  let choice = $state<GraceChoice>(initial ?? loadStored(GRACE_KEY, (raw) => parseGraceChoice(parseJson(raw))));
   function set(change: Partial<GraceChoice>) {
     choice = { ...choice, ...change };
     saveStored(GRACE_KEY, JSON.stringify(choice));
@@ -113,7 +121,7 @@
   const ok = $derived(!!offsets && result.made > 0 && !result.tooMany);
   function apply() {
     if (!ok) return;
-    onapply(result);
+    onapply(result, { ...choice, length });
     dialog.close();
   }
   const s = $derived(result.skipped);
@@ -121,7 +129,7 @@
 </script>
 
 <dialog bind:this={dialog} {onclose}>
-  <h2>{t("ui.grace")}</h2>
+  <h2>{title ?? t("ui.grace")}</h2>
   <div class="grid">
     <span>{t("ui.graceTiming")}</span>
     <span class="row">
@@ -167,6 +175,15 @@
   {/if}
   <footer>
     <span class="spacer"></span>
+    {#if onrestore}
+      <button
+        title={t("ui.madeRestoreHelp")}
+        onclick={() => {
+          onrestore?.();
+          dialog.close();
+        }}>{t("ui.madeRestoreButton")}</button
+      >
+    {/if}
     <button onclick={() => dialog.close()}>{t("ui.cancel")}</button>
     <button class="primary" disabled={!ok} onclick={apply}>{t("ui.apply")}</button>
   </footer>

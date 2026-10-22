@@ -69,3 +69,25 @@ export function formatGraceInput(offsets: readonly number[], tab?: { fret: numbe
   }
   return offsets.map((o) => (o > 0 ? `+${o}` : `${o}`)).join(" ");
 }
+
+/** 만든 기록에 남기는 꾸밈음 설정: 고른 것, 타브에서 열었으면 기준 본음 프렛, 꾸밈음을 놓은 타브 줄 (고른 음 id → 줄) */
+export interface GraceMade {
+  readonly choice: GraceChoice;
+  readonly tab?: { readonly fret: number; readonly string: number; readonly maxFret: number };
+  readonly strings: readonly (readonly [string, number])[];
+}
+
+/** 만든 기록의 설정을 읽는다 (모르는 값은 기본으로) */
+export function parseGraceMade(raw: unknown): GraceMade {
+  const v = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const t = v.tab && typeof v.tab === "object" ? (v.tab as Record<string, unknown>) : undefined;
+  const int = (x: unknown) => Number.isInteger(x) && (x as number) >= 0;
+  const tab = t && int(t.fret) && int(t.string) && int(t.maxFret) ? { fret: t.fret as number, string: t.string as number, maxFret: t.maxFret as number } : undefined;
+  return { choice: parseGraceChoice(v.choice), ...(tab ? { tab } : {}), strings: parseStrings(v.strings) };
+}
+
+/** 고른 음 id → 타브 줄 목록 (만든 기록) */
+export function parseStrings(raw: unknown): [string, number][] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((x): x is [string, number] => Array.isArray(x) && typeof x[0] === "string" && Number.isInteger(x[1]) && x[1] >= 1 && x[1] <= 12);
+}

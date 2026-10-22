@@ -20,7 +20,7 @@
   import { setSplitSpread, splitPrefs } from "./splitPrefs.svelte";
   import { canAskSave, canPickFolder, canShareFiles, pickSaveFolder, saveTarget, setSaveMode, setSaveShare } from "./saveTarget.svelte";
   import { LANE_MAX, LANE_MIN, saveVolumeLane, volumeLane, type LaneState } from "./volumeLane.svelte";
-  import { LAB_FEATURES, labs, setLabs } from "./labs.svelte";
+  import { LAB_FEATURES, labs, setButtonNames, setLabs } from "./labs.svelte";
 
   import Icon from "./Icon.svelte";
   import PackBar from "./PackBar.svelte";
@@ -398,6 +398,11 @@
             <li class:off={!labs.on}><b>{t(f.label)}</b> <span class="muted">{t(f.help)}</span></li>
           {/each}
         </ul>
+        <label class="row">
+          <input type="checkbox" checked={labs.buttonNames} disabled={!labs.on} onchange={(e) => setButtonNames(e.currentTarget.checked)} />
+          <span>{t("ui.labButtonNames")}</span>
+        </label>
+        <p class="muted help">{t("ui.labButtonNamesHelp")}</p>
       {:else if section === "language"}
         <div class="langs" role="radiogroup" aria-label={t("ui.language")}>
           {#each LOCALES as l (l)}

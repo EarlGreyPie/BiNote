@@ -5,7 +5,7 @@
   import { lengthLabel } from "./Toolbar.svelte";
   import { lengthsFor, noteLengthOf } from "./roll";
   import { withLengths } from "./tuplet";
-  import { ARP_KEY, ARP_LENGTHS, parseArpChoice, storeArpChoice, type ArpChoice } from "./arpeggioOptions";
+  import { ARP_KEY, ARP_LENGTHS, parseArpChoice, storeArpChoice, type ArpChoice, type ArpMade } from "./arpeggioOptions";
   import { loadStored, parseJson, saveStored } from "./persist";
 
   /**
@@ -31,14 +31,22 @@
     locked: ReadonlySet<string>;
     /** 곡의 트랙 색 (트랙 바와 같은 색: 색 방식·테마). 미리 보기는 넣은 뒤 곡으로 불러 새 트랙 색도 맞춘다 */
     colorsFor: (song: Song) => ReadonlyMap<string, string>;
-    onapply: (result: ArpResult) => void;
+    /** 다시 고치기: 만들 때 고른 것 (없으면 이 브라우저에 기억해 둔 값) */
+    initial?: ArpMade | undefined;
+    /** 창 제목 (다시 고치기) */
+    title?: string | undefined;
+    /** 다시 고치기: 창을 닫고 원래 음으로 되돌린다 (있으면 "원래대로" 버튼) */
+    onrestore?: (() => void) | undefined;
+    /** 적용: 결과와 만든 기록에 남길 고른 것 */
+    onapply: (result: ArpResult, made: ArpMade) => void;
     onclose: () => void;
   }
 
-  let { song, trackId, picked, division, lengthRange, tupletLength, range, maxTracks, locked, colorsFor, onapply, onclose }: Props = $props();
+  let { song, trackId, picked, division, lengthRange, tupletLength, range, maxTracks, locked, colorsFor, initial, title, onrestore, onapply, onclose }: Props = $props();
 
   let dialog: HTMLDialogElement;
-  const stored = loadStored(ARP_KEY, (raw) => parseArpChoice(parseJson(raw)));
+  // svelte-ignore state_referenced_locally
+  const stored = initial?.choice ?? loadStored(ARP_KEY, (raw) => parseArpChoice(parseJson(raw)));
   let choice = $state<ArpChoice>(stored);
   function set(change: Partial<ArpChoice>) {
     choice = { ...choice, ...change };
@@ -61,7 +69,8 @@
     return song.tracks.filter((tr) => tr.playerId === player);
   });
   /** 화음에서 뺀 트랙 (창을 열 때마다 비운다: 기본은 모두 넣기). 고른 트랙은 뺄 수 없다 */
-  let excluded = $state<ReadonlySet<string>>(new Set());
+  // svelte-ignore state_referenced_locally
+  let excluded = $state<ReadonlySet<string>>(new Set(initial?.excluded ?? []));
   function toggleTrack(id: string, on: boolean) {
     const next = new Set(excluded);
     if (on) next.delete(id);
@@ -140,7 +149,9 @@
   const ok = $derived(result.notes > 0);
   function apply() {
     if (!ok) return;
-    onapply(result);
+    // 격자 길이는 지금 격자 이름으로 남긴다 (다시 고칠 때 격자를 바꿨어도 같은 길이)
+    const used = length === "grid" && lengths.includes(String(division) as ArpChoice["length"]) ? (String(division) as ArpChoice["length"]) : length;
+    onapply(result, { choice: { ...choice, length: used }, excluded: [...excluded] });
     dialog.close();
   }
 
@@ -148,7 +159,7 @@
 </script>
 
 <dialog bind:this={dialog} {onclose}>
-  <h2>{t("ui.arpeggio")}</h2>
+  <h2>{title ?? t("ui.arpeggio")}</h2>
   <div class="grid">
     <span>{t("ui.arpSource")}</span>
     <span class="row">
@@ -232,6 +243,15 @@
   {#if !ok && !result.cutCells}<p class="warn">{t("ui.arpNothing")}</p>{/if}
   <footer>
     <span class="spacer"></span>
+    {#if onrestore}
+      <button
+        title={t("ui.madeRestoreHelp")}
+        onclick={() => {
+          onrestore?.();
+          dialog.close();
+        }}>{t("ui.madeRestoreButton")}</button
+      >
+    {/if}
     <button onclick={() => dialog.close()}>{t("ui.cancel")}</button>
     <button class="primary" disabled={!ok} onclick={apply}>{t("ui.apply")}</button>
   </footer>

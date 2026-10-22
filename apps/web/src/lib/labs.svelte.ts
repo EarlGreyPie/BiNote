@@ -6,14 +6,15 @@ import { loadStored, saveStored } from "./persist";
  * 새 실험실 기능은 LAB_FEATURES에 하나 더하고, 메뉴 항목과 창을 App에 붙인다
  */
 const LABS_KEY = "mmlce.labs";
+const BUTTON_NAMES_KEY = "mmlce.labs.buttonNames";
 
-export type LabFeatureId = "ghost" | "harmonic" | "reverb";
+export type LabFeatureId = "ghost" | "harmonic" | "reverb" | "midiRecord";
 
 export interface LabFeature {
   readonly id: LabFeatureId;
   /** 메뉴·설정에 쓰는 이름과 설명 문구 키 */
-  readonly label: "ui.labGhost" | "ui.labHarmonic" | "ui.labReverb";
-  readonly help: "ui.labGhostHelp" | "ui.labHarmonicHelp" | "ui.labReverbHelp";
+  readonly label: "ui.labGhost" | "ui.labHarmonic" | "ui.labReverb" | "ui.labMidiRecord";
+  readonly help: "ui.labGhostHelp" | "ui.labHarmonicHelp" | "ui.labReverbHelp" | "ui.labMidiRecordHelp";
 }
 
 /** 실험실 기능 목록 (메뉴와 설정 설명이 이 순서를 따른다) */
@@ -21,11 +22,24 @@ export const LAB_FEATURES: readonly LabFeature[] = [
   { id: "ghost", label: "ui.labGhost", help: "ui.labGhostHelp" },
   { id: "harmonic", label: "ui.labHarmonic", help: "ui.labHarmonicHelp" },
   { id: "reverb", label: "ui.labReverb", help: "ui.labReverbHelp" },
+  { id: "midiRecord", label: "ui.labMidiRecord", help: "ui.labMidiRecordHelp" },
 ];
 
 export const labs = $state({
   on: loadStored(LABS_KEY, (raw) => raw === "1"),
+  /** 단추 이름 펼치기 (실험실을 켰을 때만 쓴다). 곡에는 아무것도 남기지 않는 화면 설정 */
+  buttonNames: loadStored(BUTTON_NAMES_KEY, (raw) => raw === "1"),
 });
+
+/** 단추 이름 펼치기를 지금 쓰는지 */
+export function buttonNamesOn(): boolean {
+  return labs.on && labs.buttonNames;
+}
+
+export function setButtonNames(on: boolean): void {
+  labs.buttonNames = on;
+  saveStored(BUTTON_NAMES_KEY, on ? "1" : "0");
+}
 
 export function setLabs(on: boolean): void {
   labs.on = on;

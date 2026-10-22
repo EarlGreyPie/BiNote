@@ -1,6 +1,7 @@
 import {
   add,
   carryTabStrings,
+  unmarkNotes,
   cmp,
   eq,
   sub,
@@ -444,7 +445,8 @@ export function appendSong(other: Song, label = "악보 더하기"): Command {
       }
       const tracks = other.tracks.map((t) => {
         const id = trackId();
-        const notes = t.mml ? carryTabStrings(t.notes, parseTrackText(id, t.mml).notes) : t.notes.map((n, k) => ({ ...n, id: `${id}.${k + 1}` }));
+        // 더하는 곡의 만든 기록은 가져오지 않으므로 그 표시도 뗀다
+        const notes = unmarkNotes(t.mml ? carryTabStrings(t.notes, parseTrackText(id, t.mml).notes) : t.notes.map((n, k) => ({ ...n, id: `${id}.${k + 1}` })));
         return { ...t, id, playerId: players.get(t.playerId)?.id ?? t.playerId, notes };
       });
       return {

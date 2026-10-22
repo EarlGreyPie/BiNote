@@ -1,5 +1,6 @@
 import { cmp, type Note, type Rat, type SlideKind, type Song } from "@mmlce/core";
 import { NOTE_LENGTHS, type NoteLength } from "./roll";
+import { parseStrings } from "./graceOptions";
 
 /** 슬라이드 창에서 고른 것 (이 브라우저에 마지막 값을 기억한다) */
 export interface SlideChoice {
@@ -68,4 +69,16 @@ export function tabSlidePick(song: Pick<Song, "tracks">, activeTrackId: string |
   const active = song.tracks.find((t) => t.id === activeTrackId);
   if (!active || !at) return [];
   return song.tracks.filter((t) => t.playerId === active.playerId && !t.mute).flatMap((t) => t.notes.filter((n) => cmp(n.start, at) === 0));
+}
+
+/** 만든 기록에 남기는 슬라이드 설정: 고른 것과 사이 음을 놓은 타브 줄 (고른 음 id → 줄) */
+export interface SlideMade {
+  readonly choice: SlideChoice;
+  readonly strings: readonly (readonly [string, number])[];
+}
+
+/** 만든 기록의 설정을 읽는다 (모르는 값은 기본으로) */
+export function parseSlideMade(raw: unknown): SlideMade {
+  const v = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  return { choice: parseSlideChoice(v.choice), strings: parseStrings(v.strings) };
 }

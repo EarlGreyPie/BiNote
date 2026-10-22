@@ -20,6 +20,19 @@ export interface ArpChoice {
 }
 
 export const ARP_KEY = "mmlce.arpeggio";
+
+/** 만든 기록에 남기는 아르페지오 설정: 고른 것과 같은 시간 음에서 뺀 트랙 */
+export interface ArpMade {
+  readonly choice: ArpChoice;
+  readonly excluded: readonly string[];
+}
+
+/** 만든 기록의 설정을 읽는다 (모르는 값은 기본으로. 판이 붙은 지금 모양으로 남긴다) */
+export function parseArpMade(raw: unknown): ArpMade {
+  const v = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const excluded = Array.isArray(v.excluded) ? v.excluded.filter((x): x is string => typeof x === "string") : [];
+  return { choice: parseArpChoice(v.choice && typeof v.choice === "object" ? { ...v.choice, v: ARP_STORE_VERSION } : undefined), excluded };
+}
 /** 저장값 판: 2부터 굴려 치기가 방식(roll)으로 따로 있다. 판이 없는 예전 값만 옮겨 읽는다 */
 export const ARP_STORE_VERSION = 2;
 

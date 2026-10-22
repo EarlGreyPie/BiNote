@@ -413,7 +413,9 @@ export function duplicateTrack(trackId: string, name: string, label = "트랙 �
       let noteId: string;
       do noteId = `${id}.n${++k}`;
       while (used.has(noteId));
-      return { ...n, id: noteId };
+      // 복사한 트랙의 음은 만든 기록 표시를 떼어 보통 음으로
+      const { made: _made, ...plain } = n;
+      return { ...plain, id: noteId };
     });
     const copy: Track = { ...track, id, name, color: TRACK_COLORS[song.tracks.length % TRACK_COLORS.length]!, mute: false, solo: false, notes };
     const tracks = [...song.tracks];

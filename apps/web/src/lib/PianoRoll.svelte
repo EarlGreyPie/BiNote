@@ -26,6 +26,8 @@
   } from "@mmlce/core";
   import { onMount, untrack } from "svelte";
   import Icon from "./Icon.svelte";
+  import { buttonName } from "./buttonName";
+  import { buttonNamesOn } from "./labs.svelte";
   import { volumeLabels } from "./volumeLabels.svelte";
   import { timbreZones } from "./timbreZones.svelte";
   import { fonts } from "./fonts.svelte";
@@ -331,6 +333,8 @@
       : `right:${laneReserved > 0 ? laneReserved + 10 : 20}px;bottom:${KEYBOARD + 4}px`,
   );
   /** 롤이 아주 좁으면(작은 휴대폰 세로 롤 등) 건반 높이 −/+는 접는다 (도구줄·더 보기 메뉴에 그대로 있다) */
+  /** 실험실: 모서리 단추에 올리면 이름표 */
+  const names = $derived(buttonNamesOn());
   const cornerNarrow = $derived((orientation === "horizontal" ? width - KEYBOARD : width - laneReserved) < 260);
 
   /** 이 화면에서 레인이 가질 수 있는 가장 큰 두께 */
@@ -1820,20 +1824,22 @@
     onpointerdown={(e) => e.stopPropagation()}
   />
   <!-- 확대·축소 단추: 롤 안 시간 스크롤바 끝 모서리 (도구줄이 좁아 건반 높이가 메뉴로 들어가도 바로 누르게). 레인이 열려 있으면 그 위로 -->
-  <div class="zoom-corner" style={zoomCornerStyle} role="group" aria-label={t("ui.fitAll")} onpointerdown={(e) => e.stopPropagation()}>
-    <button class="icon" title={t("ui.fitAllHelp")} aria-label={t("ui.fitAll")} onclick={fitAll}><Icon name="maximize" size={14} /></button>
-    <button class="icon" title={t("ui.zoomTimeOut")} aria-label={t("ui.zoomTimeOut")} onclick={() => zoom("time", 1 / 1.25)}>
-      <Icon name="arrows-h" size={14} /><Icon name="minus" size={12} />
+  <div class="zoom-corner" class:named={names} style={zoomCornerStyle} role="group" aria-label={t("ui.fitAll")} onpointerdown={(e) => e.stopPropagation()}>
+    <button class="icon" title={names ? undefined : t("ui.fitAllHelp")} aria-label={t("ui.fitAll")} use:buttonName={names} onclick={fitAll}>
+      <Icon name="maximize" size={14} /><span class="btn-name" aria-hidden="true">{t("ui.fitAll")}</span>
     </button>
-    <button class="icon" title={t("ui.zoomTimeIn")} aria-label={t("ui.zoomTimeIn")} onclick={() => zoom("time", 1.25)}>
-      <Icon name="arrows-h" size={14} /><Icon name="plus" size={12} />
+    <button class="icon" title={names ? undefined : t("ui.zoomTimeOut")} aria-label={t("ui.zoomTimeOut")} use:buttonName={names} onclick={() => zoom("time", 1 / 1.25)}>
+      <Icon name="arrows-h" size={14} /><Icon name="minus" size={12} /><span class="btn-name" aria-hidden="true">{t("ui.zoomOutTime")}</span>
+    </button>
+    <button class="icon" title={names ? undefined : t("ui.zoomTimeIn")} aria-label={t("ui.zoomTimeIn")} use:buttonName={names} onclick={() => zoom("time", 1.25)}>
+      <Icon name="arrows-h" size={14} /><Icon name="plus" size={12} /><span class="btn-name" aria-hidden="true">{t("ui.zoomInTime")}</span>
     </button>
     {#if !cornerNarrow}
-      <button class="icon" title={t("ui.zoomPitchOut")} aria-label={t("ui.zoomPitchOut")} onclick={() => zoom("pitch", 1 / 1.25)}>
-        <Icon name="arrows-v" size={14} /><Icon name="minus" size={12} />
+      <button class="icon" title={names ? undefined : t("ui.zoomPitchOut")} aria-label={t("ui.zoomPitchOut")} use:buttonName={names} onclick={() => zoom("pitch", 1 / 1.25)}>
+        <Icon name="arrows-v" size={14} /><Icon name="minus" size={12} /><span class="btn-name" aria-hidden="true">{t("ui.keysSmaller")}</span>
       </button>
-      <button class="icon" title={t("ui.zoomPitchIn")} aria-label={t("ui.zoomPitchIn")} onclick={() => zoom("pitch", 1.25)}>
-        <Icon name="arrows-v" size={14} /><Icon name="plus" size={12} />
+      <button class="icon" title={names ? undefined : t("ui.zoomPitchIn")} aria-label={t("ui.zoomPitchIn")} use:buttonName={names} onclick={() => zoom("pitch", 1.25)}>
+        <Icon name="arrows-v" size={14} /><Icon name="plus" size={12} /><span class="btn-name" aria-hidden="true">{t("ui.keysBigger")}</span>
       </button>
     {/if}
   </div>
@@ -1909,10 +1915,50 @@
     opacity: 1;
   }
   .zoom-corner button {
+    position: relative;
     min-width: 28px;
     height: 28px;
     padding: 0 4px;
     gap: 1px;
+  }
+  /* 실험실 단추 이름 펼치기: 이름표는 단추 위에 겹쳐 뜬다 (배치·롤 그림판은 그대로). 꺼져 있으면 아예 숨긴다 */
+  .btn-name {
+    display: none;
+  }
+  .named .btn-name {
+    display: block;
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 4px);
+    padding: 3px 8px;
+    white-space: nowrap;
+    font-size: 12px;
+    color: var(--text);
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+    pointer-events: none;
+    opacity: 0;
+    transform: translateY(3px);
+    transition:
+      opacity 0.12s ease-out,
+      transform 0.12s ease-out;
+  }
+  .named button:global(.show-name) .btn-name,
+  .named button:focus-visible .btn-name {
+    opacity: 1;
+    transform: none;
+  }
+  /* 이름표가 떠 있는 동안은 모서리 단추 묶음도 또렷하게 */
+  .zoom-corner.named:has(:global(.show-name)) {
+    opacity: 1;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .named .btn-name {
+      transition: none;
+      transform: none;
+    }
   }
 
   /* 음량 레인 단추: 건반 띠와 레인이 만나는 모서리 */

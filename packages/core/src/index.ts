@@ -15,3 +15,4 @@ export * from "./grace.js";
 export * from "./volume.js";
 export * from "./lab.js";
 export * from "./reverb.js";
+export * from "./made.js";

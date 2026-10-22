@@ -223,14 +223,14 @@ export function assignTab(
 }
 
 /**
- * MML 글을 다시 읽어 음을 바꿔 끼울 때, 옛 음에 적힌 글 밖 표시(타브 줄 tabString, 실험실 표시 lab)를 새 음으로 옮긴다.
+ * MML 글을 다시 읽어 음을 바꿔 끼울 때, 옛 음에 적힌 글 밖 표시(타브 줄 tabString, 실험실 표시 lab, 만든 기록 made)를 새 음으로 옮긴다.
  * 글에는 이 정보가 없어 그대로 두면 다시 읽은 음이 잃는다 (글자 수 줄이기·화음 분산·병합처럼 다시 쓰는 편집 모두 여기를 지난다).
  * 다시 쓰면 음이 합쳐지거나 나뉘므로 순서가 아니라 시간과 높이로 맞춘다: 새 음의 시작이 옛 음이 울리는 동안 안에 있고
  * 높이가 같으면 그 표시를 받는다. 실험실 표시는 새 음이 덮는 같은 높이 옛 음의 표시가 모두 같을 때만 받는다
  * (조각마다 다르면 붙이지 않는다). 한 트랙은 한 번에 한 음이라 둘 다 시작 순으로 훑는다
  */
 export function carryTabStrings(old: readonly Note[], next: readonly Note[]): Note[] {
-  if (!old.some((n) => n.tabString !== undefined || n.lab !== undefined)) return [...next];
+  if (!old.some((n) => n.tabString !== undefined || n.lab !== undefined || n.made !== undefined)) return [...next];
   const from = [...old].sort((a, b) => cmp(a.start, b.start));
   const order = next.map((_, i) => i).sort((a, b) => cmp(next[a]!.start, next[b]!.start));
   const out = [...next];
@@ -244,11 +244,24 @@ export function carryTabStrings(old: readonly Note[], next: readonly Note[]): No
       if (o.pitch !== n.pitch || cmp(add(o.start, o.dur), n.start) <= 0) continue;
       const tab = o.tabString !== undefined && n.tabString === undefined;
       const lab = o.lab !== undefined && n.lab === undefined && sameLabOver(from, k, n);
-      if (tab || lab) out[i] = { ...n, ...(tab ? { tabString: o.tabString } : {}), ...(lab ? { lab: o.lab } : {}) };
+      const made = o.made !== undefined && n.made === undefined && sameMadeOver(from, k, n);
+      if (tab || lab || made) out[i] = { ...n, ...(tab ? { tabString: o.tabString } : {}), ...(lab ? { lab: o.lab } : {}), ...(made ? { made: o.made } : {}) };
       break;
     }
   }
   return out;
+}
+
+/**
+ * 새 음 n이 덮는 옛 음(from[k]부터, 높이와 상관없이)이 모두 같은 만든 기록 표시를 가졌는지. 다시 쓰며 만든 음과 보통 음이 한 음으로
+ * 합쳐졌을 때 표시를 주면, 되돌리기가 그 음을 통째로 지워 보통 음 구간까지 사라진다. 다르면 표시를 옮기지 않는다
+ * (그 음은 보통 음이 되고, 되돌리기는 그 자리가 막혀 있다고 알린다)
+ */
+function sameMadeOver(from: readonly Note[], k: number, n: Note): boolean {
+  const made = from[k]!.made;
+  const stop = add(n.start, n.dur);
+  for (let m = k + 1; m < from.length && cmp(from[m]!.start, stop) < 0; m++) if (from[m]!.made !== made) return false;
+  return true;
 }
 
 /**

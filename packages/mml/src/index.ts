@@ -18,3 +18,4 @@ export * from "./score-end.js";
 export * from "./offgrid.js";
 export * from "./spread.js";
 export * from "./merge-tracks.js";
+export * from "./made.js";

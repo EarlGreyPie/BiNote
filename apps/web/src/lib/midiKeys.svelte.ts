@@ -46,6 +46,9 @@ export class MidiKeys {
   /** 켜 두면 건반을 눌러도 악보에 넣지 않는다 (새 판으로 바꾸는 동안) */
   paused = false;
 
+  /** 녹음 중이면 건반을 화음 입력 대신 여기로 보낸다 (소리는 그대로 들려준다) */
+  capture: { on(pitch: number, velocity: number): void; off(pitch: number): void } | undefined;
+
   /** 기다리던 화음을 지금 넣는다 (저장 직전 등) */
   flushPending(): void {
     const chord = this.chords.take();
@@ -82,6 +85,7 @@ export class MidiKeys {
           this.held.delete(pitch);
           this.on.previewOff(pitch);
           if (session !== this.session || this.paused) return;
+          if (this.capture) return this.capture.off(pitch);
           const chord = this.chords.up(pitch);
           if (chord) this.on.chord({ pitches: [...chord.pitches], velocity: chord.velocity });
         },
@@ -102,6 +106,7 @@ export class MidiKeys {
     if (this.paused) return;
     this.held.add(pitch);
     this.on.previewOn(pitch, velocity);
+    if (this.capture) return this.capture.on(pitch, velocity);
     this.chords.down(pitch, velocity);
   }
 }

@@ -136,3 +136,15 @@ describe("커서 없이 넣는 자리: 마지막 음 뒤", () => {
     expect(cmp(notes[1]!.start, rat(1, 7))).toBe(0);
   });
 });
+
+describe("MIDI 스텝 입력 숫자 키", () => {
+  it("1~6은 온음표~32분, 7·8은 셋잇단, 0은 쉼표, 숫자판도 같게", async () => {
+    const { midiStepLength } = await import("../src/lib/midiInput");
+    expect(["1", "2", "3", "4", "5", "6", "7", "8"].map(midiStepLength)).toEqual(["1", "2", "4", "8", "16", "32", "12", "24"]);
+    expect(midiStepLength("0")).toBe("rest");
+    expect(midiStepLength("Num3")).toBe("4");
+    expect(midiStepLength("9")).toBeUndefined();
+    expect(midiStepLength("Ctrl+1")).toBeUndefined();
+    expect(midiStepLength("A")).toBeUndefined();
+  });
+});

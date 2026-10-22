@@ -254,9 +254,9 @@ export function clipOverlaps(clip: NoteClip): boolean {
   return false;
 }
 
-/** 복사한 음을 at 위치에 새 id로 놓을 음들 */
+/** 복사한 음을 at 위치에 새 id로 놓을 음들. 만든 기록 표시는 떼어 보통 음으로 (되돌리기가 붙인 음까지 지우지 않게) */
 export function pasteClip(clip: NoteClip, at: Rat, newId: () => string): Note[] {
-  return clip.notes.map((n) => ({ ...n, id: newId(), start: add(at, n.start) }));
+  return clip.notes.map(({ made: _made, ...n }) => ({ ...n, id: newId(), start: add(at, n.start) }));
 }
 
 /**

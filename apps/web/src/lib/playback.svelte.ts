@@ -48,9 +48,10 @@ export class Playback {
   /**
    * start(온음표, 없으면 처음)부터 재생. loop가 있으면 그 구간을 끊김 없이 되풀이한다.
    * rate: 재생 속도 (탭 템포를 느리게 찍을 때). 위치·탭 시각은 늘 곡 시간(초)으로 잰다.
-   * at: 반복 구간이 있을 때 이 곡 시각(초)이 구간 안이면 처음이 아니라 거기서부터 이어 재생한다 (속도 바꾸기)
+   * at: 반복 구간이 있을 때 이 곡 시각(초)이 구간 안이면 처음이 아니라 거기서부터 이어 재생한다 (속도 바꾸기).
+   * record: MIDI 건반 녹음 (예비박 leadIn 오디오 초, 곡이 끝나도 정지할 때까지 돈다)
    */
-  async play(song: Song, start: number | undefined, loop: readonly [number, number] | undefined, rate = 1, at?: number): Promise<void> {
+  async play(song: Song, start: number | undefined, loop: readonly [number, number] | undefined, rate = 1, at?: number, record?: { leadIn: number }): Promise<boolean> {
     const generation = ++this.generation;
     this.pending = { song, start, loop, rate };
     const begin = loop ? loop[0] : start;
@@ -58,8 +59,8 @@ export class Playback {
     const fromSeconds = from ? positionToSeconds(song.tempo, from) : 0;
     const loopSeconds = loop ? positionToSeconds(song.tempo, asRat(loop[1])) - fromSeconds : undefined;
     const offset = loopSeconds && at !== undefined && at > fromSeconds && at < fromSeconds + loopSeconds ? at - fromSeconds : 0;
-    const result = await this.engine.play(song, from, loopSeconds && loopSeconds > 0 ? loopSeconds : undefined, rate, offset);
-    if (generation !== this.generation) return;
+    const result = await this.engine.play(song, from, loopSeconds && loopSeconds > 0 ? loopSeconds : undefined, rate, offset, record);
+    if (generation !== this.generation) return false;
     this.pending = undefined;
     this.unresolved = result;
     this.from = fromSeconds;
@@ -75,6 +76,7 @@ export class Playback {
       else this.playing = false;
     };
     requestAnimationFrame(frame);
+    return this.engine.playing;
   }
 
   stop(): void {
