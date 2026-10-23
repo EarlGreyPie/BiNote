@@ -607,10 +607,13 @@ function textTempo(trackId: string, mml: TrackText): TempoEvent[] {
  * 원문이 있던 트랙의 마지막 음 끝이 그대로인데(볼륨·높이만 바꿈 등) 원문 게임 길이가 더 길면, 출력기로 다시 쓴 글에
  * 모자란 쉼표와 그 자리 템포를 붙여 원문으로 남긴다. 마지막 음 끝과 지킨 끝 사이에 이 트랙이 적은 템포
  * (예: `t60c4t80r4r4`의 t80)도 같은 자리에 쉼표로 띄워 다시 적는다 (빠지면 끝 쉼표의 시간이 달라진다).
- * 음 끝이 바뀐 편집(끝 음을 지우거나 늘림)은 전처럼 음 끝이 길이다.
+ * 음 끝이 바뀐 편집(끝 음을 지우거나 늘림)은 전처럼 음 끝이 길이다. 단 mode "tail"(만든 것 되돌리기·아르페지오 적용)은
+ * 원문에 마지막 음 뒤 끝 쉼표가 실제로 있었으면(원문 게임 길이 > 옛 음 끝) 음 끝이 바뀌어도 그 길이를 지킨다
+ * (쉼표만 있던 트랙에 원래 화음을 돌려놓거나, 접기로 베이스를 다른 트랙에 옮겨 비운 트랙의 끝 쉼표가 사라지지 않게).
+ * 끝 쉼표가 없던 원문(음이 끝까지 찬 원문)은 음 끝이 길이라, 손으로 늘린 음을 되돌릴 때 없던 쉼표를 새로 만들지 않는다.
  * 다시 읽은 음이 고친 음과 다르면(출력기가 쓸 수 없는 길이 등) 전처럼 원문 없이 둔다
  */
-export function keepTextEnd(before: Song, after: Song, trackIds: readonly string[]): Song {
+export function keepTextEnd(before: Song, after: Song, trackIds: readonly string[], mode: "same-end" | "tail" = "same-end"): Song {
   const lengths = (PROFILES[after.meta.profileId] ?? getProfile("mobile")).length;
   let out = after;
   for (const id of trackIds) {
@@ -619,7 +622,8 @@ export function keepTextEnd(before: Song, after: Song, trackIds: readonly string
     if (!old?.mml || !now || now.mml) continue;
     const end = textEnd(old.mml);
     const last = notesEnd(now.notes);
-    if (!eq(notesEnd(old.notes), last) || cmp(end, last) <= 0) continue;
+    const kept = mode === "tail" ? cmp(end, notesEnd(old.notes)) > 0 : eq(notesEnd(old.notes), last);
+    if (!kept || cmp(end, last) <= 0) continue;
     const base = withTailTempo(trackSource(out, now).text, textTempo(id, old.mml), end, lengths);
     const text = padScore([base], end, writtenBpmAt(out, id, base, end), lengths)[0]!;
     const mml: TrackText = { text };
@@ -653,7 +657,7 @@ function withTailTempo(text: string, own: readonly TempoEvent[], end: Rat, lengt
 }
 
 /** 여러 트랙의 음을 한 번에 바꾸는 명령 (MIDI 건반 화음 입력 등). 실행 취소 한 칸 */
-export function setTracksNotes(changes: readonly { trackId: string; notes: readonly Note[] }[], label = "음 넣기"): Command {
+export function setTracksNotes(changes: readonly { trackId: string; notes: readonly Note[] }[], label = "음 넣기", keep: "same-end" | "tail" = "same-end"): Command {
   const byId = new Map(changes.map((c) => [c.trackId, c.notes]));
   return {
     label,
@@ -667,7 +671,7 @@ export function setTracksNotes(changes: readonly { trackId: string; notes: reado
           return { ...rest, notes };
         }),
       };
-      return keepTextEnd(song, next, [...byId.keys()]);
+      return keepTextEnd(song, next, [...byId.keys()], keep);
     },
     invert: (before) => restoreSong(before),
   };
@@ -844,6 +848,132 @@ export function changeTemposResult(song: Song, change: TempoChange, from: Rat = 
 /** changeTemposResult를 실행 취소 한 칸 명령으로 (넣지 못한 악보는 changeTemposResult로 미리 알아본다) */
 export function changeTempos(change: TempoChange, from: Rat = ZERO, to?: Rat, label = "템포 한꺼번에 바꾸기"): Command {
   return songCommand(label, (song) => changeTemposResult(song, change, from, to).song);
+}
+
+/**
+ * 점점 느리게·빠르게 (rit.·accel.): 게임 MML에는 서서히 바뀌는 템포가 없어 step마다 t를 계단처럼 적는다.
+ * curve: linear = 고르게, in = 처음엔 조금씩 바꾸다 끝에서 크게, out = 처음에 크게 바꾸고 끝에서 조금씩
+ */
+export type TempoCurve = "linear" | "in" | "out";
+
+export interface TempoRamp {
+  readonly startBpm: number;
+  readonly endBpm: number;
+  /** 계단 하나 길이 (온음표 단위. 1/4 = 4분음표마다) */
+  readonly step: Rat;
+  readonly curve: TempoCurve;
+  /** 구간 끝에 원래 템포를 다시 적는다 */
+  readonly restore: boolean;
+}
+
+/**
+ * 구간 [from, to)에 적을 계단 템포. 구간 처음부터 step마다 하나씩, 첫 계단은 startBpm, 마지막 계단은 endBpm이고
+ * 사이는 curve로 나눈다. 정수로 반올림해 range 안으로 맞추고, 바로 앞 계단과 같은 값은 뺀다 (글자 수를 아끼려고)
+ */
+export function rampSteps(from: Rat, to: Rat, ramp: TempoRamp, range: { readonly min: number; readonly max: number }): TempoEvent[] {
+  if (cmp(to, from) <= 0 || cmp(ramp.step, ZERO) <= 0) return [];
+  const at: Rat[] = [];
+  for (let p = from; cmp(p, to) < 0; p = add(p, ramp.step)) at.push(p);
+  const shape = (f: number) => (ramp.curve === "in" ? f * f : ramp.curve === "out" ? 1 - (1 - f) * (1 - f) : f);
+  const out: TempoEvent[] = [];
+  at.forEach((p, k) => {
+    const f = at.length === 1 ? 1 : k / (at.length - 1);
+    const bpm = Math.min(range.max, Math.max(range.min, Math.round(ramp.startBpm + (ramp.endBpm - ramp.startBpm) * shape(f))));
+    if (out.at(-1)?.bpm !== bpm) out.push({ at: p, bpm });
+  });
+  return out;
+}
+
+/** 점점 느리게·빠르게 결과: 바뀐 곡, 적은 계단, 구간 안에서 지운 지도 템포 수, 계단 템포를 넣지 못해 원문을 그대로 둔 악보 */
+export interface TempoRampResult extends TempoChangeResult {
+  readonly steps: readonly TempoEvent[];
+  readonly replaced: number;
+}
+
+/**
+ * 구간 [from, to)를 계단 템포로 바꾼다. 구간 안에 있던 템포(지도와 원문의 t)는 지우고, rampSteps를 그 뒤에 음이 있는 자리만 적는다.
+ * restore면 구간 끝에 원래 그 자리 템포를 다시 적는다 (끝 자리에 이미 템포가 있거나 뒤에 음이 없으면 적지 않는다).
+ * 원문에는 changeTemposResult처럼 insertEdge로 끼운다: 음·쉼표 경계 → 걸친 쉼표 나누기 → 걸친 음을 &로 나누기.
+ * 게임 길이가 바뀌는 자리(끝난 악보, 마지막 쉼표)에는 적지 않으므로 끝난 악보가 길어지지 않는다
+ */
+export function rampTemposResult(song: Song, ramp: TempoRamp, from: Rat, to: Rat, range?: { readonly min: number; readonly max: number }): TempoRampResult {
+  const unchanged = { song, failed: [], steps: [], replaced: 0 };
+  if (cmp(to, from) <= 0) return unchanged;
+  const limit = range ?? (PROFILES[song.meta.profileId] ?? getProfile("mobile")).tempo;
+  const inside = (at: Rat) => cmp(at, from) >= 0 && cmp(at, to) < 0;
+  const before = normalizeTempo(song.tempo);
+  const bpmAt = (at: Rat) => before.filter((e) => cmp(e.at, at) <= 0).at(-1)?.bpm ?? DEFAULT_BPM;
+  const end = song.tracks.reduce<Rat>((m, t) => t.notes.reduce((mm, n) => (cmp(add(n.start, n.dur), mm) > 0 ? add(n.start, n.dur) : mm), m), ZERO);
+  const steps = rampSteps(from, to, ramp, limit).filter((e) => cmp(end, e.at) > 0);
+  if (steps.length === 0) return unchanged;
+  const edges: TempoEvent[] = [...steps];
+  const back = bpmAt(to);
+  if (ramp.restore && cmp(end, to) > 0 && !before.some((e) => eq(e.at, to)) && back !== steps.at(-1)!.bpm) edges.push({ at: to, bpm: back });
+  // 구간 안 지도 템포는 그것을 나타내던 원문의 t(음 경계로 옮겨 적은 t 포함)와 함께 지우고,
+  // 남은 구간 안 원문의 t(같은 자리에 겹쳐 쓴 t 등)도 지운다. 계단과 자리·값이 같은 것은 그대로 둔다
+  const same = (e: TempoEvent) => edges.some((x) => eq(x.at, e.at) && x.bpm === e.bpm);
+  const removed = before.filter((e) => inside(e.at) && !same(e));
+  const cleared = removed.reduce<Song>((out, e) => withoutTempo(out, e.at), song);
+  const { tokens } = tempoChangeTargets(cleared, from, to);
+  const tracks = cleared.tracks.map((t) => {
+    const hits = tokens.get(t.id)?.filter((h) => !same(h));
+    if (!t.mml || !hits || hits.length === 0) return t;
+    const text = t.mml.text;
+    const spans = hits.map((h): [number, number] => {
+      const [a, b] = h.span;
+      const spaceBefore = a === 0 || /\s/.test(text[a - 1]!);
+      return spaceBefore && /\s/.test(text[b] ?? "") ? [a, b + 1] : [a, b];
+    });
+    return { ...t, mml: { ...t.mml, text: spliceText(text, spans.map((span) => ({ span, text: "" }))) } };
+  });
+  const tempo = normalizeTempo([...before.filter((e) => !inside(e.at)), ...edges]);
+  // 지운 t가 마지막 쉼표 뒤에 있으면 그 쉼표가 마지막 명령이 돼 게임이 버리고 악보가 짧아진다.
+  // 그런 원문은 지우는 대신 그 자리의 새 템포 값으로 바꿔 적어 게임 길이를 그대로 둔다
+  const keptTracks = tracks.map((t, k) => {
+    const old = song.tracks[k]!;
+    if (!t.mml || !old.mml || t.mml.text === old.mml.text || eq(textEnd(t.mml), textEnd(old.mml))) return t;
+    return { ...t, mml: { ...old.mml, text: retempoRemoved(old.mml, t.mml, tempo) } };
+  });
+  const failures = new Map<number, Set<TempoEdgeFailure>>();
+  const next = edges.reduce<Song>(
+    (out, e) =>
+      songScores(out).reduce<Song>((acc, ids, score) => {
+        const done = insertEdge(acc, ids, e);
+        if (done.failed) failures.set(score, new Set([...(failures.get(score) ?? []), ...done.failed]));
+        return done.song;
+      }, out),
+    { ...cleared, tempo, tracks: keptTracks },
+  );
+  if (sameTempo(next.tempo, before) && next.tracks.every((t, k) => t.mml?.text === song.tracks[k]?.mml?.text)) return unchanged;
+  return {
+    song: next,
+    failed: [...failures].sort(([a], [b]) => a - b).map(([score, reasons]) => ({ score, reasons: [...reasons] })),
+    steps,
+    replaced: removed.length,
+  };
+}
+
+/**
+ * 계단 템포가 지운 원문 t를 지우지 않고 바꿔 적은 글. old에 있던 t 중 now에 남지 않은 것(같은 순서로 맞춰 본다)을
+ * 그 자리에서 tempo 지도가 울리는 값으로 바꾼다. t 자리·글 길이 구조는 그대로라 게임 길이가 바뀌지 않는다
+ */
+function retempoRemoved(old: TrackText, now: TrackText, tempo: readonly TempoEvent[]): string {
+  const was = tempoTokens(old);
+  const left = tempoTokens(now);
+  const removed: TempoToken[] = [];
+  let j = 0;
+  for (const k of was) {
+    const n = left[j];
+    if (n && eq(n.at, k.at) && n.bpm === k.bpm) j++;
+    else removed.push(k);
+  }
+  const bpmAt = (at: Rat) => tempo.filter((e) => cmp(e.at, at) <= 0).at(-1)?.bpm ?? DEFAULT_BPM;
+  return spliceText(old.text, removed.map((k) => ({ span: k.span, text: `t${bpmAt(k.at)}` })));
+}
+
+/** rampTemposResult를 실행 취소 한 칸 명령으로 (넣지 못한 악보는 rampTemposResult로 미리 알아본다) */
+export function rampTempos(ramp: TempoRamp, from: Rat, to: Rat, label = "점점 느리게·빠르게", range?: { readonly min: number; readonly max: number }): Command {
+  return songCommand(label, (song) => rampTemposResult(song, ramp, from, to, range).song);
 }
 
 /**

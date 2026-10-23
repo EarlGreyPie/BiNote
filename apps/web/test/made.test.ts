@@ -8,6 +8,7 @@ import {
   planArpeggio,
   planGrace,
   planSlides,
+  planTrill,
   pruneMade,
   rat,
   recordMade,
@@ -147,6 +148,22 @@ describe("원래대로 되돌리기", () => {
     expect(r.made).toBe(1);
     h.run(madeCommand(setTracksNotes(r.changes, "꾸밈음"), { tool: "grace", options: {}, picked: picked.map((x) => x.id) }));
     expect(h.song.made![0]!.tool).toBe("grace");
+    restore(h, ["mk1"]);
+    expect(plain(h.song)).toEqual(plain(s));
+  });
+
+  it("트릴·트레몰로(긴 음을 짧은 음으로 나눔)도 원래대로, .mme에 기록이 남는다", () => {
+    const s = songOf([n("a", 0, 2, 60), n("b", 2, 2, 64)], [n("c", 0, 2, 67)]);
+    const h = new History(s);
+    const picked = [s.tracks[0]!.notes[0]!, s.tracks[1]!.notes[0]!];
+    const base = { offset: 2, length: rat(1, 32), startOther: false, endOnMain: false, tie: false, canWrite };
+    const r = planTrill(s, picked, { ...base, kind: "tremolo" }, MOBILE_PROFILE, () => `t${++k}`);
+    expect(r.made).toBe(2);
+    expect(r.pieces).toBe(16);
+    h.run(madeCommand(setTracksNotes(r.changes, "트릴"), { tool: "trill", options: { choice: { kind: "tremolo" } }, picked: picked.map((x) => x.id) }));
+    expect(h.song.made![0]!.tool).toBe("trill");
+    const back = readProject(writeProject(h.song));
+    expect(back.song.made![0]!.tool).toBe("trill");
     restore(h, ["mk1"]);
     expect(plain(h.song)).toEqual(plain(s));
   });

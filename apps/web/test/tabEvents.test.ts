@@ -276,3 +276,15 @@ describe("타브 원곡 파형 띠 칸 (지시서 27)", () => {
     expect(tabZone(spots, 300, top - 21, top, 20, true)).toBe("wave");
   });
 });
+
+describe("화면 배율: 마디 번호 줄 두께", () => {
+  it("줄이 두꺼워지면 변속 줄·파형 띠·첫 줄과 누르는 칸이 그만큼 내려간다", () => {
+    const d = 10;
+    expect(tabEventText(0, TAB_EVENT_FONT, TAB_RULER + d).top).toBe(tabEventText(0).top + d);
+    expect(tabEventBottom(TAB_EVENT_FONT, TAB_RULER + d)).toBe(TAB_EVENT_BOTTOM + d);
+    expect(tabWaveTop(TAB_EVENT_FONT, TAB_RULER + d)).toBe(TAB_WAVE_TOP + d);
+    expect(tabTop(false, TAB_EVENT_FONT, TAB_RULER + d)).toBe(TAB_TOP + d);
+    expect(tabZone([], 300, TAB_RULER + d - 1, 500, 11, false, TAB_EVENT_FONT, TAB_RULER + d)).toBe("ruler");
+    expect(tabZone([], 300, TAB_RULER + d + 1, 500, 11, false, TAB_EVENT_FONT, TAB_RULER + d)).toBe("tempo");
+  });
+});

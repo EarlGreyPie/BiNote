@@ -52,6 +52,7 @@
 </script>
 
 <script lang="ts">
+  import { REM_BASE } from "./uiScale";
   /**
    * 아이콘 모음. 모양은 Lucide(ISC 허가, licenses/third-party.txt)의 SVG 경로를 인라인으로 옮긴 것이다.
    * 쓰는 아이콘만 여기 적는다.
@@ -63,15 +64,19 @@
     size?: number;
     /** 채워서 그리는 아이콘 (재생 단추) */
     fill?: boolean;
+    /** 화면 배율을 따르지 않는다 (피아노롤·타브처럼 배율 고정 화면 안) */
+    fixed?: boolean;
   }
 
-  let { name, size = 16, fill = false }: Props = $props();
+  let { name, size = 16, fill = false, fixed = false }: Props = $props();
 </script>
 
 <svg
   class="icon-svg"
   width={size}
   height={size}
+  style:width={fixed ? undefined : `${size / REM_BASE}rem`}
+  style:height={fixed ? undefined : `${size / REM_BASE}rem`}
   viewBox="0 0 24 24"
   fill={fill ? "currentColor" : "none"}
   stroke="currentColor"

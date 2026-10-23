@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ARP_LENGTHS, DEFAULT_ARP, parseArpChoice, storeArpChoice } from "../src/lib/arpeggioOptions";
+import { ARP_LENGTHS, arpMadeOfGuess, DEFAULT_ARP, parseArpChoice, storeArpChoice } from "../src/lib/arpeggioOptions";
 import { lengthsFor, noteLengthOf } from "../src/lib/roll";
 import { defaultLengthLimit, rat } from "@mmlce/core";
 
@@ -9,8 +9,10 @@ describe("아르페지오 창 저장값", () => {
     expect(parseArpChoice({ source: "x", octaves: 9, length: "96" })).toEqual(DEFAULT_ARP);
   });
   it("아는 값은 그대로", () => {
-    const v = { source: "chord", chord: "m7", style: "strum", order: "random", length: "12", octaves: 2, repeat: false, clear: false };
+    const v = { source: "chord", chord: "m7", style: "strum", order: "random", length: "12", octaves: 2, repeat: false, clear: false, fold: 4 };
     expect(parseArpChoice(v)).toEqual(v);
+    // 트랙 접기는 0~5만 (모르면 접지 않음)
+    expect(parseArpChoice({ ...v, fold: 9 }).fold).toBe(0);
   });
   it("예전 값의 깔기 + 옥타브 1 + 반복 끔은 굴려 치기로 읽는다 (판 2로 저장한 값은 그대로)", () => {
     expect(parseArpChoice({ style: "strum", octaves: 1, repeat: false }).style).toBe("roll");
@@ -30,5 +32,19 @@ describe("아르페지오 음 길이", () => {
     for (let i = 1; i < lens.length; i++) expect(lens[i]!.n / lens[i]!.d).toBeLessThan(lens[i - 1]!.n / lens[i - 1]!.d);
     // 게임 한도로 거른다 (모바일 한도 안이라 모두 남는다)
     expect(lengthsFor(defaultLengthLimit(), ARP_LENGTHS)).toEqual([...ARP_LENGTHS]);
+  });
+});
+
+describe("아르페지오로 알아보기 설정", () => {
+  const guess = (step: ReturnType<typeof rat>) =>
+    ({ ok: true, style: "spread", order: "down", step, octaves: 2, repeat: false, clearChordTracks: false, trackId: "t1", cells: [], before: [], after: [], picked: [], dropped: 0, skipped: 0 }) as const;
+  it("한 음 길이를 길이 이름으로 (점음표·잇단음), 안 되면 격자", () => {
+    expect(arpMadeOfGuess(guess(rat(1, 16)))).toEqual({
+      choice: { source: "together", chord: "major", style: "spread", order: "down", length: "16", octaves: 2, repeat: false, clear: false, fold: 0 },
+      excluded: [],
+    });
+    expect(arpMadeOfGuess(guess(rat(3, 32))).choice.length).toBe("16.");
+    expect(arpMadeOfGuess(guess(rat(1, 12))).choice.length).toBe("12");
+    expect(arpMadeOfGuess(guess(rat(5, 16))).choice.length).toBe("grid");
   });
 });

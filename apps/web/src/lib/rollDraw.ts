@@ -21,7 +21,8 @@ import {
   type Song,
 } from "@mmlce/core";
 import {
-  BAR_ROW,
+  barFontSize,
+  barRowSize,
   BLACK_KEY_LENGTH,
   eventFontSize,
   eventLabels,
@@ -425,6 +426,8 @@ export function drawRoll(canvas: HTMLCanvasElement, o: RollDrawOptions): void {
   g.fillStyle = line;
   if (horizontal) g.fillRect(v.keyboard, ruler - 1, v.width - v.keyboard, 1);
   else g.fillRect(ruler - 1, 0, 1, v.height - v.keyboard);
+  // 마디 번호: 화면 배율을 따라 줄 두께와 같이 커진다 (기본 10px)
+  g.font = `${barFontSize(v)}px "D2Coding", ui-monospace, monospace`;
   for (const gl of gridLines(s.timeSig, from, to)) {
     if (gl.kind !== "measure") continue;
     const p = timeToScreen(v, gl.at);
@@ -432,7 +435,7 @@ export function drawRoll(canvas: HTMLCanvasElement, o: RollDrawOptions): void {
     if (horizontal) g.fillRect(p, 0, 1, ruler);
     else g.fillRect(0, p, ruler, 1);
     g.fillStyle = o.css("--muted");
-    if (horizontal) g.fillText(String(gl.bar), p + 3, 10);
+    if (horizontal) g.fillText(String(gl.bar), p + 3, barFontSize(v));
     else g.fillText(String(gl.bar), 3, p - 3);
   }
   if (o.wave) drawWave(g, o.wave);
@@ -472,7 +475,7 @@ export function drawRoll(canvas: HTMLCanvasElement, o: RollDrawOptions): void {
     g.fillStyle = line;
     const row = eventRowSize(v);
     const font = eventFontSize(v);
-    if (horizontal) g.fillRect(v.keyboard, BAR_ROW + row, v.width - v.keyboard, 1);
+    if (horizontal) g.fillRect(v.keyboard, barRowSize(v) + row, v.width - v.keyboard, 1);
     const drawLabel = (l: EventLabel, p: number, dashed: boolean) => {
       const color = colorOf[l.kind];
       // 바뀌는 자리를 롤 전체에 점선으로

@@ -47,6 +47,7 @@
   import { laneItems, type LaneTrack } from "./volumeLaneEdit";
   import { LaneGesture } from "./laneGesture.svelte";
   import { tabEventPrefs } from "./tabEventPrefs.svelte";
+  import { scaledPx } from "./uiScaleNow.svelte";
   import { fallShift, fallSpeed, SPEED_FRAME_GAP, SPEED_FRAME_WIDTH, SPEED_PICK_GAP, speedPickLost, speedPickPress, speedPickWheel, toGray } from "./videoSpeed";
   import {
     bpmAt,
@@ -70,6 +71,7 @@
     noteNear,
     isResizeGrab,
     BAR_ROW,
+    barRowSize,
     eventRowFor,
     eventsBottom,
     eventAt,
@@ -351,8 +353,9 @@
     pxPerKey,
     keyboard: KEYBOARD,
     lane: laneReserved,
-    // 이벤트 줄 글자 크기 (설정 → 화면, 타브 변속 줄과 같은 설정)
-    eventRow: eventRowFor(tabEventPrefs.font),
+    // 이벤트 줄 글자 크기 (설정 → 화면, 타브 변속 줄과 같은 설정) × 화면 배율. 마디 번호 줄도 화면 배율을 따른다
+    eventRow: eventRowFor(scaledPx(tabEventPrefs.font)),
+    barRow: scaledPx(BAR_ROW),
   });
 
   // 음 높이 범위 밖(o19 같은)이 보이지 않게: 넓은 화면이면 칸을 키워 범위를 꽉 채운다
@@ -781,7 +784,7 @@
   const WAVE = 32;
   /** 마디 번호 줄 두께 (이벤트를 켜면 두 줄) */
   function eventsSize(): number {
-    return showEvents ? eventsBottom(view) : BAR_ROW;
+    return showEvents ? eventsBottom(view) : barRowSize(view);
   }
 
   // 이벤트 줄 누르기: 라벨을 끌면 옮기고, 길게 누르면(터치·펜) 고치기 창, 그냥 떼면 그 자리로 커서
@@ -1825,26 +1828,27 @@
   />
   <!-- 확대·축소 단추: 롤 안 시간 스크롤바 끝 모서리 (도구줄이 좁아 건반 높이가 메뉴로 들어가도 바로 누르게). 레인이 열려 있으면 그 위로 -->
   <div class="zoom-corner" class:named={names} style={zoomCornerStyle} role="group" aria-label={t("ui.fitAll")} onpointerdown={(e) => e.stopPropagation()}>
-    <button class="icon" title={names ? undefined : t("ui.fitAllHelp")} aria-label={t("ui.fitAll")} use:buttonName={names} onclick={fitAll}>
-      <Icon name="maximize" size={14} /><span class="btn-name" aria-hidden="true">{t("ui.fitAll")}</span>
+    <button class="icon" title={names ? undefined : t("ui.fitAllHelp")} aria-label={t("ui.fitAll")} use:buttonName={{ on: names, name: t("ui.fitAll") }} onclick={fitAll}>
+      <Icon name="maximize" size={14} fixed />
     </button>
-    <button class="icon" title={names ? undefined : t("ui.zoomTimeOut")} aria-label={t("ui.zoomTimeOut")} use:buttonName={names} onclick={() => zoom("time", 1 / 1.25)}>
-      <Icon name="arrows-h" size={14} /><Icon name="minus" size={12} /><span class="btn-name" aria-hidden="true">{t("ui.zoomOutTime")}</span>
+    <button class="icon" title={names ? undefined : t("ui.zoomTimeOut")} aria-label={t("ui.zoomTimeOut")} use:buttonName={{ on: names, name: t("ui.zoomOutTime") }} onclick={() => zoom("time", 1 / 1.25)}>
+      <Icon name="arrows-h" size={14} fixed /><Icon name="minus" size={12} fixed />
     </button>
-    <button class="icon" title={names ? undefined : t("ui.zoomTimeIn")} aria-label={t("ui.zoomTimeIn")} use:buttonName={names} onclick={() => zoom("time", 1.25)}>
-      <Icon name="arrows-h" size={14} /><Icon name="plus" size={12} /><span class="btn-name" aria-hidden="true">{t("ui.zoomInTime")}</span>
+    <button class="icon" title={names ? undefined : t("ui.zoomTimeIn")} aria-label={t("ui.zoomTimeIn")} use:buttonName={{ on: names, name: t("ui.zoomInTime") }} onclick={() => zoom("time", 1.25)}>
+      <Icon name="arrows-h" size={14} fixed /><Icon name="plus" size={12} fixed />
     </button>
     {#if !cornerNarrow}
-      <button class="icon" title={names ? undefined : t("ui.zoomPitchOut")} aria-label={t("ui.zoomPitchOut")} use:buttonName={names} onclick={() => zoom("pitch", 1 / 1.25)}>
-        <Icon name="arrows-v" size={14} /><Icon name="minus" size={12} /><span class="btn-name" aria-hidden="true">{t("ui.keysSmaller")}</span>
+      <button class="icon" title={names ? undefined : t("ui.zoomPitchOut")} aria-label={t("ui.zoomPitchOut")} use:buttonName={{ on: names, name: t("ui.keysSmaller") }} onclick={() => zoom("pitch", 1 / 1.25)}>
+        <Icon name="arrows-v" size={14} fixed /><Icon name="minus" size={12} fixed />
       </button>
-      <button class="icon" title={names ? undefined : t("ui.zoomPitchIn")} aria-label={t("ui.zoomPitchIn")} use:buttonName={names} onclick={() => zoom("pitch", 1.25)}>
-        <Icon name="arrows-v" size={14} /><Icon name="plus" size={12} /><span class="btn-name" aria-hidden="true">{t("ui.keysBigger")}</span>
+      <button class="icon" title={names ? undefined : t("ui.zoomPitchIn")} aria-label={t("ui.zoomPitchIn")} use:buttonName={{ on: names, name: t("ui.keysBigger") }} onclick={() => zoom("pitch", 1.25)}>
+        <Icon name="arrows-v" size={14} fixed /><Icon name="plus" size={12} fixed />
       </button>
     {/if}
   </div>
 </div>
 <style>
+  /* ui-scale: fixed — 캔버스 그림과 자리를 맞추므로 화면 배율을 따르지 않는다 (lib/uiScale.ts). 안쪽은 롤·타브 확대로 키운다 */
   /* 지우개 모드: 마우스 모양으로도 알 수 있게 */
   .roll.eraser canvas {
     cursor: not-allowed;
@@ -1915,50 +1919,14 @@
     opacity: 1;
   }
   .zoom-corner button {
-    position: relative;
     min-width: 28px;
     height: 28px;
     padding: 0 4px;
     gap: 1px;
   }
-  /* 실험실 단추 이름 펼치기: 이름표는 단추 위에 겹쳐 뜬다 (배치·롤 그림판은 그대로). 꺼져 있으면 아예 숨긴다 */
-  .btn-name {
-    display: none;
-  }
-  .named .btn-name {
-    display: block;
-    position: absolute;
-    right: 0;
-    bottom: calc(100% + 4px);
-    padding: 3px 8px;
-    white-space: nowrap;
-    font-size: 12px;
-    color: var(--text);
-    background: var(--panel);
-    border: 1px solid var(--line);
-    border-radius: 6px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
-    pointer-events: none;
-    opacity: 0;
-    transform: translateY(3px);
-    transition:
-      opacity 0.12s ease-out,
-      transform 0.12s ease-out;
-  }
-  .named button:global(.show-name) .btn-name,
-  .named button:focus-visible .btn-name {
-    opacity: 1;
-    transform: none;
-  }
-  /* 이름표가 떠 있는 동안은 모서리 단추 묶음도 또렷하게 */
+  /* 실험실 단추 이름 펼치기: 이름표가 떠 있는 동안은 모서리 단추 묶음도 또렷하게 (이름표는 app.css .btn-name-float) */
   .zoom-corner.named:has(:global(.show-name)) {
     opacity: 1;
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .named .btn-name {
-      transition: none;
-      transform: none;
-    }
   }
 
   /* 음량 레인 단추: 건반 띠와 레인이 만나는 모서리 */

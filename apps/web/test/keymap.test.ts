@@ -49,6 +49,16 @@ describe("키 설정", () => {
     expect(commandFor(b, "F5")).toBe("play.start");
   });
 
+  it("격자 ×2·½은 두 키 설정 모두 Shift+] / Shift+[ (숫자·길이 키와 따로)", () => {
+    for (const p of PRESETS) {
+      const b = resolve({ preset: p, overrides: {} });
+      expect(commandFor(b, "Shift+]")).toBe("grid.double");
+      expect(commandFor(b, "Shift+[")).toBe("grid.half");
+    }
+    const keyed = bind(DEFAULT_SETTINGS, "grid.double", "F2");
+    expect(keysOf(resolve(keyed), "grid.double")).toEqual(["Shift+]", "F2"]);
+  });
+
   it("다른 명령이 쓰던 키를 가져오면 그쪽에서 뺀다", () => {
     const s = bind(DEFAULT_SETTINGS, "play.start", "Space");
     const b = resolve(s);

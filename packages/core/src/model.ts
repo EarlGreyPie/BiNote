@@ -67,7 +67,7 @@ export interface Note {
   readonly tabString?: number;
   /** 실험실 입력으로 만든 음의 표시 (프로젝트 파일에만 저장. 출력은 보통 v·높이 그대로). 풀면 처음 값으로 돌아간다 */
   readonly lab?: NoteLab;
-  /** 아르페지오·꾸밈음·슬라이드 창이 만들거나 바꾼 음이면 그 만든 기록 id (Song.made, 프로젝트 파일에만 저장. 출력과는 상관없다) */
+  /** 아르페지오·꾸밈음·슬라이드·트릴 창이 만들거나 바꾼 음이면 그 만든 기록 id (Song.made, 프로젝트 파일에만 저장. 출력과는 상관없다) */
   readonly made?: string;
 }
 

@@ -28,7 +28,8 @@
   import { t } from "./i18n.svelte";
   import { mediaAccept } from "./fileAccept";
   import Icon from "./Icon.svelte";
-  import { labs } from "./labs.svelte";
+  import { buttonNamesOn, labs } from "./labs.svelte";
+  import { buttonName } from "./buttonName";
   import Menu, { type MenuItem } from "./Menu.svelte";
   import VolumeBox from "./VolumeBox.svelte";
   import { lengthNumber, tupletName, TUPLET_PICK } from "./tuplet";
@@ -170,6 +171,8 @@
   const LAYERS: readonly RollLayer[] = ["track", "score", "all"];
   const layerLabel = (l: RollLayer) => t(l === "track" ? "ui.layerTrack" : l === "score" ? "ui.layerScore" : "ui.layerAll");
 
+  /** 실험실: 아이콘 단추에 올리면 이름표 */
+  const names = $derived(buttonNamesOn());
   const alignText = $derived(t("ui.tabAlign", { now: t(TAB_ALIGN_LABEL[tabAlign]), next: t(TAB_ALIGN_LABEL[nextTabAlign(tabAlign)]) }));
 
   const moreMenu: MenuItem[] = $derived([
@@ -239,32 +242,32 @@
   <span class="sep"></span>
 
   {#if viewMode === "roll"}
-    <button class="icon" class:on={tool === "pen"} title={t("ui.toolPenHelp")} aria-label={t("ui.toolPen")} aria-pressed={tool === "pen"} onclick={() => ontool("pen")}>
+    <button class="icon" class:on={tool === "pen"} title={names ? undefined : t("ui.toolPenHelp")} aria-label={t("ui.toolPen")} use:buttonName={{ on: names, name: t("ui.toolPen") }} aria-pressed={tool === "pen"} onclick={() => ontool("pen")}>
       <Icon name="pencil" />
     </button>
-    <button class="icon" class:on={tool === "select"} title={t("ui.toolSelectHelp")} aria-label={t("ui.toolSelect")} aria-pressed={tool === "select"} onclick={() => ontool("select")}>
+    <button class="icon" class:on={tool === "select"} title={names ? undefined : t("ui.toolSelectHelp")} aria-label={t("ui.toolSelect")} use:buttonName={{ on: names, name: t("ui.toolSelect") }} aria-pressed={tool === "select"} onclick={() => ontool("select")}>
       <Icon name="pointer" />
     </button>
     {#if tool === "select"}
       <button
         class="icon lockbtn"
         class:on={selectMove}
-        title={selectMove ? t("ui.selectMoveOnHelp") : t("ui.selectMoveOffHelp")}
-        aria-label={t("ui.selectMove")}
+        title={names ? undefined : selectMove ? t("ui.selectMoveOnHelp") : t("ui.selectMoveOffHelp")}
+        aria-label={t("ui.selectMove")} use:buttonName={{ on: names, name: t("ui.selectMove") }}
         aria-pressed={selectMove}
         onclick={() => onselectmove(!selectMove)}
       >
         <Icon name={selectMove ? "lock-open" : "lock"} />
       </button>
     {/if}
-    <button class="icon" class:on={tool === "eraser"} title={t("ui.eraserHelp")} aria-label={t("ui.eraser")} aria-pressed={tool === "eraser"} onclick={() => ontool("eraser")}>
+    <button class="icon" class:on={tool === "eraser"} title={names ? undefined : t("ui.eraserHelp")} aria-label={t("ui.eraser")} use:buttonName={{ on: names, name: t("ui.eraser") }} aria-pressed={tool === "eraser"} onclick={() => ontool("eraser")}>
       <Icon name="eraser" />
     </button>
-    <button class="icon" class:on={tool === "split"} title={t("ui.toolSplitHelp")} aria-label={t("ui.toolSplit")} aria-pressed={tool === "split"} onclick={() => ontool("split")}>
+    <button class="icon" class:on={tool === "split"} title={names ? undefined : t("ui.toolSplitHelp")} aria-label={t("ui.toolSplit")} use:buttonName={{ on: names, name: t("ui.toolSplit") }} aria-pressed={tool === "split"} onclick={() => ontool("split")}>
       <Icon name="scissors" />
     </button>
     {#if labs.on}
-      <button class="icon" class:on={tool === "reverb"} title={t("ui.toolReverbHelp")} aria-label={t("ui.toolReverb")} aria-pressed={tool === "reverb"} onclick={() => ontool("reverb")}>
+      <button class="icon" class:on={tool === "reverb"} title={names ? undefined : t("ui.toolReverbHelp")} aria-label={t("ui.toolReverb")} use:buttonName={{ on: names, name: t("ui.toolReverb") }} aria-pressed={tool === "reverb"} onclick={() => ontool("reverb")}>
         <Icon name="reverb" />
       </button>
     {/if}
@@ -286,18 +289,18 @@
     <VolumeBox bind:value={inputVolume} min={volumeMin} max={volumeMax} selected={selectedVolume} onselected={onselectedvolume} />
     <span class="sep"></span>
     <span class="group" title={t("ui.zoomHelp")}>
-      <button class="icon" title={t("ui.fitAllHelp")} aria-label={t("ui.fitAll")} onclick={onfit}><Icon name="maximize" /></button>
-      <button class="icon" title={t("ui.zoomTimeOut")} aria-label={t("ui.zoomTimeOut")} onclick={() => onzoom("time", 1 / 1.25)}>
+      <button class="icon" title={names ? undefined : t("ui.fitAllHelp")} aria-label={t("ui.fitAll")} use:buttonName={{ on: names, name: t("ui.fitAll") }} onclick={onfit}><Icon name="maximize" /></button>
+      <button class="icon" title={names ? undefined : t("ui.zoomTimeOut")} aria-label={t("ui.zoomTimeOut")} use:buttonName={{ on: names, name: t("ui.zoomOutTime") }} onclick={() => onzoom("time", 1 / 1.25)}>
         <Icon name="arrows-h" size={14} /><Icon name="minus" size={12} />
       </button>
-      <button class="icon" title={t("ui.zoomTimeIn")} aria-label={t("ui.zoomTimeIn")} onclick={() => onzoom("time", 1.25)}>
+      <button class="icon" title={names ? undefined : t("ui.zoomTimeIn")} aria-label={t("ui.zoomTimeIn")} use:buttonName={{ on: names, name: t("ui.zoomInTime") }} onclick={() => onzoom("time", 1.25)}>
         <Icon name="arrows-h" size={14} /><Icon name="plus" size={12} />
       </button>
       {#if !compact}
-        <button class="icon" title={t("ui.zoomPitchOut")} aria-label={t("ui.zoomPitchOut")} onclick={() => onzoom("pitch", 1 / 1.25)}>
+        <button class="icon" title={names ? undefined : t("ui.zoomPitchOut")} aria-label={t("ui.zoomPitchOut")} use:buttonName={{ on: names, name: t("ui.keysSmaller") }} onclick={() => onzoom("pitch", 1 / 1.25)}>
           <Icon name="arrows-v" size={14} /><Icon name="minus" size={12} />
         </button>
-        <button class="icon" title={t("ui.zoomPitchIn")} aria-label={t("ui.zoomPitchIn")} onclick={() => onzoom("pitch", 1.25)}>
+        <button class="icon" title={names ? undefined : t("ui.zoomPitchIn")} aria-label={t("ui.zoomPitchIn")} use:buttonName={{ on: names, name: t("ui.keysBigger") }} onclick={() => onzoom("pitch", 1.25)}>
           <Icon name="arrows-v" size={14} /><Icon name="plus" size={12} />
         </button>
       {/if}
@@ -360,17 +363,17 @@
       <!-- PC: 피아노롤처럼 확대 묶음을 위 도구줄에 (터치는 타브 아래 도구 띠에 그대로) -->
       <span class="sep"></span>
       <span class="group">
-        <button class="icon" title={t("ui.tabFitAllHelp")} aria-label={t("ui.fitAll")} onclick={onfit}><Icon name="maximize" /></button>
-        <button class="icon" title={t("ui.zoomOutTime")} aria-label={t("ui.zoomOutTime")} onclick={() => onzoom("time", 1 / 1.25)}>
+        <button class="icon" title={names ? undefined : t("ui.tabFitAllHelp")} aria-label={t("ui.fitAll")} use:buttonName={{ on: names, name: t("ui.fitAll") }} onclick={onfit}><Icon name="maximize" /></button>
+        <button class="icon" title={names ? undefined : t("ui.zoomOutTime")} aria-label={t("ui.zoomOutTime")} use:buttonName={{ on: names, name: t("ui.zoomOutTime") }} onclick={() => onzoom("time", 1 / 1.25)}>
           <Icon name="arrows-h" size={14} /><Icon name="minus" size={12} />
         </button>
-        <button class="icon" title={t("ui.zoomInTime")} aria-label={t("ui.zoomInTime")} onclick={() => onzoom("time", 1.25)}>
+        <button class="icon" title={names ? undefined : t("ui.zoomInTime")} aria-label={t("ui.zoomInTime")} use:buttonName={{ on: names, name: t("ui.zoomInTime") }} onclick={() => onzoom("time", 1.25)}>
           <Icon name="arrows-h" size={14} /><Icon name="plus" size={12} />
         </button>
         {#if !compact}
-          <button class="icon" title={t("ui.tabSmaller")} aria-label={t("ui.tabSmaller")} onclick={() => ontabsize(-1)}>A−</button>
-          <button class="icon" title={t("ui.tabBigger")} aria-label={t("ui.tabBigger")} onclick={() => ontabsize(1)}>A+</button>
-          <button class="icon" title={alignText} aria-label={alignText} onclick={ontabalign}>{TAB_ALIGN_ICON[tabAlign]}</button>
+          <button class="icon" title={names ? undefined : t("ui.tabSmaller")} aria-label={t("ui.tabSmaller")} use:buttonName={{ on: names, name: t("ui.tabSmaller") }} onclick={() => ontabsize(-1)}>A−</button>
+          <button class="icon" title={names ? undefined : t("ui.tabBigger")} aria-label={t("ui.tabBigger")} use:buttonName={{ on: names, name: t("ui.tabBigger") }} onclick={() => ontabsize(1)}>A+</button>
+          <button class="icon" title={names ? undefined : alignText} aria-label={alignText} use:buttonName={{ on: names, name: alignText }} onclick={ontabalign}>{TAB_ALIGN_ICON[tabAlign]}</button>
         {/if}
       </span>
     {/if}

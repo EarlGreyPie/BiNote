@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clockMoves, isTouchWebKit, LATENCY_JUMP, LOCK_HIDDEN_MS, needsRebuild, settlesWithin, staleAfterReturn } from "../src/lib/audioHealth";
+import { audioLag, CLOCK_STOP_SLACK, clockMoves, clockStats, isTouchWebKit, LATENCY_JUMP, LOCK_HIDDEN_MS, needsRebuild, settlesWithin, staleAfterReturn } from "../src/lib/audioHealth";
 
 describe("잠자기 뒤 오디오 확인", () => {
   it("끝나지 않는 resume()을 오래 기다리지 않는다", async () => {
@@ -64,5 +64,27 @@ describe("화면을 가렸다 돌아온 뒤 오디오 새로 만들기 (아이�
     expect(isTouchWebKit("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)", 5)).toBe(true);
     expect(isTouchWebKit("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)", 0)).toBe(false);
     expect(isTouchWebKit("Mozilla/5.0 (Windows NT 10.0; Win64; x64)", 10)).toBe(false);
+  });
+});
+
+describe("오디오 시계 멈춤 알아보기 (앱으로 띄운 아이패드는 가려짐 알림이 없을 때가 있음)", () => {
+  it("오디오가 계속 돌았으면 덜 간 시간이 0에 가깝다", () => {
+    expect(audioLag({ audio: 10, wall: 100 }, { audio: 11, wall: 101 })).toBeCloseTo(0);
+  });
+
+  it("화면을 잠근 동안 오디오 시계만 멈췄으면 그만큼 덜 간다", () => {
+    // 벽시계는 30초, 오디오 시계는 1초만 갔다
+    const lag = audioLag({ audio: 10, wall: 100 }, { audio: 11, wall: 130 });
+    expect(lag).toBeCloseTo(29);
+    expect(lag).toBeGreaterThan(CLOCK_STOP_SLACK);
+  });
+
+  it("시계 빠르기와 가장 큰 건너뛰기를 잰다", () => {
+    // 오디오 시계가 0.1초 묶음으로 건너뛰며 벽시계와 같은 빠르기로 간다
+    const samples = [0, 0.05, 0.1, 0.15, 0.2].map((w) => ({ wall: w, audio: Math.floor(w * 10 + 1e-9) / 10 }));
+    const { rate, maxStepMs } = clockStats(samples);
+    expect(rate).toBeCloseTo(1);
+    expect(maxStepMs).toBeCloseTo(100);
+    expect(clockStats([])).toEqual({ rate: 0, maxStepMs: 0 });
   });
 });

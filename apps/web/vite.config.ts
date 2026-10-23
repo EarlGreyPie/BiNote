@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 import { defineConfig, type Plugin } from "vite";
 import { changelogSection } from "./src/lib/releaseNotes";
+import { pxToRemPlugin } from "./src/lib/uiScale";
 
 /**
  * 빌드한 파일 목록을 서비스 워커(public/sw.js)에 적어 넣는다. 캐시 이름은 파일 이름(해시)으로 만들어,
@@ -100,4 +101,6 @@ export default defineConfig({
   // GitHub Pages 등 하위 경로에 올려도 되도록 상대 경로로 만든다
   base: "./",
   plugins: [svelte(), precacheList(build, notes)],
+  // 화면 배율: 소스의 px를 rem으로 바꾼다 (src/lib/uiScale.ts)
+  css: { postcss: { plugins: [pxToRemPlugin()] } },
 });

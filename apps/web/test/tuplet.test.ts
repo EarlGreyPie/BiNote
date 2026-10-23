@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { defaultLengthLimit, rat } from "@mmlce/core";
 import { ARP_LENGTHS } from "../src/lib/arpeggioOptions";
 import { exactTime, lengthsFor, noteLengthOf } from "../src/lib/roll";
-import { DEFAULT_TUPLET, gridDivisions, isGameLengthName, isGridDivision, parseTuplet, tupletFits, tupletGrid, tupletName, tupletValue, withLengths } from "../src/lib/tuplet";
+import { DEFAULT_TUPLET, gridDivisions, isGameLengthName, isGridDivision, parseTuplet, stepGrid, tupletFits, tupletGrid, tupletName, tupletValue, withLengths } from "../src/lib/tuplet";
 
 const limit = defaultLengthLimit();
 
@@ -78,5 +78,21 @@ describe("잇단음", () => {
     expect(exactTime(0.5, 16)).toEqual(rat(1, 2));
     expect(exactTime(1 / 28, 16)).toEqual(rat(34, 960));
     expect(exactTime(-0.001, 16)).toEqual(rat(0));
+  });
+});
+
+describe("격자 ×2·½", () => {
+  it("칸을 두 배·반으로, 셋잇단은 셋잇단끼리", () => {
+    expect(stepGrid(16, "double", limit)).toBe(8);
+    expect(stepGrid(16, "half", limit)).toBe(32);
+    expect(stepGrid(24, "double", limit)).toBe(12);
+    expect(stepGrid(24, "half", limit)).toBe(48);
+    expect(stepGrid(20, "double", limit)).toBe(10);
+  });
+  it("1/1보다 크게, 정수 분모가 아니게, 게임 최단 칸보다 잘게는 바꾸지 않는다", () => {
+    expect(stepGrid(1, "double", limit)).toBeUndefined();
+    expect(stepGrid(3, "double", limit)).toBeUndefined();
+    expect(stepGrid(64, "half", limit)).toBeUndefined();
+    expect(stepGrid(48, "half", limit)).toBeUndefined();
   });
 });

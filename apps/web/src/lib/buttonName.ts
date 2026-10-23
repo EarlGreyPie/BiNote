@@ -1,7 +1,8 @@
 /**
  * 실험실 "단추 이름 펼치기": 아이콘 단추에 마우스나 떠 있는 펜(애플펜슬 호버·S펜 에어 뷰)을 올리거나
- * 키보드로 오면 단추 위에 이름표를 띄운다. 터치는 길게 누르면 띄우고, 그때 뒤따르는 누름(click)은 먹는다.
- * 이름표는 단추 위에 겹쳐 뜨므로(absolute) 옆 단추·롤 그림판의 배치는 바뀌지 않는다
+ * 키보드로 오면 단추 곁에 이름표를 띄운다. 터치는 길게 누르면 띄우고, 그때 뒤따르는 누름(click)은 먹는다.
+ * 이름표는 앱 맨 바깥(#app)에 fixed로 하나만 띄우므로, 가로 스크롤 도구줄 안 단추여도 잘리지 않고
+ * 옆 단추·롤 그림판의 배치는 바뀌지 않는다. 화면 위쪽 단추는 아래에, 아래쪽 단추는 위에 띄운다
  */
 
 /** 길게 누름으로 보는 시간(ms) */
@@ -14,17 +15,73 @@ export function isHover(pointerType: string, buttons: number): boolean {
   return pointerType === "mouse" || (pointerType === "pen" && buttons === 0);
 }
 
-/** 이름표를 보이는 클래스. 단추 CSS가 .show-name .btn-name을 보이게 한다 */
+/** 이름표를 띄운 단추에 붙는 클래스 (모서리 단추 묶음을 또렷하게 하는 데 쓴다) */
 const SHOW = "show-name";
 
-export function buttonName(node: HTMLElement, enabled: boolean) {
-  let on = enabled;
+export interface ButtonNameOptions {
+  /** 쓰는지 (실험실과 설정을 모두 켰을 때) */
+  readonly on: boolean;
+  /** 이름표 글자. 단축키 설명 없이 짧게 */
+  readonly name: string;
+}
+
+/** 화면에 하나만 띄우는 이름표와 지금 그 주인 단추 */
+let label: HTMLDivElement | undefined;
+let owner: HTMLElement | undefined;
+
+/** 이름표를 주인 단추 곁에 둔다. 단추가 화면 아래 절반이면 위에, 아니면 아래에 */
+export function labelPosition(
+  button: { left: number; right: number; top: number; bottom: number },
+  size: { width: number; height: number },
+  viewport: { width: number; height: number },
+): { left: number; top: number } {
+  const gap = 6;
+  const center = (button.left + button.right) / 2;
+  const left = Math.min(Math.max(4, center - size.width / 2), Math.max(4, viewport.width - size.width - 4));
+  const above = button.top > viewport.height / 2;
+  const top = above ? button.top - size.height - gap : button.bottom + gap;
+  return { left, top: Math.max(4, top) };
+}
+
+function floatLabel(node: HTMLElement, name: string) {
+  if (typeof document === "undefined") return;
+  if (!label) {
+    label = document.createElement("div");
+    label.className = "btn-name-float";
+    label.setAttribute("aria-hidden", "true");
+  }
+  if (!label.isConnected) (document.getElementById("app") ?? document.body).appendChild(label);
+  owner = node;
+  label.textContent = name;
+  const r = node.getBoundingClientRect();
+  const at = labelPosition(r, { width: label.offsetWidth, height: label.offsetHeight }, { width: innerWidth, height: innerHeight });
+  label.style.left = `${at.left}px`;
+  label.style.top = `${at.top}px`;
+  label.classList.add("on");
+}
+
+function sinkLabel(node: HTMLElement) {
+  if (owner !== node || !label) return;
+  owner = undefined;
+  label.classList.remove("on");
+}
+
+export function buttonName(node: HTMLElement, options: ButtonNameOptions) {
+  let on = options.on;
+  let name = options.name;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let linger: ReturnType<typeof setTimeout> | undefined;
   let swallow = false;
 
-  const show = () => on && node.classList.add(SHOW);
-  const hide = () => node.classList.remove(SHOW);
+  const show = () => {
+    if (!on) return;
+    node.classList.add(SHOW);
+    floatLabel(node, name);
+  };
+  const hide = () => {
+    node.classList.remove(SHOW);
+    sinkLabel(node);
+  };
   const clear = () => {
     if (timer) clearTimeout(timer);
     timer = undefined;
@@ -78,6 +135,10 @@ export function buttonName(node: HTMLElement, enabled: boolean) {
   function menu(e: Event) {
     if (swallow || timer) e.preventDefault();
   }
+  /** 키보드로 왔을 때만 (마우스로 눌러 생긴 초점에는 띄우지 않는다) */
+  function focus() {
+    if (node.matches(":focus-visible")) show();
+  }
 
   node.addEventListener("pointerenter", enter);
   node.addEventListener("pointerleave", leave);
@@ -86,9 +147,12 @@ export function buttonName(node: HTMLElement, enabled: boolean) {
   node.addEventListener("pointercancel", cancel);
   node.addEventListener("click", click, true);
   node.addEventListener("contextmenu", menu);
+  node.addEventListener("focus", focus);
+  node.addEventListener("blur", hide);
   return {
-    update(next: boolean) {
-      on = next;
+    update(next: ButtonNameOptions) {
+      on = next.on;
+      name = next.name;
       if (!on) reset();
     },
     destroy() {
@@ -100,6 +164,8 @@ export function buttonName(node: HTMLElement, enabled: boolean) {
       node.removeEventListener("pointercancel", cancel);
       node.removeEventListener("click", click, true);
       node.removeEventListener("contextmenu", menu);
+      node.removeEventListener("focus", focus);
+      node.removeEventListener("blur", hide);
     },
   };
 }

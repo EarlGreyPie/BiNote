@@ -51,6 +51,8 @@ export const COMMANDS = [
   "view.tab",
   "view.orientation",
   "view.keymap",
+  "grid.double",
+  "grid.half",
   ...GRID_DIVISIONS.map((d) => `grid.${d}` as const),
 ] as const;
 export type CommandId = (typeof COMMANDS)[number];
@@ -97,6 +99,10 @@ const COMMON: Bindings = {
   "track.moveDown": ["Alt+Shift+Down"],
   "play.start": ["F5"],
   "play.stop": ["Escape"],
+  // 격자 칸 ×2(성기게)·½(촘촘히). 길이 ×2·½(Ctrl+] / Ctrl+[)과 같은 [ ] 자리에 Shift.
+  // 숫자 키(격자·MIDI 건반 스텝)·+/−·점 키와 겹치지 않고, Ctrl+Alt+방향키는 윈도우 화면 회전과 겹칠 수 있어 피한다
+  "grid.double": ["Shift+]"],
+  "grid.half": ["Shift+["],
 };
 
 const MMLCE: Bindings = {

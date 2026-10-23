@@ -16,6 +16,7 @@
     type ArpResult,
     type SlidesResult,
     type GraceResult,
+    type TrillResult,
     type LabResult,
     isSoloInstrument,
     barBeatAt,
@@ -39,6 +40,7 @@
     breakTimbreTies,
     madeOf,
     madeTracks,
+    guessArpeggio,
     restoreMade,
     sameNotes,
     type MadeRestore,
@@ -99,6 +101,9 @@
     setTempos,
     changeTempos,
     changeTemposResult,
+    rampTempos,
+    rampTemposResult,
+    type TempoRamp,
     tempoChangeTargets,
     type TempoChange,
     fillScoreTempo,
@@ -111,6 +116,7 @@
     applyMadeRestore,
     madeCommand,
     restoreMadeCommand,
+    adoptMadeCommand,
     setTracksNotesAddingTracks,
     setTrackPack,
     type ProgramForPack,
@@ -156,14 +162,18 @@
   import TapBar from "./lib/TapBar.svelte";
   import RecordBar from "./lib/RecordBar.svelte";
   import { countIn, MidiRecorder, placeTake, quantizeTake, RecordFlow, type RecordJob, type RecordStatus, type TakeKey } from "./lib/midiRecord";
-  import { alignBarTempo, attackStarts, barStart, bpmAt, nearestBar, nearestBeat, offIntervals, onsetNear, pairBarTempo, previousBar, snapTaps, tapMarks, tapTempos, type BarDragMode, type TapReview, type TapUnit } from "./lib/tempoSync";
+  import { alignBarTempo, attackStarts, boundToSong, tempoOutOfRange, barStart, bpmAt, nearestBar, nearestBeat, offIntervals, onsetNear, pairBarTempo, previousBar, snapTaps, tapMarks, tapTempos, type BarDragMode, type TapReview, type TapUnit } from "./lib/tempoSync";
   import SongChecks from "./lib/SongChecks.svelte";
   import TrackPane from "./lib/TrackPane.svelte";
   import type { TrackActions } from "./lib/trackActions";
   import type { Peaks } from "./lib/waveform";
   import { noteClipboard } from "./lib/noteClipboard.svelte";
-  import { APPEARANCE_STORAGE, applyAppearance, parseAppearance, type Appearance } from "./lib/appearance";
+  import { APPEARANCE_STORAGE, applyAppearance, parseAppearance, themeKeyOf, type Appearance } from "./lib/appearance";
+  import { uiScaleNow } from "./lib/uiScaleNow.svelte";
   import VideoBar from "./lib/VideoBar.svelte";
+  import VideoBarsBar from "./lib/VideoBarsBar.svelte";
+  import { pickBarStarts } from "./lib/videoBars";
+  import { scanVideo } from "./lib/videoScan";
   import { MidiKeys } from "./lib/midiKeys.svelte";
   import { loadStored, parseJson, saveStored } from "./lib/persist";
   import { flushSync, untrack } from "svelte";
@@ -192,11 +202,12 @@
   import MeterDialog from "./lib/MeterDialog.svelte";
   import TupletDialog from "./lib/TupletDialog.svelte";
   import { newUnwritableTrack } from "./lib/writable";
-  import { gridDivisions, isGridDivision, tupletFits, tupletGrid, tupletName, withLengths, type Tuplet } from "./lib/tuplet";
+  import { gridDivisions, isGridDivision, stepGrid, tupletFits, tupletGrid, tupletName, withLengths, type Tuplet } from "./lib/tuplet";
   import { setTuplet, tupletPrefs } from "./lib/tupletPrefs.svelte";
   import EventDialog from "./lib/EventDialog.svelte";
   import type { EventChanges } from "./lib/eventChanges";
   import TempoChangeDialog from "./lib/TempoChangeDialog.svelte";
+  import TempoRampDialog from "./lib/TempoRampDialog.svelte";
   import OffgridDialog from "./lib/OffgridDialog.svelte";
   import SettingsDialog from "./lib/SettingsDialog.svelte";
   import StatusBar, { type StatusPanel } from "./lib/StatusBar.svelte";
@@ -212,6 +223,7 @@
   import ArpeggioDialog from "./lib/ArpeggioDialog.svelte";
   import SlideDialog from "./lib/SlideDialog.svelte";
   import GraceDialog from "./lib/GraceDialog.svelte";
+  import TrillDialog from "./lib/TrillDialog.svelte";
   import MadeRestoreDialog from "./lib/MadeRestoreDialog.svelte";
   import LabNoteDialog from "./lib/LabNoteDialog.svelte";
   import ReverbDialog from "./lib/ReverbDialog.svelte";
@@ -253,10 +265,12 @@
   import { guideUrl } from "./lib/links";
   import { clampRollShare, maxRollShare, paneMinHeight, ROLL_SHARE_MAX, ROLL_SHARE_MIN } from "./lib/paneSplit";
   import { meterEditAt, meterTarget } from "./lib/meterTarget";
+  import { pitchText, positionText } from "./lib/noteInfo";
   import { dotFactor, toggleDot } from "./lib/dotLength";
-  import { parseArpMade, tabArpPick, type ArpMade } from "./lib/arpeggioOptions";
+  import { arpMadeOfGuess, parseArpMade, tabArpPick, type ArpMade } from "./lib/arpeggioOptions";
   import { parseSlideMade, tabSlidePick, type SlideChoice } from "./lib/slideOptions";
   import { parseGraceMade, type GraceChoice } from "./lib/graceOptions";
+  import { parseTrillMade, type TrillChoice } from "./lib/trillOptions";
   import { VIDEO_DEFAULTS, exactTime, tempoChanges, lengthsFor, noteLengthOf, stepNoteLength, type BackgroundVideo, type EventKind, type EventLabel, type EventRef, type NoteLength, type Orientation, type RollTool } from "./lib/roll";
 
 
@@ -317,7 +331,7 @@
   const viewMemory = emptyViewMemory();
   /** 타브 지판 위치 (TabView가 알린다. PC 위 도구줄 단추 글자·안내용) */
   let tabAlign = $state<TabAlign>("middle");
-  // 화면 모양: 테마·강조색·음 모양. 시스템 테마가 바뀌어도 롤을 다시 그리게 themeKey를 바꾼다
+  // 화면 모양: 테마·강조색·음 모양. 시스템 테마가 바뀌어도 롤·타브 캔버스를 다시 그리게 themeKey를 바꾼다
   let appearance = $state<Appearance>(loadStored(APPEARANCE_STORAGE, parseAppearance));
   function setAppearance(next: Appearance) {
     // 롤 캔버스가 다시 그릴 때 새 색을 읽도록 문서 테마를 먼저 바꾼다 (효과 순서에 기대지 않는다)
@@ -333,8 +347,11 @@
     mq.addEventListener("change", on);
     return () => mq.removeEventListener("change", on);
   });
-  $effect(() => applyAppearance(appearance, document.documentElement));
-  const themeKey = $derived(`${appearance.theme}:${appearance.accent}:${systemDark}`);
+  $effect(() => {
+    applyAppearance(appearance, document.documentElement);
+    uiScaleNow.factor = appearance.uiScale / 100;
+  });
+  const themeKey = $derived(themeKeyOf(appearance, systemDark));
 
   const COLOR_STORAGE = "mmlce.colorScheme";
   let colorScheme = $state<ColorScheme>(loadStored(COLOR_STORAGE, (raw) => (raw === "score" || raw === "stored" ? raw : "position")));
@@ -1303,6 +1320,9 @@
     clearTaps();
     tapResult = "";
     tapReview = undefined;
+    // 영상 마디의 결과·파형 맞추기 제안도 앞 곡 것이라 버린다 (찾은 마디 시각은 영상 것이라 둔다)
+    videoBarsResult = "";
+    videoBarsReview = undefined;
     stop();
     error = "";
     notices = [];
@@ -1352,11 +1372,13 @@
     arpeggio = fresh.arpeggio;
     slide = fresh.slide;
     grace = fresh.grace;
+    trill = fresh.trill;
     labDialog = fresh.labDialog;
     reverbDialog = fresh.reverbDialog;
     transposing = fresh.transposing;
     voicing = fresh.voicing;
     tempoChangeOpen = fresh.tempoChangeOpen;
+    tempoRampOpen = fresh.tempoRampOpen;
     offgridOpen = fresh.offgridOpen;
     meterOpen = fresh.meterOpen;
     split = fresh.split;
@@ -1991,19 +2013,38 @@
     const unit = tapUnit;
     const at = fine(secondsToWhole(session.tempo, list[0]!));
     const first = session.anchor ?? (unit === "bar" ? nearestBar(s.timeSig, at) : nearestBeat(s.timeSig, at));
+    const r = placeTaps(s, list, first, unit, t("ui.tapTempo"), (o) => {
+      tapResult = o.result;
+      tapReview = o.review;
+    });
+    if (r) tapResumeBar = barBeatAt(s.timeSig, r).bar;
+  }
+  type TapShow = (o: { result: string; review: TapReview | undefined }) => void;
+  /**
+   * 탭 시각(곡 초, 간격만 쓴다)을 first부터 마디·박마다 템포로 넣는다 (실행 취소 한 칸).
+   * 결과 문구와 다시 볼 것(튀는 자리·파형 맞추기)은 show로 넘기고, 마지막 탭 자리를 돌려준다. 못 넣으면 undefined
+   */
+  function placeTaps(s: Song, list: readonly number[], first: Rat, unit: TapUnit, label: string, show: TapShow): Rat | undefined {
     const slack = TAP_SLACK[tapMerge] ?? 0;
     const plan = tapTempos(s.tempo, s.timeSig, first, list, { slack, unit });
     if (!plan) {
-      tapResult = t("ui.tapFailed");
-      return;
+      show({ result: t("ui.tapFailed"), review: undefined });
+      return undefined;
     }
-    const done = runIfChanged(setTempos(plan.set, plan.remove, t("ui.tapTempo")));
+    // 게임 템포 범위 밖 값은 넣지 않는다 (영상 마디가 촘촘하거나 시작 마디를 잘못 고른 경우 등)
+    const outside = tempoOutOfRange(plan, profile.tempo);
+    if (outside !== undefined) {
+      show({ result: t("ui.tapOutOfRange", { bpm: outside, min: profile.tempo.min, max: profile.tempo.max }), review: undefined });
+      return undefined;
+    }
+    const done = runIfChanged(setTempos(plan.set, plan.remove, label));
+    // 파형 맞추기 제안은 지금 곡에만 쓴다 (그 뒤 다른 편집·다른 곡이면 옛 탭 시각으로 템포를 덮지 않는다)
+    const base = history?.song;
     const where = barBeatAt(s.timeSig, first);
-    tapResult = done
+    const result = done
       ? t(unit === "bar" ? "ui.tapDone" : "ui.tapDoneBeats", { bar: where.bar, beat: where.beat, n: list.length - 1, undo: keyOf("edit.undo") ?? "" })
       : t("ui.tapSame");
     const marks = tapMarks(s.timeSig, first, list.length, unit);
-    tapResumeBar = barBeatAt(s.timeSig, marks.at(-1)!).bar;
     // 간격이 튀는 자리는 알려만 준다 (고치지 않는다)
     const flags = offIntervals(list, marks, TAP_FLAG[tapFlag] ?? 0).map((i) => {
       const w = barBeatAt(s.timeSig, marks[i]!);
@@ -2022,19 +2063,29 @@
       });
       if (r.moved.length > 0) {
         const ms = Math.round((r.moved.reduce((sum, m) => sum + Math.abs(m.shift), 0) / r.moved.length) * 1000);
-        snap = { count: r.moved.length, ms, apply: () => applySnap(first, r.times, slack, unit, r.moved.length) };
+        const offer = boundToSong(
+          base,
+          () => applySnap(first, r.times, slack, unit, r.moved.length, flags, show),
+          () => show({ result: t("ui.tapSnapStale"), review: flags.length > 0 ? { flags } : undefined }),
+        );
+        snap = { count: r.moved.length, ms, apply: () => offer(history?.song) };
       } else snap = { count: 0, ms: 0, apply: () => {} };
     }
-    tapReview = flags.length > 0 || snap ? { flags, snap } : undefined;
+    show({ result, review: flags.length > 0 || snap ? { flags, snap } : undefined });
+    return marks.at(-1)!;
   }
   /** 파형 시작점에 맞춘 탭 시각으로 다시 넣는다 (실행 취소 한 칸) */
-  function applySnap(first: Rat, times: readonly number[], slack: number, unit: TapUnit, count: number) {
+  function applySnap(first: Rat, times: readonly number[], slack: number, unit: TapUnit, count: number, flags: TapReview["flags"], show: TapShow) {
     const s = history?.song;
     if (!s) return;
     const plan = tapTempos(s.tempo, s.timeSig, first, times, { slack, unit });
+    const outside = plan && tempoOutOfRange(plan, profile.tempo);
+    if (outside !== undefined) {
+      show({ result: t("ui.tapOutOfRange", { bpm: outside, min: profile.tempo.min, max: profile.tempo.max }), review: flags.length > 0 ? { flags } : undefined });
+      return;
+    }
     const done = plan ? runIfChanged(setTempos(plan.set, plan.remove, t("ui.tapSnapLabel"))) : false;
-    tapReview = tapReview && tapReview.flags.length > 0 ? { flags: tapReview.flags } : undefined;
-    tapResult = done ? t("ui.tapSnapDone", { n: count, undo: keyOf("edit.undo") ?? "" }) : t("ui.tapSame");
+    show({ result: done ? t("ui.tapSnapDone", { n: count, undo: keyOf("edit.undo") ?? "" }) : t("ui.tapSame"), review: flags.length > 0 ? { flags } : undefined });
   }
   // 멈추면(끝까지 갔거나 정지·일시정지) 찍은 것을 넣는다
   $effect(() => {
@@ -2049,6 +2100,87 @@
     tapResult = "";
     tapReview = undefined;
     respeed();
+  }
+
+  // 실험실 영상 마디 넘김: 배경 영상에서 마디 상자가 옮겨진 시각을 찾아 마디 단위 탭으로 넣는다
+  let videoBarsOpen = $state(false);
+  /** 찾는 중: 읽은 비율과 그만두기 */
+  let videoBarsScan = $state.raw<{ share: number; abort: AbortController } | undefined>(undefined);
+  /** 찾은 마디 시작 (영상 초)과 그 영상 */
+  let videoBarsFound = $state.raw<{ url: string; times: readonly number[]; complete: boolean } | undefined>(undefined);
+  let videoBarsFirst = $state(1);
+  let videoBarsResult = $state("");
+  let videoBarsReview = $state.raw<TapReview | undefined>(undefined);
+  const VIDEO_BARS_SPEEDS = [1, 2] as const;
+  const VIDEO_BARS_SPEED_KEY = "mmlce.videoBarsSpeed";
+  let videoBarsSpeed = $state(loadStored(VIDEO_BARS_SPEED_KEY, (raw) => (raw === "1" ? 1 : 0)));
+  function setVideoBarsSpeed(n: number) {
+    videoBarsSpeed = n;
+    saveStored(VIDEO_BARS_SPEED_KEY, String(n));
+  }
+  function toggleVideoBars() {
+    if (videoBarsOpen) return closeVideoBars();
+    videoBarsOpen = true;
+    videoBarsResult = "";
+    videoBarsReview = undefined;
+  }
+  function closeVideoBars() {
+    videoBarsScan?.abort.abort();
+    videoBarsScan = undefined;
+    videoBarsOpen = false;
+  }
+  $effect(() => {
+    if (!labs.on && videoBarsOpen) untrack(closeVideoBars);
+  });
+  // 배경 영상을 빼거나 바꾸면 찾던 것을 그만두고 찾은 것도 버린다
+  $effect(() => {
+    const url = video?.url;
+    untrack(() => {
+      if (videoBarsFound && videoBarsFound.url !== url) videoBarsFound = undefined;
+      if (videoBarsScan && !url) {
+        videoBarsScan.abort.abort();
+        videoBarsScan = undefined;
+      }
+    });
+  });
+  async function startVideoBars() {
+    if (!video || videoBarsScan) return;
+    const url = video.url;
+    const abort = new AbortController();
+    videoBarsScan = { share: 0, abort };
+    videoBarsFound = undefined;
+    videoBarsResult = "";
+    videoBarsReview = undefined;
+    try {
+      const r = await scanVideo(url, {
+        rate: VIDEO_BARS_SPEEDS[videoBarsSpeed] ?? 1,
+        signal: abort.signal,
+        onprogress: (share) => {
+          if (videoBarsScan?.abort === abort) videoBarsScan = { share, abort };
+        },
+      });
+      if (videoBarsScan?.abort !== abort || video?.url !== url) return;
+      const times = pickBarStarts(r.samples, r.pixels);
+      videoBarsFound = { url, times, complete: r.complete };
+      // 첫 마디 번호: 지금 템포와 영상 어긋남으로 첫 변화가 오는 가장 가까운 마디 (직접 고칠 수 있다)
+      const s = history?.song;
+      if (s && times.length > 0) videoBarsFirst = barBeatAt(s.timeSig, nearestBar(s.timeSig, fine(secondsToWhole(s.tempo, Math.max(0, times[0]! - video.offset))))).bar;
+    } catch {
+      if (videoBarsScan?.abort === abort) videoBarsResult = t("ui.videoBarsFailed");
+    } finally {
+      if (videoBarsScan?.abort === abort) videoBarsScan = undefined;
+    }
+  }
+  function applyVideoBars(bar: number) {
+    const s = history?.song;
+    const found = videoBarsFound;
+    if (!s || !video || !found || found.times.length < 2 || !(bar >= 1)) return;
+    // 영상 초 → 곡 초 (간격만 쓰지만 파형 맞추기는 곡 초로 원곡을 찾는다)
+    const offset = video.offset;
+    placeTaps(s, found.times.map((time) => time - offset), barStart(s.timeSig, Math.floor(bar)), "bar", t("ui.labVideoBars"), (o) => {
+      videoBarsResult = o.result;
+      videoBarsReview = o.review;
+    });
   }
 
   /** 이벤트 줄에서 누른 라벨: 휠로 템포 바꾸기, Del로 지우기 */
@@ -2107,6 +2239,56 @@
       error = t("ui.tempoChangeFailed", { scores: failed.map((f) => f.score + 1).join(", "), reasons: reasons.join(", ") });
     }
   }
+
+  /**
+   * 실험실 점점 느리게·빠르게: 반복 구간이 있으면 그 안, 없으면 고른 음이 걸친 구간 (실행 취소 한 칸).
+   * 열려 있는 동안 고른 음이 바뀌어도 연 때의 구간을 쓴다
+   */
+  let tempoRampOpen = $state(false);
+  let tempoRampAt = $state.raw<{ from: Rat; to: Rat; scope: string } | undefined>(undefined);
+  const tempoRampRange = $derived.by(() => {
+    const s = song;
+    if (!s) return undefined;
+    const where = (at: Rat) => {
+      const { bar, beat } = barBeatAt(s.timeSig, at);
+      return `${bar}:${Number.isInteger(beat) ? beat : beat.toFixed(2)}`;
+    };
+    if (loop) {
+      const from = asRat(loop[0]);
+      const to = asRat(loop[1]);
+      return { from, to, scope: t("ui.tempoChangeRange", { from: where(from), to: where(to) }) };
+    }
+    if (selectedNotes.length === 0) return undefined;
+    const from = selectedNotes.reduce((m, n) => (cmp(n.start, m) < 0 ? n.start : m), selectedNotes[0]!.start);
+    const to = selectedNotes.reduce((m, n) => (cmp(add(n.start, n.dur), m) > 0 ? add(n.start, n.dur) : m), add(selectedNotes[0]!.start, selectedNotes[0]!.dur));
+    return { from, to, scope: t("ui.tempoRampScopeNotes", { from: where(from), to: where(to) }) };
+  });
+  function openTempoRamp() {
+    if (!labs.on || !tempoRampRange) return;
+    tempoRampAt = tempoRampRange;
+    tempoRampOpen = true;
+  }
+  function previewTempoRamp(ramp: TempoRamp) {
+    const s = history?.song;
+    const at = tempoRampAt;
+    if (!s || !at) return { steps: [], replaced: 0, rows: [] };
+    const r = rampTemposResult(s, ramp, at.from, at.to, profile.tempo);
+    return { steps: r.steps, replaced: r.replaced, rows: r.song === s ? [] : previewRows(s, r.song, profile.charLimitPerScore) };
+  }
+  function applyTempoRamp(ramp: TempoRamp) {
+    const at = tempoRampAt;
+    const before = history?.song;
+    if (!at || !before) return;
+    const failed = rampTemposResult(before, ramp, at.from, at.to, profile.tempo).failed;
+    runIfChanged(rampTempos(ramp, at.from, at.to, t("ui.tempoRamp"), profile.tempo));
+    if (failed.length > 0) {
+      const reasons = [...new Set(failed.flatMap((f) => f.reasons))].map((r) => t(r === "n-note" ? "ui.tempoEdgeNNote" : "ui.tempoEdgeLength"));
+      error = t("ui.tempoRampFailed", { scores: failed.map((f) => f.score + 1).join(", "), reasons: reasons.join(", ") });
+    }
+  }
+  $effect(() => {
+    if (!labs.on && tempoRampOpen) tempoRampOpen = false;
+  });
 
   function deletePicked(): boolean {
     const e = pickedEvent;
@@ -2491,9 +2673,13 @@
   // 타브에서는 고른 음, 없으면 타브 커서 자리에서 시작하는 화음 (같은 악보 여러 트랙 음을 함께 넘긴다)
   let arpeggio = $state.raw<{ trackId: string; picked: readonly Note[]; cursor?: boolean; redo?: MadeRedo; initial?: ArpMade } | undefined>(undefined);
   const tabArp = $derived(song && viewMode === "tab" ? tabArpPick(song, activeTrackId, tabCursor, selectedNotes) : undefined);
-  const canArpeggio = $derived(!!song && (viewMode === "roll" ? !!activeTrackId && selectedNotes.length > 0 : !!tabArp));
   function openArpeggio() {
     if (!song || !canArpeggio) return;
+    // 창으로 만든 아르페지오를 골랐으면 그 아르페지오를 다시 고친다 (펼친 음을 또 펼치면 화음 칸이 없어 만들 것이 없다)
+    if (madeArp) {
+      reeditMade();
+      return;
+    }
     if (viewMode === "tab") {
       const pick = song ? tabArpPick(song, activeTrackId, tabCursorForCommand(), selectedNotes) : undefined;
       if (pick) arpeggio = { ...pick, ...(selectedNotes.length === 0 ? { cursor: true } : {}) };
@@ -2609,12 +2795,68 @@
     else tab?.selectIds(result.ids);
   }
 
-  // 만든 것 되돌리기·다시 고치기: 아르페지오·꾸밈음·슬라이드 창으로 만든 음에 남긴 기록(Song.made, .mme에만 저장)으로
+  // 트릴·트레몰로: 고른 음을 짧은 음 여러 개로 나눈다 (실행 취소 한 칸). 고르는 법은 꾸밈음과 같다:
+  // 피아노롤은 고른 음, 타브는 고른 음이나 없으면 커서 자리 음. 타브에서 열면 상대 음을 본음 줄의 프렛 번호로 받는다
+  let trill = $state.raw<
+    | {
+        picked: readonly Note[];
+        tab?: { fret: number; string: number; maxFret: number };
+        strings?: ReadonlyMap<string, number>;
+        redo?: MadeRedo;
+        initial?: TrillChoice;
+      }
+    | undefined
+  >(undefined);
+  function openTrill() {
+    if (!song || !canGrace) return;
+    if (viewMode === "roll") {
+      trill = { picked: selectedNotes };
+      return;
+    }
+    const picked = selectedNotes.length > 0 ? selectedNotes : (tabArpPick(song, activeTrackId, tabCursorForCommand(), [])?.picked.slice(0, 1) ?? []);
+    if (picked.length === 0) return;
+    const strings = new Map<string, number>();
+    for (const n of picked) {
+      const at = tab?.positionOf(n.id);
+      if (at) strings.set(n.id, at.string);
+    }
+    // 기준 본음: 가장 먼저 시작하는 음 중 가장 높은 음 (화음이면 트릴을 거는 음)
+    const ref = [...picked].sort((a, b) => cmp(a.start, b.start) || b.pitch - a.pitch)[0]!;
+    const at = tab?.positionOf(ref.id);
+    trill = { picked, strings, ...(at ? { tab: { fret: at.fret, string: at.string, maxFret: tuning.maxFret } } : {}) };
+  }
+  function applyTrill(result: TrillResult, choice: TrillChoice) {
+    const target = trill;
+    if (!history || !target || result.changes.length === 0 || staleMade(target.redo?.plan)) return;
+    // 잠근 트랙은 바꾸지 않는다 (계산에서 이미 건너뛰지만, 다른 편집 명령과 같게 적용 직전에도 막는다)
+    if (!result.changes.every((c) => editable(c.trackId))) return;
+    const command = setTracksNotes(result.changes.map((c) => ({ trackId: c.trackId, notes: c.notes })), t("ui.trill"));
+    const options = { choice, ...(target.tab ? { tab: target.tab } : {}), strings: [...(target.strings ?? [])] };
+    if (!commit(madeCommand(command, { tool: "trill", options, picked: target.picked.map((n) => n.id) }, redoBase(target.redo)))) return;
+    selectNoteIds(result.ids);
+  }
+
+  // 만든 것 되돌리기·다시 고치기: 아르페지오·꾸밈음·슬라이드·트릴 창으로 만든 음에 남긴 기록(Song.made, .mme에만 저장)으로
   // 원래 음을 돌려놓거나, 원래 음으로 되돌린 곡에서 그 창을 옛 설정으로 다시 연다 (적용하면 되돌리기와 새로 만들기가 실행 취소 한 칸)
   type MadeRedo = { readonly record: string; readonly plan: Extract<MadeRestore, { ok: true }>; readonly base: Song; readonly title: string };
   /** 기록을 볼 음: 고른 음, 타브는 없으면 커서 자리 화음 */
-  const madePick = $derived(selectedNotes.length > 0 ? selectedNotes : viewMode === "tab" ? (tabArp?.picked ?? []) : []);
+  const madePick = $derived.by(() => {
+    if (selectedNotes.length > 0) return selectedNotes;
+    if (viewMode !== "tab" || !song) return [];
+    if (tabArp) return tabArp.picked;
+    // 커서가 만든 음 한가운데(음 시작이 아닌 자리)에 있으면 그 자리에서 울리는 만든 음 (펼친 아르페지오 칸 안 등)
+    const player = song.tracks.find((tr) => tr.id === activeTrackId)?.playerId;
+    const at = tabCursor;
+    if (player === undefined || !at) return [];
+    return song.tracks
+      .filter((tr) => tr.playerId === player)
+      .flatMap((tr) => tr.notes.filter((n) => n.made !== undefined && cmp(n.start, at) <= 0 && cmp(at, add(n.start, n.dur)) < 0));
+  });
   const madeHere = $derived(song?.made ? madeOf(song, madePick.map((n) => n.id)) : []);
+  /** 고른 음(타브는 커서 자리)이 창으로 만든 아르페지오 하나면 아르페지오 메뉴가 다시 고치기를 연다 */
+  const madeArp = $derived(madeHere.length === 1 && madeHere[0]!.tool === "arpeggio");
+  /** 아르페지오 메뉴: 피아노롤은 고른 음, 타브는 커서 자리 화음. 만든 아르페지오를 골랐으면 다시 고치기 */
+  const canArpeggio = $derived(!!song && ((viewMode === "roll" ? !!activeTrackId && selectedNotes.length > 0 : !!tabArp) || madeArp));
   /** 다시 고치기면 적용할 때 먼저 옛 기록을 되돌린 곡에서 시작한다 */
   const redoBase = (redo: MadeRedo | undefined) => (redo ? (s: Song) => applyMadeRestore(s, redo.plan) : undefined);
   /** 계획을 세운 뒤(창을 연 사이 MIDI 건반 입력 등) 곡 음이 바뀌었으면 넣지 않고 알린다 */
@@ -2675,7 +2917,7 @@
     const byId = new Map(base.tracks.flatMap((tr) => tr.notes.map((n) => [n.id, n] as const)));
     const picked = record.picked.map((old) => byId.get(id(old))).filter((n): n is Note => n !== undefined);
     if (picked.length === 0) return;
-    const tool = t(record.tool === "arpeggio" ? "ui.arpeggio" : record.tool === "grace" ? "ui.grace" : "ui.slide");
+    const tool = t(record.tool === "arpeggio" ? "ui.arpeggio" : record.tool === "grace" ? "ui.grace" : record.tool === "trill" ? "ui.trill" : "ui.slide");
     const redo: MadeRedo = { record: record.id, plan, base, title: t("ui.madeReeditTitle", { tool }) };
     const stringsOf = (list: readonly (readonly [string, number])[]) => new Map(list.map(([old, string]) => [id(old), string] as const));
     if (record.tool === "arpeggio") {
@@ -2685,19 +2927,62 @@
     } else if (record.tool === "grace") {
       const made = parseGraceMade(record.options);
       grace = { picked, redo, initial: made.choice, strings: stringsOf(made.strings), ...(made.tab ? { tab: made.tab } : {}) };
+    } else if (record.tool === "trill") {
+      const made = parseTrillMade(record.options);
+      trill = { picked, redo, initial: made.choice, strings: stringsOf(made.strings), ...(made.tab ? { tab: made.tab } : {}) };
     } else {
       const made = parseSlideMade(record.options);
       slide = { picked, redo, initial: made.choice, strings: stringsOf(made.strings) };
     }
   }
 
+  // 아르페지오로 알아보기: 기록 없는 아르페지오(전 판에서 만들었거나 .mml로 다시 연 곡)를 고른 음의 배치로 짐작해 만든 기록을 남긴다.
+  // 고른 음만 본다 (보통 선율도 아르페지오와 모양이 같을 수 있어 곡을 저절로 훑지 않는다). 짐작한 화음을 보여 주고 물어본 뒤 넣는다 (실행 취소 한 칸)
+  const canAdoptArp = $derived(!!song && selectedNotes.length >= 3 && madeHere.length === 0);
+  function adoptArpeggio() {
+    if (!history || !canAdoptArp) return;
+    const song0 = history.song;
+    const used = new Set(song0.tracks.flatMap((tr) => tr.notes.map((n) => n.id)));
+    let k = 0;
+    const newId = () => {
+      let id: string;
+      do id = `ag${++k}`;
+      while (used.has(id));
+      used.add(id);
+      return id;
+    };
+    const guess = guessArpeggio(song0, selectedNotes, newId, lockedIds);
+    if (!guess.ok) {
+      error = t(guess.reason === "made" ? "ui.arpAdoptMade" : guess.reason === "score" ? "ui.arpAdoptScore" : "ui.arpAdoptNone");
+      if (guess.blocking.length > 0) selectNoteIds(guess.blocking);
+      return;
+    }
+    const made = arpMadeOfGuess(guess);
+    const styleKey = { spread: "ui.arpStyleSpread", strum: "ui.arpStyleStrum", roll: "ui.arpStyleRoll" } as const;
+    const orderKey = { up: "ui.arpOrderUp", down: "ui.arpOrderDown", updown: "ui.arpOrderUpDown", random: "ui.arpOrderRandom" } as const;
+    const shown = guess.cells.slice(0, 4).map((c) => `${positionText(song0.timeSig, c.start)} ${c.pitches.map(pitchText).join("·")}`);
+    const lines = [
+      t("ui.arpAdoptConfirm", { cells: guess.cells.length, style: t(styleKey[guess.style]), order: t(orderKey[guess.order]), length: made.choice.length === "grid" ? "-" : made.choice.length }),
+      ...shown,
+      ...(guess.cells.length > shown.length ? ["…"] : []),
+      ...(guess.dropped > 0 ? [t("ui.arpAdoptDropped", { n: guess.dropped })] : []),
+      ...(guess.skipped > 0 ? [t("ui.arpAdoptSkipped", { n: guess.skipped })] : []),
+      t("ui.arpAdoptAsk"),
+    ];
+    if (!confirm(lines.join("\n"))) return;
+    const next = commit(adoptMadeCommand({ tool: "arpeggio", options: made, trackId: guess.trackId, picked: guess.picked }, guess.before, guess.after, t("ui.arpAdopt")));
+    if (!next || next === song0) return;
+    selectNoteIds(guess.after.flatMap((g) => g.notes.map((n) => n.id)));
+    flash(t("ui.arpAdoptDone"));
+  }
+
   // 실험실 (설정 → 실험실을 켰을 때만 메뉴가 보인다): 고른 음을 고스트 노트·하모닉스로 (실행 취소 한 칸).
   // 피아노롤은 고른 음, 타브는 고른 음이나 없으면 커서 자리 음. 타브에서 열면 음이 놓인 줄·프렛을 넘겨 자연 하모닉스를 계산한다
   let labDialog = $state.raw<
-    { kind: Exclude<LabFeatureId, "reverb" | "midiRecord">; picked: readonly Note[]; positions?: ReadonlyMap<string, { string: number; fret: number; open: number }> } | undefined
+    { kind: Exclude<LabFeatureId, "reverb" | "midiRecord" | "tempoRamp" | "videoBars" | "arpFold">; picked: readonly Note[]; positions?: ReadonlyMap<string, { string: number; fret: number; open: number }> } | undefined
   >(undefined);
   const canLab = $derived(!!song && (viewMode === "roll" ? selectedNotes.length > 0 : selectedNotes.length > 0 || !!tabArp));
-  function openLab(kind: Exclude<LabFeatureId, "reverb" | "midiRecord">) {
+  function openLab(kind: Exclude<LabFeatureId, "reverb" | "midiRecord" | "tempoRamp" | "videoBars" | "arpFold">) {
     if (!song || !canLab || !labs.on) return;
     if (viewMode === "roll") {
       labDialog = { kind, picked: selectedNotes };
@@ -2759,13 +3044,22 @@
   $effect(() => {
     if (!labs.on && rollTool === "reverb") rollTool = "pen";
   });
+  const tempoRampItem: MenuItem = $derived({
+    label: t("ui.tempoRamp") + "…",
+    title: tempoRampRange ? t("ui.tempoRampHelp") : t("ui.tempoRampNoRange"),
+    disabled: !tempoRampRange,
+    run: openTempoRamp,
+  });
   const labsMenu: MenuItem[] = $derived([
-    ...LAB_FEATURES.filter((f) => f.id !== "reverb" && f.id !== "midiRecord").map((f) => ({ label: t(f.label) + "…", title: t(f.help), disabled: !canLab, run: () => openLab(f.id as Exclude<LabFeatureId, "reverb" | "midiRecord">) })),
+    ...LAB_FEATURES.filter((f) => f.id !== "reverb" && f.id !== "midiRecord" && f.id !== "tempoRamp" && f.id !== "videoBars" && f.id !== "arpFold").map((f) => ({ label: t(f.label) + "…", title: t(f.help), disabled: !canLab, run: () => openLab(f.id as Exclude<LabFeatureId, "reverb" | "midiRecord" | "tempoRamp" | "videoBars" | "arpFold">) })),
     { separator: true },
     { label: t("ui.labReverb") + "…", title: t("ui.labReverbHelp"), disabled: !song || !activeTrackId, run: openReverb },
     { label: t("ui.labReverbStampCursor"), title: t("ui.labReverbStampCursorHelp"), disabled: !song || !activeTrackId, run: stampReverbAtCursor },
     { separator: true },
     { label: t("ui.labMidiRecord"), title: t("ui.labMidiRecordHelp"), checked: recordOpen, disabled: !song, run: toggleRecord },
+    { label: t("ui.labVideoBars"), title: t("ui.labVideoBarsHelp"), checked: videoBarsOpen, disabled: !song, run: toggleVideoBars },
+    { separator: true },
+    tempoRampItem,
   ]);
 
   const editMenu: MenuItem[] = $derived([
@@ -2800,8 +3094,10 @@
     { label: t("ui.arpeggio") + "…", title: t("ui.arpeggioHelp"), disabled: !canArpeggio, run: openArpeggio },
     { label: t("ui.slide") + "…", title: t("ui.slideHelp"), disabled: !canSlide, run: openSlide },
     { label: t("ui.grace") + "…", title: t("ui.graceHelp"), disabled: !canGrace, run: openGrace },
+    { label: t("ui.trill") + "…", title: t("ui.trillHelp"), disabled: !canGrace, run: openTrill },
     { label: t("ui.madeRestore"), title: madeHere.length > 0 ? t("ui.madeRestoreHelp") : t("ui.madeNone"), disabled: madeHere.length === 0, run: restoreMadeHere },
     { label: t("ui.madeReedit") + "…", title: madeHere.length > 0 ? t("ui.madeReeditHelp") : t("ui.madeNone"), disabled: madeHere.length !== 1, run: reeditMade },
+    { label: t("ui.arpAdopt") + "…", title: t("ui.arpAdoptHelp"), disabled: !canAdoptArp, run: adoptArpeggio },
   ]);
 
   const songMenu: MenuItem[] = $derived([
@@ -2825,6 +3121,8 @@
           disabled: !song,
           run: () => (tempoChangeOpen = true),
         },
+        // 실험실을 켜면 템포 하위 메뉴에도 보인다
+        ...(labs.on ? [tempoRampItem] : []),
         {
           label: t("ui.tempoFillScores") + ` (${tempoMissing})`,
           title: t("ui.tempoFillScoresHelp"),
@@ -3319,6 +3617,11 @@
   /** 명령 실행. 할 일이 없었으면 false (키를 브라우저에 그대로 넘긴다) */
   function run(command: CommandId): boolean {
     if (!speedPickAllows(speedStep, command)) return false;
+    if (command === "grid.double" || command === "grid.half") {
+      // 더 바꿀 수 없으면(1/1의 ×2 등) 그대로 두고 키는 먹는다
+      division = stepGrid(division, command === "grid.double" ? "double" : "half", profile.length) ?? division;
+      return true;
+    }
     if (command.startsWith("grid.")) {
       division = Number(command.slice(5));
       return true;
@@ -3486,7 +3789,7 @@
   function onKeydown(event: KeyboardEvent) {
     // 편집기가 이미 처리한 키(편집기 안 실행 취소 등)는 건드리지 않는다
     if (picking && !event.defaultPrevented) return pickingKey(event);
-    if (event.defaultPrevented || showKeymap || paste || midi || transposing || arpeggio || slide || grace || labDialog || reverbDialog || voicing || settings || meterOpen || eventEdit || addScoreOpen || recoverOpen || outputOpen || optimizing || spreadOpen || mergeOpen || event.isComposing) return;
+    if (event.defaultPrevented || showKeymap || paste || midi || transposing || arpeggio || slide || grace || trill || labDialog || reverbDialog || voicing || settings || meterOpen || eventEdit || addScoreOpen || recoverOpen || outputOpen || optimizing || spreadOpen || mergeOpen || event.isComposing) return;
     // 위 목록에 없는 대화 상자라도 열려 있으면 뒤의 곡에 단축키를 보내지 않는다
     if (document.querySelector("dialog[open]")) return;
     const target = event.target as HTMLElement | null;
@@ -3774,6 +4077,23 @@
     onclose={() => (grace = undefined)}
   />
 {/if}
+{#if trill && song}
+  {@const g = trill}
+  <TrillDialog
+    song={g.redo?.base ?? song}
+    picked={g.picked}
+    initial={g.initial}
+    title={g.redo?.title}
+    onrestore={g.redo ? () => restoreFromDialog(g.redo) : undefined}
+    {profile}
+    locked={lockedIds}
+    {...g.tab ? { tab: g.tab } : {}}
+    stringOf={(n) => g.strings?.get(n.id)}
+    instrumentOf={(id) => (song ? instrumentIdOf(song, id) : undefined)}
+    onapply={applyTrill}
+    onclose={() => (trill = undefined)}
+  />
+{/if}
 {#if labDialog && song}
   {@const d = labDialog}
   <LabNoteDialog
@@ -3876,6 +4196,8 @@
     ongain={setInstrumentGain}
     {syncOffsetMs}
     onsync={setSyncOffset}
+    onaudioreport={() => engine.audioReport()}
+    onaudiorebuild={() => engine.rebuildNow()}
     {lightKeys}
     onlightkeys={toggleLightKeys}
     {midiKeys}
@@ -3942,6 +4264,18 @@
     onclose={() => (tempoChangeOpen = false)}
   />
 {/if}
+{#if tempoRampOpen && tempoRampAt && song}
+  <TempoRampDialog
+    scope={tempoRampAt.scope}
+    startBpm={bpmAt(song.tempo, tempoRampAt.from)}
+    backBpm={bpmAt(song.tempo, tempoRampAt.to)}
+    tempoRange={profile.tempo}
+    limit={profile.charLimitPerScore}
+    preview={previewTempoRamp}
+    onapply={applyTempoRamp}
+    onclose={() => (tempoRampOpen = false)}
+  />
+{/if}
 {#if offgridOpen && song}
   <OffgridDialog {song} fixes={offgrid} ongo={goToOffgrid} onlisten={listenOffgrid} onfix={applyOffgrid} onclose={() => (offgridOpen = false)} />
 {/if}
@@ -3988,8 +4322,11 @@
     <MasterVolume value={masterVolume} max={MASTER_MAX} title={t("ui.masterVolume")} onchange={setMasterVolume} />
   </div>
   <span class="spacer"></span>
-  <Menu icon="help" title={t("ui.helpTitle")} align="right" items={helpMenu} />
-  <button class="icon" title={t("ui.settings")} aria-label={t("ui.settings")} onclick={() => (settings = { section: "packs" })}><Icon name="settings" /></button>
+  <!-- 위 띠가 넘쳐 옆으로 밀려도(좁은 화면·큰 화면 배율) 도움말·설정은 오른쪽 끝에 남는다 -->
+  <div class="bar-end">
+    <Menu icon="help" title={t("ui.helpTitle")} align="right" items={helpMenu} />
+    <button class="icon" title={t("ui.settings")} aria-label={t("ui.settings")} onclick={() => (settings = { section: "packs" })}><Icon name="settings" /></button>
+  </div>
 </header>
 
 {#if song}
@@ -4047,6 +4384,24 @@
     />
     {#if reference}
       <ReferenceBar {reference} bind:showWave onoffset={setReferenceOffset} onvolume={setReferenceVolume} onremove={removeReference} {tapOpen} ontaptempo={toggleTap} {barDragMode} onbardrag={setBarDragMode} />
+    {/if}
+    {#if videoBarsOpen}
+      <VideoBarsBar
+        hasVideo={!!video}
+        scanning={videoBarsScan?.share}
+        found={videoBarsFound && videoBarsFound.url === video?.url ? videoBarsFound : undefined}
+        bind:first={videoBarsFirst}
+        speed={videoBarsSpeed}
+        speeds={VIDEO_BARS_SPEEDS}
+        onspeed={setVideoBarsSpeed}
+        result={videoBarsResult}
+        review={videoBarsReview}
+        onscan={startVideoBars}
+        onstop={() => videoBarsScan?.abort.abort()}
+        onapply={applyVideoBars}
+        onjump={seek}
+        onclose={closeVideoBars}
+      />
     {/if}
     {#if recordOpen}
       <RecordBar
@@ -4201,6 +4556,7 @@
       {:else}
         <TabView
           {song}
+          {themeKey}
           wave={showWave && reference && referencePeaks ? { peaks: referencePeaks, offset: reference.offsetMs / 1000 } : undefined}
           onwaveoffset={(sec) => setReferenceOffset(Math.round(sec * 1000))}
           octaveKey={(e) => {

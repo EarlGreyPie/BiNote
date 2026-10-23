@@ -28,6 +28,8 @@ export interface RollView {
   readonly laneGutter?: number;
   /** 이벤트 줄 한 칸 두께 (없으면 EVENT_ROW). 설정의 이벤트 줄 글자 크기를 따른다(eventRowFor) */
   readonly eventRow?: number;
+  /** 마디 번호 줄 두께 (없으면 BAR_ROW). 화면 배율을 따른다 */
+  readonly barRow?: number;
 }
 
 export interface Rect {
@@ -440,6 +442,16 @@ export function eventRowFor(tabFont: number): number {
   return Math.max(10, tabFont - 2) + 3;
 }
 
+/** 마디 번호 줄 두께 */
+export function barRowSize(v: RollView): number {
+  return v.barRow ?? BAR_ROW;
+}
+
+/** 마디 번호 글자 크기 (기본 줄 14px에 10px) */
+export function barFontSize(v: RollView): number {
+  return barRowSize(v) - 4;
+}
+
 /** 이벤트 줄 한 칸 두께 */
 export function eventRowSize(v: RollView): number {
   return v.eventRow ?? EVENT_ROW;
@@ -452,7 +464,7 @@ export function eventFontSize(v: RollView): number {
 
 /** 마디 번호 줄 + 이벤트 줄 두 칸 두께 */
 export function eventsBottom(v: RollView): number {
-  return BAR_ROW + 2 * eventRowSize(v);
+  return barRowSize(v) + 2 * eventRowSize(v);
 }
 
 /**
@@ -473,7 +485,7 @@ export function eventLabels(
     const w = width(text);
     const extra = { ...(id ? { id } : {}), ...(implicit ? { implicit } : {}) };
     return v.orientation === "horizontal"
-      ? { kind, at, text, x: p, y: BAR_ROW + row * size, w, h: size, ...extra }
+      ? { kind, at, text, x: p, y: barRowSize(v) + row * size, w, h: size, ...extra }
       : { kind, at, text, x: 2, y: p + row * size, w, h: size, ...extra };
   };
   const labels = [
@@ -526,8 +538,8 @@ export function sameEvent(a: EventRef | undefined, b: EventRef | undefined): boo
 /** 이벤트 줄의 몇째 칸인지 (가로 롤만 칸으로 나뉜다). 0 = 템포 칸, 1 = 박자·마커 칸, undefined = 마디 번호 줄이나 밖 */
 export function eventRow(v: RollView, x: number, y: number): 0 | 1 | undefined {
   const along = v.orientation === "horizontal" ? y : x;
-  if (along < BAR_ROW || along >= eventsBottom(v)) return undefined;
-  return along < BAR_ROW + eventRowSize(v) ? 0 : 1;
+  if (along < barRowSize(v) || along >= eventsBottom(v)) return undefined;
+  return along < barRowSize(v) + eventRowSize(v) ? 0 : 1;
 }
 
 /** 음량 레인 맨 끝의 시간 스크롤바 칸 (값 칸에서 뺀다) */

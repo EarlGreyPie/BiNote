@@ -2,14 +2,14 @@ import { add, cmp, sub, ZERO, type Rat } from "./rat.js";
 import type { Note, Song } from "./model.js";
 
 /**
- * 만든 기록: 아르페지오·꾸밈음·슬라이드 창으로 적용한 결과를 나중에 원래대로 되돌리거나, 옛 설정으로 창을 다시 열어 고치려고 남긴다.
+ * 만든 기록: 아르페지오·꾸밈음·슬라이드·트릴 창으로 적용한 결과를 나중에 원래대로 되돌리거나, 옛 설정으로 창을 다시 열어 고치려고 남긴다.
  * 곡(Song.made)에 기록 하나, 만들거나 바꾼 음에는 기록 id(Note.made)만 붙는다. 프로젝트 파일(.mme)에만 저장되고
  * MML·3MLE·.mmi·MIDI 출력은 그대로다. 곡 안의 상태라 실행 취소·다시 실행이 함께 따른다.
  * 결과만 계산하고 곡은 바꾸지 않는다 (트랙에 넣는 것은 @mmlce/mml의 restoreMadeCommand)
  */
 
-export type MadeTool = "arpeggio" | "grace" | "slide";
-export const MADE_TOOLS: readonly MadeTool[] = ["arpeggio", "grace", "slide"];
+export type MadeTool = "arpeggio" | "grace" | "slide" | "trill";
+export const MADE_TOOLS: readonly MadeTool[] = ["arpeggio", "grace", "slide", "trill"];
 
 /** 트랙 하나의 음 묶음 */
 export interface MadeNotes {
@@ -323,4 +323,31 @@ export function restoreMade(song: Song, recordIds: Iterable<string>, tracks?: Re
   const removeTracks = targets.flatMap((r) => r.addedTracks ?? []).filter((id) => included(id) && notes.get(id)?.length === 0);
   const changes = [...touched].filter((id) => !removeTracks.includes(id)).map((trackId) => ({ trackId, notes: notes.get(trackId)! }));
   return { ok: true, changes, removeTracks, made: records, edited, ids, from: song };
+}
+
+/**
+ * 기록 없는 음을 만든 음으로 알아본 곡 (아르페지오로 알아보기): after의 음에 새 기록 id를 붙이고, 짐작한 원래 음(before)과 함께 기록을 남긴다.
+ * after 음 가운데 곡에 없거나 이미 살아 있는 기록이 붙은 음이 있으면 song 그대로
+ */
+export function adoptMade(song: Song, info: MadeInfo, before: readonly MadeNotes[], after: readonly MadeNotes[]): Song {
+  const live = new Set((song.made ?? []).map((r) => r.id));
+  const want = new Map<string, string>();
+  for (const g of after) for (const n of g.notes) want.set(n.id, g.trackId);
+  if (want.size === 0) return song;
+  let found = 0;
+  for (const t of song.tracks)
+    for (const n of t.notes) {
+      if (want.get(n.id) !== t.id) continue;
+      if (n.made !== undefined && live.has(n.made)) return song;
+      found++;
+    }
+  if (found !== want.size) return song;
+  const id = freshMadeId(song);
+  const tracks = song.tracks.map((t) => (t.notes.some((n) => want.get(n.id) === t.id) ? { ...t, notes: t.notes.map((n) => (want.get(n.id) === t.id ? { ...n, made: id } : n)) } : t));
+  const now = tracks.flatMap((t) => {
+    const notes = t.notes.filter((n) => n.made === id).map(withoutMark);
+    return notes.length > 0 ? [{ trackId: t.id, notes }] : [];
+  });
+  const record: MadeRecord = { id, tool: info.tool, options: info.options, ...(info.trackId !== undefined ? { trackId: info.trackId } : {}), picked: [...info.picked], before: [...before], after: now };
+  return pruneMade({ ...song, tracks, made: [...(song.made ?? []), record] });
 }

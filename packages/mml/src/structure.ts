@@ -1,5 +1,5 @@
 import { add, cmp, div, emptySong, fitNotes, INSTRUMENTS, tieChains, removeNotes, replaceNotes, meterGrid, trackInstrument, rat, sub, ZERO, type Command, type InstrumentRef, type Note, type Player, type PlayerTab, type Rat, type Song, type Track, type TrackRole } from "@mmlce/core";
-import { setTracksNotes } from "./edit.js";
+import { keepTextEnd, setTracksNotes } from "./edit.js";
 
 /** 트랙 색 (3MLE·마비꼬와 비슷한 6색을 차례로) */
 const TRACK_COLORS = ["#4f8cff", "#ff7a59", "#2bb673", "#b061ff", "#f2b705", "#00b8d9"];
@@ -317,6 +317,8 @@ export function setNotesAndAddTracks(
         return { ...rest, notes: [...notes] };
       }),
     };
+    // 원문 끝 쉼표로 지키던 악보 길이는 음이 다른 트랙으로 옮겨 가도 지킨다 (트랙 접기로 비운 트랙 등)
+    next = keepTextEnd(song, next, [...byId.keys()], "tail");
     for (const notes of newTracks) {
       const n = next.tracks.filter((t) => t.playerId === playerId).length + 1;
       next = addTrackWithNotes(playerId, trackName(n), notes).apply(next);

@@ -109,3 +109,12 @@ export function gridDivisions(base: readonly number[], extra: readonly number[],
   for (const d of extra) if (isGridDivision(d, limit)) out.add(d);
   return [...out].sort((a, b) => a - b);
 }
+
+/**
+ * 격자 ×2(칸을 두 배로, 1/16 → 1/8)·½(칸을 반으로, 1/16 → 1/32). 셋잇단·잇단음 칸은 같은 갈래 안에서 움직인다 (1/12 ↔ 1/24 ↔ 1/48).
+ * 칸이 정수 분모가 아니게 되거나(1/1의 ×2, 1/3의 ×2) 게임이 받는 가장 짧은 토막보다 잘아지면 undefined (그대로 둔다)
+ */
+export function stepGrid(division: number, way: "double" | "half", limit: LengthLimit): number | undefined {
+  const next = way === "double" ? division / 2 : division * 2;
+  return Number.isInteger(next) && isGridDivision(next, limit) ? next : undefined;
+}

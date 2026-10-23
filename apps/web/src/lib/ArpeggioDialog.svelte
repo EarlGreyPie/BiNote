@@ -7,6 +7,7 @@
   import { withLengths } from "./tuplet";
   import { ARP_KEY, ARP_LENGTHS, parseArpChoice, storeArpChoice, type ArpChoice, type ArpMade } from "./arpeggioOptions";
   import { loadStored, parseJson, saveStored } from "./persist";
+  import { labs } from "./labs.svelte";
 
   /**
    * 아르페지오 창 (편집 메뉴): 고른 음(같은 악보, 타브는 여러 트랙)의 화음을 순서대로 펼쳐 한 트랙에 넣거나, 원래 음을 둔 채 굴려 치거나,
@@ -77,6 +78,9 @@
     else next.add(id);
     excluded = next;
   }
+  /** 트랙 접기 (실험실, 굴려 치기): 고를 수 있는 남길 트랙 수 (2 ~ 악보 트랙 수 − 1) */
+  const foldCounts = $derived(Array.from({ length: Math.max(0, Math.min(5, sameTracks.length - 1) - 1) }, (_, i) => i + 2));
+  const fold = $derived(labs.on && choice.style === "roll" && foldCounts.includes(choice.fold) ? choice.fold : 0);
   const chordTracks = $derived(new Set(sameTracks.map((tr) => tr.id).filter((id) => id === trackId || !excluded.has(id))));
 
   const result = $derived.by(() => {
@@ -106,6 +110,7 @@
         maxTracks,
         locked,
         ...(src === "together" ? { tracks: chordTracks } : {}),
+        ...(fold > 0 ? { fold } : {}),
       },
       newId,
     );
@@ -216,6 +221,16 @@
       </label>
     {/if}
   </div>
+  {#if labs.on && choice.style === "roll" && foldCounts.length > 0}
+    <div class="row" title={t("ui.arpFoldHelp")}>
+      <span>{t("ui.arpFold")}</span>
+      <select aria-label={t("ui.arpFold")} value={fold} onchange={(e) => set({ fold: Number(e.currentTarget.value) })}>
+        <option value={0}>{t("ui.arpFoldOff")}</option>
+        {#each foldCounts as c (c)}<option value={c}>{t("ui.arpFoldTo", { n: c })}</option>{/each}
+      </select>
+    </div>
+    {#if fold > 0}<p class="muted help">{t("ui.arpFoldHelp")}</p>{/if}
+  {/if}
   {#if src === "together"}
     <div class="row tracks" role="group" aria-label={t("ui.arpTracks")}>
       <span>{t("ui.arpTracks")}</span>
@@ -236,11 +251,14 @@
   {#if result.single > 0}<p class="muted">{t("ui.arpSingle", { n: result.single })}</p>{/if}
   {#if result.lockedSkipped > 0}<p class="warn">{t("ui.arpLocked", { n: result.lockedSkipped })}</p>{/if}
   {#if result.trackLimit !== undefined}<p class="warn">{t("ui.arpTrackLimit", { n: result.trackLimit })}</p>{/if}
+  {#if result.folded}<p class="muted">{t("ui.arpFolded", { n: result.folded })}</p>{/if}
+  {#if result.foldSkipped}<p class="warn">{t("ui.arpFoldSkipped", { n: result.foldSkipped })}</p>{/if}
+  {#if result.emptied}<p class="muted">{t("ui.arpFoldEmptied", { names: result.emptied.map((id) => song.tracks.find((tr) => tr.id === id)?.name ?? id).join(", ") })}</p>{/if}
   {#if result.tooShort}<p class="warn">{t("ui.arpTooShort", { n: result.tooShort })}</p>{/if}
   {#if result.sequential}<p class="warn">{t("ui.arpSequential", { n: result.sequential })}</p>{/if}
   {#if result.cutCells && choice.style === "spread"}<p class="warn">{t("ui.arpSpreadBlocked", { n: result.cutCells })}</p>
   {:else if result.cutCells && result.cutCells > (result.sequential ?? 0)}<p class="warn">{t("ui.arpCutCells", { n: result.cutCells - (result.sequential ?? 0) })}</p>{/if}
-  {#if !ok && !result.cutCells}<p class="warn">{t("ui.arpNothing")}</p>{/if}
+  {#if !ok && !result.cutCells}<p class="warn">{t("ui.arpNothing")}</p><p class="hint">{t("ui.arpNothingAdopt")}</p>{/if}
   <footer>
     <span class="spacer"></span>
     {#if onrestore}

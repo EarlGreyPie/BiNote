@@ -1,4 +1,4 @@
-import { recordMade, sameNotes, type Command, type MadeInfo, type MadeRestore, type Song } from "@mmlce/core";
+import { adoptMade, recordMade, sameNotes, type Command, type MadeInfo, type MadeNotes, type MadeRestore, type Song } from "@mmlce/core";
 import { setTracksNotes } from "./edit.js";
 
 /**
@@ -7,7 +7,8 @@ import { setTracksNotes } from "./edit.js";
  */
 export function applyMadeRestore(song: Song, plan: Extract<MadeRestore, { ok: true }>): Song {
   if (!sameNotes(song, plan.from)) return song;
-  const next = plan.changes.length > 0 ? setTracksNotes(plan.changes).apply(song) : song;
+  // 원문에 있던 끝 쉼표로 지키던 악보 길이는 음 끝이 바뀌어도 지킨다 (쉼표만 있던 트랙에 원래 음을 돌려놓는 경우 등)
+  const next = plan.changes.length > 0 ? setTracksNotes(plan.changes, undefined, "tail").apply(song) : song;
   const gone = new Set(plan.removeTracks);
   const { made: _made, ...rest } = next;
   return { ...rest, tracks: next.tracks.filter((t) => !gone.has(t.id)), ...(plan.made.length > 0 ? { made: plan.made } : {}) };
@@ -39,4 +40,14 @@ export function madeCommand(command: Command, info: MadeInfo, base?: (song: Song
     invert: (before) => ({ label: command.label, apply: () => before, invert: () => self }),
   };
   return self;
+}
+
+/** 기록 없는 음을 만든 음으로 알아보기 (실행 취소 한 칸). 그사이 음이 바뀌어 붙일 수 없으면 곡 그대로 */
+export function adoptMadeCommand(info: MadeInfo, before: readonly MadeNotes[], after: readonly MadeNotes[], label: string): Command {
+  const command: Command = {
+    label,
+    apply: (song) => adoptMade(song, info, before, after),
+    invert: (prev) => ({ label, apply: () => prev, invert: () => command }),
+  };
+  return command;
 }

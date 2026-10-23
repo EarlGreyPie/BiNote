@@ -21,7 +21,7 @@ import { previewPitch } from "./instrumentRange";
 import { PreviewVoices } from "./previewVoices";
 import { preparePlay } from "./playPlan";
 import type { WavRequest } from "./jobs";
-import { clockMoves, isTouchWebKit, needsRebuild, settlesWithin, staleAfterReturn } from "./audioHealth";
+import { audioLag, CLOCK_STOP_SLACK, clockMoves, clockStats, FROZEN_MS, isTouchWebKit, needsRebuild, settlesWithin, staleAfterReturn, type ClockPair } from "./audioHealth";
 
 /** CC 0 = 뱅크 선택(MSB) */
 const BANK_SELECT = 0;
@@ -98,6 +98,12 @@ export class Engine {
   private latencyBefore = 0;
   /** 아이패드·아이폰인지 (화면 잠금 뒤 오디오를 새로 만들지 정할 때 쓴다) */
   private readonly touchWebKit = typeof navigator !== "undefined" && isTouchWebKit(navigator.userAgent, navigator.maxTouchPoints ?? 0);
+  /** 마지막 심장 박동(1초마다 부르는 타이머)에서 읽은 시계. 오디오 시계가 멈췄었는지 보려고 */
+  private beat: (ClockPair & { at: number }) | undefined;
+  /** 오디오 상태 칸에 보여 줄 최근 일 (가려짐·멈춤·새로 만듦) */
+  private readonly events: string[] = [];
+  /** 오디오를 새로 만든 횟수 (처음 만든 것 빼고) */
+  private rebuilds = 0;
   /** 오디오를 새로 만드는 중 */
   private reviving: Promise<WorkletSynthesizer> | undefined;
   /** 지금 신스를 버리면 풀리는 약속. 버린 신스의 응답을 기다리던 작업(팩 올리기 등)이 멈춰 있지 않게 한다 */
@@ -115,14 +121,19 @@ export class Engine {
       if (document.visibilityState === "hidden") {
         this.suspect = true;
         this.hiddenAt ??= performance.now();
+        this.note("hidden");
         return;
       }
       if (this.hiddenAt !== undefined) this.hiddenMs = Math.max(this.hiddenMs, performance.now() - this.hiddenAt);
+      this.note(`visible after ${this.hiddenAt === undefined ? "?" : ((performance.now() - this.hiddenAt) / 1000).toFixed(1)}s, audio ${this.context?.state ?? "-"}`);
       this.hiddenAt = undefined;
       // 돌아왔는데 오디오가 멈춰 있으면 가려진 사이 시스템이 멈춘 것이다 (onstatechange가 늦게 오거나 안 올 때)
       const c = this.context;
       if (c && this.warmed && c.state !== "running") this.interrupted = true;
     });
+    // 앱으로 띄운 아이패드는 화면을 잠가도 가려짐 알림이 오지 않을 때가 있다. 1초마다 시계를 읽어
+    // 타이머가 오래 멈췄으면(페이지가 얼었음) 잠금으로, 오디오 시계만 덜 갔으면 오디오가 멈췄던 것으로 본다
+    setInterval(() => this.heartbeat(), 1000);
     // 뒤로 가기 캐시에서 돌아온 페이지도 오디오가 멈춰 있을 수 있다
     window.addEventListener("pageshow", (e) => {
       if (!e.persisted) return;
@@ -182,6 +193,7 @@ export class Engine {
     if (node) node.onprocessorerror = () => (this.broken = true);
     // 소리를 낸 뒤 오디오가 멈추면(잠자기·다른 앱이 오디오를 가져감) 다음에 쓸 때 살아 있는지 확인한다
     context.onstatechange = () => {
+      if (this.context === context) this.note(`audio ${context.state}`);
       if (this.context !== context || context.state === "running" || !this.warmed) return;
       this.suspect = true;
       if (document.visibilityState === "hidden") this.interrupted = true;
@@ -261,10 +273,10 @@ export class Engine {
     if (!this.synth || !context) return this.ready();
     const state = context.state as string;
     // 닫혔거나 멈췄거나, 재운 뒤 "중단됨"으로 남아 있으면 바로 새로 만든다 (누른 그 순간에 만들어야 소리가 켜진다)
-    if (this.broken || state === "closed" || (this.suspect && state === "interrupted")) return this.rebuild();
+    if (this.broken || state === "closed" || (this.suspect && state === "interrupted")) return this.rebuild(this.broken ? "broken" : state);
     if (!this.suspect) return this.synth;
     // 화면 잠금 뒤처럼 시계는 흘러도 소리가 밀리는 경우: 누른 그 순간에 새로 만든다
-    if (this.stale()) return this.rebuild();
+    if (this.stale()) return this.rebuild(this.interrupted ? "stale: interrupted" : `stale: hidden ${(this.hiddenMs / 1000).toFixed(1)}s`);
     // 의심스러우면 깨워 보고 시계가 흐르는지 확인한다
     await settlesWithin(context.resume(), RESUME_TIMEOUT);
     const clockMoved = context.state === "running" && (await clockMoves(() => context.currentTime, CLOCK_TIMEOUT));
@@ -275,7 +287,86 @@ export class Engine {
       this.hiddenMs = 0;
       return this.synth!;
     }
-    return this.rebuild();
+    return this.rebuild("clock stuck");
+  }
+
+  /** 1초마다: 페이지가 얼었었는지, 그사이 오디오 시계가 멈췄었는지 본다 */
+  private heartbeat(): void {
+    const now = performance.now();
+    const last = this.beat;
+    const c = this.context;
+    this.beat = c ? { audio: c.currentTime, wall: now / 1000, at: now } : undefined;
+    if (!last || !c) return;
+    const gap = now - last.at;
+    if (gap >= FROZEN_MS) {
+      // 타이머가 오래 멈췄다: 화면 잠금·절전. 가려짐 알림이 없었어도 가려졌던 것으로 친다
+      this.suspect = true;
+      this.hiddenMs = Math.max(this.hiddenMs, gap);
+      this.note(`frozen ${(gap / 1000).toFixed(1)}s, audio ${c.state}`);
+    }
+    if (!this.warmed) return;
+    const lag = audioLag(last, this.beat!);
+    if (lag > CLOCK_STOP_SLACK) {
+      // 벽시계는 갔는데 오디오 시계는 멈춰 있었다: 시스템이 오디오를 멈췄다 (다시 켜졌어도 밀릴 수 있음)
+      this.suspect = true;
+      if (!this.interrupted) this.note(`audio clock stopped ${lag.toFixed(1)}s`);
+      this.interrupted = true;
+    }
+  }
+
+  /** 오디오 상태 칸에 남길 일 (최근 12개) */
+  private note(what: string): void {
+    const d = new Date();
+    const hms = [d.getHours(), d.getMinutes(), d.getSeconds()].map((n) => String(n).padStart(2, "0")).join(":");
+    this.events.push(`${hms} ${what}`);
+    if (this.events.length > 12) this.events.shift();
+  }
+
+  /** 오디오 상태 칸의 "오디오 다시 만들기". 누른 그 순간에 새로 만들고, 잠금 뒤 밀림이 이것으로 풀리는지 볼 수 있다 */
+  async rebuildNow(): Promise<void> {
+    if (!this.context) return;
+    await this.rebuild("manual");
+  }
+
+  /**
+   * 오디오 상태 칸에 보여 줄 글. 오디오 시계를 1초 동안 읽어 빠르기·건너뛰기를 재고,
+   * 브라우저가 알려 주는 지연과 실제 출력 시각(getOutputTimestamp)을 함께 적는다. 화면 잠금 전후를 비교하려고 쓴다
+   */
+  async audioReport(): Promise<string> {
+    const c = this.context;
+    const ms = (s: number) => `${(s * 1000).toFixed(1)}ms`;
+    const standalone = typeof matchMedia !== "undefined" && matchMedia("(display-mode: standalone)").matches;
+    const lines = [
+      `ua: ${navigator.userAgent}`,
+      `app: ${standalone ? "standalone" : "browser"}, touchWebKit: ${this.touchWebKit}, visible: ${document.visibilityState}`,
+    ];
+    if (!c) {
+      lines.push("audio: - (no sound yet)");
+    } else {
+      const samples: ClockPair[] = [];
+      const until = performance.now() + 1000;
+      while (performance.now() < until) {
+        samples.push({ audio: c.currentTime, wall: performance.now() / 1000 });
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      const { rate, maxStepMs } = clockStats(samples);
+      lines.push(
+        `state: ${c.state}, sampleRate: ${c.sampleRate}, warmed: ${this.warmed}, suspect: ${this.suspect}, stale: ${this.stale()}`,
+        `baseLatency: ${ms(c.baseLatency || 0)}, outputLatency: ${ms(c.outputLatency || 0)}, limiter: ${ms(this.limiterLag)}, syncOffset: ${ms(this.syncOffset)}`,
+        `clock rate: ${rate.toFixed(4)}, max step: ${maxStepMs.toFixed(1)}ms`,
+      );
+      if (typeof c.getOutputTimestamp === "function") {
+        const ts = c.getOutputTimestamp();
+        const now = performance.now();
+        // 지금 오디오 시계와 지금 스피커에서 나는 소리의 오디오 시각 차이 = 실제 출력 지연(근사)
+        if (ts.contextTime !== undefined && ts.performanceTime !== undefined) {
+          const heard = ts.contextTime + (now - ts.performanceTime) / 1000;
+          lines.push(`output delay (timestamp): ${ms(c.currentTime - heard)}`);
+        }
+      }
+    }
+    lines.push(`rebuilds: ${this.rebuilds}`, ...this.events);
+    return lines.join("\n");
   }
 
   /** 화면을 가렸다 돌아온 뒤 시계가 흘러도 오디오를 새로 만들어야 하는지 (staleAfterReturn) */
@@ -292,9 +383,11 @@ export class Engine {
     });
   }
 
-  /** 지금 오디오를 버리고 새로 만든다 (사운드팩은 create가 다시 올린다) */
-  private rebuild(): Promise<WorkletSynthesizer> {
+  /** 지금 오디오를 버리고 새로 만든다 (사운드팩은 create가 다시 올린다). reason은 오디오 상태 칸에 남긴다 */
+  private rebuild(reason: string): Promise<WorkletSynthesizer> {
     if (this.reviving) return this.reviving;
+    this.rebuilds++;
+    this.note(`rebuild (${reason})`);
     let fresh: AudioContext | undefined;
     try {
       fresh = new AudioContext();

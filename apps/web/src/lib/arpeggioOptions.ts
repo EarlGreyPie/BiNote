@@ -1,4 +1,4 @@
-import { CHORD_KIND_IDS, cmp, defaultLengthLimit, type ArpOrder, type ArpSource, type ArpStyle, type ChordKind, type Note, type Rat, type Song } from "@mmlce/core";
+import { CHORD_KIND_IDS, cmp, defaultLengthLimit, type ArpGuess, type ArpOrder, type ArpSource, type ArpStyle, type ChordKind, type Note, type Rat, type Song } from "@mmlce/core";
 import type { LengthName } from "./roll";
 import { isGameLengthName } from "./tuplet";
 
@@ -17,6 +17,8 @@ export interface ArpChoice {
   readonly octaves: 1 | 2 | 3;
   readonly repeat: boolean;
   readonly clear: boolean;
+  /** 굴려 치기 트랙 접기 (실험실): 남길 트랙 수, 0이면 접지 않음 */
+  readonly fold: number;
 }
 
 export const ARP_KEY = "mmlce.arpeggio";
@@ -33,6 +35,20 @@ export function parseArpMade(raw: unknown): ArpMade {
   const excluded = Array.isArray(v.excluded) ? v.excluded.filter((x): x is string => typeof x === "string") : [];
   return { choice: parseArpChoice(v.choice && typeof v.choice === "object" ? { ...v.choice, v: ARP_STORE_VERSION } : undefined), excluded };
 }
+/**
+ * 아르페지오로 알아보기의 짐작을 만든 기록 설정으로. 한 음 길이가 길이 이름(16, 16., 잇단음 12 등)으로 안 되면 격자
+ * (다시 고치기 창에서 고른다). 화음은 같은 시간 음, 뺀 트랙 없음
+ */
+export function arpMadeOfGuess(guess: Extract<ArpGuess, { ok: true }>): ArpMade {
+  const { n, d } = guess.step;
+  const name = n === 1 ? `${d}` : n === 3 && d % 2 === 0 ? `${d / 2}.` : undefined;
+  const length: ArpLength = name !== undefined && (ARP_LENGTHS.includes(name as never) || isGameLengthName(name, defaultLengthLimit())) ? (name as ArpLength) : "grid";
+  return {
+    choice: { source: "together", chord: DEFAULT_ARP.chord, style: guess.style, order: guess.order, length, octaves: guess.octaves, repeat: guess.repeat, clear: guess.clearChordTracks, fold: 0 },
+    excluded: [],
+  };
+}
+
 /** 저장값 판: 2부터 굴려 치기가 방식(roll)으로 따로 있다. 판이 없는 예전 값만 옮겨 읽는다 */
 export const ARP_STORE_VERSION = 2;
 
@@ -41,7 +57,7 @@ export function storeArpChoice(choice: ArpChoice): string {
   return JSON.stringify({ ...choice, v: ARP_STORE_VERSION });
 }
 
-export const DEFAULT_ARP: ArpChoice = { source: "together", chord: "major", style: "spread", order: "up", length: "16", octaves: 1, repeat: true, clear: true };
+export const DEFAULT_ARP: ArpChoice = { source: "together", chord: "major", style: "spread", order: "up", length: "16", octaves: 1, repeat: true, clear: true, fold: 0 };
 
 /** 저장해 둔 값을 읽는다. 모르는 값은 기본으로 */
 export function parseArpChoice(raw: unknown): ArpChoice {
@@ -62,6 +78,7 @@ export function parseArpChoice(raw: unknown): ArpChoice {
     octaves,
     repeat,
     clear: typeof v.clear === "boolean" ? v.clear : DEFAULT_ARP.clear,
+    fold: pick(v.fold, [0, 1, 2, 3, 4, 5] as const, DEFAULT_ARP.fold),
   };
 }
 

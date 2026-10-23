@@ -25,6 +25,8 @@ import {
   eventFontSize,
   eventsBottom,
   BAR_ROW,
+  barFontSize,
+  barRowSize,
   EVENT_ROW,
   axes,
   inLane,
@@ -228,6 +230,18 @@ describe("eventLabels / eventAt", () => {
     expect(eventRow(v, 300, BAR_ROW + 42)).toBeUndefined();
     expect(eventRow(base, 300, 45)).toBeUndefined();
     expect(eventRow(v, 300, 45)).toBe(1);
+  });
+  it("화면 배율로 마디 번호 줄이 두꺼워지면 이벤트 줄과 누르는 칸도 그만큼 아래로", () => {
+    const base: RollView = { orientation: "horizontal", width: 800, height: 400, start: 0, pxPerWhole: 100, edgePitch: 84, pxPerKey: 12, keyboard: 44 };
+    const v: RollView = { ...base, barRow: 21, eventRow: eventRowFor(20) };
+    expect(barRowSize(base)).toBe(BAR_ROW);
+    expect(barFontSize(base)).toBe(10);
+    expect(barFontSize(v)).toBe(17);
+    expect(eventsBottom(v)).toBe(21 + 42);
+    expect(eventLabels(v, events).find((l) => l.text === "t90")!.y).toBe(21);
+    expect(eventRow(v, 300, 20)).toBeUndefined();
+    expect(eventRow(v, 300, 21)).toBe(0);
+    expect(eventRow(v, 300, 42)).toBe(1);
   });
   it("곡 처음에 템포가 없으면 기본값 t120을 옅은 곡 처음 라벨로 보인다", () => {
     const v: RollView = { orientation: "horizontal", width: 800, height: 400, start: 0, pxPerWhole: 100, edgePitch: 84, pxPerKey: 12, keyboard: 44 };

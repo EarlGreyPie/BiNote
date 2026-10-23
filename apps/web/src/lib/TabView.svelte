@@ -20,16 +20,19 @@
   import { padLengths, padPressed } from "./lengthPad";
   import { fretPadPrefs } from "./fretPadPrefs.svelte";
   import { tabEventPrefs } from "./tabEventPrefs.svelte";
+  import { scaledPx } from "./uiScaleNow.svelte";
   import { tupletPrefs } from "./tupletPrefs.svelte";
   import { TUPLET_PICK } from "./tuplet";
   import { nextTabAlign, parseTabAlign, TAB_ALIGN_ICON, TAB_ALIGN_LABEL, type TabAlign } from "./tabAlign";
   import { coarsePointer } from "./mmlPad.svelte";
+  import { buttonName } from "./buttonName";
+  import { buttonNamesOn } from "./labs.svelte";
   import { carryViewStart, type ViewMemory } from "./viewCarry";
   import { volumeLabels } from "./volumeLabels.svelte";
   import { labelFits, volumeLabelNotes } from "./volumeLabels";
   import { layoutTabMarks, struckNotes, tieLinks } from "./tabMarks";
   import { labs } from "./labs.svelte";
-  import { fretBoxLeft, fretCenter, layoutTabEvents, rulerRelease, TAB_RULER, TAB_RULER_BASELINE, tabEventAction, tabEventBottom, tabEventAt, tabEventRow, tabEventText, tabMarkerText, tabTop, tabWaveTop, tabZone, type TabEventRow, type TabEventSpot } from "./tabEvents";
+  import { fretBoxLeft, fretCenter, layoutTabEvents, rulerRelease, TAB_RULER, TAB_RULER_BASELINE, TAB_RULER_FONT, tabEventAction, tabEventBottom, tabEventAt, tabEventRow, tabEventText, tabMarkerText, tabTop, tabWaveTop, tabZone, type TabEventRow, type TabEventSpot } from "./tabEvents";
   import { drawWaveStrip, noteStarts, WAVE_SIZE } from "./waveDraw";
   import { wholeToSecondsFn, type Peaks } from "./waveform";
   import { shownTempo, snapNearest, type EventKind, type EventLabel } from "./roll";
@@ -120,18 +123,24 @@
     ondot?: (() => void) | undefined;
     /** 트랙 수 한도 때문에 붙이지 못했을 때 (아무것도 붙이지 않았다) */
     onpastefull?: ((limit: number) => void) | undefined;
+    /** 테마·강조색이 바뀌면 달라지는 값. 캔버스는 그릴 때만 CSS 색을 읽으니 이것으로 다시 그린다 (피아노롤과 같다) */
+    themeKey?: string;
   }
 
-  let { song, octaveKey, wave, onwaveoffset, activeTrackId, tuning, playhead, onunplayable, division, noteDur, noteLength, noteLengths = NOTE_LENGTHS, tupletLength, ontuplet, lengthLimit, onnotelength, onedit, onnewtrack, onfull, maxTracks = Infinity, onpreview, volume = $bindable(), volumeRange, colors, locked, laneTrackIds, onlanetoggle, onclearlane, melodyIds, padByMouse = false, onevent, oncursor, onlayers, onpastefull, ondot, onalign, memory, onmemory, work, followCursor = true, playCursor, loop, onseek, onplaycursor, onloop }: Props = $props();
+  let { song, themeKey = "", octaveKey, wave, onwaveoffset, activeTrackId, tuning, playhead, onunplayable, division, noteDur, noteLength, noteLengths = NOTE_LENGTHS, tupletLength, ontuplet, lengthLimit, onnotelength, onedit, onnewtrack, onfull, maxTracks = Infinity, onpreview, volume = $bindable(), volumeRange, colors, locked, laneTrackIds, onlanetoggle, onclearlane, melodyIds, padByMouse = false, onevent, oncursor, onlayers, onpastefull, ondot, onalign, memory, onmemory, work, followCursor = true, playCursor, loop, onseek, onplaycursor, onloop }: Props = $props();
 
   // 위쪽에 마디 번호 줄과 변속 줄 두 칸(위 칸 템포, 아래 칸 박자·마커), 원곡이 있으면 그 아래 파형 띠를 두고 그 아래에 첫 줄
   // 숫자판을 띄운 동안은 지판 자리를 위해 띠를 숨긴다 (도구 띠를 숨기는 것과 같은 규칙)
   const waveShown = $derived.by(() => !!wave && !padOpen);
+  /** 실험실: 확대·글자 크기 단추에 올리면 이름표 */
+  const names = $derived(buttonNamesOn());
   /** 변속 줄 글자 크기 (설정 → 화면). 칸 높이와 그 아래 파형 띠·첫 줄 자리도 따라 바뀐다 */
-  const eventFont = $derived(tabEventPrefs.font);
-  const EVENT_BOTTOM = $derived(tabEventBottom(eventFont));
-  const WAVE_TOP = $derived(tabWaveTop(eventFont));
-  const TOP = $derived.by(() => tabTop(waveShown, eventFont));
+  const eventFont = $derived(scaledPx(tabEventPrefs.font));
+  /** 마디 번호 줄 두께. 변속 줄 글자처럼 화면 배율을 따른다 */
+  const RULER = $derived(scaledPx(TAB_RULER));
+  const EVENT_BOTTOM = $derived(tabEventBottom(eventFont, RULER));
+  const WAVE_TOP = $derived(tabWaveTop(eventFont, RULER));
+  const TOP = $derived.by(() => tabTop(waveShown, eventFont, RULER));
   // 줄 간격(타브 크기). 숫자 글자 크기도 같이 커진다. 이 브라우저에 기억한다
   const GAP_KEY = "mmlce.tabGap";
   let gap = $state(loadStored(GAP_KEY, (raw) => {
@@ -408,7 +417,7 @@
   /** 그린 변속 글자 자리 (그릴 때마다 새로). 누를 때 이걸로 찾는다 */
   let eventSpots: TabEventSpot[] = [];
   /** 위쪽 변속 줄의 몇째 칸인지 (0 템포, 1 박자·마커. 첫 줄 숫자 칸과 겹치면 글자 위만. 첫 줄을 누르는 자리는 남긴다) */
-  const eventRowAt = (px: number, py: number) => tabEventRow(eventSpots, px, py, TOP, fontPx, eventFont);
+  const eventRowAt = (px: number, py: number) => tabEventRow(eventSpots, px, py, TOP, fontPx, eventFont, RULER);
   /** 템포 글자 위에 올렸을 때 보이는 안내 */
   let eventHover = $state<TabEventSpot | undefined>(undefined);
   /** 마커 글자의 전체 이름 (줄여 쓴 글자 대신 안내에 보인다) */
@@ -445,7 +454,7 @@
     const act = tabEventAction(eventSpots, px, row);
     if ("edit" in act) {
       const spot = act.edit;
-      const box = tabEventText(spot.row, eventFont);
+      const box = tabEventText(spot.row, eventFont, RULER);
       // 마커는 id로 찾아 고친다 (같은 자리에 마커가 여럿일 수 있다)
       const label: EventLabel = { kind: spot.kind, at: spot.at, text: spot.text, ...(spot.implicit ? { implicit: true } : {}), x: spot.left, y: box.top, w: spot.right - spot.left, h: box.bottom - box.top, ...(spot.id ? { id: spot.id } : {}) };
       onevent({ label, kind: spot.kind, at: spot.at, work: carry.work });
@@ -489,8 +498,8 @@
     }
     if (e.pointerType === "mouse") {
       const [px, py] = point(e);
-      rulerHover = !!onseek && px >= LEFT && py < TAB_RULER;
-      waveHover = !!onwaveoffset && px >= LEFT && tabZone(eventSpots, px, py, TOP, fontPx, waveShown, eventFont) === "wave";
+      rulerHover = !!onseek && px >= LEFT && py < RULER;
+      waveHover = !!onwaveoffset && px >= LEFT && tabZone(eventSpots, px, py, TOP, fontPx, waveShown, eventFont, RULER) === "wave";
       const row = onevent && px >= LEFT && !rulerHover ? eventRowAt(px, py) : undefined;
       eventHover = row !== undefined ? tabEventAt(eventSpots, px, row) : undefined;
       bandHover = eventHover ? undefined : row;
@@ -551,14 +560,14 @@
     const py = e.clientY - rect.top;
     if (px < LEFT) return;
     // 맨 위 마디 번호 줄: 누르고 떼면 재생 위치, 끌면 반복 구간 (피아노롤 눈금자와 같다). 화면은 움직이지 않는다
-    if (py < TAB_RULER && onseek) {
+    if (py < RULER && onseek) {
       const t = rulerTime(px);
       marking = [t, t];
       canvas.setPointerCapture(e.pointerId);
       return;
     }
     // 원곡 파형 띠: 마디 번호 줄과 같은 칸 (떼면 재생 위치). 빈 곳을 끌면 원곡을 앞뒤로 옮긴다 (피아노롤과 같다)
-    if (tabZone(eventSpots, px, py, TOP, fontPx, waveShown, eventFont) === "wave") {
+    if (tabZone(eventSpots, px, py, TOP, fontPx, waveShown, eventFont, RULER) === "wave") {
       const grab = Math.max(0, start + (px - LEFT) / pxPerWhole);
       if (wave && onwaveoffset) {
         waveDrag = { grab, x0: e.clientX, y0: e.clientY, slop: e.pointerType === "mouse" ? 3 : 8, live: false, offset: wave.offset };
@@ -1049,6 +1058,7 @@
     const c = laneCanvas;
     if (!c || laneHeight <= 0) return;
     void fonts.loaded;
+    void themeKey;
     const ratio = window.devicePixelRatio || 1;
     c.width = width * ratio;
     c.height = laneHeight * ratio;
@@ -1104,6 +1114,7 @@
     if (!g) return;
     g.setTransform(ratio, 0, 0, ratio, 0, 0);
     void fonts.loaded;
+    void themeKey;
     g.fillStyle = css("--panel");
     g.fillRect(0, 0, width, height);
     const x = (t: number) => LEFT + (t - start) * pxPerWhole;
@@ -1112,12 +1123,12 @@
 
     // 마디 번호 줄 (누르는 곳): 피아노롤 눈금자와 같은 바탕색과 아래 경계선
     g.fillStyle = css("--bg");
-    g.fillRect(LEFT, 0, width - LEFT, TAB_RULER);
+    g.fillRect(LEFT, 0, width - LEFT, RULER);
     // 변속 줄도 같은 바탕색으로 칠해 타브 줄과 다른 칸임을 보인다 (바탕 없이 선만 있으면 줄이 하나 더 있는 것처럼 보인다).
     // 아래 끝에는 선을 긋지 않는다 (가로선은 첫 줄 바로 위에서 타브 줄처럼 보인다). 바탕색이 끝나는 곳이 경계다
-    g.fillRect(LEFT, TAB_RULER, width - LEFT, EVENT_BOTTOM - TAB_RULER);
+    g.fillRect(LEFT, RULER, width - LEFT, EVENT_BOTTOM - RULER);
     g.fillStyle = css("--line");
-    g.fillRect(LEFT, TAB_RULER - 1, width - LEFT, 1);
+    g.fillRect(LEFT, RULER - 1, width - LEFT, 1);
     // 원곡 파형 띠 (피아노롤과 같은 그리기): 변속 줄 아래, 첫 줄 위. 음 시작 눈금은 타브에 보이는 트랙 음으로
     // 바탕은 마디 번호 줄처럼 먼저 칠하고, 막대·눈금은 마디선 위에 그린다 (피아노롤 띠와 같은 순서)
     if (waveShown && wave) {
@@ -1125,13 +1136,13 @@
       g.fillRect(LEFT, WAVE_TOP, width - LEFT, WAVE_SIZE);
     }
     // 마디선과 마디 번호
-    g.font = '10px "D2Coding", ui-monospace, Consolas, monospace';
+    g.font = `${scaledPx(TAB_RULER_FONT)}px "D2Coding", ui-monospace, Consolas, monospace`;
     for (const gl of gridLines(song.timeSig, start, end)) {
       if (gl.kind !== "measure") continue;
       g.fillStyle = css("--line");
       g.fillRect(x(gl.at), 4, 1, y(tuning.strings.length) - 4);
       g.fillStyle = css("--muted");
-      g.fillText(String(gl.bar), x(gl.at) + 3, TAB_RULER_BASELINE);
+      g.fillText(String(gl.bar), x(gl.at) + 3, RULER - (TAB_RULER - TAB_RULER_BASELINE));
     }
     if (waveShown && wave) {
       drawWaveStrip(g, {
@@ -1157,7 +1168,7 @@
       const b = x(range[1]);
       g.fillStyle = "rgba(127,127,255,0.14)";
       g.fillRect(a, 0, b - a, height);
-      g.fillRect(a, 0, b - a, TAB_RULER);
+      g.fillRect(a, 0, b - a, RULER);
     }
     // 재생 위치: 피아노롤과 같은 점선
     if (playCursor !== undefined && playCursor >= start - 0.01 && playCursor <= end) {
@@ -1190,12 +1201,12 @@
     g.lineWidth = 1;
     g.setLineDash([2, 3]);
     g.beginPath();
-    g.moveTo(LEFT, tabEventText(1, eventFont).top + 0.5);
-    g.lineTo(width, tabEventText(1, eventFont).top + 0.5);
+    g.moveTo(LEFT, tabEventText(1, eventFont, RULER).top + 0.5);
+    g.lineTo(width, tabEventText(1, eventFont, RULER).top + 0.5);
     g.stroke();
     g.setLineDash([]);
     for (const e of eventSpots) {
-      const box = tabEventText(e.row, eventFont);
+      const box = tabEventText(e.row, eventFont, RULER);
       const px = x(toFloat(e.at));
       const color = eventColor[e.kind];
       g.strokeStyle = color;
@@ -1357,7 +1368,7 @@
 <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
 <div class="tab" bind:this={host} tabindex="0" role="application" {onkeydown}>
   <!-- 숫자판이 열리면 지판 칸이 줄어드니 위치와 상관없이 위에 붙인다 -->
-  <div class="canvas-wrap" bind:this={wrap} data-align={padOpen ? "top" : align} style:min-height={padOpen ? `min(${height}px, 45%)` : undefined}>
+  <div class="canvas-wrap" bind:this={wrap} data-align={align} style:min-height={padOpen ? `min(${height}px, 45%)` : undefined}>
     <canvas
       bind:this={canvas}
       class:event-hover={!!eventHover || rulerHover}
@@ -1401,10 +1412,10 @@
     <div class="pad" role="group" aria-label={t("ui.fretPad")}>
       <div class="pad-top">
         <div class="moves">
-          <button title={t("ui.fretPadLeft")} onclick={() => moveCursor("left")}><Icon name="chevron-left" /></button>
-          <button title={t("ui.fretPadRight")} onclick={() => moveCursor("right")}><Icon name="chevron-right" /></button>
-          <button title={t("ui.fretPadUp")} onclick={() => moveCursor("up")}><Icon name="chevron-up" /></button>
-          <button title={t("ui.fretPadDown")} onclick={() => moveCursor("down")}><Icon name="chevron-down" /></button>
+          <button title={t("ui.fretPadLeft")} onclick={() => moveCursor("left")}><Icon name="chevron-left" fixed /></button>
+          <button title={t("ui.fretPadRight")} onclick={() => moveCursor("right")}><Icon name="chevron-right" fixed /></button>
+          <button title={t("ui.fretPadUp")} onclick={() => moveCursor("up")}><Icon name="chevron-up" fixed /></button>
+          <button title={t("ui.fretPadDown")} onclick={() => moveCursor("down")}><Icon name="chevron-down" fixed /></button>
           <button title={t("ui.fretPadTieHelp")} onclick={() => (ensureCursorVisible(), tieKey())}>{t("ui.fretPadTie")}</button>
           <button onclick={() => (ensureCursorVisible(), deleteKey())}>{t("ui.fretPadDelete")}</button>
           <button class:on={padChord} aria-pressed={padChord} title={t("ui.fretPadChordHelp")} onclick={() => (padChord = !padChord)}>{t("ui.fretPadChord")}</button>
@@ -1417,6 +1428,13 @@
             large
           />
           <label class="advance"><input type="checkbox" bind:checked={padAdvance} /> {t("ui.fretPadAdvance")}</label>
+          <!-- 지판 위치: 숫자판이 열리면 아래 도구 띠가 숨고 좁은 창은 위 도구줄에서도 빠지므로 여기에도 둔다 -->
+          <button
+            class="tab-align"
+            title={t("ui.tabAlign", { now: t(TAB_ALIGN_LABEL[align]), next: t(TAB_ALIGN_LABEL[nextTabAlign(align)]) })}
+            aria-label={t("ui.tabAlign", { now: t(TAB_ALIGN_LABEL[align]), next: t(TAB_ALIGN_LABEL[nextTabAlign(align)]) })}
+            onclick={cycleAlign}>{TAB_ALIGN_ICON[align]}</button
+          >
         </div>
         <!-- 고르기: 옆으로 미는 줄 밖에 두어 좁은 화면에서도 늘 보인다 -->
         <button class="select" class:on={selecting} aria-pressed={selecting} title={t("ui.fretPadSelectHelp")} onclick={toggleSelecting}>{t("ui.fretPadSelect")}</button>
@@ -1491,10 +1509,10 @@
     <!-- 확대·타브 크기·지판 위치: 터치는 엄지가 닿는 여기, PC(마우스)는 피아노롤처럼 위 도구줄에 있다 -->
     {#if coarsePointer}
       <span class="zoom">
-        <button class="small" title={t("ui.zoomOutTime")} onclick={() => zoomTime(1 / 1.25)}><Icon name="arrows-h" size={14} /><Icon name="minus" size={12} /></button>
-        <button class="small" title={t("ui.zoomInTime")} onclick={() => zoomTime(1.25)}><Icon name="arrows-h" size={14} /><Icon name="plus" size={12} /></button>
-        <button class="small" title={t("ui.tabSmaller")} onclick={() => resizeTab(-1)}>A−</button>
-        <button class="small" title={t("ui.tabBigger")} onclick={() => resizeTab(1)}>A+</button>
+        <button class="small" title={names ? undefined : t("ui.zoomOutTime")} aria-label={t("ui.zoomOutTime")} use:buttonName={{ on: names, name: t("ui.zoomOutTime") }} onclick={() => zoomTime(1 / 1.25)}><Icon name="arrows-h" size={14} fixed /><Icon name="minus" size={12} fixed /></button>
+        <button class="small" title={names ? undefined : t("ui.zoomInTime")} aria-label={t("ui.zoomInTime")} use:buttonName={{ on: names, name: t("ui.zoomInTime") }} onclick={() => zoomTime(1.25)}><Icon name="arrows-h" size={14} fixed /><Icon name="plus" size={12} fixed /></button>
+        <button class="small" title={names ? undefined : t("ui.tabSmaller")} aria-label={t("ui.tabSmaller")} use:buttonName={{ on: names, name: t("ui.tabSmaller") }} onclick={() => resizeTab(-1)}>A−</button>
+        <button class="small" title={names ? undefined : t("ui.tabBigger")} aria-label={t("ui.tabBigger")} use:buttonName={{ on: names, name: t("ui.tabBigger") }} onclick={() => resizeTab(1)}>A+</button>
         <button
           class="small tab-align"
           title={t("ui.tabAlign", { now: t(TAB_ALIGN_LABEL[align]), next: t(TAB_ALIGN_LABEL[nextTabAlign(align)]) })}
@@ -1507,6 +1525,7 @@
 </div>
 
 <style>
+  /* ui-scale: fixed — 캔버스 그림과 자리를 맞추므로 화면 배율을 따르지 않는다 (lib/uiScale.ts). 안쪽은 롤·타브 확대로 키운다 */
   .tab {
     /* 칸 높이를 다 쓰고, 줄이 많으면 캔버스 칸 안에서 스크롤한다 */
     height: 100%;

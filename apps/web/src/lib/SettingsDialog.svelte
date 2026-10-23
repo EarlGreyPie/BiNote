@@ -26,6 +26,7 @@
   import PackBar from "./PackBar.svelte";
   import type { MidiKeys } from "./midiKeys.svelte";
   import type { ColorScheme } from "./scores";
+  import { UI_SCALES } from "./uiScale";
   import { ACCENTS, EDITOR_FONT_SIZES, EDITOR_FONTS, type Appearance, type EditorFont, type NoteLook, type ThemeMode } from "./appearance";
 
   /** 설정 창: 사운드팩 · 재생 · 화면 · 단축키. 맨 아래에 판 정보 */
@@ -44,6 +45,9 @@
     ongain: (key: string, db: number) => void;
     syncOffsetMs: number;
     onsync: (ms: number) => void;
+    /** 오디오 상태 칸: 재서 글로 돌려준다 / 오디오를 다시 만든다 */
+    onaudioreport: () => Promise<string>;
+    onaudiorebuild: () => Promise<void>;
     lightKeys: boolean;
     onlightkeys: () => void;
     midiKeys: MidiKeys;
@@ -78,6 +82,8 @@
     ongain,
     syncOffsetMs,
     onsync,
+    onaudioreport,
+    onaudiorebuild,
     lightKeys,
     onlightkeys,
     midiKeys,
@@ -93,6 +99,23 @@
     initial = "packs",
     onclose,
   }: Props = $props();
+
+  /** 오디오 상태 칸에 보여 줄 글 (재기 전에는 빈 글) */
+  let audioReport = $state("");
+  let measuring = $state(false);
+  async function measureAudio() {
+    if (measuring) return;
+    measuring = true;
+    try {
+      audioReport = await onaudioreport();
+    } finally {
+      measuring = false;
+    }
+  }
+  async function rebuildAudio() {
+    await onaudiorebuild();
+    await measureAudio();
+  }
 
   const NOTE_LOOKS: readonly (keyof NoteLook)[] = ["round", "border", "shade", "names"];
   function setLook(k: keyof NoteLook, on: boolean) {
@@ -169,6 +192,17 @@
           ms
         </label>
         <p class="muted help">{t("ui.syncOffsetHelp")}</p>
+        <details class="audio-state">
+          <summary>{t("ui.audioState")}</summary>
+          <p class="muted help">{t("ui.audioStateHelp")}</p>
+          <div class="row">
+            <button onclick={measureAudio} disabled={measuring}>{t(measuring ? "ui.audioStateMeasuring" : "ui.audioStateMeasure")}</button>
+            <button disabled={!audioReport} onclick={() => void navigator.clipboard.writeText(audioReport).catch(() => {})}>{t("ui.audioStateCopy")}</button>
+            <button title={t("ui.audioRebuildHelp")} onclick={rebuildAudio}>{t("ui.audioRebuild")}</button>
+          </div>
+          <p class="muted help">{t("ui.audioRebuildHelp")}</p>
+          {#if audioReport}<pre class="audio-report">{audioReport}</pre>{/if}
+        </details>
         <h3 class="sub">{t("ui.instrumentGains")}</h3>
         {#if packs.length === 0}
           <p class="muted help">{t("ui.instrumentGainsNoPack")}</p>
@@ -201,6 +235,13 @@
           {/each}
         {/if}
       {:else if section === "display"}
+        <label class="row" title={t("ui.uiScaleHelp")}>
+          <span>{t("ui.uiScale")}</span>
+          <select value={appearance.uiScale} onchange={(e) => onappearance({ ...appearance, uiScale: Number(e.currentTarget.value) })}>
+            {#each UI_SCALES as pct (pct)}<option value={pct}>{pct}%</option>{/each}
+          </select>
+        </label>
+        <p class="muted help">{t("ui.uiScaleHelp")}</p>
         <label class="row">
           <span>{t("ui.colorScheme")}</span>
           <select value={colorScheme} onchange={(e) => oncolorscheme(e.currentTarget.value as ColorScheme)}>
@@ -574,6 +615,23 @@
     align-items: center;
     gap: 8px;
   }
+  .audio-state {
+    display: grid;
+    gap: 8px;
+  }
+  .audio-state[open] summary {
+    margin-bottom: 6px;
+  }
+  .audio-report {
+    margin: 0;
+    padding: 6px 8px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    font-size: 11px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    user-select: text;
+  }
   .help {
     margin: -4px 0 0;
     font-size: 12px;
@@ -603,6 +661,8 @@
   @media (max-aspect-ratio: 1/1) {
     .body {
       grid-template-columns: minmax(0, 1fr);
+      /* 칸 줄(nav)은 옆으로 미는 스크롤 칸이라 최소 높이가 0이다. 내용이 길면(큰 화면 배율) 줄이 눌려 잘리지 않게 내용 높이로 둔다 */
+      grid-auto-rows: max-content;
       gap: 8px;
     }
     /* 칸 이름이 길어도(언어 · Language) 글자가 꺾이지 않게 한 줄로 두고, 넘치면 옆으로 민다 */

@@ -1,4 +1,6 @@
-/** 화면 모양 설정: 테마(밝게·어둡게·시스템), 강조색, 피아노롤 음 모양, MML 편집기 글자 */
+/** 화면 모양 설정: 테마(밝게·어둡게·시스템), 강조색, 피아노롤 음 모양, MML 편집기 글자, 화면 배율 */
+import { DEFAULT_UI_SCALE, REM_BASE, UI_SCALES } from "./uiScale";
+
 export type ThemeMode = "system" | "light" | "dark";
 
 /** 강조색. 밝은 테마와 어두운 테마에서 읽기 좋게 두 가지 색을 짝으로 둔다 */
@@ -42,6 +44,8 @@ export interface Appearance {
   readonly note: NoteLook;
   readonly editorFont: EditorFont;
   readonly editorFontSize: number;
+  /** 화면 배율(%): 글자·단추·메뉴·창 크기 (lib/uiScale.ts). 기기마다 따로 저장된다 */
+  readonly uiScale: number;
 }
 
 export const DEFAULT_APPEARANCE: Appearance = {
@@ -51,6 +55,7 @@ export const DEFAULT_APPEARANCE: Appearance = {
   note: { round: true, border: true, shade: false, names: true },
   editorFont: "d2coding",
   editorFontSize: 14,
+  uiScale: DEFAULT_UI_SCALE,
 };
 
 export const APPEARANCE_STORAGE = "mmlce.appearance";
@@ -72,6 +77,7 @@ export function parseAppearance(raw: string | null): Appearance {
     note: { round: flag("round"), border: flag("border"), shade: flag("shade"), names: flag("names") },
     editorFont: typeof o.editorFont === "string" && Object.hasOwn(EDITOR_FONTS, o.editorFont) ? (o.editorFont as EditorFont) : DEFAULT_APPEARANCE.editorFont,
     editorFontSize: (EDITOR_FONT_SIZES as readonly unknown[]).includes(o.editorFontSize) ? (o.editorFontSize as number) : DEFAULT_APPEARANCE.editorFontSize,
+    uiScale: (UI_SCALES as readonly unknown[]).includes(o.uiScale) ? (o.uiScale as number) : DEFAULT_APPEARANCE.uiScale,
   };
 }
 
@@ -84,5 +90,15 @@ export function applyAppearance(a: Appearance, root: HTMLElement): void {
   root.style.setProperty("--accent-dark", accent.dark);
   // MML 편집기 글자 (mml-highlight의 편집기 테마가 읽는다)
   root.style.setProperty("--mml-font", EDITOR_FONTS[a.editorFont]);
-  root.style.setProperty("--mml-font-size", `${a.editorFontSize}px`);
+  // 편집기 글자도 화면 배율을 따른다 (rem)
+  root.style.setProperty("--mml-font-size", `${a.editorFontSize / REM_BASE}rem`);
+  root.style.setProperty("--ui-scale", String(a.uiScale / 100));
+}
+
+/**
+ * 캔버스(피아노롤·타브·볼륨 레인·원곡 파형 띠)를 다시 그릴 열쇠. 캔버스는 그릴 때만 CSS 색을 읽으니,
+ * 테마·강조색이 바뀌거나 "시스템" 테마에서 기기 밝기 모드가 바뀌면 이 값이 달라져 다시 그리게 한다
+ */
+export function themeKeyOf(a: Pick<Appearance, "theme" | "accent">, systemDark: boolean): string {
+  return `${a.theme}:${a.accent}:${systemDark}`;
 }

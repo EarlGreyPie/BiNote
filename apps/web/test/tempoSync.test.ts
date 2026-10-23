@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { positionToSeconds, rat } from "@mmlce/core";
-import { alignBarTempo, attackStarts, barStart, nearestBar, nearestBeat, offIntervals, onsetNear, pairBarTempo, snapTaps, tapMarks, tapTempos } from "../src/lib/tempoSync";
+import { emptySong, History, MOBILE_PROFILE, positionToSeconds, rat, type Command } from "@mmlce/core";
+import { alignBarTempo, attackStarts, boundToSong, tempoOutOfRange, barStart, nearestBar, nearestBeat, offIntervals, onsetNear, pairBarTempo, snapTaps, tapMarks, tapTempos } from "../src/lib/tempoSync";
 import type { Peaks } from "../src/lib/waveform";
 
 describe("원곡에 템포 맞추기", () => {
@@ -175,3 +175,39 @@ describe("마디 번호로 자리 찾기", () => {
   });
 });
 
+describe("영상 마디·탭 템포 안전장치 (GPT 검수 B-02·B-03)", () => {
+  const bar1 = [{ at: rat(0), bpm: 120 }];
+  const sig = [{ at: rat(0), beats: 4, unit: 4 }];
+  it("0.5초 간격 마디는 t480, 10초 간격은 t24라 게임 범위(t32~t255) 밖으로 알린다", () => {
+    const fast = tapTempos(bar1, sig, rat(0), [0, 0.5, 1.0], { unit: "bar" })!;
+    expect(tempoOutOfRange(fast, MOBILE_PROFILE.tempo)).toBe(480);
+    const slow = tapTempos(bar1, sig, rat(0), [0, 10, 20], { unit: "bar" })!;
+    expect(tempoOutOfRange(slow, MOBILE_PROFILE.tempo)).toBe(24);
+    const ok = tapTempos(bar1, sig, rat(0), [0, 2, 4], { unit: "bar" })!;
+    expect(tempoOutOfRange(ok, MOBILE_PROFILE.tempo)).toBeUndefined();
+  });
+
+  it("파형 맞추기 제안은 만든 때 곡 그대로일 때만 적용하고, 다른 편집·다른 곡이면 버린다", () => {
+    const song = emptySong({ title: "", author: "", profileId: "mobile" });
+    const h = new History(song);
+    let ran = 0;
+    let stale = 0;
+    const offer = boundToSong(h.song, () => ran++, () => stale++);
+    offer(h.song);
+    expect([ran, stale]).toEqual([1, 0]);
+    const retitle: Command = {
+      label: "제목",
+      apply: (s) => ({ ...s, meta: { ...s.meta, title: "다른" } }),
+      invert: (before) => ({ label: "제목", apply: () => before, invert: () => retitle }),
+    };
+    h.run(retitle);
+    offer(h.song);
+    expect([ran, stale]).toEqual([1, 1]);
+    // 다른 곡을 연 경우
+    offer(emptySong({ title: "B", author: "", profileId: "mobile" }));
+    expect([ran, stale]).toEqual([1, 2]);
+    // 곡이 없을 때 만든 제안은 언제나 버린다
+    boundToSong(undefined, () => ran++, () => stale++)(undefined);
+    expect([ran, stale]).toEqual([1, 3]);
+  });
+});

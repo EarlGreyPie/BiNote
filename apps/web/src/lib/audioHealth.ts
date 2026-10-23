@@ -79,3 +79,33 @@ export function staleAfterReturn(o: {
   if (o.touchWebKit && o.hiddenMs >= LOCK_HIDDEN_MS) return true;
   return o.latencyNow - o.latencyBefore > LATENCY_JUMP;
 }
+
+/** 타이머가 이만큼(ms) 넘게 불리지 않았으면 페이지가 얼어 있었던 것(화면 잠금·절전)으로 본다 */
+export const FROZEN_MS = 3000;
+/** 벽시계보다 오디오 시계가 이만큼(초) 넘게 덜 갔으면 그사이 오디오가 멈췄던 것으로 본다 */
+export const CLOCK_STOP_SLACK = 0.5;
+
+/** 오디오 시계와 벽시계를 같은 때 읽은 값 (둘 다 초) */
+export interface ClockPair {
+  audio: number;
+  wall: number;
+}
+
+/**
+ * 두 번 읽은 사이 오디오 시계가 벽시계보다 얼마나 덜 갔는지(초). 오디오가 계속 돌았으면 0 가까이.
+ * 앱으로 띄운 아이패드는 화면을 잠가도 가려짐 알림이 오지 않을 때가 있어, 이것으로 잠금(오디오 멈춤)을 알아본다
+ */
+export function audioLag(before: ClockPair, after: ClockPair): number {
+  return after.wall - before.wall - (after.audio - before.audio);
+}
+
+/** 시계를 여러 번 읽은 것으로 오디오 시계 빠르기(벽시계 1초에 몇 초)와 가장 큰 한 번 건너뛰기(ms)를 잰다 */
+export function clockStats(samples: readonly ClockPair[]): { rate: number; maxStepMs: number } {
+  if (samples.length < 2) return { rate: 0, maxStepMs: 0 };
+  const first = samples[0]!;
+  const last = samples[samples.length - 1]!;
+  const wall = last.wall - first.wall;
+  let maxStep = 0;
+  for (let i = 1; i < samples.length; i++) maxStep = Math.max(maxStep, samples[i]!.audio - samples[i - 1]!.audio);
+  return { rate: wall > 0 ? (last.audio - first.audio) / wall : 0, maxStepMs: maxStep * 1000 };
+}

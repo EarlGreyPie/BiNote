@@ -26,6 +26,19 @@ export interface TempoPlan {
 }
 
 /**
+ * 나중에 누르는 제안(파형 맞추기 등)을 만든 때의 곡에 묶는다. 누를 때 곡이 그 곡 그대로(같은 객체)일 때만 run,
+ * 그 사이 다른 편집·실행 취소·다른 곡 열기로 곡이 바뀌었으면 stale (옛 자료로 지금 곡을 바꾸지 않는다)
+ */
+export function boundToSong<S>(base: S | undefined, run: () => void, stale: () => void): (now: S | undefined) => void {
+  return (now) => (base !== undefined && now === base ? run() : stale());
+}
+
+/** 계획한 템포 중 게임 템포 범위(GameProfile.tempo) 밖인 첫 값. 모두 범위 안이면 undefined (넣지 않고 알릴 때 쓴다) */
+export function tempoOutOfRange(plan: TempoPlan, range: { readonly min: number; readonly max: number }): number | undefined {
+  return plan.set.find((e) => e.bpm < range.min || e.bpm > range.max)?.bpm;
+}
+
+/**
  * 마디선 bar를 곡 시각 targetSeconds(지금 템포로 잰 초, 파형에서 그 박이 보이는 자리)에 오게 한다.
  * bar 앞의 마지막 템포 자리(없으면 곡 처음)부터 bar까지의 템포를 바꾸고, bar 뒤는 원래 템포를 이어 간다
  * (bar에 원래 템포를 하나 넣는다). 앞 자리보다 앞으로 끌면 undefined

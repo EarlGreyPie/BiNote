@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { defaultLengthLimit, History, MOBILE_PROFILE, planGhost, planHarmonic, planLabClear, planReverbBatch, planReverbStamp, rat, type Note, type Song } from "@mmlce/core";
-import { addTrack, applyPlan, canWriteExactly, deleteTime, distributeSong, findOffgrid, findSpreadSpans, fixOffgrid, insertTime, mergeTracksSong, newSong, parseTrackText, planMergeTracks, planMoveNotes, setMeter, setTempoAt, setTempos, setTracksNotes, spreadSong } from "@mmlce/mml";
+import { addTrack, applyPlan, canWriteExactly, deleteTime, distributeSong, findOffgrid, findSpreadSpans, fixOffgrid, insertTime, mergeTracksSong, newSong, parseTrackText, planMergeTracks, planMoveNotes, rampTempos, setMeter, setTrackText, setTempoAt, setTempos, setTracksNotes, spreadSong } from "@mmlce/mml";
 import { pairBarTempo, tapTempos } from "../src/lib/tempoSync";
 import { newUnwritableTrack } from "../src/lib/writable";
 import { retuneCommand, retuneKeepingTab } from "../src/lib/retune";
@@ -90,6 +90,26 @@ describe("모든 편집은 실행 취소 기록 한 곳에서 쓸 수 없는 길
       expect(h.refused).toBe(false);
       expect(h.song.tracks.map((tr) => tr.notes)).toEqual(s.tracks.map((tr) => tr.notes));
     }
+  });
+
+  it("점점 느리게·빠르게는 템포만 바꾸고(음 가운데면 &로 나눠도 소리는 같다) 검사를 지나며, 실행 취소 한 번에 돌아간다", () => {
+    const ramp = { startBpm: 120, endBpm: 80, step: rat(1, 4), curve: "linear" as const, restore: true };
+    // 원문 없는 트랙: 템포만 바뀐다
+    const s = song([note("a", [0, 1], [1, 20]), note("b", [1, 20], [3, 4], 64), note("c", [1, 1], [1, 4], 67)]);
+    const h = guarded(s);
+    h.run(rampTempos(ramp, rat(0), rat(1)));
+    expect(h.refused).toBe(false);
+    expect(h.song.tracks.map((tr) => tr.notes)).toEqual(s.tracks.map((tr) => tr.notes));
+    expect(h.song.tempo.map((e) => e.bpm)).toEqual([120, 107, 93, 80, 120]);
+    // 원문 있는 트랙: 걸친 음을 &로 나눈다
+    const g = guarded(s);
+    g.run(setTrackText("t1", "t120 c1 d4"));
+    const before = g.song;
+    g.run(rampTempos(ramp, rat(0), rat(1)));
+    expect(g.refused).toBe(false);
+    expect(g.song.tracks[0]!.mml!.text).toBe("t120 c4&t107c4&t93c4&t80c4 t120d4");
+    g.undo();
+    expect(g.song).toBe(before);
   });
 
   it("어긋난 길이 고치기: 쓸 수 있는 길이로만 바꾸므로 검사를 지나고, 뒤 음이 칸에 맞는다", () => {

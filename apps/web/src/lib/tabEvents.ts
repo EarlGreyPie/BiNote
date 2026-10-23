@@ -70,8 +70,10 @@ export function tabEventAt(spots: readonly TabEventSpot[], x: number, row: TabEv
  * 변속 줄은 이 아래부터다
  */
 export const TAB_RULER = 20;
-/** 마디 번호 글자 기준선 */
+/** 마디 번호 글자 기준선 (줄 두께 20에 14) */
 export const TAB_RULER_BASELINE = 14;
+/** 마디 번호 글자 크기 (줄 두께 20에 10px) */
+export const TAB_RULER_FONT = 10;
 /** 변속 줄 글자 크기 고르기 (설정 → 화면). 칸 높이도 글자에 맞춰 바뀐다 */
 export const TAB_EVENT_FONTS = [10, 13, 16, 20] as const;
 /**
@@ -92,14 +94,14 @@ export const TAB_EVENT_ROW_H = tabEventRowH();
  * top은 글자 칸 위(창 위치 기준), baseline은 글자 기준선, bottom은 기준선 아래 글자 끝.
  * 위 칸을 누르는 범위는 top보다 조금 위(마디 번호 줄 아래)부터 아래 칸 top 앞까지, 아래 칸은 그다음부터 bottom 앞까지다
  */
-export function tabEventText(row: TabEventRow, eventFont = TAB_EVENT_FONT): { readonly top: number; readonly baseline: number; readonly bottom: number } {
-  const top = 22 + row * tabEventRowH(eventFont);
+export function tabEventText(row: TabEventRow, eventFont = TAB_EVENT_FONT, ruler = TAB_RULER): { readonly top: number; readonly baseline: number; readonly bottom: number } {
+  const top = ruler + 2 + row * tabEventRowH(eventFont);
   return { top, baseline: top + eventFont + 1, bottom: top + eventFont + 5 };
 }
 
 /** 변속 줄 아래 끝 (아래 칸 글자 끝) */
-export function tabEventBottom(eventFont = TAB_EVENT_FONT): number {
-  return tabEventText(1, eventFont).bottom;
+export function tabEventBottom(eventFont = TAB_EVENT_FONT, ruler = TAB_RULER): number {
+  return tabEventText(1, eventFont, ruler).bottom;
 }
 /** 기본 글자 크기의 변속 줄 아래 끝 */
 export const TAB_EVENT_BOTTOM = tabEventBottom();
@@ -111,16 +113,16 @@ export const TAB_TOP = TAB_EVENT_BOTTOM + 11;
  * 위로 fontPx 가까이 올라오므로, 타브를 크게 해 그 숫자와 겹치는 자리는 그 칸에 글자가 있는 곳만 변속 쪽으로 보내고
  * 빈 곳은 첫 줄을 누르게 남긴다
  */
-export function tabEventRow(spots: readonly TabEventSpot[], px: number, py: number, firstLine: number, fontPx: number, eventFont = TAB_EVENT_FONT): TabEventRow | undefined {
-  if (py < TAB_RULER || py >= tabEventBottom(eventFont)) return undefined;
-  const row: TabEventRow = py < tabEventText(1, eventFont).top ? 0 : 1;
+export function tabEventRow(spots: readonly TabEventSpot[], px: number, py: number, firstLine: number, fontPx: number, eventFont = TAB_EVENT_FONT, ruler = TAB_RULER): TabEventRow | undefined {
+  if (py < ruler || py >= tabEventBottom(eventFont, ruler)) return undefined;
+  const row: TabEventRow = py < tabEventText(1, eventFont, ruler).top ? 0 : 1;
   if (py < firstLine - fontPx) return row;
   return tabEventAt(spots, px, row) !== undefined ? row : undefined;
 }
 
 /** 누른 자리(px, py)가 변속 줄 쪽인지 (아니면 지판 쪽). 규칙은 tabEventRow */
-export function inTabEventBand(spots: readonly TabEventSpot[], px: number, py: number, firstLine: number, fontPx: number, eventFont = TAB_EVENT_FONT): boolean {
-  return tabEventRow(spots, px, py, firstLine, fontPx, eventFont) !== undefined;
+export function inTabEventBand(spots: readonly TabEventSpot[], px: number, py: number, firstLine: number, fontPx: number, eventFont = TAB_EVENT_FONT, ruler = TAB_RULER): boolean {
+  return tabEventRow(spots, px, py, firstLine, fontPx, eventFont, ruler) !== undefined;
 }
 
 /**
@@ -141,15 +143,15 @@ export function fretCenter(x: number, width: number): number {
 }
 
 /** 원곡 파형 띠 위쪽 끝 (변속 줄 두 칸 바로 아래). 띠 높이는 피아노롤과 같은 WAVE_SIZE */
-export function tabWaveTop(eventFont = TAB_EVENT_FONT): number {
-  return tabEventBottom(eventFont);
+export function tabWaveTop(eventFont = TAB_EVENT_FONT, ruler = TAB_RULER): number {
+  return tabEventBottom(eventFont, ruler);
 }
 /** 기본 글자 크기의 파형 띠 위쪽 끝 */
 export const TAB_WAVE_TOP = tabWaveTop();
 
 /** 첫 줄 자리. 변속 줄 아래 틈 11px, 파형 띠를 보이면 띠 높이만큼 더 아래 */
-export function tabTop(wave: boolean, eventFont = TAB_EVENT_FONT): number {
-  return tabEventBottom(eventFont) + 11 + (wave ? WAVE_SIZE : 0);
+export function tabTop(wave: boolean, eventFont = TAB_EVENT_FONT, ruler = TAB_RULER): number {
+  return tabEventBottom(eventFont, ruler) + 11 + (wave ? WAVE_SIZE : 0);
 }
 
 /** 누른 칸: 마디 번호 줄(재생 위치·반복 구간) / 변속 위 칸(템포) / 변속 아래 칸(박자·마커) / 원곡 파형 띠 / 지판 */
@@ -159,11 +161,11 @@ export type TabZone = "ruler" | "tempo" | "meter" | "wave" | "fret";
  * 누른 자리(px, py)가 어느 칸인지. 변속 줄과 첫 줄 프렛 숫자가 겹치는 자리는 tabEventRow 규칙(글자 위만 변속 쪽).
  * 파형 띠(wave일 때만)는 변속 줄 아래 [TAB_WAVE_TOP, + WAVE_SIZE). 타브를 크게 해 첫 줄 숫자가 띠까지 올라오면 그 자리는 첫 줄을 누르게 남긴다
  */
-export function tabZone(spots: readonly TabEventSpot[], px: number, py: number, firstLine: number, fontPx: number, wave = false, eventFont = TAB_EVENT_FONT): TabZone {
-  if (py < TAB_RULER) return "ruler";
-  const row = tabEventRow(spots, px, py, firstLine, fontPx, eventFont);
+export function tabZone(spots: readonly TabEventSpot[], px: number, py: number, firstLine: number, fontPx: number, wave = false, eventFont = TAB_EVENT_FONT, ruler = TAB_RULER): TabZone {
+  if (py < ruler) return "ruler";
+  const row = tabEventRow(spots, px, py, firstLine, fontPx, eventFont, ruler);
   if (row !== undefined) return row === 0 ? "tempo" : "meter";
-  const waveTop = tabWaveTop(eventFont);
+  const waveTop = tabWaveTop(eventFont, ruler);
   if (wave && py >= waveTop && py < waveTop + WAVE_SIZE && py < firstLine - fontPx) return "wave";
   return "fret";
 }
