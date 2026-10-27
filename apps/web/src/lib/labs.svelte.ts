@@ -7,14 +7,22 @@ import { loadStored, saveStored } from "./persist";
  */
 const LABS_KEY = "mmlce.labs";
 const BUTTON_NAMES_KEY = "mmlce.labs.buttonNames";
+const FADE_KEY = "mmlce.labs.fade";
 
-export type LabFeatureId = "ghost" | "harmonic" | "reverb" | "midiRecord" | "tempoRamp" | "videoBars" | "arpFold" | "loudness";
+/** 소리 줄어듦 알림: 가장 클 때보다 이만큼(dB) 작아진 뒤로도 이어지는 음을 검사에서 알린다 */
+export const FADE_DB = 30;
+
+export type LabFeatureId = "ghost" | "harmonic" | "reverb" | "midiRecord" | "tempoRamp" | "videoBars" | "arpFold" | "loudness" | "staff" | "musicXml" | "transcribe";
+
+/** 고른 음을 바꾸는 창(LabNoteDialog)으로 여는 기능. 나머지는 저마다 메뉴·창이 있다 (새 기능이 이 창으로 잘못 열리지 않게 이름으로 적는다) */
+export type NoteLabId = "ghost" | "harmonic";
+export const isNoteLab = (id: LabFeatureId): id is NoteLabId => id === "ghost" || id === "harmonic";
 
 export interface LabFeature {
   readonly id: LabFeatureId;
   /** 메뉴·설정에 쓰는 이름과 설명 문구 키 */
-  readonly label: "ui.labGhost" | "ui.labHarmonic" | "ui.labReverb" | "ui.labMidiRecord" | "ui.tempoRamp" | "ui.labVideoBars" | "ui.labArpFold" | "ui.labLoudness";
-  readonly help: "ui.labGhostHelp" | "ui.labHarmonicHelp" | "ui.labReverbHelp" | "ui.labMidiRecordHelp" | "ui.tempoRampHelp" | "ui.labVideoBarsHelp" | "ui.labArpFoldHelp" | "ui.labLoudnessHelp";
+  readonly label: "ui.labGhost" | "ui.labHarmonic" | "ui.labReverb" | "ui.labMidiRecord" | "ui.tempoRamp" | "ui.labVideoBars" | "ui.labArpFold" | "ui.labLoudness" | "ui.labStaff" | "ui.labMusicXml" | "ui.labTranscribe";
+  readonly help: "ui.labGhostHelp" | "ui.labHarmonicHelp" | "ui.labReverbHelp" | "ui.labMidiRecordHelp" | "ui.tempoRampHelp" | "ui.labVideoBarsHelp" | "ui.labArpFoldHelp" | "ui.labLoudnessHelp" | "ui.labStaffHelp" | "ui.labMusicXmlHelp" | "ui.labTranscribeHelp";
 }
 
 /** 실험실 기능 목록 (메뉴와 설정 설명이 이 순서를 따른다) */
@@ -29,12 +37,20 @@ export const LAB_FEATURES: readonly LabFeature[] = [
   { id: "arpFold", label: "ui.labArpFold", help: "ui.labArpFoldHelp" },
   // 보기만: 곡을 바꾸지 않는다 (원곡을 불러온 곡에서 실험실 메뉴)
   { id: "loudness", label: "ui.labLoudness", help: "ui.labLoudnessHelp" },
+  // 보기만: 편집기 위 오선보 칸 (보기 메뉴에서 켜고 끈다)
+  { id: "staff", label: "ui.labStaff", help: "ui.labStaffHelp" },
+  // 실험실 메뉴에 가져오기·내보내기 두 항목 (가져오기는 MIDI 가져오기 창을 같이 쓴다)
+  { id: "musicXml", label: "ui.labMusicXml", help: "ui.labMusicXmlHelp" },
+  // 곡 없이도 쓴다: 받아 적은 음은 MIDI 불러오기 창으로 새 곡이 된다 (PC는 Basic Scriptor, 모든 기기는 브라우저 안 basic-pitch)
+  { id: "transcribe", label: "ui.labTranscribe", help: "ui.labTranscribeHelp" },
 ];
 
 export const labs = $state({
   on: loadStored(LABS_KEY, (raw) => raw === "1"),
   /** 단추 이름 펼치기 (실험실을 켰을 때만 쓴다). 곡에는 아무것도 남기지 않는 화면 설정 */
   buttonNames: loadStored(BUTTON_NAMES_KEY, (raw) => raw === "1"),
+  /** 소리 줄어듦 알림 (실험실을 켰을 때만 쓴다). 곡은 바꾸지 않고 검사 안내만 더한다 */
+  fade: loadStored(FADE_KEY, (raw) => raw === "1"),
 });
 
 /** 단추 이름 펼치기를 지금 쓰는지 */
@@ -45,6 +61,16 @@ export function buttonNamesOn(): boolean {
 export function setButtonNames(on: boolean): void {
   labs.buttonNames = on;
   saveStored(BUTTON_NAMES_KEY, on ? "1" : "0");
+}
+
+/** 소리 줄어듦 알림을 지금 쓰는지 */
+export function fadeOn(): boolean {
+  return labs.on && labs.fade;
+}
+
+export function setFade(on: boolean): void {
+  labs.fade = on;
+  saveStored(FADE_KEY, on ? "1" : "0");
 }
 
 export function setLabs(on: boolean): void {

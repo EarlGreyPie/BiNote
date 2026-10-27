@@ -10,6 +10,7 @@
     type ImportPlan,
     type ImportResult,
     type MidiAnalysis,
+    type MusicXmlReport,
   } from "@mmlce/midi";
   import type { MessageKey } from "@mmlce/i18n";
   import { optimizeMml } from "@mmlce/mml";
@@ -19,12 +20,14 @@
   interface Props {
     analysis: MidiAnalysis;
     name: string;
+    /** MusicXML에서 읽은 파트면 그 보고 (칸 맞추기 대신 적힌 길이 그대로, 화음 감쇠를 고를 수 있다) */
+    musicXml?: MusicXmlReport | undefined;
     profile: GameProfile;
     onimport: (song: Song) => void;
     onclose: () => void;
   }
 
-  let { analysis, name, profile, onimport, onclose }: Props = $props();
+  let { analysis, name, musicXml, profile, onimport, onclose }: Props = $props();
 
   interface PlayerRow {
     key: string;
@@ -74,6 +77,9 @@
   let triplets = $state(true);
   let straighten = $state(false);
   let fill = $state(true);
+  // BiNote가 내보낸 MusicXML은 v가 이미 감쇠된 값이라 처음부터 끈다
+  // svelte-ignore state_referenced_locally
+  let attenuate = $state(!musicXml?.fromBiNote);
 
   $effect(() => {
     dialog.showModal();
@@ -101,9 +107,10 @@
         dropFirst: p.dropFirst,
         ...(p.protect ? { protect: [p.protect] } : {}),
       })),
-      quantize: { grid, triplets, straighten: triplets && straighten },
+      quantize: musicXml ? { exact: true } : { grid, triplets, straighten: triplets && straighten },
       fill,
       merge: chordPrefs.merge,
+      ...(musicXml ? { attenuate } : {}),
     };
   }
 
@@ -120,32 +127,41 @@
   const total = $derived(players.filter((p) => analysis.parts.some((part) => assign[part.id] === p.key) || (DRUMS.has(p.canonical) && analysis.parts.some((part) => part.drum && assign[part.id] === "drums"))).reduce((s, p) => s + validChords(p.chords), 0));
 
   // 미리보기: 설정이 바뀔 때마다 다시 만든다
+  // 만들다 실패하면(아주 큰 곡에서 메모리 등) 창을 깨뜨리지 않고 알린다
   const preview = $derived.by((): { result: ImportResult; maxChars: number } | undefined => {
     const p = plan();
     if (p.players.every((x) => x.parts.length === 0)) return undefined;
-    const result = midiToSong(analysis, p, profile, name);
-    const maxChars = Math.max(0, ...result.song.tracks.map((tr) => optimizeMml(tr.notes).text.length));
-    return { result, maxChars };
+    try {
+      const result = midiToSong(analysis, p, profile, musicXml?.title || name);
+      const maxChars = result.song.tracks.reduce((m, tr) => Math.max(m, optimizeMml(tr.notes).text.length), 0);
+      return { result, maxChars };
+    } catch (e) {
+      console.error(e);
+      return undefined;
+    }
   });
+  const previewFailed = $derived(!preview && !plan().players.every((x) => x.parts.length === 0));
 
   const partsOf = (key: string) => analysis.parts.filter((part) => !part.drum && assign[part.id] === key);
   const pitch = (p: number) => `${["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"][p % 12]}${Math.floor(p / 12) - 1}`;
 
   function finish() {
     if (!preview) return;
-    onimport(preview.result.song);
+    const song = preview.result.song;
+    // MusicXML 작곡자는 곡 정보로 (내보내기의 creator와 짝)
+    onimport(musicXml?.composer ? { ...song, meta: { ...song.meta, author: musicXml.composer } } : song);
     dialog.close();
   }
 </script>
 
 <dialog bind:this={dialog} {onclose}>
   <header>
-    <h2>{t("ui.midiImport")}</h2>
+    <h2>{t(musicXml ? "ui.musicXmlImport" : "ui.midiImport")}</h2>
     <span class="muted">{name}</span>
     <span class="spacer"></span>
     <button class="small" onclick={() => dialog.close()}>{t("ui.close")}</button>
   </header>
-  <p class="muted">{t("ui.midiHelp")}</p>
+  <p class="muted">{t(musicXml ? "ui.musicXmlHelp" : "ui.midiHelp")}</p>
 
   <section class="row">
     <label>
@@ -155,20 +171,24 @@
       </select>
     </label>
     <span class={total > budget ? "warn" : "muted"}>{t("ui.midiTotal", { count: total })}</span>
-    <label>
-      {t("ui.midiGrid")}
-      <select bind:value={grid}>
-        <option value="auto">{t("ui.midiGridAuto")}</option>
-        {#each GRID_CHOICES as g (g)}<option value={g}>{t("ui.midiGridNote", { n: g })}</option>{/each}
-      </select>
-    </label>
-    <label><input type="checkbox" bind:checked={triplets} /> {t("ui.midiTriplets")}</label>
-    <label title={t("ui.midiStraightenHelp")}><input type="checkbox" bind:checked={straighten} disabled={!triplets} /> {t("ui.midiStraighten")}</label>
+    {#if musicXml}
+      <label title={t("ui.musicXmlAttenuateHelp")}><input type="checkbox" bind:checked={attenuate} /> {t("ui.musicXmlAttenuate")}</label>
+    {:else}
+      <label>
+        {t("ui.midiGrid")}
+        <select bind:value={grid}>
+          <option value="auto">{t("ui.midiGridAuto")}</option>
+          {#each GRID_CHOICES as g (g)}<option value={g}>{t("ui.midiGridNote", { n: g })}</option>{/each}
+        </select>
+      </label>
+      <label><input type="checkbox" bind:checked={triplets} /> {t("ui.midiTriplets")}</label>
+      <label title={t("ui.midiStraightenHelp")}><input type="checkbox" bind:checked={straighten} disabled={!triplets} /> {t("ui.midiStraighten")}</label>
+    {/if}
     <label title={t("ui.midiFillHelp")}><input type="checkbox" bind:checked={fill} /> {t("ui.midiFill")}</label>
     <label title={t("ui.mergeHelp")}><input type="checkbox" checked={chordPrefs.merge} onchange={(e) => setMidiMerge(e.currentTarget.checked)} /> {t("ui.merge")}</label>
   </section>
 
-  <h3>{t("ui.midiParts")}</h3>
+  <h3>{t(musicXml ? "ui.musicXmlParts" : "ui.midiParts")}</h3>
   <table>
     <thead>
       <tr>
@@ -183,7 +203,7 @@
       {#each analysis.parts as part (part.id)}
         <tr>
           <td>
-            {part.name} <span class="muted">ch{part.channel + 1} {part.drum ? t("ui.midiDrum") : `#${part.program}`}</span>
+            {part.name} <span class="muted">{musicXml ? "" : `ch${part.channel + 1} `}{part.drum ? t("ui.midiDrum") : `#${part.program}`}</span>
             {#if !part.drum && !part.suggestion.matched}<span class="warn" title={t("ui.midiNoMatchHelp")}>{t("ui.midiNoMatch")}</span>{/if}
           </td>
           <td>{part.notes.length}</td>
@@ -249,7 +269,7 @@
             {#if !DRUMS.has(p.canonical)}
               <select bind:value={p.protect}>
                 <option value="">{t("ui.midiProtectNone")}</option>
-                {#each partsOf(p.key) as part (part.id)}<option value={part.id}>{part.name} ch{part.channel + 1}</option>{/each}
+                {#each partsOf(p.key) as part (part.id)}<option value={part.id}>{part.name}{musicXml ? "" : ` ch${part.channel + 1}`}</option>{/each}
               </select>
             {/if}
             {#if result && (result.dropped > 0 || result.filled > 0)}
@@ -268,15 +288,32 @@
   </table>
 
   <footer>
+    {#if previewFailed}<span class="warn">{t("ui.midiBuildFailed")}</span>{/if}
     {#if preview}
       <span class="muted">
-        {t("ui.midiSummary", { grid: preview.result.grid, triplets: preview.result.tripletBeats, tracks: preview.result.song.tracks.length })}
+        {#if musicXml}
+          {t("ui.musicXmlSummary", { tracks: preview.result.song.tracks.length })}
+        {:else}
+          {t("ui.midiSummary", { grid: preview.result.grid, triplets: preview.result.tripletBeats, tracks: preview.result.song.tracks.length })}
+        {/if}
       </span>
       <span class={preview.maxChars > profile.charLimitPerScore ? "warn" : "muted"}>
         {t("ui.midiMaxChars", { count: preview.maxChars, limit: profile.charLimitPerScore })}
       </span>
       {#if preview.result.unmappedDrums > 0}<span class="warn">{t("ui.midiUnmappedDrums", { count: preview.result.unmappedDrums })}</span>{/if}
       {#if preview.result.merged > 0}<span class="warn">{t("ui.midiCollapsed", { count: preview.result.merged })}</span>{/if}
+    {/if}
+    {#if musicXml}
+      {#if musicXml.grace > 0}<span class="warn">{t("ui.musicXmlGrace", { count: musicXml.grace })}</span>{/if}
+      {#if musicXml.cue > 0}<span class="muted">{t("ui.musicXmlCue", { count: musicXml.cue })}</span>{/if}
+      {#if musicXml.repeats > 0}<span class="warn">{t("ui.musicXmlRepeats", { count: musicXml.repeats })}</span>{/if}
+      {#if musicXml.silent > 0}<span class="muted">{t("ui.musicXmlSilent", { count: musicXml.silent })}</span>{/if}
+      {#if preview?.result.folded}<span class="warn">{t("ui.musicXmlFolded", { count: preview.result.folded })}</span>{/if}
+      {#if musicXml.microtones > 0}<span class="warn">{t("ui.musicXmlMicrotones", { count: musicXml.microtones })}</span>{/if}
+      {#if preview?.result.fitted}<span class="warn">{t("ui.musicXmlFitted", { count: preview.result.fitted })}</span>{/if}
+      {#if preview?.result.tempoFixed?.clamped}<span class="warn">{t("ui.musicXmlTempoClamped", { count: preview.result.tempoFixed.clamped, min: profile.tempo.min, max: profile.tempo.max })}</span>{/if}
+      {#if preview?.result.tempoFixed?.rounded}<span class="muted">{t("ui.musicXmlTempoRounded", { count: preview.result.tempoFixed.rounded })}</span>{/if}
+      {#if musicXml.tabStrings > 0}<span class="muted">{t("ui.musicXmlTabs", { count: musicXml.tabStrings })}</span>{/if}
     {/if}
     <span class="spacer"></span>
     <button onclick={finish} disabled={!preview}>{t("ui.midiDoImport")}</button>

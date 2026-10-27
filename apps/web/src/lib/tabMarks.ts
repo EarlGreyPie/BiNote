@@ -6,7 +6,7 @@ import { fretBoxLeft } from "./tabEvents";
  * from은 화면에 숫자로 쓰는 앞 음(같은 높이로 여러 번 이었으면 맨 처음 음), to는 이어 받는 뒤 음
  */
 export type TieLink =
-  | { readonly kind: "hold"; readonly from: string; readonly to: string; readonly prev: Rat; readonly at: Rat }
+  | { readonly kind: "hold"; readonly from: string; readonly to: string; readonly prev: Rat; readonly at: Rat; readonly end: Rat }
   | { readonly kind: "slide"; readonly from: string; readonly to: string; readonly up: boolean };
 
 /** 트랙마다 &로 이은 음 짝 (시작 순으로 훑는다) */
@@ -22,7 +22,7 @@ export function tieLinks(tracks: readonly (readonly Note[])[]): TieLink[] {
         head = undefined;
         return;
       }
-      if (next.pitch === n.pitch) out.push({ kind: "hold", from: head, to: next.id, prev: n.start, at: next.start });
+      if (next.pitch === n.pitch) out.push({ kind: "hold", from: head, to: next.id, prev: n.start, at: next.start, end: add(next.start, next.dur) });
       else {
         out.push({ kind: "slide", from: head, to: next.id, up: next.pitch > n.pitch });
         head = next.id;
@@ -153,11 +153,16 @@ export function layoutTabMarks(
   const lastOf = new Map<string, { right: number; hold?: (typeof holds)[number] }>();
   /** 칠 수 없는 음(줄에 없는 앞 음)에 이어 울리는 뒷음 → 그 앞 음 id */
   const heldByMissing = new Map<string, string>();
+  /** 그 뒷음이 울리는 [시작, 끝) 시각 */
+  const tailAt = new Map<string, number>();
+  const tailEnd = new Map<string, number>();
   for (const l of links) {
     if (l.kind !== "hold") continue;
     const a = placed.get(l.from);
     if (!a) {
       heldByMissing.set(l.to, l.from);
+      tailAt.set(l.to, toFloat(l.at));
+      tailEnd.set(l.to, toFloat(l.end));
       continue;
     }
     const t1 = toFloat(l.at);
@@ -197,12 +202,24 @@ export function layoutTabMarks(
   const missing: MissingMark[] = [];
   for (const e of events) {
     const t = toFloat(e.start);
-    if (t < from - 0.1 || t > to) continue;
+    if (t > to) continue;
     const ids = e.notes.filter((n) => !n.at).map((n) => n.note.id);
     if (ids.length === 0) continue;
     const heads = new Set(ids);
     const tails = [...heldByMissing].filter(([, head]) => heads.has(head)).map(([tail]) => tail);
-    missing.push({ t, count: ids.length, ids: [...ids, ...tails] });
+    if (t >= from - 0.1) {
+      missing.push({ t, count: ids.length, ids: [...ids, ...tails] });
+      continue;
+    }
+    // 화면 왼쪽 밖에서 친 음: 화면 안에서 이어 울리는 뒷음이 있으면 그 첫 자리에 × (뒷음이 아무 표시 없이 사라지지 않게).
+    // 뒷음도 화면 왼쪽 밖에서 시작했으면 화면 왼쪽 끝에
+    const shown = tails.filter((id) => {
+      const at = tailAt.get(id)!;
+      return at <= to && tailEnd.get(id)! > from - 0.1;
+    });
+    if (shown.length === 0) continue;
+    const first = Math.max(from, Math.min(...shown.map((id) => tailAt.get(id)!)));
+    missing.push({ t: first, count: new Set(shown.map((id) => heldByMissing.get(id))).size, ids: [...ids, ...tails] });
   }
   return { frets, holds: holds.map(({ x1: _x1, ...h }) => h), missing, placed, grouped };
 }

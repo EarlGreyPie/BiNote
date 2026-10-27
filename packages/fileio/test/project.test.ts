@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { rat, type Song } from "@mmlce/core";
-import { isProjectFileName, looksLikeProject, PROJECT_EXTENSION, PROJECT_VERSION, ProjectError, readMmlAt, readProject, writeProject } from "../src/index.js";
+import { hexColor, isProjectFileName, looksLikeProject, PROJECT_EXTENSION, PROJECT_VERSION, ProjectError, readMmlAt, readProject, writeProject } from "../src/index.js";
 
 function sample(): Song {
   // l7·l37처럼 tick으로 떨어지지 않는 길이와 & 이음, 트랙 원문, 트랙별 악기를 함께 둔다
@@ -18,6 +18,51 @@ function sample(): Song {
 }
 
 describe("writeProject / readProject", () => {
+  it("트랙 색 고정은 저장했다 다시 열어도 남고, 예전 파일(표시 없음)은 고정이 아니다", () => {
+    const song = sample();
+    const tracks = song.tracks.map((t, i) => (i === 1 ? { ...t, color: "#e04a8a", colorPinned: true } : t));
+    const back = readProject(writeProject({ ...song, tracks })).song;
+    expect(back.tracks.map((t) => t.colorPinned)).toEqual([undefined, true, undefined]);
+    expect(back.tracks[1]!.color).toBe("#e04a8a");
+  });
+
+  it("읽을 수 없는 트랙 색은 차례대로 주는 색으로 바꾸고 고정도 켜지 않는다 (알림을 남김)", () => {
+    const song = sample();
+    const tracks = song.tracks.map((t, i) => (i === 0 ? { ...t, color: "not-a-color", colorPinned: true } : i === 1 ? { ...t, color: " ", colorPinned: true } : { ...t, color: "rgb(255, 0, 0)" }));
+    const read = readProject(writeProject({ ...song, tracks }));
+    expect(read.song.tracks.map((t) => t.colorPinned)).toEqual([undefined, undefined, undefined]);
+    expect(read.song.tracks[0]!.color).toMatch(/^#[0-9a-f]{6}$/);
+    expect(read.song.tracks[2]!.color).toBe("rgb(255, 0, 0)");
+    expect(read.diagnostics.filter((d) => d.code === "project-track-color")).toHaveLength(1);
+  });
+
+  it("hexColor: #rgb·rgb()·hsl()을 색 고르기 칸 값으로, 모르는 꼴은 undefined", () => {
+    expect(hexColor("rgb(255, 0, 0)")).toBe("#ff0000");
+    expect(hexColor("rgb(0 128 255)")).toBe("#0080ff");
+    expect(hexColor("Red")).toBe("#ff0000");
+    expect(hexColor("rebeccapurple")).toBe("#663399");
+    expect(hexColor(" ")).toBeUndefined();
+    // 숫자가 아닌 숫자 자리는 받지 않는다 (NaN 색이 되지 않게)
+    expect(hexColor("rgb(1..2, 0, 0)")).toBeUndefined();
+    expect(hexColor("hsl(.., 20%, 30%)")).toBeUndefined();
+    expect(hexColor("redd")).toBeUndefined();
+    // 쉼표와 빈칸을 섞은 꼴, 아주 긴 숫자도 받지 않는다
+    expect(hexColor("rgb(1,2 3)")).toBeUndefined();
+    expect(hexColor("hsl(120 50%, 50%)")).toBeUndefined();
+    expect(hexColor(`rgb(${"9".repeat(400)}, 0, 0)`)).toBeUndefined();
+    expect(hexColor("hsl(120, 100%, 25%)")).toBe("#008000");
+    expect(hexColor("hsl(120deg 100% 25%)")).toBe("#008000");
+  });
+
+  it("예전 파일의 CSS 색 이름(red)은 그대로 읽고 고정도 남긴다", () => {
+    const song = sample();
+    const tracks = song.tracks.map((t, i) => (i === 0 ? { ...t, color: "red", colorPinned: true } : i === 1 ? { ...t, color: "rgb(1..2,0,0)", colorPinned: true } : t));
+    const read = readProject(writeProject({ ...song, tracks }));
+    expect(read.song.tracks[0]).toMatchObject({ color: "red", colorPinned: true });
+    expect(read.song.tracks[1]!.colorPinned).toBeUndefined();
+    expect(read.song.tracks[1]!.color).toMatch(/^#[0-9a-f]{6}$/);
+  });
+
   it("떼어 낸 악보 표시는 없는 악보·자기 자신·돌고 도는 연결이면 버린다 (#96 점검 2번)", () => {
     const song = sample();
     const base = song.players[0]!;
@@ -54,6 +99,17 @@ describe("writeProject / readProject", () => {
     const back = readProject(writeProject({ ...song, tracks })).song.tracks[0]!.notes;
     expect(back.map((x) => x.lab)).toEqual([labs[0], labs[1], undefined, undefined].slice(0, back.length));
     expect(back.length).toBe(song.tracks[0]!.notes.length);
+  });
+
+  it("직접 입력 튜닝은 줄 높이째 저장했다 다시 열고, 줄 높이가 맞지 않으면 튜닝을 버린다", () => {
+    const song = sample();
+    const custom = { tuning: "custom", capo: 1, strings: [56, 51, 59, 54, 37, 32] };
+    const back = readProject(writeProject({ ...song, players: song.players.map((p) => ({ ...p, tab: custom })) })).song;
+    expect(back.players.every((p) => JSON.stringify(p.tab) === JSON.stringify(custom))).toBe(true);
+    for (const strings of [undefined, [], [60, 128], [60.5], Array.from({ length: 13 }, () => 40), "E A D"]) {
+      const bad = writeProject({ ...song, players: song.players.map((p) => ({ ...p, tab: { tuning: "custom", capo: 0, strings } as never })) });
+      expect(readProject(bad).song.players.every((p) => p.tab === undefined), JSON.stringify(strings)).toBe(true);
+    }
   });
 
   it("악보 타브 튜닝은 카포가 0~24 정수일 때만 읽는다", () => {

@@ -1,4 +1,4 @@
-import { add, cmp, div, emptySong, fitNotes, INSTRUMENTS, tieChains, removeNotes, replaceNotes, meterGrid, trackInstrument, rat, sub, ZERO, type Command, type InstrumentRef, type Note, type Player, type PlayerTab, type Rat, type Song, type Track, type TrackRole } from "@mmlce/core";
+import { add, cmp, div, emptySong, fitNotes, INSTRUMENTS, tieChains, removeNotes, replaceNotes, meterGrid, trackInstrument, rat, sub, ZERO, type Command, type InstrumentRef, type Note, type Player, type PlayerTab, samePlayerTab, type Rat, type Song, type Track, type TrackRole } from "@mmlce/core";
 import { keepTextEnd, setTracksNotes } from "./edit.js";
 
 /** 트랙 색 (3MLE·마비꼬와 비슷한 6색을 차례로) */
@@ -419,7 +419,9 @@ export function duplicateTrack(trackId: string, name: string, label = "트랙 �
       const { made: _made, ...plain } = n;
       return { ...plain, id: noteId };
     });
-    const copy: Track = { ...track, id, name, color: TRACK_COLORS[song.tracks.length % TRACK_COLORS.length]!, mute: false, solo: false, notes };
+    // 복제본은 색 고정을 물려받지 않는다 (원본과 같은 색이면 둘을 구분하지 못해서)
+    const { colorPinned: _pin, ...base } = track;
+    const copy: Track = { ...base, id, name, color: TRACK_COLORS[song.tracks.length % TRACK_COLORS.length]!, mute: false, solo: false, notes };
     const tracks = [...song.tracks];
     tracks.splice(index + 1, 0, copy);
     return { ...song, tracks };
@@ -510,6 +512,28 @@ export function renameTrack(trackId: string, name: string, label = "트랙 이�
   );
 }
 
+/**
+ * 트랙 색을 정해 고정한다(#rrggbb). undefined면 고정을 풀어 설정의 트랙 색 방식으로 돌아간다.
+ * 고정한 색은 트랙에 붙어 있어서 순서를 바꾸거나 다른 악보로 옮겨도 그대로다. 음은 그대로
+ */
+export function setTrackColor(trackId: string, color: string | undefined, label = "트랙 색"): Command {
+  return replaceWith(label, (song) => {
+    const track = song.tracks.find((t) => t.id === trackId);
+    if (!track) return song;
+    let next: Track;
+    if (color === undefined) {
+      if (!track.colorPinned) return song;
+      const { colorPinned: _pin, ...rest } = track;
+      next = rest;
+    } else {
+      const hex = color.trim().toLowerCase();
+      if (!/^#[0-9a-f]{6}$/.test(hex) || (track.colorPinned && track.color.toLowerCase() === hex)) return song;
+      next = { ...track, color: hex, colorPinned: true };
+    }
+    return { ...song, tracks: song.tracks.map((t) => (t.id === trackId ? next : t)) };
+  });
+}
+
 /** 트랙 역할 (멜로디 표시 등). 음은 그대로 */
 export function setTrackRole(trackId: string, role: TrackRole, label = "트랙 역할"): Command {
   return replaceWith(label, (song) =>
@@ -524,12 +548,13 @@ export function renamePlayer(playerId: string, name: string, label = "악보 이
   );
 }
 
-/** 악보의 타브 튜닝·카포를 정한다. 같은 값이면 곡을 그대로 돌려준다. 앱은 실행 취소 기록 밖(History.amend)으로 쓴다 */
+/** 악보의 타브 튜닝·카포(직접 입력한 튜닝이면 줄 높이도)를 정한다. 같은 값이면 곡을 그대로 돌려준다. 앱은 실행 취소 기록 밖(History.amend)으로 쓴다 */
 export function setPlayerTab(playerId: string, tab: PlayerTab, label = "튜닝"): Command {
   return replaceWith(label, (song) => {
     const player = song.players.find((p) => p.id === playerId);
-    if (!player || (player.tab?.tuning === tab.tuning && player.tab.capo === tab.capo)) return song;
-    return { ...song, players: song.players.map((p) => (p === player ? { ...p, tab: { tuning: tab.tuning, capo: tab.capo } } : p)) };
+    const next: PlayerTab = { tuning: tab.tuning, capo: tab.capo, ...(tab.tuning === "custom" && tab.strings ? { strings: [...tab.strings] } : {}) };
+    if (!player || samePlayerTab(player.tab, next)) return song;
+    return { ...song, players: song.players.map((p) => (p === player ? { ...p, tab: next } : p)) };
   });
 }
 

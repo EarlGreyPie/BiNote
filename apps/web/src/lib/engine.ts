@@ -18,6 +18,7 @@ import type { WorkletSynthesizer } from "spessasynth_lib";
 import processorUrl from "spessasynth_lib/dist/spessasynth_processor.min.js?url";
 import { computePeaks, type Peaks } from "./waveform";
 import { computePower, type ReferencePower } from "./loudnessCompare";
+import { referenceFeatures, type AlignFeatures } from "./tempoAlign";
 import { previewPitch } from "./instrumentRange";
 import { PreviewVoices } from "./previewVoices";
 import { preparePlay } from "./playPlan";
@@ -414,7 +415,8 @@ export class Engine {
     this.player = undefined;
     this.stopReference();
     this.fallback.clear();
-    this.previewHeld.clear();
+    // 누르고 있는 건반(previewHeld)은 비우지 않는다: 누른 건반이 오디오를 새로 만들게 했을 때(잠자기 뒤 첫 미리듣기)
+    // 그 건반 소리가 새 오디오에서 나야 한다. 뗄 때 previewOff가 지운다
     this.previewSent = new PreviewVoices();
     try {
       this.synth?.destroy();
@@ -829,6 +831,13 @@ export class Engine {
     const r = this.reference;
     if (!r) return undefined;
     return computePower(Array.from({ length: r.numberOfChannels }, (_, i) => r.getChannelData(i)), r.sampleRate);
+  }
+
+  /** 불러온 원곡의 크로마·온셋 (실험실 원곡 대조의 템포 자동 맞추기). 디코딩해 둔 것을 다시 쓴다 */
+  referenceAlignFeatures(): AlignFeatures | undefined {
+    const r = this.reference;
+    if (!r) return undefined;
+    return referenceFeatures(Array.from({ length: r.numberOfChannels }, (_, i) => r.getChannelData(i)), r.sampleRate);
   }
 
   /** 원곡 파일(음원·영상)을 불러와 길이(초)를 돌려준다 */

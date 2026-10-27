@@ -112,6 +112,31 @@ describe("splitSong", { timeout: 30_000 }, () => {
     ]);
   });
 
+  it("v0으로 시작한 음은 소리가 없으니, 다른 트랙이 쉬는 그 자리를 모두 쉬는 자리로 보고 자른다 (beta.32 최종 점검 8)", () => {
+    const phrase = "cdefgab>c<";
+    const melody = "t120 l8 " + phrase.repeat(4) + "r1" + phrase.repeat(12);
+    const bass = "o0 l4 v8 " + "c".repeat(16) + "v0ccccv8" + "c".repeat(48);
+    const s = song([melody, bass]);
+    const r = splitSong(s, { ...MOBILE_PROFILE, charLimitPerScore: 120 });
+    expect(r.parts.length).toBeGreaterThan(1);
+    // 첫 권은 온음표 4-5 사이(멜로디 r1, 베이스 v0)에서 끝나야 소리 나는 음을 자르지 않는다
+    const end = r.parts[0]!.end;
+    expect(cmp(end, rat(4)) >= 0 && cmp(end, rat(5)) <= 0).toBe(true);
+  });
+
+  it("모든 트랙이 쉬는 자리는 window 밖(권 앞쪽)이어도 먼저 고른다", () => {
+    // 4~5 온음표에 두 트랙 모두 쉰다 (t120 지연 1.01초 ≈ 온음표 1/2). 한 권은 14 온음표 넘게 들어가 window(25%) 밖이다
+    const melody = "t120 l8 " + "cdefgab>c<".repeat(4) + "r1 " + "cdefgab>c<".repeat(12);
+    const bass = (rest: string) => "o0 l4 " + "c".repeat(16) + rest + "c".repeat(48);
+    const r = splitSong(song([melody, bass("r1 ")]), { ...MOBILE_PROFILE, charLimitPerScore: 120 });
+    expect(r.parts).toHaveLength(2);
+    expect(r.parts[0]!.end).toEqual(rat(5));
+    expect(r.parts[0]!.cut).toBe(0);
+    // 낮은 음(o0, 게임에서는 옥타브를 접어 울린다)도 울리는 음으로 센다: 그 쉼표 자리에 음이 있으면 쉬는 자리가 아니다
+    const busy = splitSong(song([melody, bass("cccc ")]), { ...MOBILE_PROFILE, charLimitPerScore: 120 });
+    expect(busy.parts[0]!.cut).toBeGreaterThan(0);
+  });
+
   it("끝 쉼표 때문에 길이가 들쭉날쭉해도 뒤쪽에 들어가는 자리를 놓치지 않는다", () => {
     const r = splitSong(song(["t120 c8d8e8f8g8a8b8>c8"]), { ...small, charLimitPerScore: 8 }, { window: 0 });
     expect(r.parts.length).toBeLessThan(5);

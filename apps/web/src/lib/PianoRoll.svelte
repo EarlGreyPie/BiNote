@@ -105,7 +105,8 @@
     /** 재생 위치(온음표 단위). 재생 중이 아니면 undefined */
     playhead: number | undefined;
     /** 한 번 부를 때마다 실행 취소 한 칸 */
-    onnotes: (trackId: string, notes: Note[], label: string) => void;
+    /** 곡에 넣지 못했으면 false를 돌려준다 (붙여넣기는 그때 고른 음을 그대로 둔다) */
+    onnotes: (trackId: string, notes: Note[], label: string) => boolean | void;
     onselecttrack: (trackId: string) => void;
     /** 음을 눌러 골랐을 때 (MML 글에서 그 자리를 보여 준다). 두 번 누르면 focus = true */
     onpicknote?: (trackId: string, note: Note, focus: boolean) => void;
@@ -1413,7 +1414,8 @@
     if (!active || !clip) return undefined;
     const from = at === undefined ? clip.origin : typeof at === "number" ? snapNearest(at, 3840) : at;
     const pasted = pasteClip(clip, from, freshIds("p"));
-    onnotes(active.id, replaceNotes(active.notes, new Map(pasted.map((n) => [n.id, n]))), label);
+    // 거절되면(잠근 트랙 등) 곡이 그대로이므로 고른 음도 그대로 둔다
+    if (onnotes(active.id, replaceNotes(active.notes, new Map(pasted.map((n) => [n.id, n]))), label) === false) return undefined;
     selected = new Set(pasted.map((n) => n.id));
     reveal(toFloat(from));
     return add(from, clip.length);

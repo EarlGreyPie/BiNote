@@ -12,10 +12,12 @@
     timeSig: readonly TimeSigEvent[];
     /** 이 트랙 악기가 게임에서 내는 높이 범위 (밖이면 옥타브째 접힌다) */
     range: PitchRange;
+    /** 실험실 소리 줄어듦: 음이 끝날 때 가장 클 때보다 몇 dB 작은지 (샘플이 먼저 끝나면 -Infinity). 없으면 안 보인다 */
+    endDb?: number | undefined;
     onlength: (dur: Rat) => void;
   }
 
-  let { notes, timeSig, range, onlength }: Props = $props();
+  let { notes, timeSig, range, endDb, onlength }: Props = $props();
 
   const first = $derived(notes[0]);
   const last = $derived(notes.reduce<Note | undefined>((m, n) => (!m || cmp(n.start, m.start) > 0 ? n : m), undefined));
@@ -84,6 +86,9 @@
     </label>
     <span>{vol === null ? t("ui.noteInfoVolMixed") : `v${vol}`}</span>
     {#if tie === "next"}<span title={t("cmd.note.tie")}>&amp;</span>{/if}
+    {#if endDb !== undefined && endDb < -0.5}
+      <span class="muted" title={t("ui.noteInfoFadeHelp")}>{Number.isFinite(endDb) ? t("ui.noteInfoFade", { db: Math.round(-endDb) }) : t("ui.noteInfoFadeSilent")}</span>
+    {/if}
   </span>
 {/if}
 

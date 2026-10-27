@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { defaultLengthLimit, MOBILE_PROFILE, planTrill, rat, type Note, type Rat, type Song, type TrillOptions } from "@mmlce/core";
 import { addPlayer, addTrack, canWriteExactly, newSong } from "@mmlce/mml";
-import { parseTrillChoice, parseTrillInput, formatTrillInput } from "../src/lib/trillOptions";
+import { parseTrillChoice, parseTrillInput, parseTrillMade, formatTrillInput } from "../src/lib/trillOptions";
 
 const limit = defaultLengthLimit();
 const canWrite = (r: Rat) => canWriteExactly(r, limit);
@@ -130,9 +130,121 @@ describe("트레몰로", () => {
   });
 });
 
+describe("전체 낮추기 자동 (트레몰로 실측 권장값)", () => {
+  const { single, chord } = MOBILE_PROFILE.ornamentRepeatLower;
+  const auto = { pattern: "same", depth: 5, lower: "auto" } as const;
+
+  it("한 음은 single, 같은 연주자 화음을 함께 되풀이하면 chord만큼", () => {
+    const one = run(songOf([n("a", rat(0), rat(1, 8), 60, { vol: 12 })]), ["a"], { kind: "tremolo", volume: auto });
+    expect(notesOf(one, "t1")!.every((x) => x.vol === 12 - single)).toBe(true);
+    const s = songOf([n("a", rat(0), rat(1, 8), 60, { vol: 12 })], [n("b", rat(0), rat(1, 8), 64, { vol: 12 })], [n("c", rat(0), rat(1, 8), 48, { vol: 12 })]);
+    const r = run(s, ["a", "b", "c"], { kind: "tremolo", volume: auto });
+    expect(notesOf(r, "t1")!.every((x) => x.vol === 12 - chord)).toBe(true);
+    expect(notesOf(r, "t2")!.every((x) => x.vol === 12 - chord)).toBe(true);
+    // 다른 연주자 음은 혼자 되풀이하는 한 음
+    const other = r.changes.find((c) => c.trackId !== "t1" && c.trackId !== "t2")!;
+    expect(other.notes.filter((x) => x.made === undefined && x.pitch === 48).every((x) => x.vol === 12 - single)).toBe(true);
+  });
+
+  it("건너뛴(너무 짧은) 음은 함께 되풀이하는 음으로 세지 않는다 (beta.32 최종 점검 7)", () => {
+    const s = songOf([n("a", rat(0), rat(1, 1), 60, { vol: 12 })], [n("b", rat(0), rat(1, 64), 64, { vol: 12 })]);
+    const r = run(s, ["a", "b"], { kind: "tremolo", volume: auto });
+    expect(r.skipped.short).toBe(1);
+    expect(notesOf(r, "t1")!.every((x) => x.vol === 12 - single)).toBe(true);
+  });
+
+  it("실측값은 프로필에 있고 더는 pending이 아니다", () => {
+    expect(MOBILE_PROFILE.ornamentFastRate).toBe(20);
+    expect(MOBILE_PROFILE.ornamentFastRateByInstrument.violin).toBeLessThan(20);
+    expect(MOBILE_PROFILE.pending).not.toContain("ornamentFastRate");
+  });
+});
+
+describe("v 모양", () => {
+  const vols = (r: ReturnType<typeof run>, trackId = "t1") => (notesOf(r, trackId) ?? []).map((x) => x.vol);
+  const tremolo = (options: Partial<TrillOptions>, dur = rat(1, 4), vol = 10) => run(songOf([n("a", rat(0), dur, 60, { vol })]), ["a"], { kind: "tremolo", ...options });
+
+  it("번갈아 작게: 하나 건너 깊이만큼 낮게", () => {
+    expect(vols(tremolo({ volume: { pattern: "alternate", depth: 3, lower: 0 } }))).toEqual([10, 7, 10, 7, 10, 7, 10, 7]);
+  });
+
+  it("첫 음만 세게 / 박마다 세게 (4분음표 자리에서 시작하는 음)", () => {
+    expect(vols(tremolo({ volume: { pattern: "accentFirst", depth: 4, lower: 0 } }))).toEqual([10, 6, 6, 6, 6, 6, 6, 6]);
+    const beat = tremolo({ length: rat(1, 16), volume: { pattern: "accentBeat", depth: 4, lower: 0 } }, rat(1, 2));
+    expect(vols(beat)).toEqual([10, 6, 6, 6, 10, 6, 6, 6]);
+  });
+
+  it("점점 크게·작게: 낮은 v와 본음 v 사이를 고르게", () => {
+    expect(vols(tremolo({ volume: { pattern: "crescendo", depth: 7, lower: 0 } }))).toEqual([3, 4, 5, 6, 7, 8, 9, 10]);
+    expect(vols(tremolo({ volume: { pattern: "decrescendo", depth: 7, lower: 0 } }))).toEqual([10, 9, 8, 7, 6, 5, 4, 3]);
+  });
+
+  it("전체 낮추기와 v 범위 자르기", () => {
+    expect(vols(tremolo({ volume: { pattern: "same", depth: 3, lower: 2 } }))).toEqual(Array(8).fill(8));
+    expect(vols(tremolo({ volume: { pattern: "alternate", depth: 5, lower: 0 } }, rat(1, 8), 2))).toEqual([2, 0, 2, 0]);
+  });
+
+  it("&로 이으면 v 모양은 쓰지 않는다 (게임은 첫 음 v로만 울린다). 전체 낮추기는 쓴다", () => {
+    const r = run(songOf([n("a", rat(0), rat(1, 8))]), ["a"], { tie: true, volume: { pattern: "alternate", depth: 3, lower: 1 } });
+    expect(notesOf(r, "t1")!.map((x) => x.vol)).toEqual([9, 9, 9, 9]);
+  });
+
+  it("트릴에도 같은 v 모양", () => {
+    const r = run(songOf([n("a", rat(0), rat(1, 8))]), ["a"], { volume: { pattern: "alternate", depth: 2, lower: 0 } });
+    expect(notesOf(r, "t1")!.map((x) => `${x.pitch}v${x.vol}`)).toEqual(["60v10", "62v8", "60v10", "62v8"]);
+  });
+});
+
+describe("끊어 치기", () => {
+  it("음마다 앞 절반만 소리, 뒤 절반은 쉼표 (&로 잇기는 쓰지 않음)", () => {
+    const r = run(songOf([n("a", rat(0), rat(1, 8)), n("b", rat(1, 4), rat(1, 4))]), ["a"], { kind: "trill", staccato: true, tie: true });
+    expect(shape(notesOf(r, "t1"))).toEqual(["60@0/1+1/64", "62@1/32+1/64", "60@1/16+1/64", "62@3/32+1/64", "60@1/4+1/4"]);
+  });
+
+  it("트랙의 마지막 음이면 마지막 조각은 끊지 않는다 (곡 끝이 짧아지지 않게)", () => {
+    const r = run(songOf([n("a", rat(0), rat(1, 8))]), ["a"], { kind: "tremolo", staccato: true });
+    expect(shape(notesOf(r, "t1"))).toEqual(["60@0/1+1/64", "60@1/32+1/64", "60@1/16+1/64", "60@3/32+1/32"]);
+  });
+
+  it("길어진 마지막 조각도 그 조각의 앞 절반을 소리 낸다", () => {
+    // c4, l32 트릴, 본음으로 끝내기: 합쳐진 마지막 조각 1/16 → 소리 1/32
+    const r = run(songOf([n("a", rat(0), rat(1, 4)), n("b", rat(1, 2), rat(1, 4))]), ["a"], { staccato: true, endOnMain: true });
+    expect(shape(notesOf(r, "t1")).at(-2)).toBe("60@3/16+1/32");
+  });
+
+  it("절반이 게임 최단(l64)보다 짧으면 건너뛴다", () => {
+    const r = run(songOf([n("a", rat(0), rat(1, 8))]), ["a"], { kind: "tremolo", staccato: true, length: rat(1, 64) });
+    expect(r.made).toBe(0);
+    expect(r.skipped.unwritable).toBe(1);
+  });
+
+  it("뒤 음과 &로 이어진 본음에는 쓰지 않는다", () => {
+    const r = run(songOf([n("a", rat(0), rat(1, 8), 60, { tie: "next" }), n("b", rat(1, 8), rat(1, 4))]), ["a"], { kind: "tremolo", staccato: true });
+    expect(r.made).toBe(0);
+    expect(r.skipped.tied).toBe(1);
+  });
+});
+
 describe("창 설정", () => {
   it("저장 값 읽기: 모르는 값은 기본", () => {
-    expect(parseTrillChoice({ kind: "tremolo", offset: 0, length: "7", tie: 1 })).toEqual({ kind: "tremolo", offset: 2, length: "32", startOther: false, endOnMain: false, tie: false });
+    expect(parseTrillChoice({ kind: "tremolo", offset: 0, length: "7", tie: 1, volumePattern: "loud", volumeDepth: 99, staccato: "y" })).toEqual({
+      kind: "tremolo",
+      offset: 2,
+      length: "32",
+      startOther: false,
+      endOnMain: false,
+      tie: false,
+      volumePattern: "same",
+      volumeDepth: 5,
+      volumeLower: "auto",
+      staccato: false,
+    });
+    // beta.29에 만든 기록(v·끊어 치기 없음)도 지금과 같은 결과로 읽힌다
+    // beta.29에 만든 기록(전체 낮추기 없음)은 낮추지 않은 것으로 읽어 다시 고치기가 같은 결과로 열린다
+    const old = { choice: { kind: "trill", offset: 1, length: "16", startOther: true, endOnMain: true, tie: true } };
+    expect(parseTrillMade(old).choice).toMatchObject({ volumePattern: "same", volumeLower: 0, staccato: false });
+    expect(parseTrillChoice({ volumeLower: "auto" }).volumeLower).toBe("auto");
+    expect(parseTrillChoice({ volumeLower: 4 }).volumeLower).toBe(4);
   });
 
   it("상대 음 입력: 피아노롤은 0 아닌 반음 수, 타브는 본음과 다른 프렛", () => {

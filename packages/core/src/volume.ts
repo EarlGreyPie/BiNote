@@ -12,7 +12,12 @@ import { applyVolumes, tieChains } from "./note-edit.js";
 export type VolumeChange =
   | { readonly kind: "set"; readonly vol: number }
   | { readonly kind: "shift"; readonly by: number }
-  | { readonly kind: "db"; readonly db: number };
+  | { readonly kind: "db"; readonly db: number }
+  /**
+   * 실험실 긴 음 맞추기: 소리마다 울리는 동안 평균 크기가 짧은 음보다 lossDb(사슬)만큼 작으면 그만큼 v를 올린다
+   * (올리기만, maxUp단계까지). lossDb는 템포·악기를 아는 쪽이 준다. 없으면 바꾸지 않는다
+   */
+  | { readonly kind: "held"; readonly maxUp: number; readonly lossDb?: (chain: readonly Note[]) => number };
 
 /** v의 음량(dB). 범위 밖이면 가까운 끝 값 */
 export function dbOfVolume(profile: Pick<GameProfile, "volume" | "volumeCurve">, vol: number): number {
@@ -45,6 +50,8 @@ export interface VolumeResult {
   readonly count: number;
   /** ±로 옮기다 범위 끝(v최소·v최대)에서 멈춘 소리 수 */
   readonly clamped: number;
+  /** 긴 음 맞추기에서 정한 만큼(maxUp)만 올리고 멈춘 소리 수 (게임 한도에 닿은 소리는 clamped로 센다) */
+  readonly limited: number;
   /** & 뒤에 이어진 음만 골라 사슬 첫 음부터 함께 바꾼 소리 수 (게임은 & 뒤 v를 읽지 않는다) */
   readonly viaTie: number;
 }
@@ -65,6 +72,7 @@ export function changeVolumes(
   let changed = 0;
   let count = 0;
   let clamped = 0;
+  let limited = 0;
   let viaTie = 0;
   for (const chain of tieChains(notes)) {
     const head = chain[0]!;
@@ -76,7 +84,16 @@ export function changeVolumes(
     let vol: number;
     if (change.kind === "set") vol = change.vol;
     else if (change.kind === "db") vol = volumeForDb(profile, change.db);
-    else {
+    else if (change.kind === "held") {
+      const loss = Math.max(0, change.lossDb?.(chain) ?? 0);
+      const target = dbOfVolume(profile, head.vol) + loss;
+      // volumeForDb는 v최대에서 멈추므로, 게임 한도에 닿았는지는 줄인 dB가 v최대 소리보다 큰지로 본다
+      const atMax = loss > 0 && target > dbOfVolume(profile, max) + 1e-9;
+      const wanted = Math.max(head.vol, volumeForDb(profile, target));
+      vol = Math.min(wanted, head.vol + change.maxUp);
+      if (wanted > vol) limited++;
+      else if (atMax) clamped++;
+    } else {
       vol = head.vol + change.by;
       if (vol < min || vol > max) clamped++;
     }
@@ -84,7 +101,7 @@ export function changeVolumes(
     if (vol !== head.vol) changed++;
     byHead.set(head.id, vol);
   }
-  return { notes: applyVolumes(notes, byHead), changed, count, clamped, viaTie };
+  return { notes: applyVolumes(notes, byHead), changed, count, clamped, limited, viaTie };
 }
 
 /** 소리마다(& 사슬은 첫 음) v의 [가장 작은 값, 가장 큰 값]. 사슬의 어느 음을 골라도 그 사슬을 센다. 고른 소리가 없으면 undefined */

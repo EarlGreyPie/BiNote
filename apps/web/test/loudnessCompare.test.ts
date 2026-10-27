@@ -42,6 +42,17 @@ describe("원곡 대조 셈여림", () => {
     for (const b of r.bars) expect(Math.abs(b.diff)).toBeLessThan(3);
   });
 
+  it("원곡이 마디마다 같은 세기면 지금 곡의 큰·작은 마디를 고르게 맞추라고 보인다", () => {
+    const r = compareLoudness(song("o4 l1 v4 c v12 c v4 c v12 c"), reference([-20, -20, -20, -20]), 0, MOBILE_PROFILE);
+    expect(r.bars).toHaveLength(4);
+    const loud = r.bars.filter((b) => b.baseVol === 12);
+    const soft = r.bars.filter((b) => b.baseVol === 4);
+    for (const b of loud) expect(b.diff).toBeLessThan(-3);
+    for (const b of soft) expect(b.diff).toBeGreaterThan(3);
+    // 목표는 모두 같다
+    expect(new Set(r.bars.map((b) => b.target.toFixed(6))).size).toBe(1);
+  });
+
   it("어긋남만큼 원곡 시각을 옮겨 읽는다", () => {
     const shape = [-20, -20, -10, -20, -20, -30, -20, -20];
     const r = compareLoudness(song(eight), reference(shape, 1.5), 1.5, MOBILE_PROFILE);

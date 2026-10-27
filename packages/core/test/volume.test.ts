@@ -22,6 +22,24 @@ describe("볼륨 일괄 조정", () => {
     expect(down.clamped).toBe(1);
   });
 
+  it("긴 음 맞추기: 잃은 dB만큼 올리기만 하고, maxUp·v최대에서 멈춘 수를 따로 센다", () => {
+    // a는 6dB 잃음(v9 −8.9dB → −2.9dB ≈ v13), b는 1dB만, c는 줄지 않음
+    const loss = new Map([["a", 6], ["b", 1], ["c", -3]]);
+    const lossDb = (chain: readonly Note[]) => loss.get(chain[0]!.id)!;
+    const r = changeVolumes(base, { kind: "held", maxUp: 6, lossDb }, MOBILE_PROFILE);
+    expect(vols(r.notes)).toBe("a13 b13 c15");
+    expect([r.clamped, r.limited]).toEqual([0, 0]);
+    const capped = changeVolumes(base, { kind: "held", maxUp: 2, lossDb }, MOBILE_PROFILE);
+    expect(vols(capped.notes)).toBe("a11 b13 c15");
+    // maxUp에서 멈춘 것은 게임 한도(clamped)가 아니라 limited로 센다
+    expect([capped.clamped, capped.limited]).toEqual([0, 1]);
+    // v15가 소리를 잃으면 더 올릴 수 없다: 게임 한도에 닿은 것으로 센다 (maxUp은 남아 있어도)
+    const top = changeVolumes([note("t", 0, 15)], { kind: "held", maxUp: 6, lossDb: () => 3 }, MOBILE_PROFILE);
+    expect([top.changed, top.clamped, top.limited]).toEqual([0, 1, 0]);
+    // 잃은 dB를 모르면 그대로
+    expect(changeVolumes(base, { kind: "held", maxUp: 3 }, MOBILE_PROFILE).changed).toBe(0);
+  });
+
   it("목표 dB: dB = 40·log10(V/15)에 가장 가까운 v", () => {
     expect(dbOfVolume(MOBILE_PROFILE, 15)).toBe(0);
     expect(dbOfVolume(MOBILE_PROFILE, 0)).toBe(-Infinity);

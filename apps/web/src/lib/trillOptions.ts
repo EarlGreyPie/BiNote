@@ -1,4 +1,4 @@
-import { TRILL_OFFSET_LIMIT, type TrillKind } from "@mmlce/core";
+import { TRILL_OFFSET_LIMIT, TRILL_VOLUME_DEPTH_LIMIT, TRILL_VOLUME_PATTERNS, type TrillKind, type TrillVolumePattern } from "@mmlce/core";
 import { parseStrings } from "./graceOptions";
 
 /** 트릴·트레몰로 창에서 고르는 음 하나 길이 (게임 최단 l64부터 l8까지) */
@@ -14,17 +14,39 @@ export interface TrillChoice {
   readonly startOther: boolean;
   readonly endOnMain: boolean;
   readonly tie: boolean;
+  /** 나눈 음의 v 모양, 낮은 v 깊이, 전체 낮추기 ("auto" = 프로필의 실측 권장값) */
+  readonly volumePattern: TrillVolumePattern;
+  readonly volumeDepth: number;
+  readonly volumeLower: number | "auto";
+  /** 끊어 치기 (음마다 앞 절반만 소리) */
+  readonly staccato: boolean;
 }
 
 export const TRILL_KEY = "mmlce.trill";
 
-/** 기본: 온음 위 트릴, l32, 본음부터, 본음으로 끝내기 끔, &로 잇기 끔 */
-export const DEFAULT_TRILL: TrillChoice = { kind: "trill", offset: 2, length: "32", startOther: false, endOnMain: false, tie: false };
+/**
+ * 기본: 온음 위 트릴, l32, 본음부터, 본음으로 끝내기 끔, &로 잇기 끔, v 모두 같게, 끊어 치기 끔.
+ * 트레몰로 실측(2026-10-27): 빠르게 다시 치면 커지므로 전체 낮추기는 자동, 번갈아 작게는 4단계 차이(v12·v8)가 l32에서
+ * 거의 안 들려 깊이 5
+ */
+export const DEFAULT_TRILL: TrillChoice = {
+  kind: "trill",
+  offset: 2,
+  length: "32",
+  startOther: false,
+  endOnMain: false,
+  tie: false,
+  volumePattern: "same",
+  volumeDepth: 5,
+  volumeLower: "auto",
+  staccato: false,
+};
 
 /** 저장해 둔 값을 읽는다. 모르는 값은 기본으로 */
 export function parseTrillChoice(raw: unknown): TrillChoice {
   const v = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
   const bool = (x: unknown, d: boolean) => (typeof x === "boolean" ? x : d);
+  const step = (x: unknown, d: number) => (Number.isInteger(x) && (x as number) >= 0 && (x as number) <= TRILL_VOLUME_DEPTH_LIMIT ? (x as number) : d);
   return {
     kind: v.kind === "tremolo" ? "tremolo" : "trill",
     offset: Number.isInteger(v.offset) && v.offset !== 0 && Math.abs(v.offset as number) <= TRILL_OFFSET_LIMIT ? (v.offset as number) : DEFAULT_TRILL.offset,
@@ -32,6 +54,10 @@ export function parseTrillChoice(raw: unknown): TrillChoice {
     startOther: bool(v.startOther, DEFAULT_TRILL.startOther),
     endOnMain: bool(v.endOnMain, DEFAULT_TRILL.endOnMain),
     tie: bool(v.tie, DEFAULT_TRILL.tie),
+    volumePattern: TRILL_VOLUME_PATTERNS.includes(v.volumePattern as TrillVolumePattern) ? (v.volumePattern as TrillVolumePattern) : DEFAULT_TRILL.volumePattern,
+    volumeDepth: step(v.volumeDepth, DEFAULT_TRILL.volumeDepth),
+    volumeLower: v.volumeLower === "auto" ? "auto" : step(v.volumeLower, -1) < 0 ? DEFAULT_TRILL.volumeLower : step(v.volumeLower, 0),
+    staccato: bool(v.staccato, DEFAULT_TRILL.staccato),
   };
 }
 
@@ -69,5 +95,8 @@ export function parseTrillMade(raw: unknown): TrillMade {
   const t = v.tab && typeof v.tab === "object" ? (v.tab as Record<string, unknown>) : undefined;
   const int = (x: unknown) => Number.isInteger(x) && (x as number) >= 0;
   const tab = t && int(t.fret) && int(t.string) && int(t.maxFret) ? { fret: t.fret as number, string: t.string as number, maxFret: t.maxFret as number } : undefined;
-  return { choice: parseTrillChoice(v.choice), ...(tab ? { tab } : {}), strings: parseStrings(v.strings) };
+  // 전체 낮추기가 없던 판(beta.29)에 만든 기록은 낮추지 않은 것이다 (다시 고치기가 같은 결과로 열리게)
+  const c = v.choice && typeof v.choice === "object" ? (v.choice as Record<string, unknown>) : undefined;
+  const choice = parseTrillChoice(c && !("volumeLower" in c) ? { ...c, volumeLower: 0 } : v.choice);
+  return { choice, ...(tab ? { tab } : {}), strings: parseStrings(v.strings) };
 }

@@ -53,6 +53,27 @@ export function recordTarget(
   return { playerId: active.playerId, trackIds, room: addTracks ? free : 0, canAdd: free > 0, auto, groupTrackIds: ids };
 }
 
+/**
+ * 녹음 중 곡이 바뀐 뒤의 넣을 곳 (미리 보기와 넣기가 같이 쓴다). 시작할 때 정한 트랙 중
+ * 지금도 곡에 있고 잠기지 않았고 같은 연주자이면서 같은 악보에 남은 것만 쓴다
+ * (녹음 중 트랙을 다른 악보로 옮기면 그 악보에 녹음이 들어가지 않게). 시작 때 트랙이 가장 많이 남은 악보를 고른다.
+ * 새 트랙은 그 악보가 지금도 연주자의 마지막 악보이고 한도(limit)가 남은 만큼만 (시작 때 room보다 늘리지 않는다)
+ */
+export function liveTarget(song: Song, groups: readonly ScoreGroup[], target: RecordTarget, locked: ReadonlySet<string>, limit: number): RecordTarget {
+  const mineNow = (id: string) => song.tracks.some((t) => t.id === id && t.playerId === target.playerId);
+  const present = target.trackIds.filter((id) => mineNow(id) && !locked.has(id));
+  // 악보는 녹음할 트랙이 아니라 시작 때 악보의 트랙 전체로 찾는다 (녹음할 트랙 하나만 다른 악보로 옮겨도 따라가지 않게)
+  const anchor = target.groupTrackIds.filter(mineNow);
+  const mine = groups.filter((g) => g.playerId === target.playerId);
+  const count = (g: ScoreGroup) => anchor.filter((id) => g.trackIds.includes(id)).length;
+  // 트랙이 모두 사라졌으면 새 트랙은 연주자 끝에 더해지므로 마지막 악보로 본다
+  const group = mine.reduce<ScoreGroup | undefined>((best, g) => (count(g) > (best ? count(best) : 0) ? g : best), undefined) ?? mine.at(-1);
+  const trackIds = group ? present.filter((id) => group.trackIds.includes(id)) : [];
+  const last = group !== undefined && mine.at(-1) === group;
+  const free = last ? Math.max(0, limit - group.trackIds.length) : 0;
+  return { ...target, trackIds, room: Math.min(target.room, free), groupTrackIds: group?.trackIds ?? [] };
+}
+
 /** 녹음 트랙 하나 (곡에 있는 트랙, 또는 더할 새 트랙) */
 export interface TakeLane {
   /** 새 트랙이면 undefined */

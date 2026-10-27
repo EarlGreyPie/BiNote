@@ -17,6 +17,80 @@ export function trackColor(index: number): string {
   return TRACK_COLORS[index % TRACK_COLORS.length]!;
 }
 
+/** CSS 색 이름 148개 → rrggbb (예전 파일에 저장된 red 같은 색도 그대로 읽고 고정할 수 있게) */
+const CSS_NAMES = new Map(
+  [
+    "aliceblue:f0f8ff antiquewhite:faebd7 aqua:00ffff aquamarine:7fffd4 azure:f0ffff beige:f5f5dc bisque:ffe4c4",
+    "black:000000 blanchedalmond:ffebcd blue:0000ff blueviolet:8a2be2 brown:a52a2a burlywood:deb887",
+    "cadetblue:5f9ea0 chartreuse:7fff00 chocolate:d2691e coral:ff7f50 cornflowerblue:6495ed cornsilk:fff8dc",
+    "crimson:dc143c cyan:00ffff darkblue:00008b darkcyan:008b8b darkgoldenrod:b8860b darkgray:a9a9a9",
+    "darkgreen:006400 darkgrey:a9a9a9 darkkhaki:bdb76b darkmagenta:8b008b darkolivegreen:556b2f darkorange:ff8c00",
+    "darkorchid:9932cc darkred:8b0000 darksalmon:e9967a darkseagreen:8fbc8f darkslateblue:483d8b",
+    "darkslategray:2f4f4f darkslategrey:2f4f4f darkturquoise:00ced1 darkviolet:9400d3 deeppink:ff1493",
+    "deepskyblue:00bfff dimgray:696969 dimgrey:696969 dodgerblue:1e90ff firebrick:b22222 floralwhite:fffaf0",
+    "forestgreen:228b22 fuchsia:ff00ff gainsboro:dcdcdc ghostwhite:f8f8ff gold:ffd700 goldenrod:daa520 gray:808080",
+    "green:008000 greenyellow:adff2f grey:808080 honeydew:f0fff0 hotpink:ff69b4 indianred:cd5c5c indigo:4b0082",
+    "ivory:fffff0 khaki:f0e68c lavender:e6e6fa lavenderblush:fff0f5 lawngreen:7cfc00 lemonchiffon:fffacd",
+    "lightblue:add8e6 lightcoral:f08080 lightcyan:e0ffff lightgoldenrodyellow:fafad2 lightgray:d3d3d3",
+    "lightgreen:90ee90 lightgrey:d3d3d3 lightpink:ffb6c1 lightsalmon:ffa07a lightseagreen:20b2aa",
+    "lightskyblue:87cefa lightslategray:778899 lightslategrey:778899 lightsteelblue:b0c4de lightyellow:ffffe0",
+    "lime:00ff00 limegreen:32cd32 linen:faf0e6 magenta:ff00ff maroon:800000 mediumaquamarine:66cdaa",
+    "mediumblue:0000cd mediumorchid:ba55d3 mediumpurple:9370db mediumseagreen:3cb371 mediumslateblue:7b68ee",
+    "mediumspringgreen:00fa9a mediumturquoise:48d1cc mediumvioletred:c71585 midnightblue:191970 mintcream:f5fffa",
+    "mistyrose:ffe4e1 moccasin:ffe4b5 navajowhite:ffdead navy:000080 oldlace:fdf5e6 olive:808000 olivedrab:6b8e23",
+    "orange:ffa500 orangered:ff4500 orchid:da70d6 palegoldenrod:eee8aa palegreen:98fb98 paleturquoise:afeeee",
+    "palevioletred:db7093 papayawhip:ffefd5 peachpuff:ffdab9 peru:cd853f pink:ffc0cb plum:dda0dd powderblue:b0e0e6",
+    "purple:800080 rebeccapurple:663399 red:ff0000 rosybrown:bc8f8f royalblue:4169e1 saddlebrown:8b4513",
+    "salmon:fa8072 sandybrown:f4a460 seagreen:2e8b57 seashell:fff5ee sienna:a0522d silver:c0c0c0 skyblue:87ceeb",
+    "slateblue:6a5acd slategray:708090 slategrey:708090 snow:fffafa springgreen:00ff7f steelblue:4682b4 tan:d2b48c",
+    "teal:008080 thistle:d8bfd8 tomato:ff6347 turquoise:40e0d0 violet:ee82ee wheat:f5deb3 white:ffffff",
+    "whitesmoke:f5f5f5 yellow:ffff00 yellowgreen:9acd32",
+  ]
+    .join(" ")
+    .split(" ")
+    .map((e) => e.split(":") as [string, string]),
+);
+
+/** 숫자 하나 (1..2·빈 칸·아주 긴 숫자처럼 쓸 수 없는 것은 받지 않는다) */
+const NUM = String.raw`(\d{1,6}(?:\.\d{1,6})?|\.\d{1,6})`;
+/** 세 값을 모두 쉼표로, 또는 모두 빈칸으로 나눈 꼴만 (rgb(1,2 3)처럼 섞인 것은 CSS도 받지 않는다) */
+const triple = (a: string, b: string, c: string) =>
+  String.raw`(?:${a}\s*,\s*${b}\s*,\s*${c}|${a}\s+${b}\s+${c})`;
+const RGB = new RegExp(String.raw`^rgb\(\s*${triple(NUM, NUM, NUM)}\s*\)$`);
+const HSL = new RegExp(String.raw`^hsl\(\s*${triple(`${NUM}(?:deg)?`, `${NUM}%`, `${NUM}%`)}\s*\)$`);
+
+/**
+ * 트랙 색 문자열(#rgb·#rrggbb·rgb()·hsl()·CSS 색 이름)을 #rrggbb로. 모르는 꼴이면 undefined.
+ * 파일에서 읽은 트랙 색은 이 꼴만 받는다 (색 고르기 칸·지금 색으로 고정이 다 쓸 수 있게)
+ */
+export function hexColor(color: string): string | undefined {
+  const c = color.trim().toLowerCase();
+  if (/^#[0-9a-f]{6}$/.test(c)) return c;
+  const short = /^#([0-9a-f])([0-9a-f])([0-9a-f])$/.exec(c);
+  if (short) return `#${short[1]}${short[1]}${short[2]}${short[2]}${short[3]}${short[3]}`;
+  const named = CSS_NAMES.get(c);
+  if (named) return `#${named}`;
+  const byte = (v: number) => Math.round(Math.max(0, Math.min(255, v))).toString(16).padStart(2, "0");
+  const rgb = RGB.exec(c);
+  if (rgb) {
+    // 쉼표 꼴은 1~3번, 빈칸 꼴은 4~6번 묶음
+    const [r, g, b] = rgb[1] !== undefined ? [rgb[1], rgb[2], rgb[3]] : [rgb[4], rgb[5], rgb[6]];
+    return `#${byte(Number(r))}${byte(Number(g))}${byte(Number(b))}`;
+  }
+  const hsl = HSL.exec(c);
+  if (!hsl) return undefined;
+  const [hv, sv, lv] = hsl[1] !== undefined ? [hsl[1], hsl[2], hsl[3]] : [hsl[4], hsl[5], hsl[6]];
+  const h = Number(hv) % 360;
+  const sat = Math.min(1, Number(sv) / 100);
+  const l = Math.min(1, Number(lv) / 100);
+  const a = sat * Math.min(l, 1 - l);
+  const f = (n: number) => {
+    const k = (n + h / 30) % 12;
+    return byte((l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1))) * 255);
+  };
+  return `#${f(0)}${f(8)}${f(4)}`;
+}
+
 /**
  * 파일의 악기 번호를 공통 ID로. PC 마비노기와 같은 번호로 알려진 악기만 이름을 붙이고,
  * 모르는 번호는 `mabi:번호`로 남겨 재생할 때 사운드팩의 같은 번호를 쓴다.

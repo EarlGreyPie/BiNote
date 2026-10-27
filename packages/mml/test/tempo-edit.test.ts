@@ -95,6 +95,14 @@ describe("템포 편집 (원문 수술)", () => {
     expect(mirrored(s)).toBe(true);
   });
 
+  it("적지 않은 t120처럼 지울 템포가 없으면 곡을 그대로 돌려 빈 실행 취소 칸을 만들지 않는다", () => {
+    const song = songOf("c4 d4");
+    expect(removeTempoAt(rat(0)).apply(song)).toBe(song);
+    const h = new History(song);
+    h.run(removeTempoAt(rat(0)));
+    expect(h.canUndo).toBe(false);
+  });
+
   it("옮기면 지우고 새 자리에 넣는다 (실행 취소 한 칸)", () => {
     const start = songOf("t120 c4 t90 c4 d4");
     const h = new History(start);

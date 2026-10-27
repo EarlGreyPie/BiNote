@@ -44,6 +44,8 @@ export interface BarLoudness {
   /** 마디 시작의 곡 시각(초)과 원곡 시각(초) */
   readonly seconds: number;
   readonly refSeconds: number;
+  /** 템포 자동 맞추기로 찾은 원곡 시각 − (곡 시각 + 원곡 어긋남) (초). +면 원곡이 그만큼 늦다. 자동 맞추기를 끄면 0 */
+  readonly drift: number;
   /** 지금 곡의 계산 크기 (dB) */
   readonly current: number;
   /** 원곡 크기를 계산 크기와 같은 평균·폭으로 맞춘 값 (dB) = 목표 */
@@ -141,6 +143,7 @@ export function correlation(xs: readonly number[], ys: readonly number[]): numbe
  * 마디별로 원곡과 지금 곡의 크기를 견준다.
  * - offsetSec: 원곡 시각 = 곡 시각 + offsetSec (원곡 동시재생의 어긋남)
  * - range: 이 곡 위치(온음표 단위) 안에서 시작하는 마디만 (반복 구간으로 박수 등을 뺄 때)
+ * - warp: 템포 자동 맞추기(tempoAlign)로 찾은 곡 시각 → 원곡 시각. 있으면 offsetSec 대신 이것으로 원곡을 읽는다
  * 모든 트랙을 센다 (듣기 끄기·솔로와 상관없이 게임에서 나는 소리)
  */
 export function compareLoudness(
@@ -149,7 +152,9 @@ export function compareLoudness(
   offsetSec: number,
   profile: Pick<GameProfile, "volume" | "volumeCurve">,
   range?: readonly [number, number],
+  warp?: (songSeconds: number) => number,
 ): LoudnessCompare {
+  const refAt = warp ?? ((t: number) => t + offsetSec);
   // & 사슬 하나를 한 번 치는 소리로: 첫 음 시각에 첫 음 v로 치고 마지막 조각 끝 + 여운에서 끊는다
   interface Hit {
     readonly start: Rat;
@@ -187,6 +192,7 @@ export function compareLoudness(
     readonly start: Rat;
     readonly end: Rat;
     readonly seconds: number;
+    readonly refSeconds: number;
     readonly reference: number;
     readonly current: number;
     readonly baseVol: number;
@@ -200,7 +206,9 @@ export function compareLoudness(
     const t1 = positionToSeconds(song.tempo, starts[i + 1] ?? end);
     const next = starts[i + 1] ?? end;
     const inBar = hits.filter((h) => cmp(h.start, start) >= 0 && cmp(h.start, next) < 0);
-    const refPower = t1 > t0 ? referenceMean(ref, t0 + offsetSec, t1 + offsetSec) : undefined;
+    const r0 = refAt(t0);
+    const r1 = refAt(t1);
+    const refPower = t1 > t0 && r1 > r0 ? referenceMean(ref, r0, r1) : undefined;
     if (inBar.length === 0 || refPower === undefined || refPower <= 0) {
       skipped++;
       return;
@@ -215,18 +223,20 @@ export function compareLoudness(
     }
     const melody = inBar.filter((h) => h.melody);
     const base = mean((melody.length > 0 ? melody : inBar).map((h) => h.vol));
-    raws.push({ bar: i + 1, start, end: next, seconds: t0, reference: toDb(refPower), current: toDb(energy / (t1 - t0)), baseVol: base });
+    raws.push({ bar: i + 1, start, end: next, seconds: t0, refSeconds: r0, reference: toDb(refPower), current: toDb(energy / (t1 - t0)), baseVol: base });
   });
 
   // 두 줄의 폭을 맞춘다: 목표 = 계산 평균 + (원곡 − 원곡 평균) / 원곡 sd × 계산 sd
   // (녹음의 믹스·울림으로 원곡 폭은 믿을 수 없어 지금 곡 폭에 맞춘다. 지금 곡이 평평하면 MIN_SPREAD_DB)
   const refs = raws.map((r) => r.reference);
   const curs = raws.map((r) => r.current);
-  const scale = raws.length >= 2 && sd(refs) > 0 ? Math.max(sd(curs), MIN_SPREAD_DB) / sd(refs) : 0;
+  // 원곡이 마디마다 같은 세기면(sd 0) 목표도 평평하게: 모든 마디를 계산 평균으로 (마디 하나뿐이면 비교할 것이 없어 지금 값)
+  const flatRef = raws.length >= 2 && sd(refs) <= 1e-9;
+  const scale = raws.length >= 2 && !flatRef ? Math.max(sd(curs), MIN_SPREAD_DB) / sd(refs) : 0;
   const mr = raws.length > 0 ? mean(refs) : 0;
   const mc = raws.length > 0 ? mean(curs) : 0;
   const bars: BarLoudness[] = raws.map((r) => {
-    const target = scale > 0 ? mc + (r.reference - mr) * scale : r.current;
+    const target = scale > 0 ? mc + (r.reference - mr) * scale : flatRef ? mc : r.current;
     const diff = target - r.current;
     const baseVol = Math.round(r.baseVol);
     let suggest: number | undefined;
@@ -242,7 +252,8 @@ export function compareLoudness(
       start: r.start,
       end: r.end,
       seconds: r.seconds,
-      refSeconds: r.seconds + offsetSec,
+      refSeconds: r.refSeconds,
+      drift: r.refSeconds - (r.seconds + offsetSec),
       current: r.current,
       target,
       diff,

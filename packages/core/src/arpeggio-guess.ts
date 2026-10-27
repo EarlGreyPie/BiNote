@@ -182,10 +182,28 @@ function orderOf(shapes: readonly { order: ArpOrder }[]): ArpOrder {
   return shapes.every((s) => s.order === shapes[0]!.order) ? shapes[0]!.order : "random";
 }
 
+/** 악보 묶음(트랙 id 목록). 주지 않으면 연주자 하나를 악보 하나로 본다 */
+export type ScoreTrackIds = readonly (readonly string[])[];
+
+/** 이 트랙들이 한 악보에 있으면 그 악보 트랙 (곡 순서대로), 여러 악보에 걸치면 undefined */
+function scoreTracksOf(song: Song, trackIds: ReadonlySet<string>, scores?: ScoreTrackIds): Song["tracks"] | undefined {
+  if (!scores) {
+    const players = new Set(song.tracks.filter((t) => trackIds.has(t.id)).map((t) => t.playerId));
+    if (players.size !== 1) return undefined;
+    const playerId = [...players][0]!;
+    return song.tracks.filter((t) => t.playerId === playerId);
+  }
+  const hit = scores.filter((ids) => ids.some((id) => trackIds.has(id)));
+  if (hit.length !== 1 || [...trackIds].some((id) => !hit[0]!.includes(id))) return undefined;
+  const ids = new Set(hit[0]!);
+  return song.tracks.filter((t) => ids.has(t.id));
+}
+
 /**
- * 고른 음에서 아르페지오 짐작. newId: 원래 음에 쓸 겹치지 않는 새 id. locked: 원래 음을 놓지 않을 트랙
+ * 고른 음에서 아르페지오 짐작. newId: 원래 음에 쓸 겹치지 않는 새 id. locked: 원래 음을 놓지 않을 트랙.
+ * scores: 악보 묶음 (한 연주자가 악보 여럿으로 나뉠 때 다른 악보 트랙을 묶지 않게)
  */
-export function guessArpeggio(song: Song, picked: readonly Note[], newId: () => string, locked: ReadonlySet<string> = new Set()): ArpGuess {
+export function guessArpeggio(song: Song, picked: readonly Note[], newId: () => string, locked: ReadonlySet<string> = new Set(), scores?: ScoreTrackIds): ArpGuess {
   const ids = new Set(picked.map((n) => n.id));
   const liveRecords = new Set((song.made ?? []).map((r) => r.id));
   const entries: Entry[] = [];
@@ -209,13 +227,11 @@ export function guessArpeggio(song: Song, picked: readonly Note[], newId: () => 
   }
   const made = entries.flatMap((x) => x.members).filter((n) => n.made !== undefined && liveRecords.has(n.made)).map((n) => n.id);
   if (made.length > 0) return { ok: false, reason: "made", blocking: made };
-  const players = new Set(entries.map((x) => song.tracks.find((t) => t.id === x.trackId)!.playerId));
-  if (players.size > 1) return { ok: false, reason: "score", blocking: [] };
-  const none = { ok: false, reason: "none", blocking: [] } as const;
-  if (entries.length < 2) return none;
-  const playerId = [...players][0]!;
-  const scoreTracks = song.tracks.filter((t) => t.playerId === playerId);
   const trackIds = new Set(entries.map((x) => x.trackId));
+  const scoreTracks = scoreTracksOf(song, trackIds, scores);
+  if (entries.length > 0 && !scoreTracks) return { ok: false, reason: "score", blocking: [] };
+  const none = { ok: false, reason: "none", blocking: [] } as const;
+  if (entries.length < 2 || !scoreTracks) return none;
 
   // 되풀이·굴려 치기
   const lanes = trackIds.size > 1 ? laneCells(entries) : [];
@@ -357,15 +373,20 @@ function afterOf(entries: readonly Entry[], covered: ReadonlySet<string>, order:
  * 고른 음에서 짐작하고, 못 찾으면 고른 음 둘레로 넓혀 본다 (한 음만 골라도 되게):
  * 같은 악보에서 고른 음과 시간이 겹쳐 이어지는 음 묶음(되풀이·굴려 치기), 고른 음 트랙에서 빈틈없이 이어진 음(펼치기)
  */
-export function guessArpeggioAround(song: Song, picked: readonly Note[], newId: () => string, locked: ReadonlySet<string> = new Set()): ArpGuess {
-  const direct = guessArpeggio(song, picked, newId, locked);
+export function guessArpeggioAround(
+  song: Song,
+  picked: readonly Note[],
+  newId: () => string,
+  locked: ReadonlySet<string> = new Set(),
+  scores?: ScoreTrackIds,
+): ArpGuess {
+  const direct = guessArpeggio(song, picked, newId, locked, scores);
   if (direct.ok || direct.reason !== "none" || picked.length === 0) return direct;
   const ids = new Set(picked.map((n) => n.id));
   const owner = new Map<string, Song["tracks"][number]>();
   for (const t of song.tracks) for (const n of t.notes) if (ids.has(n.id)) owner.set(n.id, t);
-  const players = new Set([...owner.values()].map((t) => t.playerId));
-  if (players.size !== 1) return direct;
-  const score = song.tracks.filter((t) => t.playerId === [...players][0]);
+  const score = scoreTracksOf(song, new Set([...owner.values()].map((t) => t.id)), scores);
+  if (!score) return direct;
   // 1) 시간이 겹쳐 이어지는 음 묶음 (어느 음도 걸치지 않는 자리에서 끊는다)
   const all = score.flatMap((t) => t.notes).sort((a, b) => cmp(a.start, b.start));
   const groups: Note[][] = [];
@@ -392,7 +413,7 @@ export function guessArpeggioAround(song: Song, picked: readonly Note[], newId: 
   for (const wider of [crossing, runs]) {
     const uniq = [...new Map(wider.map((n) => [n.id, n])).values()];
     if (uniq.length <= picked.length) continue;
-    const r = guessArpeggio(song, uniq, newId, locked);
+    const r = guessArpeggio(song, uniq, newId, locked, scores);
     if (r.ok) return r;
   }
   return direct;

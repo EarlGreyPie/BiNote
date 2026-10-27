@@ -56,3 +56,44 @@ export function newUnwritableTrack(before: Song, after: Song, limit: LengthLimit
   const rest = after.tracks.filter((tr) => old.get(tr.id) === tr.notes);
   return [...changed, ...rest].find((tr) => of(tr.notes).some((k) => added.has(k)))?.id;
 }
+
+/** MML로 쓸 수 있는 음 높이 [가장 낮은, 가장 높은] (o{min}c부터, MIDI 127까지) */
+export function writablePitchRange(octave: { readonly min: number; readonly max: number }): [number, number] {
+  return [(octave.min + 1) * 12, Math.min(127, (octave.max + 1) * 12 + 11)];
+}
+
+/**
+ * 곡을 바꾼 결과(after)가 쓸 수 있는 음 높이 밖의 음을 새로 만든 트랙. 없으면 undefined.
+ * 저장한 파일을 다시 열면 그런 음은 빠지고, MML로는 잘못된 옥타브(o-1 등)로 써지므로 편집으로 새로 만들면 안 된다.
+ * 음마다 본다: 원래 곡에 같은 음(id와 높이, 또는 높이·시작·길이)이 이미 범위 밖으로 있었으면 막지 않는다
+ * (다른 트랙으로 옮기기처럼 원래 있던 음을 그대로 옮기는 편집은 된다). 원래 음 하나는 한 번만 쓴다:
+ * 범위 밖 음을 복제해 하나가 둘이 되면 새로 만든 것이다
+ */
+export function newOutOfRangeTrack(before: Song, after: Song, octave: { readonly min: number; readonly max: number }): string | undefined {
+  const [low, high] = writablePitchRange(octave);
+  const outside = (n: Note) => n.pitch < low || n.pitch > high;
+  const shape = (n: Note) => `${n.pitch}|${n.start.n}/${n.start.d}|${n.dur.n}/${n.dur.d}`;
+  const idKey = (n: Note) => `${n.id}|${n.pitch}`;
+  // 원래 범위 밖 음 (하나씩 쓰면 used)
+  const was = before.tracks.flatMap((tr) => tr.notes.filter(outside)).map((n) => ({ id: idKey(n), shape: shape(n), used: false }));
+  if (!after.tracks.some((tr) => tr.notes.some(outside))) return undefined;
+  const old = new Map(before.tracks.map((tr) => [tr.id, tr.notes]));
+  // 그대로인 트랙의 음이 먼저 제 몫을 쓰고, 바뀐 트랙의 음이 남은 몫을 쓴다
+  const order = [...after.tracks.filter((tr) => old.get(tr.id) === tr.notes), ...after.tracks.filter((tr) => old.get(tr.id) !== tr.notes)];
+  const notes = order.flatMap((tr) => tr.notes.filter(outside).map((n) => ({ tr, n, ok: false })));
+  // id가 같은 음을 먼저 맞추고, 남은 음은 높이·시작·길이로 맞춘다
+  const take = (want: (w: (typeof was)[number], n: Note) => boolean) => {
+    for (const x of notes) {
+      if (x.ok) continue;
+      const w = was.find((w) => !w.used && want(w, x.n));
+      if (w) {
+        w.used = true;
+        x.ok = true;
+      }
+    }
+  };
+  take((w, n) => w.id === idKey(n));
+  take((w, n) => w.shape === shape(n));
+  const bad = notes.find((x) => !x.ok && old.get(x.tr.id) !== x.tr.notes) ?? notes.find((x) => !x.ok);
+  return bad?.tr.id;
+}

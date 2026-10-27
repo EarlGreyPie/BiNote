@@ -53,6 +53,13 @@ describe("볼륨 숫자를 쓸 음", () => {
     expect(ids(volumeLabelNotes(notes, "all", 0, 0.5))).toEqual([["a", 8], ["b", 8]]);
   });
 
+  it("음 높이가 화면 밖인 음은 처음 보이는 음 자리를 차지하지 않는다 (Codex PR152 재현)", () => {
+    const low: Note = { ...note("low", 0, 8), pitch: 40 };
+    const high: Note = { ...note("high", 2, 8), pitch: 72 };
+    const inView = (n: Note) => n.pitch >= 60 && n.pitch <= 84;
+    expect(ids(volumeLabelNotes([low, high], "changes", -Infinity, Infinity, inView))).toEqual([["high", 8]]);
+  });
+
   it("v0도 바뀌었으면 쓴다", () => {
     const zero = [note("a", 0, 8), note("b", 1, 0), note("c", 2, 0)];
     expect(ids(volumeLabelNotes(zero, "changes"))).toEqual([["a", 8], ["b", 0]]);

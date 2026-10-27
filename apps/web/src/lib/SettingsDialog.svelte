@@ -20,7 +20,7 @@
   import { setSplitSpread, splitPrefs } from "./splitPrefs.svelte";
   import { canAskSave, canPickFolder, canShareFiles, pickSaveFolder, saveTarget, setSaveMode, setSaveShare } from "./saveTarget.svelte";
   import { LANE_MAX, LANE_MIN, saveVolumeLane, volumeLane, type LaneState } from "./volumeLane.svelte";
-  import { LAB_FEATURES, labs, setButtonNames, setLabs } from "./labs.svelte";
+  import { LAB_FEATURES, labs, setButtonNames, setFade, setLabs } from "./labs.svelte";
 
   import Icon from "./Icon.svelte";
   import PackBar from "./PackBar.svelte";
@@ -250,6 +250,7 @@
             <option value="stored">{t("ui.colorStored")}</option>
           </select>
         </label>
+        <p class="muted help">{t("ui.colorSchemeHelp")}</p>
         <label class="row" title={t("ui.rollFlowHelp")}>
           <span>{t("ui.rollFlow")}</span>
           <select value={rollFlow.mode} onchange={(e) => setRollFlow(e.currentTarget.value as RollFlow)}>
@@ -444,6 +445,11 @@
           <span>{t("ui.labButtonNames")}</span>
         </label>
         <p class="muted help">{t("ui.labButtonNamesHelp")}</p>
+        <label class="row">
+          <input type="checkbox" checked={labs.fade} disabled={!labs.on} onchange={(e) => setFade(e.currentTarget.checked)} />
+          <span>{t("ui.labFade")}</span>
+        </label>
+        <p class="muted help">{t("ui.labFadeHelp")}</p>
       {:else if section === "language"}
         <div class="langs" role="radiogroup" aria-label={t("ui.language")}>
           {#each LOCALES as l (l)}

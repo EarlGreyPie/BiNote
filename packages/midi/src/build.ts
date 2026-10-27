@@ -4,11 +4,13 @@ import {
   sub,
   emptySong,
   normalizeTempo,
+  shortestLength,
   rat,
   toFloat,
   ZERO,
   type GameProfile,
   type InstrumentRef,
+  type LengthLimit,
   type Note,
   type Player,
   type Rat,
@@ -26,7 +28,7 @@ import { prepareQuantize, tidy, type GridNote, type PreparedQuantize, type Quant
 import { assignVoices } from "./voices.js";
 import { fillRests } from "./fill.js";
 import { attenuateChords, fillVolume } from "./attenuate.js";
-import { gameTimeline, gameTimelineOf, mergeVoices, timelineCovers, timelineText } from "@mmlce/mml";
+import { canWriteExactly, gameTimeline, gameTimelineOf, mergeVoices, timelineCovers, timelineText } from "@mmlce/mml";
 
 /** 악기 지정 화면에서 정한 연주자 하나 */
 export interface PlayerPlan {
@@ -50,6 +52,8 @@ export interface ImportPlan {
   readonly fill?: boolean;
   /** 화음 병합: 잠깐 늘어난 화음 음만 든 드문 트랙의 음을 쉬는 트랙으로 옮기고 빈 트랙은 뺀다 (기본 켬) */
   readonly merge?: boolean;
+  /** 화음감쇠: 손마다 함께 치는 음 수만큼 v를 낮춘다 (기본 켬). 이미 감쇠한 v가 적힌 파일(BiNote가 쓴 MusicXML)은 끈다 */
+  readonly attenuate?: boolean;
 }
 
 export interface ImportResult {
@@ -65,20 +69,28 @@ export interface ImportResult {
   readonly compressed: readonly { readonly plan: number; readonly player: string; readonly dropped: number; readonly shortened: number; readonly filled: number; readonly merged: number }[];
   /** 마비노기 타악기로 바꿀 수 없어 뺀 드럼 음 수 */
   readonly unmappedDrums: number;
+  /** 칸 맞춤 없이(exact) 가져올 때 게임 길이로 적을 수 없어 자리·길이를 가장 가까운 적을 수 있는 값으로 맞춘 음 수 */
+  readonly fitted?: number;
+  /** exact로 가져올 때 프로필 옥타브 범위 밖이라 옥타브째 접어 넣은 음 수 */
+  readonly folded?: number;
+  /** exact로 가져올 때 소수라 반올림한 템포 수와 게임 범위 밖이라 범위 끝으로 맞춘 템포 수 */
+  readonly tempoFixed?: { readonly rounded: number; readonly clamped: number };
 }
 
 /**
- * 기본 계획: 드럼이 아닌 파트는 GM 악기 번호가 같으면 한 연주자로 묶고(오른손·왼손 트랙 등),
- * 드럼은 큰북·심벌즈 연주자로 나눈다. 화음 수는 프로필의 연주자당 최대.
+ * 기본 계획: 드럼이 아닌 파트는 GM 악기 번호와 추천 악기가 같으면 한 연주자로 묶고(MIDI 오른손·왼손 트랙 등),
+ * MusicXML 파트(group)는 같은 파트의 보표끼리만 묶는다. 드럼은 큰북·심벌즈 연주자로 나눈다. 화음 수는 프로필의 연주자당 최대.
  */
 export function suggestPlan(analysis: MidiAnalysis, profile: GameProfile): ImportPlan {
   const players: PlayerPlan[] = [];
-  const byProgram = new Map<number, MidiPart[]>();
+  // MIDI: 악기 번호와 추천 악기가 모두 같은 파트끼리. MusicXML: 같은 파트(큰보표 두 손)끼리만 (group)
+  const byProgram = new Map<string, MidiPart[]>();
   for (const part of analysis.parts) {
     if (part.drum) continue;
-    const list = byProgram.get(part.program) ?? [];
+    const key = part.group !== undefined ? `g:${part.group}` : `${part.program}:${part.suggestion.canonical}`;
+    const list = byProgram.get(key) ?? [];
     list.push(part);
-    byProgram.set(part.program, list);
+    byProgram.set(key, list);
   }
   for (const parts of byProgram.values()) {
     const s = parts[0]!.suggestion;
@@ -124,10 +136,105 @@ export function midiToSong(analysis: MidiAnalysis, plan: ImportPlan, profile: Ga
   const used = new Set(plan.players.flatMap((p) => p.parts));
   const parts = analysis.parts.filter((p) => used.has(p.id));
   const partOf = new Map(parts.map((p) => [p.id, p]));
+  if (plan.quantize?.exact) {
+    // 프로필 옥타브(o0~o9 등)로 적을 수 없는 높이는 옥타브째 접는다 (o-1로 잘못 쓰이거나 버려지지 않게). 드럼은 타악기 높이로 바뀌니 그대로
+    const low = (profile.octave.min + 1) * 12;
+    const high = Math.min(127, (profile.octave.max + 1) * 12 + 11);
+    let folded = 0;
+    const fold = (pitch: number) => {
+      let p = pitch;
+      while (p < low) p += 12;
+      while (p > high) p -= 12;
+      if (p !== pitch) folded++;
+      return p;
+    };
+    const inRange = parts.map((p) => (p.drum ? p : { ...p, notes: p.notes.map((n) => (n.pitch < low || n.pitch > high ? { ...n, pitch: fold(n.pitch) } : n)) }));
+    const exactPartOf = new Map(inRange.map((p) => [p.id, p]));
+    const result = assemble(analysis, plan, profile, title, exactPartOf, exactPlace(inRange), true);
+    let fitted = 0;
+    const tracks = result.song.tracks.map((t) => {
+      const f = fitWritable(t.notes, profile.length);
+      fitted += f.moved;
+      return f.moved > 0 ? { ...t, notes: f.notes } : t;
+    });
+    return { ...result, song: { ...result.song, tracks }, fitted, folded };
+  }
   const prepared = prepareQuantize(parts, analysis.tempo, plan.quantize);
   const build = (q: QuantizeResult) => assemble(analysis, plan, profile, title, partOf, q);
   if (!plan.quantize?.straighten || prepared.suspect.length === 0) return build(prepared.place());
   return straighten(prepared, build);
+}
+
+/**
+ * 칸에 맞추지 않고 적힌 위치·길이 그대로 (MusicXML). 같은 파트의 같은 음 겹침만 정리한다.
+ * grid는 빈 채널 채우기의 가장 짧은 길이(16분음표)에만 쓰인다
+ */
+function exactPlace(parts: readonly MidiPart[]): QuantizeResult {
+  const notes = parts.flatMap((p) =>
+    p.notes.map(
+      (n): GridNote => ({
+        start: n.start,
+        dur: n.dur,
+        pitch: n.pitch,
+        velocity: n.velocity,
+        part: p.id,
+        ...(n.string !== undefined ? { string: n.string } : {}),
+        ...(n.voice !== undefined ? { voice: n.voice } : {}),
+      }),
+    ),
+  );
+  const out = tidy(notes);
+  return { notes: out, grid: 16, tripletBeats: 0, merged: notes.length - out.length, suspect: [] };
+}
+
+/**
+ * x에 가장 가까운, 그 길이 한도로 적을 수 있는 값: 가장 짧은 음표(지금 1/64)의 배수, 또는 그 셋잇단(지금 1/48)의 배수 가운데
+ * 실제로 적을 수 있는 것 (가장 짧은 음표의 배수는 늘 적을 수 있다)
+ */
+function nearestWritable(x: Rat, limit: LengthLimit): Rat {
+  const max = limit.max;
+  const a = rat(Math.round(toFloat(x) * max), max);
+  const tri = (max * 3) / 4;
+  if (!Number.isInteger(tri)) return a;
+  const b = rat(Math.round(toFloat(x) * tri), tri);
+  const gap = (y: Rat) => Math.abs(toFloat(sub(y, x)));
+  return gap(b) < gap(a) && canWriteExactly(b, limit) ? b : a;
+}
+
+/**
+ * 한 트랙 음의 자리·길이를 게임 MML로 정확히 적을 수 있게 맞춘다 (칸 맞춤 없이 가져온 악보용).
+ * 앞 음 끝에서 이 음까지의 쉼과 음 길이를 적을 수 없으면(1/128 같은 길이) 가장 가까운 가장 짧은 음표(1/64)·그 셋잇단(1/48) 배수로 옮긴다.
+ * 그대로 두면 출력기가 그 음을 쓰지 못해 음과 자리가 사라진다. 음은 빼지 않는다. moved: 자리나 길이가 바뀐 음 수
+ */
+export function fitWritable(notes: readonly Note[], limit: LengthLimit): { notes: Note[]; moved: number } {
+  const sorted = [...notes].sort((a, b) => cmp(a.start, b.start));
+  const out: Note[] = [];
+  const shortest = shortestLength(limit);
+  let at: Rat = ZERO;
+  let moved = 0;
+  sorted.forEach((n, i) => {
+    const end = add(n.start, n.dur);
+    let start = cmp(n.start, at) < 0 ? at : n.start;
+    const gap = sub(start, at);
+    if (gap.n > 0 && !canWriteExactly(gap, limit)) start = add(at, nearestWritable(gap, limit));
+    let dur = sub(end, start);
+    if (dur.n <= 0 || !canWriteExactly(dur, limit)) {
+      dur = nearestWritable(dur, limit);
+      if (cmp(dur, shortest) < 0) dur = shortest;
+    }
+    // 늘린 끝이 다음 음을 덮으면 다음 음 시작까지만 (그것도 적을 수 없으면 다음 음을 뒤로 민다)
+    const next = sorted[i + 1];
+    if (next && cmp(next.start, start) > 0 && cmp(add(start, dur), next.start) > 0) {
+      const room = sub(next.start, start);
+      if (canWriteExactly(room, limit)) dur = room;
+    }
+    if (cmp(start, n.start) !== 0 || cmp(dur, n.dur) !== 0) {
+      moved++;
+      out.push({ ...n, start, dur });
+    } else out.push(n);
+    at = add(start, dur);
+  });
+  return { notes: out, moved };
 }
 
 /** 곡 전체를 다시 만들어 맞대 보는 횟수의 한도. 넘으면 main 판정으로 둔다 */
@@ -235,8 +342,9 @@ function playerNotes(pp: PlayerPlan, byPart: ReadonlyMap<string, GridNote[]>, pa
     const list = byPart.get(id) ?? [];
     if (partOf.get(id)?.drum) {
       if (!drumKind) continue;
-      notes.push(...list.filter((n) => drumInstrument(n.pitch) === drumKind).map((n) => ({ ...n, pitch: profile.percussionPitch })));
-    } else notes.push(...list);
+      // 음이 아주 많은 파트(받아 적기 결과 등)도 되게 펼치기(push(...)) 대신 하나씩 넣는다
+      for (const n of list) if (drumInstrument(n.pitch) === drumKind) notes.push({ ...n, pitch: profile.percussionPitch });
+    } else for (const n of list) notes.push(n);
   }
   const out = tidy(notes.map((n) => ({ ...n, part: drumKind ? "drum" : n.part })));
   return { notes: out, merged: notes.length - out.length };
@@ -260,14 +368,24 @@ function assemble(
   title: string,
   partOf: ReadonlyMap<string, MidiPart>,
   q: QuantizeResult,
+  exact = false,
 ): ImportResult {
   const byPart = groupByPart(q.notes);
 
-  const snap = (at: number) => rat(Math.round(at * q.grid), q.grid);
+  // exact(MusicXML)·keepTiming(받아 적기, 곡에서 온 템포·박자)은 분수 위치를 그대로 둔다
+  const snap = (at: Rat) => (exact || analysis.keepTiming ? at : rat(Math.round(toFloat(at) * q.grid), q.grid));
   const tempo: TempoEvent[] = [];
+  const tempoFixed = { rounded: 0, clamped: 0 };
   for (const t of analysis.tempo) {
-    const at = snap(toFloat(t.at));
-    const bpm = Math.round(t.bpm);
+    const at = snap(t.at);
+    let bpm = analysis.keepTiming ? t.bpm : Math.round(t.bpm);
+    if (exact) {
+      // 악보 템포는 소수일 수 있고 게임 범위(t32~t255 등)를 넘을 수 있다: 맞추고 알린다
+      if (bpm !== t.bpm) tempoFixed.rounded++;
+      const clamped = Math.max(profile.tempo.min, Math.min(profile.tempo.max, bpm));
+      if (clamped !== bpm) tempoFixed.clamped++;
+      bpm = clamped;
+    }
     const prev = tempo.at(-1);
     if (prev && cmp(prev.at, at) === 0) tempo[tempo.length - 1] = { at, bpm };
     else if (!prev || prev.bpm !== bpm) tempo.push({ at, bpm });
@@ -297,7 +415,7 @@ function assemble(
     const result = compressChords(notes, compressOptions(pp, partOf));
     // 화음감쇠: 손마다 함께 치는 음 수만큼 v를 낮춘다
     const volumeOf = (n: GridNote) => velocityToVolume(n.velocity, profile);
-    const volumes = drumKind ? undefined : attenuateChords(result.notes, volumeOf, profile, hands);
+    const volumes = drumKind || plan.attenuate === false ? undefined : attenuateChords(result.notes, volumeOf, profile, hands);
     const toNote = (n: GridNote): Note => ({
       id: `n${++noteId}`,
       start: n.start,
@@ -305,6 +423,7 @@ function assemble(
       pitch: n.pitch,
       vol: volumes?.get(n) ?? volumeOf(n),
       tie: "none",
+      ...(n.string !== undefined ? { tabString: n.string } : {}),
     });
     let voices: Note[][] = assignVoices(result.notes, pp.chords).map((voice) => voice.map(toNote));
     /** 이 연주자의 트랙만 든 곡 (아래에서 실제로 만드는 것과 같게 maxChordsPerPlayer 트랙마다 연주자를 나눈다) */
@@ -377,10 +496,10 @@ function assemble(
     }
   });
 
-  // 박자 변화는 모두 격자에 맞춰 남긴다. 같은 자리면 나중 것, 맨 앞이 0이 아니면 0으로 당긴다
+  // 박자 변화는 모두 남긴다: 보통은 격자에 맞추고, keepTiming·exact면 자리 그대로. 같은 자리면 나중 것, 맨 앞이 0이 아니면 0으로 당긴다
   const timeSig: TimeSigEvent[] = [];
   for (const sig of analysis.timeSig) {
-    const at = timeSig.length === 0 ? ZERO : snap(toFloat(sig.at));
+    const at = timeSig.length === 0 ? ZERO : snap(sig.at);
     const prev = timeSig.at(-1);
     if (prev && cmp(prev.at, at) === 0) timeSig[timeSig.length - 1] = { at, beats: sig.beats, unit: sig.unit };
     else if (!prev || prev.beats !== sig.beats || prev.unit !== sig.unit) timeSig.push({ at, beats: sig.beats, unit: sig.unit });
@@ -392,7 +511,15 @@ function assemble(
     players,
     tracks,
   };
-  return { song, grid: q.grid, tripletBeats: q.tripletBeats, merged: q.merged + instrumentMerged, compressed, unmappedDrums };
+  return {
+    song,
+    grid: q.grid,
+    tripletBeats: q.tripletBeats,
+    merged: q.merged + instrumentMerged,
+    compressed,
+    unmappedDrums,
+    ...(exact ? { tempoFixed } : {}),
+  };
 }
 
 /** 파트가 둘 이상이면 평균 음높이가 가장 높은 파트를 오른손, 나머지를 왼손으로 본다 */

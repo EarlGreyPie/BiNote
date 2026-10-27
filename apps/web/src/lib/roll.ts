@@ -500,14 +500,22 @@ export function eventLabels(
   const out = [...labels];
   let last: EventLabel | undefined;
   let lastRow = -1;
+  /** 이 칸에 이미 놓은 라벨 (세로 롤은 밀어 놓은 라벨이 더 앞 라벨과 다시 겹칠 수 있어 모두 본다) */
+  let placed: EventLabel[] = [];
   for (const { l, i, row } of order) {
     let next = l;
+    if (row !== lastRow) placed = [];
     if (last && row === lastRow) {
-      // 세로 롤은 시간이 위로 가므로 앞 라벨과 범위가 겹칠 때만 민다
       if (horizontal && next.x < last.x + last.w + 2) next = { ...next, x: last.x + last.w + 2 };
-      else if (!horizontal && next.y < last.y + last.h && next.y + next.h > last.y) next = { ...next, y: last.y + last.h };
+      else if (!horizontal) {
+        // 세로 롤은 시간이 위로 가므로 놓은 라벨과 범위가 겹칠 때만 아래로 민다 (셋 이상 모여도 겹치지 않게 되풀이)
+        for (let hit = placed.find((o) => next.y < o.y + o.h && next.y + next.h > o.y); hit; hit = placed.find((o) => next.y < o.y + o.h && next.y + next.h > o.y)) {
+          next = { ...next, y: hit.y + hit.h };
+        }
+      }
     }
     out[i] = next;
+    placed.push(next);
     last = next;
     lastRow = row;
   }

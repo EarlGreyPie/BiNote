@@ -419,8 +419,17 @@ export function drawRoll(canvas: HTMLCanvasElement, o: RollDrawOptions): void {
       const dragged = new Set(o.dragNotes.map((n) => n.id));
       notes = [...notes.filter((n) => !dragged.has(n.id)), ...o.dragNotes];
     }
-    const labels = volumeLabelNotes(notes, labelMode, from, to);
     const laneSize = v.lane ?? 0;
+    // 숫자가 실제로 보이는 음만 "화면에서 처음 보이는 음"으로 친다 (이벤트 줄·마디 번호 뒤에 가린 음은 빼고)
+    const labelShown = (n: Note) => {
+      if (n.pitch < low || n.pitch > high) return false;
+      const r = noteRect(v, toFloat(n.start), toFloat(n.dur), n.pitch);
+      if (horizontal) return r.y - 11 >= o.ruler && r.y <= v.height - laneSize;
+      // 세로 롤: 숫자는 음 오른쪽에 붙으므로 왼쪽 이벤트 줄(ruler) 뒤나 아래 건반 뒤면 안 보인다
+      const x = r.x + r.w + 1;
+      return x >= o.ruler && x < v.width - laneSize && r.y + r.h >= 0 && r.y + r.h - 11 < v.height - v.keyboard;
+    };
+    const labels = volumeLabelNotes(notes, labelMode, from, to, labelShown);
     g.save();
     g.beginPath();
     if (horizontal) g.rect(v.keyboard, o.ruler, v.width - v.keyboard, v.height - o.ruler - laneSize);

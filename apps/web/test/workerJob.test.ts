@@ -112,3 +112,31 @@ describe("WorkerJob (악보책 나누기)", () => {
     expect(again).toEqual([0.5, 1]);
   });
 });
+
+describe("WorkerJob 정리", () => {
+  it("dispose는 쉬고 있는 워커도 끝내고, 다시 쓰면 새 워커를 만든다", async () => {
+    const workers: FakeWorker[] = [];
+    const runner = splitJob(() => {
+      const w = new FakeWorker();
+      workers.push(w);
+      return w as unknown as Worker;
+    });
+    await runner.run(request);
+    expect(workers).toHaveLength(1);
+    runner.cancel(); // 돌던 계산이 없으면 cancel은 워커를 두고
+    expect(workers[0]!.terminated).toBe(false);
+    runner.dispose(); // dispose는 끝낸다
+    expect(workers[0]!.terminated).toBe(true);
+    expect(await runner.run(request)).toBeDefined();
+    expect(workers).toHaveLength(2);
+  });
+
+  it("dispose는 돌던 계산을 undefined로 끝낸다", async () => {
+    const runner = splitJob(() => new FakeWorker() as unknown as Worker);
+    const pending = runner.run(request);
+    runner.dispose();
+    expect(await pending).toBeUndefined();
+    expect(runner.busy).toBe(false);
+  });
+});
+

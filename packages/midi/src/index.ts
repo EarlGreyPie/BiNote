@@ -8,3 +8,8 @@ export * from "./build.js";
 export * from "./export.js";
 export * from "./fill.js";
 export * from "./attenuate.js";
+export * from "./xml.js";
+export * from "./mxl.js";
+export * from "./musicxml.js";
+export * from "./musicxmlWrite.js";
+export * from "./transcribe.js";

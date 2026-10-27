@@ -34,7 +34,7 @@
   import VolumeBox from "./VolumeBox.svelte";
   import { lengthNumber, tupletName, TUPLET_PICK } from "./tuplet";
   import { tupletPrefs } from "./tupletPrefs.svelte";
-  import { TUNINGS, type TuningName } from "./tunings";
+  import { CUSTOM_TUNING, TUNINGS, type TuningChoice, type TuningName } from "./tunings";
   import { type LengthName, type NoteLength, type Orientation, type RollTool } from "./roll";
   import { coarsePointer } from "./mmlPad.svelte";
   import { nextTabAlign, TAB_ALIGN_ICON, TAB_ALIGN_LABEL, type TabAlign } from "./tabAlign";
@@ -78,7 +78,9 @@
     layer: RollLayer;
     /** 좁은 화면(세로·1700px 이하): 도구줄을 한 줄로 쓰려고 일부를 ⋯ 메뉴로 넘긴다 */
     compact: boolean;
-    tuningName: TuningName;
+    tuningName: TuningChoice;
+    /** 직접 입력 튜닝의 줄임 표기 (지금 튜닝이 직접 입력일 때) */
+    customLabel?: string | undefined;
     capo: number;
     showEvents: boolean;
     orientation: Orientation;
@@ -93,6 +95,8 @@
     onnotelength: (length: NoteLength) => void;
     onlayer: (layer: RollLayer) => void;
     ontuning: (name: TuningName) => void;
+    /** 직접 입력 창 열기 (악보가 없으면 없다) */
+    oncustomtuning?: (() => void) | undefined;
     oncapo: (capo: number) => void;
     /** 타브 그대로 튜닝 바꾸기 창 열기. 없으면 단추를 숨긴다 (고른 트랙이 없을 때) */
     onretune?: (() => void) | undefined;
@@ -147,6 +151,8 @@
     onnotelength,
     onlayer,
     ontuning,
+    customLabel,
+    oncustomtuning,
     oncapo,
     onretune,
     ontoggleevents,
@@ -331,10 +337,28 @@
   {:else}
     <label class="field" title={t("ui.tuningHelp")}>
       <span class="muted">{t("ui.tuning")}</span>
-      <select class="tuning" value={tuningName} onchange={(e) => ontuning(e.currentTarget.value as TuningName)}>
+      <select
+        class="tuning"
+        value={tuningName}
+        onchange={(e) => {
+          const v = e.currentTarget.value;
+          if (v !== CUSTOM_TUNING) return ontuning(v as TuningName);
+          // 직접 입력은 창에서 고른다. 창을 닫으면 지금 튜닝이 그대로 보이게 칸을 되돌린다
+          e.currentTarget.value = tuningName;
+          oncustomtuning?.();
+        }}
+      >
         {#each Object.entries(TUNINGS) as [name, info] (name)}<option value={name}>{t(info.key)}</option>{/each}
+        {#if tuningName === CUSTOM_TUNING}
+          <option value={CUSTOM_TUNING}>{t("ui.tuningCustomNamed", { names: customLabel ?? "" })}</option>
+        {:else if oncustomtuning}
+          <option value={CUSTOM_TUNING}>{t("ui.tuningCustomMenu")}</option>
+        {/if}
       </select>
     </label>
+    {#if tuningName === CUSTOM_TUNING && oncustomtuning}
+      <button title={t("ui.tuningCustomHelp")} onclick={oncustomtuning}>{t("ui.tuningCustomEdit")}…</button>
+    {/if}
     <label class="field">
       <span class="muted">{t("ui.capo")}</span>
       <select value={capo} onchange={(e) => oncapo(Number(e.currentTarget.value))}>

@@ -11,8 +11,10 @@
 </script>
 
 <script lang="ts">
+  import { samePlayerTab } from "@mmlce/core";
   import { t } from "./i18n.svelte";
-  import { TUNINGS, type ScoreTuning, type TuningName } from "./tunings";
+  import TuningStrings from "./TuningStrings.svelte";
+  import { CUSTOM_TUNING, TUNINGS, tuningStrings, type ScoreTuning, type TuningChoice } from "./tunings";
 
   interface Props {
     /** 지금 악보 튜닝 */
@@ -27,30 +29,42 @@
   const CAPOS = Array.from({ length: 25 }, (_, c) => c);
   let dialog: HTMLDialogElement;
   // svelte-ignore state_referenced_locally
-  let tuning = $state<TuningName>(current.tuning);
+  let tuning = $state<TuningChoice>(current.tuning);
   // svelte-ignore state_referenced_locally
   let capo = $state(current.capo);
-  const result = $derived(check({ tuning, capo }));
+  /** 직접 입력 줄 높이. 직접 입력으로 바꾸면 그 앞에 고른 튜닝에서 시작한다 (반음 내린 내슈빌 등) */
+  // svelte-ignore state_referenced_locally
+  let strings = $state<readonly number[]>([...tuningStrings(current)]);
+  const target = $derived<ScoreTuning>(tuning === CUSTOM_TUNING ? { tuning, capo, strings } : { tuning, capo });
+  const result = $derived(check(target));
+  /** 높이가 바뀌는 음이 없어도(반음 옮김과 카포가 서로 상쇄되는 등) 튜닝이 다르면 적용할 수 있다 */
+  const changed = $derived(result.moved > 0 || !samePlayerTab(target, current));
+
+  function choose(next: TuningChoice) {
+    if (next === CUSTOM_TUNING && tuning !== CUSTOM_TUNING) strings = [...tuningStrings({ tuning, capo })];
+    tuning = next;
+  }
 
   $effect(() => {
     dialog.showModal();
   });
 
   function apply() {
-    if (result.moved === 0) return;
-    onapply({ tuning, capo });
+    if (!changed) return;
+    onapply(target);
     dialog.close();
   }
 </script>
 
-<dialog bind:this={dialog} {onclose}>
-  <h2>{t("ui.retune")}</h2>
+<dialog bind:this={dialog} {onclose} aria-labelledby="retune-title">
+  <h2 id="retune-title">{t("ui.retune")}</h2>
   <p class="muted">{t("ui.retuneHelp")}</p>
   <div class="row">
     <label>
       {t("ui.tuning")}
-      <select bind:value={tuning}>
+      <select value={tuning} onchange={(e) => choose(e.currentTarget.value as TuningChoice)}>
         {#each Object.entries(TUNINGS) as [name, info] (name)}<option value={name}>{t(info.key)}</option>{/each}
+        <option value={CUSTOM_TUNING}>{t("ui.tuningCustom")}</option>
       </select>
     </label>
     <label>
@@ -60,6 +74,10 @@
       </select>
     </label>
   </div>
+  {#if tuning === CUSTOM_TUNING}
+    <p class="muted">{t("ui.tuningCustomHelp")}</p>
+    <TuningStrings bind:strings />
+  {/if}
   <p class="muted">{result.moved > 0 ? t("ui.retuneCount", { count: result.moved }) : t("ui.retuneNothing")}</p>
   {#if result.kept > 0}
     <p class="warn">{t("ui.retuneKept", { count: result.kept })}</p>
@@ -70,13 +88,15 @@
   <footer>
     <span class="spacer"></span>
     <button onclick={() => dialog.close()}>{t("ui.cancel")}</button>
-    <button disabled={result.moved === 0} onclick={apply}>{t("ui.apply")}</button>
+    <button disabled={!changed} onclick={apply}>{t("ui.apply")}</button>
   </footer>
 </dialog>
 
 <style>
   dialog {
     width: min(460px, calc(100vw - 32px));
+    max-height: calc(100dvh - 32px);
+    overflow-y: auto;
     background: var(--panel);
     color: var(--text);
     border: 1px solid var(--line);

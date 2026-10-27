@@ -60,7 +60,8 @@ export function visibleTrackIds(song: Song, groups: readonly ScoreGroup[], view:
  * 트랙 색 방식.
  * - position: 악보 안 위치마다 같은 색 (어느 악보든 1번 파랑, 2번 주황 …)
  * - score: 악보마다 색 계열, 같은 악보 안 트랙은 색조를 조금씩 돌리고 진하기를 번갈아 구분
- * - stored: 파일에 저장된 트랙 색 그대로 (곡 전체에 6색을 차례로)
+ * - stored: 트랙마다 고정 색. 트랙을 만들 때 받은 색(파일에 저장됨)을 그대로 써서 순서를 바꿔도 색이 안 바뀐다
+ * 어느 방식이든 사용자가 정한 색(colorPinned)이 있는 트랙은 그 색을 쓴다
  */
 export type ColorScheme = "position" | "score" | "stored";
 /** 트랙 색을 고를 바탕: 밝은 테마는 진한 색, 어두운 테마는 밝은 색 */
@@ -71,18 +72,31 @@ const POSITION_COLORS: Record<PaletteTheme, readonly string[]> = {
   light: ["#2f6fe4", "#e0592f", "#1f9d5c", "#9146e0", "#c48a00", "#0094b3"],
   dark: ["#6ea2ff", "#ff8a66", "#4fcf8a", "#c08cff", "#f5c542", "#3fd0ec"],
 };
+/** 트랙을 만들 때 차례로 주는 6색(파일에 저장되는 값). 고정 색 방식은 이 색을 테마에 맞는 위치 방식 색으로 바꿔 보여 준다 */
+const CREATED_COLORS = ["#4f8cff", "#ff7a59", "#2bb673", "#b061ff", "#f2b705", "#00b8d9"];
 const SCORE_HUES = [218, 14, 145, 275, 45, 190, 330, 95];
 /** 악보 방식: 같은 악보 안 k번째 트랙의 색조 어긋남. 진하기만으로 나누면 6트랙이 구분되지 않아서 */
 const HUE_STEPS = [0, 26, -26, 52, -52, 78];
 
+/** 트랙 색 고르기 판에 보여 줄 색 (밝은·어두운 테마 어디서나 보이도록 중간 진하기) */
+export const PICK_COLORS: readonly string[] = [
+  "#3b7cf0", "#e8643a", "#24a865", "#9a52e6", "#d29a00", "#0aa2c2",
+  "#e04a8a", "#7a8a1e", "#c0392b", "#5b5fd6", "#8d6e4f", "#6f7c8a",
+];
+
 /** 트랙 id → 화면에 쓸 색 */
 export function trackColors(song: Song, groups: readonly ScoreGroup[], scheme: ColorScheme, theme: PaletteTheme = "light"): Map<string, string> {
   const out = new Map<string, string>();
-  for (const t of song.tracks) out.set(t.id, t.color);
-  if (scheme === "stored") return out;
   const palette = POSITION_COLORS[theme];
+  for (const t of song.tracks) {
+    const k = CREATED_COLORS.indexOf(t.color.toLowerCase());
+    out.set(t.id, !t.colorPinned && k >= 0 ? palette[k]! : t.color);
+  }
+  if (scheme === "stored") return out;
+  const pinned = new Set(song.tracks.filter((t) => t.colorPinned).map((t) => t.id));
   for (const g of groups) {
     g.trackIds.forEach((id, k) => {
+      if (pinned.has(id)) return;
       if (scheme === "position") out.set(id, palette[k % palette.length]!);
       else {
         const hue = (SCORE_HUES[(g.number - 1) % SCORE_HUES.length]! + HUE_STEPS[k % HUE_STEPS.length]! + 360) % 360;
@@ -94,6 +108,9 @@ export function trackColors(song: Song, groups: readonly ScoreGroup[], scheme: C
   }
   return out;
 }
+
+/** 색 문자열을 색 고르기 칸에 넣을 #rrggbb로 (파일을 읽을 때와 같은 규칙) */
+export { hexColor } from "@mmlce/fileio";
 
 /** 이 시점(온음표 단위)에 울리는 음 수 (음소거 트랙 제외) */
 /**

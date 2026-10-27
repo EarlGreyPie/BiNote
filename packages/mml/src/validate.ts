@@ -1,4 +1,4 @@
-import { add, chainSampleEnd, cmp, crossesTimbre, eq, foldPitch, isSoloInstrument, positionToSeconds, soundingRangeOf, TIE_BEND_LIMIT, trackInstrument, type GameProfile, type Note, type Rat, type Song, type Track } from "@mmlce/core";
+import { add, chainFadeEnd, chainSampleEnd, cmp, crossesTimbre, dbOfVolume, decayDbAt, eq, foldPitch, isSoloInstrument, positionToSeconds, soundingRangeOf, TIE_BEND_LIMIT, trackInstrument, volumeForDb, type GameProfile, type Note, type Rat, type Song, type Track } from "@mmlce/core";
 import { type Diagnostic, type ParseResult } from "./parser.js";
 import { tempoMismatch } from "./tempo-text.js";
 
@@ -58,6 +58,47 @@ function end(n: Note): Rat {
   return add(n.start, n.dur);
 }
 
+/** 이만큼(초) 이상 울리는 음만 묻힘을 본다 */
+const BURIED_MIN_SECONDS = 1;
+/** 다른 트랙이 새로 치는 음보다 평균 이만큼(dB) 작으면 묻혔다고 본다 */
+const BURIED_GAP_DB = 12;
+/** 제안 v는 이만큼(dB) 작은 데까지 올린다 */
+const BURIED_TARGET_DB = 6;
+
+interface Chain {
+  readonly first: Note;
+  /** 음마다 시작 시각(초)과 접은 뒤 높이. 같은 음 붙임은 한 음 */
+  readonly steps: readonly { readonly at: number; readonly pitch: number }[];
+  readonly startAt: number;
+  readonly length: number;
+}
+
+/** 트랙의 붙임 사슬(첫 음부터 &로 이은 음들). 재생과 같이 높이가 TIE_BEND_LIMIT보다 멀면 새로 친다 */
+function chainsOf(song: Song, track: Track, range: { readonly low: number; readonly high: number }): Chain[] {
+  const out: Chain[] = [];
+  const notes = [...track.notes].sort((a, b) => cmp(a.start, b.start));
+  const timeOf = (n: Note) => positionToSeconds(song.tempo, n.start);
+  for (let i = 0; i < notes.length; ) {
+    let j = i;
+    while (
+      j + 1 < notes.length &&
+      notes[j]!.tie === "next" &&
+      eq(end(notes[j]!), notes[j + 1]!.start) &&
+      Math.abs(foldPitch(notes[j + 1]!.pitch, range) - foldPitch(notes[i]!.pitch, range)) <= TIE_BEND_LIMIT
+    )
+      j++;
+    const steps: { at: number; pitch: number }[] = [];
+    for (let k = i; k <= j; k++) {
+      const pitch = foldPitch(notes[k]!.pitch, range);
+      if (steps.at(-1)?.pitch !== pitch) steps.push({ at: timeOf(notes[k]!), pitch });
+    }
+    const startAt = timeOf(notes[i]!);
+    out.push({ first: notes[i]!, steps, startAt, length: positionToSeconds(song.tempo, end(notes[j]!)) - startAt });
+    i = j + 1;
+  }
+  return out;
+}
+
 export interface ValidateSongOptions {
   /**
    * 번호로만 아는 악기(추가 사운드팩의 #42.3 등)의 실제 악기를 알려 준다(재생의 buildSchedule과 같은 모양).
@@ -65,6 +106,11 @@ export interface ValidateSongOptions {
    * 주면 음역·샘플 길이를 그 악기로 잰다. 모르면 undefined를 돌려주고, 그때는 원래 ID로 잰다
    */
   readonly canonicalOf?: (instrument: string, program: number | undefined, pack?: string) => string | undefined;
+  /**
+   * 주면 붙임 사슬이 가장 클 때보다 이만큼(dB) 작아진 뒤에도 이어지는 음을 알린다 (sample-faded, 실험실 "소리 줄어듦").
+   * 샘플이 먼저 끝나는 음은 sample-cut만 낸다
+   */
+  readonly fadeDb?: number;
 }
 
 /**
@@ -119,29 +165,10 @@ export function validateSong(song: Song, profile: GameProfile, options: Validate
 
     // 샘플은 반복 없이 끝나므로, 붙임 사슬이 샘플 끝보다 길면 뒷부분이 안 들린다.
     // 다른 음 붙임은 샘플 위치를 이어 가므로 재생과 같은 식(chainSampleEnd)으로 잰다
+    const chainsByTrack = new Map(tracks.map((track) => [track.id, chainsOf(song, track, rangeOf(track))]));
     for (const track of tracks) {
-      const range = rangeOf(track);
-      const notes = [...track.notes].sort((a, b) => cmp(a.start, b.start));
-      for (let i = 0; i < notes.length; ) {
-        let j = i;
-        while (
-          j + 1 < notes.length &&
-          notes[j]!.tie === "next" &&
-          eq(end(notes[j]!), notes[j + 1]!.start) &&
-          Math.abs(foldPitch(notes[j + 1]!.pitch, range) - foldPitch(notes[i]!.pitch, range)) <= TIE_BEND_LIMIT
-        )
-          j++;
-        const first = notes[i]!;
-        const timeOf = (n: Note) => positionToSeconds(song.tempo, n.start);
-        const steps: { at: number; pitch: number }[] = [];
-        for (let k = i; k <= j; k++) {
-          const pitch = foldPitch(notes[k]!.pitch, range);
-          // 같은 음 붙임은 한 음이다
-          if (steps.at(-1)?.pitch !== pitch) steps.push({ at: timeOf(notes[k]!), pitch });
-        }
-        const startAt = timeOf(first);
+      for (const { first, steps, startAt, length } of chainsByTrack.get(track.id)!) {
         const soundEnd = chainSampleEnd(profile, instrumentOf(track), steps);
-        const length = positionToSeconds(song.tempo, end(notes[j]!)) - startAt;
         const heard = soundEnd - startAt;
         if (Number.isFinite(heard) && length > heard + 0.05) {
           out.push({
@@ -151,8 +178,57 @@ export function validateSong(song: Song, profile: GameProfile, options: Validate
             trackId: track.id,
             noteId: first.id,
           });
+        } else if (options.fadeDb !== undefined) {
+          const faded = chainFadeEnd(profile, instrumentOf(track), steps, options.fadeDb) - startAt;
+          if (faded < heard && length > faded + 0.05) {
+            out.push({
+              level: "info",
+              code: "sample-faded",
+              params: { seconds: Math.round(faded * 10) / 10, length: Math.round(length * 10) / 10, db: options.fadeDb },
+              trackId: track.id,
+              noteId: first.id,
+            });
+          }
         }
-        i = j + 1;
+      }
+    }
+
+    // 실험실 소리 줄어듦: 긴 음이 울리는 동안 같은 악보의 다른 트랙이 새로 치는 음보다 한참 작아져 묻히면 알린다
+    if (options.fadeDb !== undefined) {
+      const fadeDb = options.fadeDb;
+      for (const track of tracks) {
+        const instrument = instrumentOf(track);
+        for (const chain of chainsByTrack.get(track.id)!) {
+          // v0으로 시작한 사슬은 소리가 없다 (묻힐 것도 없다)
+          if (chain.length < BURIED_MIN_SECONDS || chain.first.vol <= 0) continue;
+          const pitch = chain.steps[0]!.pitch;
+          const own = dbOfVolume(profile, chain.first.vol);
+          const gaps: number[] = [];
+          for (const other of tracks) {
+            if (other.id === track.id) continue;
+            for (const o of chainsByTrack.get(other.id)!) {
+              const after = o.startAt - chain.startAt;
+              // 다른 트랙의 무음(v0) 음은 덮지 않는다
+              if (after <= 0 || after >= chain.length || o.first.vol <= 0) continue;
+              const fade = decayDbAt(profile, instrument, pitch, after);
+              // 이미 거의 안 들리는 때는 sample-faded가 알린다
+              if (fade <= -fadeDb) continue;
+              gaps.push(dbOfVolume(profile, o.first.vol) - (own + fade));
+            }
+          }
+          if (gaps.length < 2) continue;
+          const gap = gaps.reduce((a, b) => a + b, 0) / gaps.length;
+          if (gap < BURIED_GAP_DB) continue;
+          const vol = volumeForDb(profile, own + gap - BURIED_TARGET_DB);
+          // 이미 가장 큰 v라 더 올릴 수 없으면 올리라고 하지 않는다 (다른 트랙을 줄이라고 알린다)
+          out.push({
+            level: "info",
+            code: vol > chain.first.vol ? "fade-buried" : "fade-buried-max",
+            params: { db: Math.round(gap), up: Math.max(0, vol - chain.first.vol), vol },
+            trackId: track.id,
+            noteId: chain.first.id,
+          });
+        }
       }
     }
 

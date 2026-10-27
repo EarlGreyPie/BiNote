@@ -13,8 +13,10 @@ import { bpmBefore, padScore, scoreEnd } from "./score-end.js";
  * 모든 채널을 같은 시점에서 자른다(연주자끼리 박자가 어긋나지 않게).
  *
  * 권 수는 늘 가장 적게: 먼저 권마다 가장 멀리까지 넣어 최소 권 수와 그때의 권 끝들을 구한다.
- * 자르는 자리 고르기: 한도 안에 들어가는 가장 먼 자리까지 찾은 뒤, 그 앞쪽 일부(window) 안에서
- * (1) 마커, (2) 끊기는 음이 가장 적은 곳(모두 쉬는 곳이면 0), (3) 더 뒤쪽 순으로 고른다.
+ * 자르는 자리 고르기: 한도 안에 들어가는 가장 먼 자리까지 찾은 뒤 (1) 마커, (2) 완전히 쉬는 자리(아래),
+ * (3) 그 앞쪽 일부(window) 안에서 잘려 나가는 소리가 가장 짧은 곳 → 끊기는 음이 가장 적은 곳, (4) 더 뒤쪽 순으로 고른다.
+ * 완전히 쉬는 자리: 자르는 자리 앞 지연 구간(앞당겨 끝내느라 버리는 구간, 약 1.01초)에 모든 트랙
+ * (접힌 음·음역 밖 음 포함, 음 높이는 보지 않는다)이 비어 있는 자리. 잃는 소리가 없으므로 window 밖, 권 안 어디서든 찾는다.
  * 다만 고른 자리에서 남은 곡을 남은 권 수 안에 넣을 수 있을 때만 골라, 좋은 자리를 고르느라 권이 늘지 않게 한다.
  * 각 권의 시작에서 옥타브·길이·볼륨은 출력기가 기본값부터 다시 쓰고, 그때의 템포를 다시 적는다.
  * 게임은 악보(연주자)마다 따로 붙여넣고 따로 넘기므로, 템포와 권 끝 쉼표는 악보마다 넣는다.
@@ -243,25 +245,51 @@ export function splitSong(song: Song, profile: GameProfile, options: SplitOption
     step(0);
   }
 
-  /** start에서 자르는 자리마다 끊기는 음 수. 정렬 비교마다 다시 세지 않게 후보마다 한 번만 센다 (곡이 길면 cutCount가 가장 오래 걸린다) */
+  // 모든 트랙에서 소리가 나는 구간(초). 완전히 쉬는 자리와 잘려 나가는 소리 길이를 잴 때 쓴다
+  const timeline = normalizeTempo(tempo);
+  const sec = (r: Rat) => positionToSeconds(timeline, r);
+  // v0으로 시작한 붙임 사슬은 소리가 없으니 쉬는 자리로 본다 (자를 자리 고르기에만 쓴다)
+  const audible = tracks.map(audibleNotes);
+  const sounding = busySpans(audible, sec);
+  /** start에서 c로 자를 때 지연 구간 [from, at] (초). 메우지 못하면 undefined */
+  const windowAt = (start: Rat, c: Rat) => {
+    const gap = gapAt(tempo, c, gapMs, start);
+    return gapMs && gap === ZERO ? undefined : { gap, from: sec(sub(c, gap)), at: sec(c) };
+  };
+  /** 지연 구간에서 모든 트랙이 쉬는 자리인지 (권 안 모든 후보를 보므로 가볍게 본다) */
+  const cleanAt = (start: Rat, c: Rat) => {
+    const w = windowAt(start, c);
+    return w !== undefined && !overlaps(sounding, w.from, w.at);
+  };
+  /** start에서 자르는 자리마다 값. 정렬 비교마다 다시 세지 않게 후보마다 한 번만 센다 (곡이 길면 cutCount가 가장 오래 걸린다) */
   const costFrom = (start: Rat) => {
-    const costs = new Map<Rat, number>();
-    return (c: Rat) => {
+    const costs = new Map<Rat, Cost>();
+    return (c: Rat): Cost => {
       let known = costs.get(c);
       if (known !== undefined) return known;
-      const gap = gapAt(tempo, c, gapMs, start);
+      const w = windowAt(start, c);
       // 권이 지연보다 짧아 메우지 못하면 다음 권이 늦어지므로 가장 나쁜 자리로 본다
-      known = gapMs && gap === ZERO ? Number.MAX_SAFE_INTEGER : cutCount(tracks, c, gap);
+      if (!w) known = { clean: false, lost: Infinity, count: Number.MAX_SAFE_INTEGER };
+      // 완전히 쉬면 끊기는 음도 없다 (걸친 음도 지연 구간에서 울린다)
+      else if (!overlaps(sounding, w.from, w.at)) known = { clean: true, lost: 0, count: 0 };
+      else known = { clean: false, lost: Math.round(lostSeconds(sounding, w.from, w.at) * 100), count: cutCount(audible, c, w.gap) };
       costs.set(c, known);
       return known;
     };
   };
-  /** 마커 자리 먼저, 그다음 끊기는 음이 적은 순, 같으면 뒤쪽 */
-  const rank = (start: Rat, pool: readonly Rat[]) => {
+  /** 마커 자리 먼저, 그다음 완전히 쉬는 자리(뒤쪽 먼저), 그다음 잘려 나가는 소리가 짧은 순 → 끊기는 음이 적은 순, 같으면 뒤쪽 */
+  const rank = (start: Rat, pool: readonly Rat[], whole: readonly Rat[] = pool) => {
     const cost = costFrom(start);
+    const byCost = (a: Rat, b: Rat) => {
+      const x = cost(a);
+      const y = cost(b);
+      return Number(y.clean) - Number(x.clean) || (x.clean ? 0 : x.lost - y.lost || x.count - y.count) || cmp(b, a);
+    };
     const marked = pool.filter((c) => markers.some((m) => eq(m, c)));
-    const byCost = (a: Rat, b: Rat) => cost(a) - cost(b) || cmp(b, a);
-    return [...[...marked].sort(byCost), ...pool.filter((c) => !marked.includes(c)).sort(byCost)];
+    // 완전히 쉬는 자리는 window 밖(권 앞쪽)에서도 찾는다
+    const inPool = new Set(pool);
+    const clean = whole.filter((c) => !inPool.has(c) && cleanAt(start, c));
+    return [...[...marked].sort(byCost), ...[...pool.filter((c) => !marked.includes(c)), ...clean].sort(byCost)];
   };
   /** [start, end)를 내보낼 권으로 (마지막 권이면 끝까지) */
   const finalPart = (start: Rat, end: Rat): SplitPart => {
@@ -282,8 +310,9 @@ export function splitSong(song: Song, profile: GameProfile, options: SplitOption
       const following = ends[k + 1]!;
       const from = toNumber(prev) + (toNumber(ends[k]!) - toNumber(prev)) * (1 - window);
       const pool = candidates.filter((c) => toNumber(c) >= from && cmp(c, following) < 0);
+      const whole = candidates.filter((c) => cmp(c, prev) > 0 && toNumber(c) < from);
       let tried = 0;
-      for (const c of rank(prev, pool)) {
+      for (const c of rank(prev, pool, [...whole, ...pool])) {
         if (eq(c, ends[k]!)) break;
         if (tried++ >= BEAM_ADJUST) break;
         if (fits(prev, c) && fits(c, following)) {
@@ -340,7 +369,7 @@ export function splitSong(song: Song, profile: GameProfile, options: SplitOption
       const from = toNumber(start) + (toNumber(far) - toNumber(start)) * (1 - window);
       const pool = after.slice(0, best + 1).filter((c) => toNumber(c) >= from);
       // 이분 탐색은 길이가 늘기만 한다고 가정하므로 고른 자리도 다시 검사한다
-      const ranked = rank(start, pool);
+      const ranked = rank(start, pool, after.slice(0, best + 1));
       if (need) {
         // 정확한 권 수를 알면: 남은 권 수가 하나 줄어드는 자리만 고른다. 고른 범위에 없으면 그런 자리 중 가장 뒤
         const left = needAt(start) - 1;
@@ -410,6 +439,72 @@ function gapAt(tempo: readonly TempoEvent[], at: Rat, gapMs: number | null | und
   }
   const gap = rat(Math.round(whole * 64), 64);
   return cmp(sub(at, gap), start) > 0 ? gap : ZERO;
+}
+
+interface Cost {
+  /** 지연 구간에서 모든 트랙이 쉬는지 */
+  readonly clean: boolean;
+  /** 지연 구간에서 잘려 나가는 소리 길이 (모든 음 합, 1/100초) */
+  readonly lost: number;
+  /** 끊기는 음 수 (cutCount) */
+  readonly count: number;
+}
+
+/** 모든 트랙의 음이 울리는 구간(초)을 합쳐 시작 순으로. 겹치는 구간은 하나로 모은다 */
+/**
+ * 소리 나는 음만. 재생처럼 &로 바로 이은 사슬은 첫 음의 v로 이어 가므로, 첫 음이 v0인 사슬 전체가 무음이고
+ * 사슬 뒤 조각의 v0은 소리를 끊지 않는다
+ */
+function audibleNotes(notes: readonly PrintableNote[]): PrintableNote[] {
+  const sorted = [...notes].sort((a, b) => cmp(a.start, b.start));
+  const out: PrintableNote[] = [];
+  let prev: PrintableNote | undefined;
+  let silent = false;
+  for (const n of sorted) {
+    const joined = prev !== undefined && prev.tie === "next" && eq(add(prev.start, prev.dur), n.start);
+    if (!joined) silent = n.vol <= 0;
+    if (!silent) out.push(n);
+    prev = n;
+  }
+  return out;
+}
+
+function busySpans(tracks: readonly (readonly PrintableNote[])[], sec: (r: Rat) => number): { spans: [number, number][]; notes: [number, number][] } {
+  const notes = tracks.flatMap((ns) => ns.map((n): [number, number] => [sec(n.start), sec(add(n.start, n.dur))])).sort((a, b) => a[0] - b[0]);
+  const spans: [number, number][] = [];
+  for (const [s, e] of notes) {
+    const last = spans[spans.length - 1];
+    if (last && s <= last[1]) last[1] = Math.max(last[1], e);
+    else spans.push([s, e]);
+  }
+  return { spans, notes };
+}
+
+/** [from, to) 안에 소리가 나는 곳이 있는지 */
+function overlaps(busy: ReturnType<typeof busySpans>, from: number, to: number): boolean {
+  const { spans } = busy;
+  // to 앞에서 시작한 마지막 구간이 from 뒤까지 가는지 본다
+  let lo = 0;
+  let hi = spans.length - 1;
+  let found = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (spans[mid]![0] < to - 1e-9) {
+      found = mid;
+      lo = mid + 1;
+    } else hi = mid - 1;
+  }
+  return found >= 0 && spans[found]![1] > from + 1e-9;
+}
+
+/** [from, to) 안에서 울리는 소리 길이의 합(초, 음마다 따로 센다) */
+function lostSeconds(busy: ReturnType<typeof busySpans>, from: number, to: number): number {
+  let total = 0;
+  for (const [s, e] of busy.notes) {
+    if (s >= to) break;
+    if (e > from) total += Math.min(e, to) - Math.max(s, from);
+  }
+  return total;
 }
 
 /** [start, end) 구간의 채널별 텍스트. 구간 밖으로 걸친 음은 잘라서 넣는다 */

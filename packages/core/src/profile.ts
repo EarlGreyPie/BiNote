@@ -43,12 +43,30 @@ export interface GameProfile {
    */
   readonly sampleSeconds: Readonly<Record<string, readonly SampleZone[]>>;
   /**
+   * 악기별 소리 줄어듦(감쇠). 구간(from = 그 구간 첫 음 MIDI 번호, sampleSeconds와 같은 구간)마다 그 첫 음이
+   * 가장 큰 때(peakAt)와 처음 소리(startDb, 가장 클 때 기준), 가장 클 때보다 6·12·20·40dB 작아져 다시 커지지 않는
+   * 시각(초, 친 때부터). 샘플이 끝날 때까지 그만큼 안 줄면 null (지속음 악기는 샘플 끝에서 끊긴다).
+   * 길이처럼 구간 안에서 위로 반음마다 2^(-1/12)배 빨라진다. 없는 악기는 모름
+   */
+  readonly sampleDecay: Readonly<Record<string, readonly DecayZone[]>>;
+  /**
    * 화음감쇠: 같은 v로 n음을 함께 치면 단음보다 perDoublingDb × log2(n) dB 커진다 (3dB면 음 에너지의 단순 합).
    * 화음의 v는 볼륨 곡선에서 그만큼 낮춘 값으로 고른다
    */
   readonly chordAttenuation: { readonly perDoublingDb: number };
   /** 게임에 붙여넣는 형식. "mml-at" = 악보 하나를 MML@트랙1,트랙2,...; 로 (PC와 같음, 2026-10-14 확인) */
   readonly clipboardFormat: "mml-at";
+  /**
+   * 트릴·트레몰로 창의 빠름 안내: 초당 이만큼보다 자주 다시 치면 게임에서 흐려진다고 알린다 (막지는 않는다).
+   * 악기(canonical)별로 더 일찍 흐려지면 ornamentFastRateByInstrument에 둔다
+   */
+  readonly ornamentFastRate: number;
+  readonly ornamentFastRateByInstrument: Readonly<Record<string, number>>;
+  /**
+   * 트릴·트레몰로 "전체 낮추기" 자동 값(v 단계): 빠르게 다시 치면 한 음보다 커지는 만큼. 한 음(single)과
+   * 같은 연주자 화음을 함께 되풀이할 때(chord)
+   */
+  readonly ornamentRepeatLower: { readonly single: number; readonly chord: number };
   /** 아직 인게임 실측으로 확인하지 못한 항목. 값은 임시 기본값이다 */
   readonly pending: readonly PendingKey[];
 }
@@ -58,6 +76,19 @@ export interface SampleZone {
   readonly seconds: number;
 }
 
+export interface DecayZone {
+  readonly from: number;
+  readonly peakAt: number;
+  readonly startDb: number;
+  readonly db6: number | null;
+  readonly db12: number | null;
+  readonly db20: number | null;
+  readonly db40: number | null;
+}
+
+/** 감쇠 시각을 아는 깊이(dB). 이 밖은 앞뒤 점을 이어 어림한다 */
+export const DECAY_STEPS = [6, 12, 20, 40] as const;
+
 export interface PitchRange {
   readonly low: number;
   readonly high: number;
@@ -66,7 +97,8 @@ export interface PitchRange {
 export type PendingKey =
   | "volumeCurve"
   | "soundingRangeInstruments"
-  | "playerChannelSeparation";
+  | "playerChannelSeparation"
+  | "sampleDecay";
 
 /**
  * 인게임 실측(2026-08-23, MMLCS): 피아노·류트·기타 v1~v15 녹음 45점이
@@ -149,8 +181,98 @@ export const MOBILE_PROFILE: GameProfile = {
     gramophone: [{ from: 40, seconds: 5.33 }, { from: 52, seconds: 5.33 }, { from: 65, seconds: 5.02 }, { from: 79, seconds: 4.47 }, { from: 89, seconds: 5.02 }],
     "cat-harmonica": [{ from: 28, seconds: 0.47 }, { from: 32, seconds: 0.74 }, { from: 44, seconds: 0.73 }, { from: 56, seconds: 0.72 }, { from: 68, seconds: 0.74 }, { from: 80, seconds: 0.47 }, { from: 84, seconds: 0.49 }],
   },
+  // BINOTE DLS Pack v0.3 샘플(= 게임 6초 녹음을 구간마다 한 음씩 자른 것)을 20ms RMS로 잼 (2026-10-27). 구간 첫 음 기준으로 옮김.
+  // 같은 날 게임 녹음 약 380음(구간 첫 음이 아닌 음)과 견줌: 끝나는 때 중앙값 0.001초, 12·20·40dB 시각은 거의 ±5% 안 →
+  // 구간마다 한 샘플을 높이만큼 빠르게 돌리는 식이 맞다. 하프 6dB(최대 0.6초 늦음)·류트 맨 위 40dB·만돌린 o3e 12dB·오르골 12dB만
+  // 0.1~0.2초 어긋나고 20dB 뒤는 맞는다. 고양이 하모니카(샘플 0.5초)와 타악기(2초 녹음뿐)는 넣지 않음
+  sampleDecay: {
+    lute: [
+      { from: 38, peakAt: 0.07, startDb: -2.84, db6: 0.5, db12: 1.26, db20: 2.62, db40: 5.38 },
+      { from: 52, peakAt: 0.03, startDb: -1.06, db6: 0.28, db12: 0.62, db20: 1.16, db40: 2.52 },
+      { from: 64, peakAt: 0.07, startDb: -0.75, db6: 0.22, db12: 0.42, db20: 0.92, db40: 2.14 },
+      { from: 77, peakAt: 0.01, startDb: -2.08, db6: 0.06, db12: 0.21, db20: 0.38, db40: 2.37 },
+    ],
+    mandolin: [
+      { from: 38, peakAt: 0.25, startDb: -13.05, db6: 0.5, db12: 0.74, db20: 1.52, db40: 5.44 },
+      { from: 52, peakAt: 0.05, startDb: -5.98, db6: 0.34, db12: 2.42, db20: 4.74, db40: 4.96 },
+      { from: 64, peakAt: 0.01, startDb: -0.77, db6: 0.24, db12: 0.9, db20: 2.08, db40: 4.8 },
+      { from: 77, peakAt: 0.12, startDb: -4.18, db6: 0.34, db12: 0.49, db20: 0.91, db40: 4.45 },
+    ],
+    flute: [
+      { from: 52, peakAt: 0.23, startDb: -16.44, db6: 5.06, db12: 5.2, db20: 5.26, db40: null },
+      { from: 76, peakAt: 0.19, startDb: -6.65, db6: 5.34, db12: 5.34, db20: 5.36, db40: null },
+      { from: 88, peakAt: 0.11, startDb: -4.38, db6: 5.34, db12: 5.34, db20: 5.36, db40: 5.36 },
+    ],
+    chalumeau: [
+      { from: 42, peakAt: 0.21, startDb: -4.91, db6: 5.6, db12: 5.6, db20: 5.62, db40: null },
+      { from: 56, peakAt: 0.35, startDb: -2.32, db6: 5.0, db12: 5.02, db20: 5.04, db40: 5.06 },
+      { from: 70, peakAt: 0.05, startDb: -1.49, db6: 4.04, db12: 4.5, db20: null, db40: null },
+      { from: 82, peakAt: 0.09, startDb: -1.08, db6: 4.26, db12: 4.5, db20: 4.52, db40: null },
+    ],
+    piano: [
+      { from: 40, peakAt: 0.05, startDb: -2.62, db6: 0.56, db12: 1.18, db20: 2.32, db40: null },
+      { from: 52, peakAt: 0.03, startDb: -1.28, db6: 0.4, db12: 0.88, db20: 2.5, db40: null },
+      { from: 64, peakAt: 0.01, startDb: -0.19, db6: 0.26, db12: 0.68, db20: 1.32, db40: null },
+      { from: 77, peakAt: 0.03, startDb: -0.41, db6: 0.28, db12: 0.44, db20: 0.66, db40: 4.98 },
+      { from: 89, peakAt: 0.03, startDb: -0.94, db6: 0.13, db12: 0.21, db20: 0.3, db40: 4.77 },
+    ],
+    violin: [
+      { from: 50, peakAt: 0.73, startDb: -12.51, db6: 5.24, db12: 5.36, db20: 5.4, db40: 5.48 },
+      { from: 60, peakAt: 0.59, startDb: -14.33, db6: 4.42, db12: 4.5, db20: 4.54, db40: null },
+      { from: 66, peakAt: 0.65, startDb: -9.53, db6: 4.7, db12: 4.78, db20: 4.8, db40: 4.88 },
+      { from: 74, peakAt: 0.61, startDb: -8.63, db6: 4.44, db12: 4.46, db20: null, db40: null },
+    ],
+    harp: [
+      { from: 40, peakAt: 0.03, startDb: -1.61, db6: 1.14, db12: 3.58, db20: 4.34, db40: 5.02 },
+      { from: 52, peakAt: 0.03, startDb: -1.55, db6: 0.38, db12: 1.7, db20: 3.5, db40: 4.76 },
+      { from: 64, peakAt: 0.01, startDb: -0.52, db6: 0.34, db12: 0.76, db20: 2.14, db40: 4.34 },
+      { from: 77, peakAt: 0.03, startDb: -0.5, db6: 0.08, db12: 0.17, db20: 0.81, db40: 3.43 },
+      { from: 89, peakAt: 0.01, startDb: -1.18, db6: 0.15, db12: 0.3, db20: 1.06, db40: 4.03 },
+    ],
+    "music-box": [
+      { from: 28, peakAt: 0.05, startDb: -3.54, db6: 0.18, db12: 1.2, db20: 3.7, db40: 4.2 },
+      { from: 52, peakAt: 0.01, startDb: -2.96, db6: 0.02, db12: 0.6, db20: 1.4, db40: 2.06 },
+      { from: 66, peakAt: 0.01, startDb: -0.58, db6: 0.58, db12: 0.94, db20: 1.4, db40: 1.84 },
+      { from: 80, peakAt: 0.01, startDb: -0.45, db6: 0.32, db12: 0.98, db20: 1.5, db40: 1.7 },
+      { from: 89, peakAt: 0.01, startDb: -2.27, db6: 0.04, db12: 0.13, db20: 0.59, db40: 1.93 },
+    ],
+    "folk-guitar": [
+      { from: 40, peakAt: 0.05, startDb: -2.14, db6: 0.34, db12: 1.74, db20: 3.84, db40: 4.86 },
+      { from: 52, peakAt: 0.03, startDb: -1.12, db6: 0.6, db12: 1.74, db20: 3.92, db40: 5.04 },
+      { from: 64, peakAt: 0.05, startDb: -0.8, db6: 0.6, db12: 1.04, db20: 3.68, db40: 4.96 },
+      { from: 77, peakAt: 0.03, startDb: -0.85, db6: 0.25, db12: 0.49, db20: 0.95, db40: 2.35 },
+      { from: 89, peakAt: 0.01, startDb: -0.49, db6: 0.11, db12: 0.17, db20: 0.61, db40: 3.94 },
+    ],
+    harmonica: [
+      { from: 40, peakAt: 1.91, startDb: -8.4, db6: 4.24, db12: 4.58, db20: 4.9, db40: 5.2 },
+      { from: 52, peakAt: 2.21, startDb: -8.85, db6: 4.18, db12: 4.54, db20: 4.8, db40: 5.16 },
+      { from: 64, peakAt: 0.09, startDb: -6.76, db6: 4.34, db12: 4.66, db20: 4.9, db40: 5.2 },
+      { from: 77, peakAt: 0.05, startDb: -2.49, db6: 3.69, db12: 4.24, db20: 4.53, db40: 4.87 },
+      { from: 89, peakAt: 1.81, startDb: -5.65, db6: 3.67, db12: 4.26, db20: 4.58, db40: 4.89 },
+    ],
+    gramophone: [
+      { from: 40, peakAt: 3.29, startDb: -6.99, db6: 4.54, db12: 4.84, db20: 5.1, db40: 5.26 },
+      { from: 52, peakAt: 2.55, startDb: -7.7, db6: 4.76, db12: 4.94, db20: 5.1, db40: 5.26 },
+      { from: 65, peakAt: 0.92, startDb: -3.7, db6: 4.49, db12: 4.7, db20: 4.83, db40: 4.98 },
+      { from: 79, peakAt: 1.39, startDb: -11.12, db6: 3.5, db12: 3.92, db20: 4.2, db40: 4.41 },
+      { from: 89, peakAt: 2.91, startDb: -10.76, db6: 4.36, db12: 4.64, db20: 4.79, db40: 4.96 },
+    ],
+    xylophone: [
+      { from: 28, peakAt: 0.13, startDb: -5.7, db6: 1.54, db12: 2.32, db20: 3.28, db40: 4.8 },
+      { from: 52, peakAt: 0.03, startDb: -1.0, db6: 0.9, db12: 1.3, db20: 1.76, db40: 2.48 },
+      { from: 66, peakAt: 0.19, startDb: -1.82, db6: 0.56, db12: 0.84, db20: 1.18, db40: 1.9 },
+      { from: 80, peakAt: 0.01, startDb: -0.59, db6: 0.4, db12: 0.72, db20: 1.1, db40: 1.8 },
+    ],
+  },
   chordAttenuation: { perDoublingDb: 3 },
   clipboardFormat: "mml-at",
+  // 트레몰로 실측(2026-10-27, 피아노·류트·만돌린·바이올린·플루트·하프): 뜯는 악기는 초당 16번까지 다시 치는 게 들리고
+  // 20번 넘으면 흐려지며 27번부터 거의 한 음. 바이올린·플루트는 12번에서 이미 약하고 16번부터 거의 안 들림
+  ornamentFastRate: 20,
+  ornamentFastRateByInstrument: { violin: 12, flute: 12 },
+  // 같은 실측: 한 음을 l64로 되풀이하면 한 음보다 약 7dB, 세 음 화음을 l32로 되풀이하면 그냥 화음보다 약 10dB 커지고 줄지 않는다.
+  // 다 맞추면 너무 작아져(같은 v로 쳐도 음마다 4~9dB 흔들림) 권장값은 그 절반쯤
+  ornamentRepeatLower: { single: 3, chord: 5 },
   pending: ["playerChannelSeparation"],
 };
 
@@ -223,6 +345,32 @@ export function chainSampleEnd(
   instrument: string | undefined,
   steps: readonly { readonly at: number; readonly pitch: number }[],
 ): number {
+  return chainPositionEnd(steps, (pitch) => sampleZoneAt(profile, instrument, pitch));
+}
+
+/**
+ * 붙임 사슬의 소리가 가장 클 때보다 drop dB 작아지는 시각(초). 샘플 안 위치가 그 구간의 drop dB 시각에 닿을 때다
+ * (chainSampleEnd와 같은 식). 샘플 끝이 먼저면 샘플 끝. 감쇠를 모르는 악기는 샘플 끝(그것도 모르면 Infinity)
+ */
+export function chainFadeEnd(
+  profile: GameProfile,
+  instrument: string | undefined,
+  steps: readonly { readonly at: number; readonly pitch: number }[],
+  drop: number,
+): number {
+  const fade = chainPositionEnd(steps, (pitch) => {
+    const zone = decayZoneAt(profile, instrument, pitch);
+    const seconds = zone && decaySeconds(zone, drop);
+    return zone && seconds !== undefined ? { from: zone.from, seconds } : undefined;
+  });
+  return Math.min(fade, chainSampleEnd(profile, instrument, steps));
+}
+
+/** 샘플 안 위치가 구간 길이(zoneAt이 주는 seconds)에 닿는 시각. 구간을 모르는 높이에서는 끝나지 않는다 */
+function chainPositionEnd(
+  steps: readonly { readonly at: number; readonly pitch: number }[],
+  zoneAt: (pitch: number) => SampleZone | undefined,
+): number {
   const first = steps[0];
   if (!first) return Infinity;
   const rate = (pitch: number, zone: SampleZone) => 2 ** ((pitch - zone.from) / 12);
@@ -230,18 +378,93 @@ export function chainSampleEnd(
   let at = first.at;
   let pitch = first.pitch;
   const endFrom = () => {
-    const zone = sampleZoneAt(profile, instrument, pitch);
+    const zone = zoneAt(pitch);
     return zone ? at + Math.max(0, zone.seconds - pos) / rate(pitch, zone) : Infinity;
   };
   for (const step of steps.slice(1)) {
     const end = endFrom();
     if (step.at >= end) return end;
-    const zone = sampleZoneAt(profile, instrument, pitch);
+    const zone = zoneAt(pitch);
     if (zone) pos += (step.at - at) * rate(pitch, zone);
     at = step.at;
     pitch = step.pitch;
   }
   return endFrom();
+}
+
+/** 이 높이(접힌 뒤)의 감쇠 구간. 모르면 undefined */
+export function decayZoneAt(profile: GameProfile, instrument: string | undefined, pitch: number): DecayZone | undefined {
+  const zones = instrument !== undefined ? profile.sampleDecay[instrument] : undefined;
+  if (!zones || zones.length === 0) return undefined;
+  let zone = zones[0]!;
+  for (const z of zones) if (z.from <= pitch) zone = z;
+  return zone;
+}
+
+/** 구간 첫 음 기준 감쇠 점 (시각, dB). 가장 클 때가 0dB이고, 모르는 깊이부터는 점이 없다 */
+function decayPoints(zone: DecayZone): [number, number][] {
+  const points: [number, number][] = [[0, Math.min(0, zone.startDb)], [zone.peakAt, 0]];
+  for (const [db, at] of [[6, zone.db6], [12, zone.db12], [20, zone.db20], [40, zone.db40]] as const) {
+    if (at === null) break;
+    points.push([at, -db]);
+  }
+  return points;
+}
+
+/**
+ * 구간 첫 음이 가장 클 때 뒤로 drop dB 작아지는 시각(초). 점 사이는 dB를 곧게 잇는다.
+ * 잰 깊이보다 깊으면 마지막 두 점의 기울기로 이어 가고, 가장 클 때 뒤 점이 하나뿐이라 기울기를 모르면 undefined
+ */
+function decaySeconds(zone: DecayZone, drop: number): number | undefined {
+  const points = decayPoints(zone).slice(1);
+  for (let i = 1; i < points.length; i++) {
+    const [t0, d0] = points[i - 1]!;
+    const [t1, d1] = points[i]!;
+    if (-drop >= d1) return t1 === t0 ? t1 : t0 + ((d0 + drop) / (d0 - d1)) * (t1 - t0);
+  }
+  if (drop <= 0) return zone.peakAt;
+  // 잰 마지막 점보다 깊으면 decayDbAt처럼 마지막 두 점의 기울기로 이어 간다 (지속음처럼 가장 클 때 뒤 점이 하나뿐이면 모른다)
+  if (points.length < 3) return undefined;
+  const [t0, d0] = points[points.length - 2]!;
+  const [t1, d1] = points[points.length - 1]!;
+  return t1 === t0 || d1 >= d0 ? undefined : t1 + ((-drop - d1) / (d1 - d0)) * (t1 - t0);
+}
+
+/**
+ * 한 번 친 음이 seconds초 뒤 가장 클 때보다 몇 dB 작은지 (0 이하). 점 사이는 dB를 곧게 잇고, 잰 마지막 점 뒤로는
+ * 마지막 두 점의 기울기로 이어 간다. 샘플이 끝난 뒤는 -Infinity. 감쇠를 모르면 0 (줄지 않는다고 본다)
+ */
+export function decayDbAt(profile: GameProfile, instrument: string | undefined, pitch: number, seconds: number): number {
+  const length = sampleSecondsAt(profile, instrument, pitch);
+  if (length !== undefined && seconds >= length) return -Infinity;
+  const zone = decayZoneAt(profile, instrument, pitch);
+  if (!zone || seconds <= 0) return 0;
+  // 구간 첫 음보다 높으면 샘플을 빨리 돌리므로 그만큼 앞의 시각을 본다
+  const t = seconds * 2 ** ((pitch - zone.from) / 12);
+  const points = decayPoints(zone);
+  for (let i = 1; i < points.length; i++) {
+    const [t0, d0] = points[i - 1]!;
+    const [t1, d1] = points[i]!;
+    if (t <= t1) return t1 === t0 ? d1 : d0 + ((t - t0) / (t1 - t0)) * (d1 - d0);
+  }
+  // 잰 마지막 점 뒤: 가장 클 때 뒤의 점이 하나뿐이면(지속음) 그대로, 아니면 마지막 기울기로 이어 간다
+  if (points.length < 4) return points.at(-1)![1];
+  const [t0, d0] = points[points.length - 2]!;
+  const [t1, d1] = points[points.length - 1]!;
+  // 두 점이 같은 시각이면(샘플 끝 바로 앞에서 뚝 끊김) 기울기를 모르므로 샘플 끝까지 마지막 값
+  return t1 === t0 ? d1 : d1 + ((t - t1) / (t1 - t0)) * (d1 - d0);
+}
+
+/**
+ * 한 번 친 음이 seconds초 울리는 동안의 평균 크기(dB, 가장 클 때 기준, 에너지 평균). 20ms마다 decayDbAt을 더한다.
+ * 샘플이 끝난 뒤는 소리 없음으로 센다. 감쇠를 모르면 0
+ */
+export function heldMeanDb(profile: GameProfile, instrument: string | undefined, pitch: number, seconds: number): number {
+  if (seconds <= 0) return decayDbAt(profile, instrument, pitch, 0);
+  const steps = Math.max(1, Math.ceil(seconds / 0.02));
+  let power = 0;
+  for (let i = 0; i < steps; i++) power += 10 ** (decayDbAt(profile, instrument, pitch, ((i + 0.5) * seconds) / steps) / 10);
+  return 10 * Math.log10(power / steps);
 }
 
 /** 이 악기로 악보 하나에 담는 트랙 수 */

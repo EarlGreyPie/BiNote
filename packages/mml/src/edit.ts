@@ -1103,6 +1103,8 @@ function withoutTempo(song: Song, at: Rat): Song {
     });
     return { ...t, mml: { ...t.mml, text: spliceText(text, spans.map((span) => ({ span, text: "" }))) } };
   });
+  // 지울 템포가 없으면(적지 않은 t120 등) 곡을 그대로 돌려 빈 실행 취소 칸이 생기지 않게 한다
+  if (!song.tempo.some((e) => eq(e.at, at)) && tracks.every((t, i) => t === song.tracks[i])) return song;
   return { ...song, tempo: song.tempo.filter((e) => !eq(e.at, at)), tracks };
 }
 

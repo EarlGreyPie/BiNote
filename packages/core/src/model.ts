@@ -51,6 +51,17 @@ export interface Player {
 export interface PlayerTab {
   readonly tuning: string;
   readonly capo: number;
+  /** 직접 입력한 튜닝(tuning "custom")의 개방현 MIDI 번호. 1번(가장 높은 줄)부터 1~12줄 */
+  readonly strings?: readonly number[];
+}
+
+/** 두 타브 튜닝이 같은지 (이름·카포·직접 입력한 줄 높이) */
+export function samePlayerTab(a: PlayerTab | undefined, b: PlayerTab | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b || a.tuning !== b.tuning || a.capo !== b.capo) return false;
+  const x = a.strings ?? [];
+  const y = b.strings ?? [];
+  return x.length === y.length && x.every((v, i) => v === y[i]);
 }
 
 export interface Note {
@@ -110,6 +121,11 @@ export interface Track {
   readonly playerId: string;
   readonly name: string;
   readonly color: string;
+  /**
+   * 사용자가 이 트랙 색을 정했는지(색 고정). 켜져 있으면 설정의 트랙 색 방식(악보 안 위치·악보마다)과
+   * 상관없이 color를 그대로 쓴다. 트랙 순서를 바꾸거나 다른 악보로 옮겨도 색이 따라간다
+   */
+  readonly colorPinned?: boolean;
   readonly role: TrackRole;
   readonly mute: boolean;
   readonly solo: boolean;

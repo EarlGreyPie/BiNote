@@ -8,6 +8,8 @@
     readonly changed: number;
     /** ±로 옮기다 v0·v15에서 멈춘 소리 수 */
     readonly clamped: number;
+    /** 긴 음 맞추기에서 최대 단계까지만 올리고 멈춘 소리 수 */
+    readonly limited: number;
     /** & 뒤 이어진 음만 골라 바꾸지 않은 수 */
     readonly viaTie: number;
     /** 지금 / 바꾼 뒤 v [최소, 최대] */
@@ -28,13 +30,15 @@
     initialVol: number;
     /** 반복 구간이 걸친 마디 [첫, 끝]. 반복 구간이 없으면 undefined */
     loopBars?: BarRange | undefined;
+    /** 실험실 소리 줄어듦을 켰으면 긴 음 맞추기를 보인다 */
+    held?: boolean;
     /** bars: 바꿀 마디 범위 (undefined면 모든 마디). 고른 음 범위에는 쓰지 않는다 */
     check: (scope: TransposeScope, change: VolumeChange, bars: readonly BarRange[] | undefined) => VolumeCheck;
     onapply: (scope: TransposeScope, change: VolumeChange, bars: readonly BarRange[] | undefined) => void;
     onclose: () => void;
   }
 
-  let { scopes, initialScope, profile, initialVol, loopBars, check, onapply, onclose }: Props = $props();
+  let { scopes, initialScope, profile, initialVol, loopBars, held = false, check, onapply, onclose }: Props = $props();
 
   let dialog: HTMLDialogElement;
   // svelte-ignore state_referenced_locally
@@ -44,9 +48,12 @@
   let vol = $state(initialVol);
   let by = $state(0);
   let db = $state(-6);
+  let maxUp = $state(3);
   const min = $derived(profile.volume.min);
   const max = $derived(profile.volume.max);
-  const change = $derived<VolumeChange>(mode === "set" ? { kind: "set", vol } : mode === "shift" ? { kind: "shift", by } : { kind: "db", db });
+  const change = $derived<VolumeChange>(
+    mode === "set" ? { kind: "set", vol } : mode === "shift" ? { kind: "shift", by } : mode === "held" ? { kind: "held", maxUp } : { kind: "db", db },
+  );
   // 마디: 모든 마디 / 선택 마디(반복 구간) / 적은 마디
   let barMode = $state<"all" | "loop" | "typed">("all");
   let barText = $state("");
@@ -106,6 +113,9 @@
     <label><input type="radio" name="mode" value="set" bind:group={mode} /> {t("ui.volumeSet")}</label>
     <label><input type="radio" name="mode" value="shift" bind:group={mode} /> {t("ui.volumeShift")}</label>
     <label><input type="radio" name="mode" value="db" bind:group={mode} /> {t("ui.volumeDb")}</label>
+    {#if held}
+      <label><input type="radio" name="mode" value="held" bind:group={mode} /> {t("ui.volumeHeld")} <span class="badge">{t("ui.labBadge")}</span></label>
+    {/if}
   </div>
   <div class="row">
     {#if mode === "set"}
@@ -139,6 +149,21 @@
         {t("ui.volumeSteps")}
       </label>
       <button onclick={() => (by = Math.min(max - min, by + 1))}>+1</button>
+    {:else if mode === "held"}
+      <label>
+        {t("ui.volumeHeldMax")}
+        <input
+          type="number"
+          min="1"
+          max={max - min}
+          value={maxUp}
+          oninput={(e) => {
+            const v = clampInt(Number(e.currentTarget.value), 1, max - min);
+            if (v !== undefined) maxUp = v;
+          }}
+        />
+        {t("ui.volumeSteps")}
+      </label>
     {:else}
       <label>
         <input
@@ -159,6 +184,8 @@
   </div>
   {#if mode === "db"}
     <p class="muted small">{t("ui.volumeDbHelp")}</p>
+  {:else if mode === "held"}
+    <p class="muted small">{t("ui.volumeHeldHelp")}</p>
   {/if}
   <p class="muted">{t("ui.volumeCount", { count: result.count, changed: result.changed })}</p>
   {#if result.count > 0}
@@ -166,6 +193,9 @@
   {/if}
   {#if result.clamped > 0}
     <p class="warn">{t("ui.volumeClamped", { count: result.clamped, min, max })}</p>
+  {/if}
+  {#if result.limited > 0}
+    <p class="warn">{t("ui.volumeHeldLimited", { count: result.limited })}</p>
   {/if}
   {#if result.viaTie > 0}
     <p class="muted small">{t("ui.volumeTiedOnly", { count: result.viaTie })}</p>
@@ -220,5 +250,12 @@
   .warn {
     color: var(--danger);
     margin: 4px 0;
+  }
+  .badge {
+    font-size: 0.75rem;
+    padding: 0 4px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    color: var(--muted);
   }
 </style>

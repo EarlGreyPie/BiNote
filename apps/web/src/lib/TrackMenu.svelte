@@ -2,6 +2,7 @@
   import { INSTRUMENTS, type Track } from "@mmlce/core";
   import { onMount, tick } from "svelte";
   import { instrumentName, t } from "./i18n.svelte";
+  import { hexColor, PICK_COLORS } from "./scores";
   import type { TrackActions } from "./trackActions";
 
   /** 트랙 줄·악보 줄을 오른쪽 클릭(터치는 길게 누르기)하면 뜨는 메뉴 */
@@ -16,8 +17,8 @@
   }
 
   let { x, y, track, playerId, playerName, actions, onclose }: Props = $props();
-  /** 악기 고르는 중이면 어느 쪽 악기인지, "target"이면 옮길 악보 고르는 중 */
-  let picking = $state<"track" | "score" | "target" | undefined>(undefined);
+  /** 악기 고르는 중이면 어느 쪽 악기인지, "target"이면 옮길 악보, "color"면 트랙 색 고르는 중 */
+  let picking = $state<"track" | "score" | "target" | "color" | undefined>(undefined);
   /** 이름 바꾸는 중이면 어느 쪽 이름인지 (메뉴 안 입력칸, 브라우저 prompt 창은 iPad에서 불편해서 안 쓴다) */
   let renaming = $state<"track" | "score" | undefined>(undefined);
   let draft = $state("");
@@ -69,7 +70,7 @@
 
   /** ↑↓로 항목 사이를 옮긴다 */
   function moveFocus(step: number) {
-    const items = [...panel.querySelectorAll<HTMLButtonElement>("button[role=menuitem]:not(:disabled)")];
+    const items = [...panel.querySelectorAll<HTMLButtonElement>("button[role=menuitem]:not(:disabled), button[role=menuitemradio]:not(:disabled)")];
     if (items.length === 0) return;
     const i = items.indexOf(document.activeElement as HTMLButtonElement);
     items[(i + step + items.length) % items.length]!.focus();
@@ -143,6 +144,37 @@
     <hr />
     <button role="menuitem" title={t("ui.moveTrackToNewHelp")} onclick={() => run(() => actions.toNewScore(id))}>{t("ui.moveTrackToNew")}</button>
     <button role="menuitem" title={t("ui.copyTrackToNewHelp")} onclick={() => run(() => actions.copyToNewScore(id))}>{t("ui.copyTrackToNew")}</button>
+  {:else if picking === "color" && track}
+    {@const id = track.id}
+    {@const now = hexColor(actions.colorOf(id))}
+    {@const pinned = actions.isColorPinned(id)}
+    <div class="colors" role="group" aria-label={t("ui.trackColor")}>
+      <p class="muted">{t("ui.trackColorHelp")}</p>
+      <div class="swatches">
+        {#each PICK_COLORS as c (c)}
+          <button
+            role="menuitemradio"
+            class="swatch"
+            class:on={pinned && now === c}
+            aria-checked={pinned && now === c}
+            style:background={c}
+            aria-label={c}
+            title={c}
+            onclick={() => run(() => actions.setColor(id, c))}
+          ></button>
+        {/each}
+      </div>
+      <label class="custom">
+        <span>{t("ui.trackColorCustom")}</span>
+        <input type="color" value={now ?? "#808080"} onchange={(e) => run(() => actions.setColor(id, e.currentTarget.value))} />
+      </label>
+    </div>
+    <hr />
+    {#if pinned}
+      <button role="menuitem" title={t("ui.trackColorUnpinHelp")} onclick={() => run(() => actions.setColor(id, undefined))}>{t("ui.trackColorUnpin")}</button>
+    {:else}
+      <button role="menuitem" title={t("ui.trackColorPinHelp")} disabled={!now} onclick={() => run(() => now && actions.setColor(id, now))}>{t("ui.trackColorPin")}</button>
+    {/if}
   {:else if picking}
     {#each INSTRUMENTS as inst (inst.id)}
       <button
@@ -156,6 +188,9 @@
     {#if track}
       <button role="menuitem" onclick={() => startRename("track")}>{t("ui.renameTrack")}</button>
       <button role="menuitem" onclick={() => (picking = "track")}>{t("ui.trackInstrumentMenu")}</button>
+      <button role="menuitem" onclick={() => (picking = "color")}>
+        <span class="dot" style:background={actions.colorOf(track.id)}></span>{t("ui.trackColorMenu")}…{#if actions.isColorPinned(track.id)}<span class="muted pinned">({t("ui.trackColorPinned")})</span>{/if}
+      </button>
       {#if actions.isMelody(track.id)}
         <button role="menuitem" title={t("ui.melodyHelp")} onclick={() => run(() => actions.setMelody(track.id, false))}>{t("ui.unmarkMelody")}</button>
       {:else}
@@ -242,6 +277,60 @@
   }
   button:disabled {
     opacity: 0.45;
+  }
+  .dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+  .pinned {
+    margin-left: 4px;
+  }
+  .colors {
+    display: grid;
+    gap: 6px;
+    padding: 6px;
+    max-width: 220px;
+  }
+  .colors p {
+    margin: 0;
+    font-size: 0.85em;
+  }
+  .swatches {
+    display: grid;
+    grid-template-columns: repeat(6, 28px);
+    gap: 6px;
+  }
+  .swatch {
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border-radius: 6px;
+    border: 2px solid transparent;
+  }
+  .swatch:hover:not(:disabled) {
+    border-color: var(--text);
+  }
+  .swatch.on {
+    border-color: var(--text);
+    box-shadow: inset 0 0 0 2px var(--panel);
+  }
+  .custom {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .custom input {
+    width: 44px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: none;
   }
   hr {
     border: none;

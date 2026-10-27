@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { assignTab, History, MOBILE_PROFILE, planSlide, rat, replaceSong, trackInstrument, type Command } from "@mmlce/core";
-import { addPlayer, addTrack, addTrackWithNotes, duplicateTrack, duplicateTrackToNewPlayer, moveTrack, moveTrackToNewPlayer, newSong, shiftTrack, trackMoveBlock, planMergeTracks, planMoveNotes, planVoiceByPitch, removeTrack, renamePlayer, renameTrack, setMeter, setPlayerInstrument, setPlayerTab, setTrackInstrument, setTrackPack, setNotesAndAddTracks, blockedSplitBack } from "../src/index.js";
+import { addPlayer, addTrack, addTrackWithNotes, duplicateTrack, duplicateTrackToNewPlayer, moveTrack, moveTrackToNewPlayer, newSong, shiftTrack, trackMoveBlock, planMergeTracks, planMoveNotes, planVoiceByPitch, removeTrack, renamePlayer, renameTrack, setTrackColor, setMeter, setPlayerInstrument, setPlayerTab, setTrackInstrument, setTrackPack, setNotesAndAddTracks, blockedSplitBack } from "../src/index.js";
 import { optimizeMml, setTracksNotes } from "../src/index.js";
 
 const fresh = () => newSong({ playerName: "피아노", trackName: "트랙 1" });
@@ -68,6 +68,23 @@ describe("이름 바꾸기", () => {
     const s = renamePlayer("p1", " 오른손 ").apply(renameTrack("t1", "멜로디").apply(fresh()));
     expect([s.tracks[0]!.name, s.players[0]!.name]).toEqual(["멜로디", "오른손"]);
     expect(renameTrack("t1", "  ").apply(s)).toBe(s);
+  });
+
+  it("트랙 색 고정: 고른 색이 트랙에 붙어 옮겨도 그대로, 풀면 고정만 빠지고, 복제본은 물려받지 않는다", () => {
+    const h = new History(fresh());
+    h.run(addTrack("p1", "트랙 2"));
+    let s = h.run(setTrackColor("t1", "#E04A8A"));
+    expect(s.tracks[0]).toMatchObject({ color: "#e04a8a", colorPinned: true });
+    expect(setTrackColor("t1", "#e04a8a").apply(s)).toBe(s);
+    expect(setTrackColor("t1", "red").apply(s)).toBe(s);
+    s = h.run(shiftTrack("t1", 1));
+    expect(s.tracks.map((t) => [t.id, t.colorPinned ?? false])).toEqual([["t2", false], ["t1", true]]);
+    const copy = duplicateTrack("t1", "복제").apply(s).tracks.find((t) => t.name === "복제")!;
+    expect(copy.colorPinned).toBeUndefined();
+    s = h.run(setTrackColor("t1", undefined));
+    expect(s.tracks.find((t) => t.id === "t1")!.colorPinned).toBeUndefined();
+    expect(setTrackColor("t1", undefined).apply(s)).toBe(s);
+    expect(h.undo().tracks.find((t) => t.id === "t1")!.colorPinned).toBe(true);
   });
 });
 
@@ -564,6 +581,24 @@ describe("악보 타브 튜닝 (기록 밖 상태, beta.11)", () => {
   it("같은 값이면 곡을 그대로 둔다", () => {
     const s = setPlayerTab("p1", { tuning: "dropD", capo: 2 }).apply(base());
     expect(setPlayerTab("p1", { tuning: "dropD", capo: 2 }).apply(s)).toBe(s);
+  });
+
+  it("직접 입력 튜닝은 줄 높이까지 같아야 같은 값이고, 이름 있는 튜닝으로 바꾸면 줄 높이를 지운다", () => {
+    const custom = { tuning: "custom", capo: 0, strings: [56, 51, 59, 54, 37, 32] };
+    const s = setPlayerTab("p1", custom).apply(base());
+    expect(s.players[0]!.tab).toEqual(custom);
+    expect(setPlayerTab("p1", { ...custom, strings: [...custom.strings] }).apply(s)).toBe(s);
+    const moved = setPlayerTab("p1", { ...custom, strings: custom.strings.map((p) => p + 1) }).apply(s);
+    expect(moved).not.toBe(s);
+    expect(setPlayerTab("p1", { ...custom, tuning: "dropD" }).apply(moved).players[0]!.tab).toEqual({ tuning: "dropD", capo: 0 });
+  });
+
+  it("직접 입력 튜닝 줄 높이만 기록 밖에서 바꿔도, 실행 취소는 나중에 고른 줄 높이를 지킨다", () => {
+    const h = new History(base());
+    h.amend(setPlayerTab("p1", { tuning: "custom", capo: 0, strings: [64, 59, 55, 50, 45, 40] }).apply(h.song));
+    h.run(renamePlayer("p1", "기타"));
+    h.amend(setPlayerTab("p1", { tuning: "custom", capo: 0, strings: [63, 58, 54, 49, 44, 39] }).apply(h.song));
+    expect(tabOf(h.undo(), "p1")).toEqual({ tuning: "custom", capo: 0, strings: [63, 58, 54, 49, 44, 39] });
   });
 });
 

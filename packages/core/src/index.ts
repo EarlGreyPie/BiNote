@@ -18,3 +18,5 @@ export * from "./lab.js";
 export * from "./reverb.js";
 export * from "./made.js";
 export * from "./arpeggio-guess.js";
+export * from "./chord-attenuation.js";
+export * from "./staff.js";

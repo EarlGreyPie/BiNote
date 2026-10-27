@@ -24,7 +24,7 @@ import {
   type Track,
   type TrackRole,
 } from "@mmlce/core";
-import { trackColor, type FileDiagnostic } from "./common.js";
+import { hexColor, trackColor, type FileDiagnostic } from "./common.js";
 
 /**
  * MMLCE 전용 프로젝트 파일 (확장자는 PROJECT_EXTENSION).
@@ -147,12 +147,19 @@ function cleanSplitFrom(players: Player[]): void {
   }
 }
 
-/** 악보의 타브 튜닝. 이름은 앱이 다시 검사한다(모르는 이름은 기본 튜닝). 카포는 0~24 정수만 */
+/**
+ * 악보의 타브 튜닝. 이름은 앱이 다시 검사한다(모르는 이름은 기본 튜닝). 카포는 0~24 정수만.
+ * 직접 입력한 튜닝("custom")은 줄 높이가 1~12줄의 MIDI 0~127 정수여야 한다(아니면 튜닝을 버려 기본 튜닝으로)
+ */
 function readTab(raw: unknown): PlayerTab | undefined {
   if (!isObject(raw) || typeof raw.tuning !== "string" || !raw.tuning) return undefined;
   const capo = raw.capo;
   if (typeof capo !== "number" || !Number.isInteger(capo) || capo < 0 || capo > 24) return undefined;
-  return { tuning: raw.tuning, capo };
+  if (raw.tuning !== "custom") return { tuning: raw.tuning, capo };
+  const strings = raw.strings;
+  if (!Array.isArray(strings) || strings.length < 1 || strings.length > 12) return undefined;
+  if (!strings.every((v): v is number => Number.isInteger(v) && (v as number) >= 0 && (v as number) <= 127)) return undefined;
+  return { tuning: "custom", capo, strings: [...strings] };
 }
 
 /** 글이 프로젝트 파일로 보이는지 (확장자가 없거나 다를 때). format 값은 이름이 바뀌어도 "mmlce" 그대로 둔다 */
@@ -317,11 +324,16 @@ function readSong(raw: Obj, diagnostics: FileDiagnostic[]): Song {
       playerId = players[0]!.id;
       warn(diagnostics, "project-player-missing", where);
     }
+    // 색은 읽을 수 있는 꼴(hexColor)만 받는다. 없거나 모르는 꼴이면 차례대로 준 색으로, 고정도 켜지 않는다
+    const color = str(tr.color).trim();
+    const goodColor = color && hexColor(color) !== undefined ? color : undefined;
+    if (color && !goodColor) warn(diagnostics, "project-track-color", where);
     tracks.push({
       id,
       playerId,
       name,
-      color: str(tr.color) || trackColor(i),
+      color: goodColor ?? trackColor(i),
+      ...(tr.colorPinned === true && goodColor ? { colorPinned: true } : {}),
       role: ROLES.includes(tr.role as TrackRole) ? (tr.role as TrackRole) : "free",
       mute: tr.mute === true,
       solo: tr.solo === true,

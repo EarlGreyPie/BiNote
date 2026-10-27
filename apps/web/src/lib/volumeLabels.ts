@@ -13,9 +13,16 @@ export function parseVolumeLabels(raw: string | null): VolumeLabelMode {
  * 볼륨 숫자를 쓸 음과 그 v (고르는 트랙 하나의 음). 피아노롤과 타브가 같이 쓴다.
  * v는 실제로 나는 값(&로 바로 이은 음은 사슬 첫 음 v)이고, 이음 사슬의 뒤 조각에는 쓰지 않는다.
  * all: 사슬 첫 음마다. changes: 트랙 첫 음, 앞 음(앞 사슬)과 v가 다른 음, 그리고 화면에서 처음 보이는 음(from 이후 첫 음).
- * 쉼표는 음이 아니라 비교에 끼지 않는다. from·to(온음표 단위, 화면 시간)가 있으면 그 안에서 시작하는 음만 돌려준다
+ * 쉼표는 음이 아니라 비교에 끼지 않는다. from·to(온음표 단위, 화면 시간)가 있으면 그 안에서 시작하는 음만 돌려준다.
+ * inView를 주면 그 밖의 음(롤에서 음 높이가 화면 밖)도 보이지 않는 것으로 보아, 화면에서 처음 보이는 음 자리를 차지하지 않는다
  */
-export function volumeLabelNotes(notes: readonly Note[], mode: VolumeLabelMode, from = -Infinity, to = Infinity): Map<string, number> {
+export function volumeLabelNotes(
+  notes: readonly Note[],
+  mode: VolumeLabelMode,
+  from = -Infinity,
+  to = Infinity,
+  inView: (n: Note) => boolean = () => true,
+): Map<string, number> {
   const out = new Map<string, number>();
   if (mode === "off") return out;
   const vols = chainVolumes(notes);
@@ -28,7 +35,7 @@ export function volumeLabelNotes(notes: readonly Note[], mode: VolumeLabelMode, 
     if (prev && prev.tie === "next" && cmp(add(prev.start, prev.dur), n.start) === 0) return;
     const vol = vols.get(n.id) ?? n.vol;
     const at = toFloat(n.start);
-    const shown = at >= from && at < to;
+    const shown = at >= from && at < to && inView(n);
     const changed = prevVol === undefined || vol !== prevVol;
     prevVol = vol;
     if (!shown) return;

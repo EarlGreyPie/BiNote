@@ -25,6 +25,8 @@
    * 우선 트랙 음은 빼지 않는다. 뺄 음은 수와 자리(마디·박·높이)를 모두 보여 주고, 띠에 빨갛게 표시한다
    */
   interface Props {
+    /** 화면 트랙 색 (트랙 목록·롤과 같은 색). 없는 트랙은 저장된 색 */
+    colors?: ReadonlyMap<string, string>;
     song: Song;
     profile: GameProfile;
     locked: ReadonlySet<string>;
@@ -36,7 +38,7 @@
     onclose: () => void;
   }
 
-  let { song, profile, locked, activeTrackId, where, onseek, onapply, onclose }: Props = $props();
+  let { song, colors, profile, locked, activeTrackId, where, onseek, onapply, onclose }: Props = $props();
 
   let dialog: HTMLDialogElement;
   const limit = $derived(profile.charLimitPerScore);
@@ -92,7 +94,7 @@
   );
 
   const name = (id: string) => song.tracks.find((tr) => tr.id === id)?.name ?? "";
-  const color = (id: string) => song.tracks.find((tr) => tr.id === id)?.color ?? "var(--muted)";
+  const color = (id: string) => colors?.get(id) ?? song.tracks.find((tr) => tr.id === id)?.color ?? "var(--muted)";
   const end = $derived(songEnd(song));
   /** 띠: 남는 트랙마다 한 줄 (원래 음은 흐리게, 다른 트랙에서 온 음은 그 트랙 색), 맨 아래 줄은 뺀 음 */
   const lanes = $derived.by(() => {

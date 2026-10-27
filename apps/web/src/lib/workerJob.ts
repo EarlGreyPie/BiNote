@@ -84,6 +84,13 @@ export class WorkerJob<Req, Res, P = number> {
     pending.done(undefined);
   }
 
+  /** 다 썼다: 돌던 계산을 멈추고 쉬고 있는 워커도 끝낸다 (창을 닫을 때). 다시 run하면 새 워커를 만든다 */
+  dispose(): void {
+    this.cancel();
+    this.worker?.terminate();
+    this.worker = undefined;
+  }
+
   private ensureWorker(): Worker | undefined {
     if (this.worker || !this.makeWorker) return this.worker;
     try {

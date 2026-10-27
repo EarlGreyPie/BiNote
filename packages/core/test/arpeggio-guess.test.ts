@@ -154,6 +154,17 @@ describe("기록 없는 아르페지오 알아보기", () => {
     expect(g.ok && [g.style, g.cells.length]).toEqual(["spread", 2]);
   });
 
+  it("한 연주자가 악보 여럿으로 나뉘면 다른 악보 트랙은 둘레로 묶지 않는다", () => {
+    // 1번 c1, 2~6번 빈 트랙, 7번(둘째 악보) r16e2
+    const song = songOf({ t1: [n("c", 0, 8, 60)], t2: [], t3: [], t4: [], t5: [], t6: [], t7: [{ ...n("e", 0, 4, 64), start: rat(1, 16) }] });
+    const scores = [["t1", "t2", "t3", "t4", "t5", "t6"], ["t7"]];
+    const one = song.tracks[0]!.notes;
+    expect(guessArpeggioAround(song, one, newId).ok).toBe(true);
+    expect(guessArpeggioAround(song, one, newId, new Set(), scores)).toMatchObject({ ok: false, reason: "none" });
+    // 두 악보 음을 함께 고르면 여러 악보
+    expect(guessArpeggio(song, [...one, ...song.tracks[6]!.notes], newId, new Set(), scores)).toMatchObject({ ok: false, reason: "score" });
+  });
+
   it("&로 이은 음은 하나로 본다", () => {
     // 굴려 치기 뒤 각 음을 &로 둘로 나눈 것
     const tied = songOf({

@@ -10,6 +10,10 @@ export interface RawNote {
   readonly seconds: number;
   readonly pitch: number;
   readonly velocity: number;
+  /** 타브 줄 번호 (1 = 가장 높은 줄). MusicXML에서 읽었을 때만 */
+  readonly string?: number;
+  /** 악보 성부 (MusicXML에서 읽었을 때만). 칸 맞춤 없이 가져올 때 다른 성부의 같은 높이 음을 자르지 않는다 */
+  readonly voice?: string;
 }
 
 /** MIDI 파트 = (트랙, 채널) 하나. 악기 지정 화면의 한 줄 */
@@ -27,14 +31,20 @@ export interface MidiPart {
   /** 동시에 울리는 음 수의 최대 */
   readonly polyphony: number;
   readonly suggestion: InstrumentSuggestion;
+  /** 기본 배정에서 한 연주자로 묶을 단위 (MusicXML 파트 id). 없으면 GM 번호·추천 악기가 같은 파트끼리 묶는다 */
+  readonly group?: string;
 }
 
 export interface MidiAnalysis {
   readonly ppq: number;
   readonly parts: MidiPart[];
-  /** 정확한 빠르기(소수). 곡에 넣을 때 반올림한다 */
+  /** 정확한 빠르기(소수). 곡에 넣을 때 반올림한다 (keepTiming이면 소수 그대로) */
   readonly tempo: TempoEvent[];
   readonly timeSig: TimeSigEvent[];
+  /**
+   * 템포·박자 위치를 그대로 쓴다 (가져오기 격자에 맞추지 않음). 받아 적은 음을 지금 곡의 템포에 놓을 때, 곡의 분수 위치를 지킨다
+   */
+  readonly keepTiming?: boolean;
 }
 
 const SUSTAIN = 64;
@@ -131,7 +141,13 @@ export function analyzeMidi(smf: Smf): MidiAnalysis {
     for (const [channel, slot] of [...byChannel].sort((a, b) => a[0] - b[0])) {
       if (slot.notes.length === 0) continue;
       slot.notes.sort((a, b) => a.seconds - b.seconds || b.pitch - a.pitch);
-      const pitches = slot.notes.map((n) => n.pitch);
+      // 음이 아주 많아도(받아 적기 결과 수만 개) 인자 펼치기 한도에 걸리지 않게 하나씩 센다
+      let low = 127;
+      let high = 0;
+      for (const n of slot.notes) {
+        if (n.pitch < low) low = n.pitch;
+        if (n.pitch > high) high = n.pitch;
+      }
       const drum = channel === 9;
       parts.push({
         id: `m${trackIndex + 1}c${channel + 1}`,
@@ -141,8 +157,8 @@ export function analyzeMidi(smf: Smf): MidiAnalysis {
         program: slot.program,
         drum,
         notes: slot.notes,
-        low: Math.min(...pitches),
-        high: Math.max(...pitches),
+        low,
+        high,
         polyphony: polyphony(slot.notes),
         suggestion: drum ? { canonical: "bass-drum", matched: true, alternatives: ["cymbal"] } : suggestInstrument(slot.program),
       });
@@ -169,7 +185,8 @@ function secondsAt(tempo: readonly { tick: number; us: number }[], ppq: number):
   };
 }
 
-function polyphony(notes: readonly RawNote[]): number {
+/** 동시에 울리는 음 수의 최대 */
+export function polyphony(notes: readonly RawNote[]): number {
   const edges: [number, number][] = [];
   for (const n of notes) {
     edges.push([n.start.n / n.start.d, 1]);

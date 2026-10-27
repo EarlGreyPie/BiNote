@@ -213,6 +213,21 @@ describe("eventLabels / eventAt", () => {
     const vm = vl.find((l) => l.kind === "meter")!;
     expect(vl.find((l) => l.kind === "marker")!.y).toBe(vm.y + vm.h);
   });
+  it("세로 롤: 셋 이상 모여도 서로 겹치지 않는다 (밀어 놓은 라벨이 더 앞 라벨과 다시 겹치지 않게)", () => {
+    const crowd = {
+      tempo: [],
+      timeSig: [{ at: rat(1), beats: 3, unit: 4 }],
+      markers: [
+        { id: "a", at: rat(1), label: "A" },
+        { id: "b", at: rat(65, 64), label: "B" },
+        { id: "c", at: rat(33, 32), label: "C" },
+      ],
+    };
+    const v: RollView = { orientation: "vertical", width: 400, height: 800, start: 0, pxPerWhole: 100, edgePitch: 36, pxPerKey: 12, keyboard: 44 };
+    const labels = eventLabels(v, crowd);
+    for (const a of labels)
+      for (const b of labels) if (a !== b) expect(a.y < b.y + b.h && a.y + a.h > b.y).toBe(false);
+  });
   it("설정의 글자 크기를 따라 칸이 두꺼워지고, 누르는 칸도 그 자리를 따른다", () => {
     // 기본(타브 13px)은 전과 같은 14px 칸
     expect(eventRowFor(13)).toBe(EVENT_ROW);

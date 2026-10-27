@@ -9,6 +9,10 @@ export interface GridNote {
   readonly velocity: number;
   /** 어느 MIDI 파트에서 왔는지 */
   readonly part: string;
+  /** 타브 줄 번호 (MusicXML에서 읽었을 때만) */
+  readonly string?: number;
+  /** 악보 성부 (MusicXML). 있으면 tidy가 성부마다 따로 정리한다 */
+  readonly voice?: string;
 }
 
 export interface QuantizeOptions {
@@ -23,6 +27,10 @@ export interface QuantizeOptions {
    * 끄면(기본) 박 판정은 그대로다. 켜면 midiToSong이 화음 정리까지 한 결과를 비교해 나빠지지 않는 박만 바꾼다
    */
   readonly straighten?: boolean;
+  /**
+   * 칸에 맞추지 않고 위치·길이를 그대로 쓴다 (MusicXML처럼 악보에 적힌 정확한 길이). 나머지 칸 설정은 쓰지 않는다
+   */
+  readonly exact?: boolean;
 }
 
 export const GRID_CHOICES = [4, 8, 16, 32, 64] as const;
@@ -251,13 +259,13 @@ function bpmAt(tempo: readonly TempoEvent[], at: number): number {
   return bpm;
 }
 
-/** 같은 파트의 같은 음이 겹치면 앞 음을 뒤 음 시작에서 끊고, 같은 자리의 같은 음은 하나만 둔다 */
+/** 같은 파트(성부가 있으면 같은 성부)의 같은 음이 겹치면 앞 음을 뒤 음 시작에서 끊고, 같은 자리의 같은 음은 하나만 둔다 */
 export function tidy(notes: readonly GridNote[]): GridNote[] {
   const sorted = [...notes].sort((a, b) => cmp(a.start, b.start) || b.pitch - a.pitch);
   const out: GridNote[] = [];
   const last = new Map<string, number>();
   for (const n of sorted) {
-    const key = `${n.part}:${n.pitch}`;
+    const key = `${n.part}:${n.voice ?? ""}:${n.pitch}`;
     const i = last.get(key);
     if (i !== undefined) {
       const prev = out[i]!;

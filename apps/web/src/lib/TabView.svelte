@@ -100,7 +100,8 @@
     /** 타브 커서 자리가 바뀔 때 (Alt+B·Alt+M이 그 자리에 넣게). 커서가 없으면 undefined */
     oncursor?: ((at: Rat | undefined) => void) | undefined;
     /** 여러 트랙에 붙이기: 있는 트랙의 바뀐 음과 이 악보에 더할 새 트랙의 음 (실행 취소 한 칸) */
-    onlayers?: ((changes: TrackChanges, added: Note[][], playerId: string, label: string) => void) | undefined;
+    /** 붙였으면 true (검사가 거절하거나 잠근 트랙이면 false: 고르기·커서를 옮기지 않는다) */
+    onlayers?: ((changes: TrackChanges, added: Note[][], playerId: string, label: string) => boolean) | undefined;
     /** 재생 위치 (온음표 단위, 피아노롤과 같은 값). 없으면 곡 처음부터 */
     playCursor?: number | undefined;
     /** 반복 구간 (피아노롤과 같은 값) */
@@ -762,7 +763,7 @@
       onpastefull?.(maxTracks);
       return undefined;
     }
-    onlayers?.(placed.changes, placed.added, player, label);
+    if (!onlayers?.(placed.changes, placed.added, player, label)) return undefined;
     selected = new Set(layers.flat().map((n) => n.id));
     anchor = undefined;
     const end = add(from, clip.length);

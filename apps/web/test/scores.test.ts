@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { emptySong, type Song } from "@mmlce/core";
-import { chainVolumes, melodyTrackIds, peakPolyphony, scoreGroups, soundingAt, trackColors, visibleTrackIds } from "../src/lib/scores";
+import { chainVolumes, hexColor, melodyTrackIds, peakPolyphony, scoreGroups, soundingAt, trackColors, visibleTrackIds } from "../src/lib/scores";
 
 function song(counts: number[]): Song {
   const base = emptySong({ title: "", author: "", profileId: "mobile" });
@@ -66,6 +66,38 @@ describe("trackColors", () => {
     expect(trackColors(s, g, "position", "dark").get("p0t0")).not.toBe(trackColors(s, g, "position", "light").get("p0t0"));
     const hues = [...trackColors(s, g, "score", "dark").values()].map((c) => c.split(" ")[0]);
     expect(new Set(hues).size).toBe(6);
+  });
+
+  it("고정한 색은 어느 방식에서든 그대로, 순서를 바꿔도 따라간다", () => {
+    const s = song([3]);
+    const pinned: Song = { ...s, tracks: s.tracks.map((t) => (t.id === "p0t2" ? { ...t, color: "#e04a8a", colorPinned: true } : t)) };
+    for (const scheme of ["position", "score", "stored"] as const) expect(trackColors(pinned, scoreGroups(pinned, 6), scheme).get("p0t2")).toBe("#e04a8a");
+    // 맨 앞으로 옮겨도 고정한 트랙 색은 그대로, 위치 방식의 다른 트랙은 자리 따라 바뀐다
+    const moved: Song = { ...pinned, tracks: [pinned.tracks[2]!, pinned.tracks[0]!, pinned.tracks[1]!] };
+    const before = trackColors(pinned, scoreGroups(pinned, 6), "position");
+    const after = trackColors(moved, scoreGroups(moved, 6), "position");
+    expect(after.get("p0t2")).toBe("#e04a8a");
+    expect(after.get("p0t0")).toBe(before.get("p0t1"));
+  });
+
+  it("트랙마다 고정 방식은 만들 때 받은 색을 테마에 맞춰 보여 주고, 순서를 바꿔도 같다", () => {
+    const s = song([2]);
+    const made: Song = { ...s, tracks: s.tracks.map((t, i) => ({ ...t, color: ["#4f8cff", "#ff7a59"][i]! })) };
+    const swapped: Song = { ...made, tracks: [made.tracks[1]!, made.tracks[0]!] };
+    const a = trackColors(made, scoreGroups(made, 6), "stored", "dark");
+    const b = trackColors(swapped, scoreGroups(swapped, 6), "stored", "dark");
+    expect(a.get("p0t0")).toBe("#6ea2ff");
+    expect(b.get("p0t0")).toBe("#6ea2ff");
+    expect(b.get("p0t1")).toBe("#ff8a66");
+    expect(trackColors(made, scoreGroups(made, 6), "stored", "light").get("p0t0")).toBe("#2f6fe4");
+  });
+
+  it("hexColor: #rgb·hsl()을 색 고르기 칸 값으로", () => {
+    expect(hexColor("#ABC")).toBe("#aabbcc");
+    expect(hexColor("#2f6fe4")).toBe("#2f6fe4");
+    expect(hexColor("hsl(0 100% 50%)")).toBe("#ff0000");
+    expect(hexColor("hsl(218 72% 42%)")).toMatch(/^#[0-9a-f]{6}$/);
+    expect(hexColor("var(--muted)")).toBeUndefined();
   });
 });
 

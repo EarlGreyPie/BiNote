@@ -12,6 +12,8 @@
    * 체크를 바꿀 때마다 적용한 결과(글자 수 전후)를 다시 계산해 보여 준다. 음은 빼지 않는다 (자리만 바꾼다)
    */
   interface Props {
+    /** 화면 트랙 색 (트랙 목록·롤과 같은 색). 없는 트랙은 저장된 색 */
+    colors?: ReadonlyMap<string, string>;
     song: Song;
     profile: GameProfile;
     locked: ReadonlySet<string>;
@@ -29,7 +31,7 @@
     onclose: () => void;
   }
 
-  let { song, profile, locked, initialSource, where, newScoreOnAdd, onseek, onaddtrack, onsplit, onapply, onclose }: Props = $props();
+  let { song, colors, profile, locked, initialSource, where, newScoreOnAdd, onseek, onaddtrack, onsplit, onapply, onclose }: Props = $props();
 
   let dialog: HTMLDialogElement;
   const limit = $derived(profile.charLimitPerScore);
@@ -62,7 +64,7 @@
   });
 
   const name = (id: string) => song.tracks.find((tr) => tr.id === id)?.name ?? "";
-  const color = (id: string) => song.tracks.find((tr) => tr.id === id)?.color ?? "var(--muted)";
+  const color = (id: string) => colors?.get(id) ?? song.tracks.find((tr) => tr.id === id)?.color ?? "var(--muted)";
   const blockText = { locked: "ui.spreadBlockLocked", score: "ui.spreadBlockScore", sound: "ui.spreadBlockSound" } as const;
 
   /** 적용한 결과 (체크를 바꾸면 잠깐 뒤에 다시 센다: 출력기로 모든 트랙을 다시 써 봐야 해서 느리다) */

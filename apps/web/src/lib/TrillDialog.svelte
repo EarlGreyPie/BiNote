@@ -1,6 +1,6 @@
 <script lang="ts">
   import { canWriteExactly, optimizeMml } from "@mmlce/mml";
-  import { add, cmp, planTrill, positionToSeconds, toFloat, type GameProfile, type Note, type Rat, type Song, type TrillResult } from "@mmlce/core";
+  import { add, cmp, planTrill, positionToSeconds, toFloat, TRILL_VOLUME_DEPTH_LIMIT, TRILL_VOLUME_PATTERNS, type GameProfile, type Note, type Rat, type Song, type TrillResult, type TrillVolumePattern } from "@mmlce/core";
   import { t } from "./i18n.svelte";
   import { lengthLabel } from "./Toolbar.svelte";
   import { lengthsFor, noteLengthOf } from "./roll";
@@ -80,6 +80,8 @@
         startOther: choice.startOther,
         endOnMain: choice.endOnMain,
         tie: choice.tie,
+        staccato: choice.staccato,
+        ...(choice.volumePattern !== "same" || choice.volumeLower !== 0 ? { volume: { pattern: choice.volumePattern, depth: choice.volumeDepth, lower: choice.volumeLower } } : {}),
         canWrite,
         locked,
         instrumentOf,
@@ -91,6 +93,17 @@
   });
 
   // 빠르기: 첫 본음 자리에서 음 하나가 걸리는 시간으로 초당 몇 번인지와 그 자리 템포
+  // 빠름 기준: 고른 음 트랙 악기 가운데 가장 낮은 값 (바이올린·플루트처럼 지속음 악기는 더 일찍 흐려진다)
+  const fastRate = $derived.by(() => {
+    const ids = new Set(picked.map((n) => n.id));
+    let low = Infinity;
+    for (const tr of song.tracks) {
+      if (!tr.notes.some((n) => ids.has(n.id))) continue;
+      const instrument = instrumentOf(tr.id);
+      low = Math.min(low, (instrument !== undefined ? profile.ornamentFastRateByInstrument[instrument] : undefined) ?? profile.ornamentFastRate);
+    }
+    return Number.isFinite(low) ? low : profile.ornamentFastRate;
+  });
   const rate = $derived.by(() => {
     if (picked.length === 0) return undefined;
     const from = picked.reduce<Rat>((m, n) => (cmp(n.start, m) < 0 ? n.start : m), picked[0]!.start);
@@ -144,7 +157,20 @@
     dialog.close();
   }
   const s = $derived(result.skipped);
+  /** v 모양 이름 */
+  const PATTERN_KEY = {
+    same: "ui.trillVolSame",
+    alternate: "ui.trillVolAlternate",
+    accentFirst: "ui.trillVolAccentFirst",
+    accentBeat: "ui.trillVolAccentBeat",
+    crescendo: "ui.trillVolCrescendo",
+    decrescendo: "ui.trillVolDecrescendo",
+  } as const satisfies Record<TrillVolumePattern, string>;
+  /** 0~한도 정수 입력 */
+  const steps = (raw: string) => Math.min(TRILL_VOLUME_DEPTH_LIMIT, Math.max(0, Math.round(Number(raw) || 0)));
   const trill = $derived(choice.kind === "trill");
+  // &로 잇기는 트릴에서만, 끊어 치기와는 함께 쓰지 않는다 (planTrill과 같은 조건)
+  const tieOn = $derived(trill && choice.tie && !choice.staccato);
 </script>
 
 <dialog bind:this={dialog} {onclose}>
@@ -175,6 +201,35 @@
       </select>
       {#if rate}<small class="muted">{t("ui.trillRate", { n: rate.n, bpm: rate.bpm })}</small>{/if}
     </span>
+    {#if rate && rate.n > fastRate}
+      <span></span>
+      <small class="warn">{t("ui.trillFast", { n: fastRate })}</small>
+    {/if}
+    <span>{t("ui.trillVolume")}</span>
+    <span class="row">
+      <select value={choice.volumePattern} disabled={tieOn} title={tieOn ? t("ui.trillVolTie") : undefined} onchange={(e) => set({ volumePattern: e.currentTarget.value as TrillVolumePattern })}>
+        {#each TRILL_VOLUME_PATTERNS as p (p)}<option value={p}>{t(PATTERN_KEY[p])}</option>{/each}
+      </select>
+      {#if choice.volumePattern !== "same" && !tieOn}
+        <label>{t("ui.trillVolDepth")} <input class="num" type="number" min="0" max={TRILL_VOLUME_DEPTH_LIMIT} value={choice.volumeDepth} onchange={(e) => set({ volumeDepth: steps(e.currentTarget.value) })} /></label>
+      {/if}
+      <span class="row" title={t("ui.trillVolLowerHelp")}>
+        {t("ui.trillVolLower")}
+        <label
+          ><input type="checkbox" checked={choice.volumeLower === "auto"} onchange={(e) => set({ volumeLower: e.currentTarget.checked ? "auto" : profile.ornamentRepeatLower.single })} />
+          {t("ui.trillVolLowerAuto", { single: profile.ornamentRepeatLower.single, chord: profile.ornamentRepeatLower.chord })}</label
+        >
+        {#if choice.volumeLower !== "auto"}
+          <input class="num" type="number" min="0" max={TRILL_VOLUME_DEPTH_LIMIT} value={choice.volumeLower} onchange={(e) => set({ volumeLower: steps(e.currentTarget.value) })} />
+        {/if}
+      </span>
+    </span>
+    {#if tieOn && choice.volumePattern !== "same"}
+      <span></span>
+      <small class="muted">{t("ui.trillVolTie")}</small>
+    {/if}
+    <span></span>
+    <label title={t("ui.trillStaccatoHelp")}><input type="checkbox" checked={choice.staccato} onchange={(e) => set({ staccato: e.currentTarget.checked })} /> {t("ui.trillStaccato")}</label>
     {#if trill}
       <span></span>
       <span class="row">
@@ -182,7 +237,7 @@
         <label><input type="checkbox" checked={choice.endOnMain} onchange={(e) => set({ endOnMain: e.currentTarget.checked })} /> {t("ui.trillEndOnMain")}</label>
       </span>
       <span></span>
-      <label><input type="checkbox" checked={choice.tie} onchange={(e) => set({ tie: e.currentTarget.checked })} /> {t("ui.trillTie")}</label>
+      <label><input type="checkbox" checked={choice.tie} disabled={choice.staccato} onchange={(e) => set({ tie: e.currentTarget.checked })} /> {t("ui.trillTie")}</label>
     {/if}
   </div>
   <svg class="preview" viewBox="0 0 {W} {H}" role="img" aria-label={t("ui.arpPreview")}>
@@ -254,6 +309,9 @@
   }
   .pitch {
     width: 5em;
+  }
+  .num {
+    width: 3.5em;
   }
   .pitch[aria-invalid="true"] {
     border-color: var(--danger);

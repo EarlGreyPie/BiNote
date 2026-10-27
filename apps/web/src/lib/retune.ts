@@ -1,6 +1,7 @@
 import { add, assignTab, cmp, replaceSong, type Command, type Note, type PlayerTab, type TabTuning, type Track } from "@mmlce/core";
 import { setPlayerTab, setTracksNotes } from "@mmlce/mml";
 import { struckNotes, tieLinks } from "./tabMarks";
+import { HIGHEST_PITCH, LOWEST_PITCH } from "./tunings";
 
 /** 타브 그대로 튜닝 바꾸기 결과 */
 export interface Retune {
@@ -33,7 +34,8 @@ export function retuneKeepingTab(tracks: readonly Track[], from: TabTuning, to: 
       const open = at && to.strings[at.string - 1];
       if (!at || open === undefined) continue;
       const pitch = open + to.capo + at.fret;
-      if (pitch < 0 || pitch > 127) continue;
+      // MML로 쓸 수 있는 높이(o0c~o9g) 밖이면 옮기지 않는다
+      if (pitch < LOWEST_PITCH || pitch > HIGHEST_PITCH) continue;
       placed.set(note.id, { pitch, string: at.string });
     }
   }

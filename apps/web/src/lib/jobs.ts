@@ -5,6 +5,8 @@ import { fewerOf, planSplit, type BooksRequest, type SplitRequest } from "./spli
 export { fewerOf, planSplit, type BooksRequest, type SplitRequest };
 import type { Schedule, SlotPatch } from "@mmlce/audio/browser";
 import { WorkerJob } from "./workerJob";
+import { transcribePitch, type PitchRequest } from "./pitchTranscribe";
+import type { TimedNote } from "@mmlce/midi";
 
 /** 악보책 나누기 (Web Worker) */
 export function splitJob(makeWorker = workerMaker(() => new Worker(new URL("./split.worker.ts", import.meta.url), { type: "module" }))) {
@@ -44,6 +46,11 @@ export async function renderWavFile(request: WavRequest, onProgress: (fraction: 
 /** WAV 저장 (Web Worker) */
 export function wavJob(makeWorker = workerMaker(() => new Worker(new URL("./wav.worker.ts", import.meta.url), { type: "module" }))) {
   return new WorkerJob<WavRequest, WavResult>(makeWorker, renderWavFile);
+}
+
+/** 브라우저 안 받아 적기 (Web Worker, 실험실). 워커가 실패하면 화면 쪽에서 돈다 */
+export function pitchJob(makeWorker = workerMaker(() => new Worker(new URL("./pitch.worker.ts", import.meta.url), { type: "module" }))) {
+  return new WorkerJob<PitchRequest, TimedNote[]>(makeWorker, transcribePitch);
 }
 
 function workerMaker(make: () => Worker): (() => Worker) | undefined {

@@ -63,5 +63,5 @@ MMLCE_SAMPLES=/경로/samples pnpm test
 
 BiNote는 [GNU GPL v3](LICENSE)(GPL-3.0-only)로 공개합니다. 고쳐서 배포할 때는 그 소스도 같은 라이선스로 공개해야 합니다.
 
-- 함께 들어 있는 라이브러리(SpessaSynth Apache-2.0, CodeMirror·Svelte MIT 등)의 고지는 [`apps/web/public/licenses/third-party.txt`](apps/web/public/licenses/third-party.txt), 글꼴(OFL)은 [`fonts.txt`](apps/web/public/licenses/fonts.txt)에 있습니다.
+- 함께 들어 있는 라이브러리(SpessaSynth Apache-2.0, CodeMirror·Svelte·VexFlow MIT 등)의 고지는 [`apps/web/public/licenses/third-party.txt`](apps/web/public/licenses/third-party.txt), 글꼴(OFL)은 [`fonts.txt`](apps/web/public/licenses/fonts.txt)에 있습니다.
 - 마비노기 모바일 사운드팩·악기 이름 등 게임 자산의 권리는 넥슨에 있으며, 이 저장소에는 들어 있지 않습니다.

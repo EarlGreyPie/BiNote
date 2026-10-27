@@ -74,6 +74,23 @@ describe("타브에 안 나오는 음이 없다", () => {
     expect(bad.slice(0, 10)).toEqual([]);
   });
 
+  it("화면 왼쪽 밖에서 친 칠 수 없는 음에 이어 울리는 뒷음은 화면 안 첫 자리에 ×", () => {
+    const tracks = tracksOf(["o8l16c&c4&c2"]);
+    const links = tieLinks(tracks);
+    const events = assignTab(tracks.flatMap((t) => struckNotes(t)), STANDARD_TUNING, new Map(), new Map());
+    const m = layoutTabMarks(events, links, (t) => t * 220, (text) => text.length * 7, 18, 0.25, 1);
+    const last = tracks[0]![2]!.id;
+    const mark = m.missing.find((x) => x.ids.includes(last));
+    expect(mark).toBeDefined();
+    // 가운데 c4(1/16-5/16)가 화면 첫 자리(1/4)에서 아직 울리므로 화면 왼쪽 끝에
+    expect(mark!.t).toBeCloseTo(1 / 4);
+    // 뒷음도 화면 밖이면 ×를 쓰지 않는다
+    expect(layoutTabMarks(events, links, (t) => t * 220, (text) => text.length * 7, 18, 1, 2).missing).toEqual([]);
+    // 뒷음이 화면 왼쪽 밖에서 시작해도 화면 안에서 아직 울리면 화면 왼쪽 끝에 ×
+    const inside = layoutTabMarks(events, links, (t) => t * 220, (text) => text.length * 7, 18, 0.5, 1).missing.find((x) => x.ids.includes(last));
+    expect(inside?.t).toBeCloseTo(0.5);
+  });
+
   it("붙은 괄호는 같은 사슬 앞 괄호가 함께 맡고, 떨어진 괄호는 호를 긋는다", () => {
     const tracks = tracksOf(["o4l64c&c&c&c"]);
     const m = marksOf(tracks, 220);

@@ -86,7 +86,7 @@ export function songToSmf(
         const same = channels.findIndex((c) => c.key === plan.key);
         k = same >= 0 ? same : channels.length - 1;
       }
-      channels[k]!.spans.push(...plan.spans);
+      for (const sp of plan.spans) channels[k]!.spans.push(sp);
       channel = CHANNELS_WITHOUT_DRUMS[k]!;
     }
     const events: SmfEvent[] = [{ tick: 0, type: "name", text: plan.name }];
@@ -100,15 +100,25 @@ export function songToSmf(
   return { format: 1, ppq, tracks };
 }
 
-/** 같은 높이로 &로 바로 이은 음을 하나로 합친다. 볼륨은 첫 음 것을 쓰고, 첫 음이 v0이면 사슬 전체가 무음이다 */
-function soundNotes(notes: readonly Note[]): Note[] {
+/**
+ * 소리 나는 음: 같은 높이로 &로 바로 이은 음을 하나로 합친다. 볼륨은 사슬 첫 음 것이고 (게임은 & 뒤의 v를 무시한다),
+ * 다른 높이로 이은 음(슬라이드)도 첫 음 볼륨으로 이어진다. 첫 음이 v0이면 사슬 전체가 무음이라 뺀다
+ */
+export function soundNotes(notes: readonly Note[]): Note[] {
   const out: Note[] = [];
   let joining = false;
+  let headVol = 0;
   for (const n of [...notes].sort((a, b) => cmp(a.start, b.start))) {
     const prev = out[out.length - 1];
-    if (joining && prev && prev.pitch === n.pitch && cmp(add(prev.start, prev.dur), n.start) === 0) {
+    const joined = joining && !!prev && cmp(add(prev.start, prev.dur), n.start) === 0;
+    if (joined && prev.pitch === n.pitch) {
       out[out.length - 1] = { ...prev, dur: add(prev.dur, n.dur), tie: n.tie };
-    } else out.push(n);
+    } else if (joined) {
+      out.push({ ...n, vol: headVol });
+    } else {
+      headVol = n.vol;
+      out.push(n);
+    }
     joining = n.tie === "next";
   }
   return out.filter((n) => n.vol > 0);

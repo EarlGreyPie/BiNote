@@ -6,6 +6,12 @@ export interface TrackActions {
   select(trackId: string): void;
   renameTrack(trackId: string, name: string): void;
   renamePlayer(playerId: string, name: string): void;
+  /** 화면에 보이는 트랙 색 (설정의 색 방식·고정 색을 따른 값) */
+  colorOf(trackId: string): string;
+  /** 지금 곡에서 트랙 색이 고정됐는지 (메뉴를 연 뒤 실행 취소해도 맞게, 연 때의 트랙이 아니라 지금 곡을 본다) */
+  isColorPinned(trackId: string): boolean;
+  /** 트랙 색을 정해 고정한다(#rrggbb). undefined면 고정을 푼다 (실행 취소에 들어간다) */
+  setColor(trackId: string, color: string | undefined): void;
   playerInstrument(playerId: string, canonical: string): void;
   trackInstrument(trackId: string, canonical: string): void;
   /** 트랙에서 들을 사운드팩 (파일 이름, undefined면 자동). 악기 고르기와 같은 대상(트랙 악기 또는 악보 악기)에 적용 */

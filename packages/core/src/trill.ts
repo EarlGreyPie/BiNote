@@ -14,6 +14,29 @@ import { replaceNotes } from "./note-edit.js";
 
 export type TrillKind = "trill" | "tremolo";
 
+/**
+ * 나눈 음의 v 모양 (본음 v 기준, 깊이만큼 낮춘 v와 섞는다). 게임에서 어떻게 들리는지는 아직 실측 전이다.
+ * - same: 모두 본음 v
+ * - alternate: 하나 건너 낮게 (번갈아)
+ * - accentFirst: 첫 음만 본음 v, 나머지는 낮게
+ * - accentBeat: 박(4분음표) 자리에서 시작하는 음만 본음 v, 나머지는 낮게
+ * - crescendo: 낮은 v에서 본음 v까지 점점 크게
+ * - decrescendo: 본음 v에서 낮은 v까지 점점 작게
+ */
+export type TrillVolumePattern = "same" | "alternate" | "accentFirst" | "accentBeat" | "crescendo" | "decrescendo";
+export const TRILL_VOLUME_PATTERNS: readonly TrillVolumePattern[] = ["same", "alternate", "accentFirst", "accentBeat", "crescendo", "decrescendo"];
+
+export interface TrillVolume {
+  readonly pattern: TrillVolumePattern;
+  /** 낮은 v가 본음 v보다 몇 단계 아래인지 */
+  readonly depth: number;
+  /**
+   * 나눈 음 전체를 몇 단계 낮출지 (빠르게 다시 치면 겹쳐 커져서). "auto"면 프로필의 실측 권장값
+   * (GameProfile.ornamentRepeatLower: 한 음, 같은 연주자 화음을 함께 되풀이하면 화음 값)
+   */
+  readonly lower: number | "auto";
+}
+
 export interface TrillOptions {
   readonly kind: TrillKind;
   /** 트릴 상대 음: 본음 기준 반음 수 (0이 아닌 수. 트레몰로는 보지 않는다) */
@@ -26,6 +49,10 @@ export interface TrillOptions {
   readonly endOnMain: boolean;
   /** 트릴 음을 &로 이어 다시 치지 않게 한다 (트레몰로는 보지 않는다: 같은 음을 이으면 긴 음 하나가 된다) */
   readonly tie: boolean;
+  /** 나눈 음의 v (없으면 모두 본음 v) */
+  readonly volume?: TrillVolume;
+  /** 끊어 치기: 음마다 앞 절반만 소리 내고 뒤 절반은 쉼표 (&로 잇기와 함께 쓰지 않는다) */
+  readonly staccato?: boolean;
   /** 이 길이를 게임 길이로 정확히 쓸 수 있는지 (출력기와 같은 판정) */
   readonly canWrite: (dur: Rat) => boolean;
   readonly locked?: ReadonlySet<string>;
@@ -40,7 +67,7 @@ export interface TrillSkipped {
   readonly tied: number;
   /** 본음이 음 하나 길이의 두 배보다 짧음 */
   readonly short: number;
-  /** 마지막 음 길이(남는 길이를 붙인 것)를 정확히 쓸 수 없음 */
+  /** 마지막 음 길이(남는 길이를 붙인 것)나 끊어 치기의 음·쉼표 길이를 정확히 쓸 수 없음 */
   readonly unwritable: number;
   /** 잠근 트랙 */
   readonly locked: number;
@@ -60,6 +87,44 @@ export interface TrillResult {
   /** 만든 음 (적용 뒤 고른 음으로 쓴다) */
   readonly ids: readonly string[];
   readonly skipped: TrillSkipped;
+}
+
+/** v 깊이·전체 낮추기 입력 상한 */
+export const TRILL_VOLUME_DEPTH_LIMIT = 15;
+
+/**
+ * 나눈 음 하나하나의 v. starts: 음마다 시작 자리 (박마다 세게에 쓴다). 결과는 프로필 v 범위 안으로 자른다
+ */
+export function trillVolumes(
+  base: number,
+  starts: readonly Rat[],
+  volume: (Omit<TrillVolume, "lower"> & { readonly lower: number }) | undefined,
+  range: { readonly min: number; readonly max: number },
+): number[] {
+  const clamp = (v: number) => Math.min(range.max, Math.max(range.min, v));
+  if (!volume) return starts.map(() => base);
+  const top = clamp(base - volume.lower);
+  const low = clamp(top - volume.depth);
+  const count = starts.length;
+  const quarter = rat(1, 4);
+  return starts.map((at, i) => {
+    switch (volume.pattern) {
+      case "alternate":
+        return i % 2 === 0 ? top : low;
+      case "accentFirst":
+        return i === 0 ? top : low;
+      case "accentBeat": {
+        const q = div(at, quarter);
+        return q.d === 1 ? top : low;
+      }
+      case "crescendo":
+        return count < 2 ? top : Math.round(low + ((top - low) * i) / (count - 1));
+      case "decrescendo":
+        return count < 2 ? top : Math.round(top - ((top - low) * i) / (count - 1));
+      default:
+        return top;
+    }
+  });
 }
 
 /** 트릴 상대 음 간격 한도 (입력 상한) */
@@ -140,8 +205,16 @@ export function planTrill(song: Song, picked: readonly Note[], options: TrillOpt
   const ids: string[] = [];
   let made = 0;
   let pieces = 0;
-  const tie = options.kind === "trill" && options.tie;
-  for (const tg of targetsOf(song, picked, options.kind)) {
+  const staccato = !!options.staccato;
+  const tie = options.kind === "trill" && options.tie && !staccato;
+  const targets = targetsOf(song, picked, options.kind);
+  // 자동 낮추기: 같은 연주자·같은 시작에 함께 되풀이하는 본음이 둘 이상이면 화음 값.
+  // 건너뛴 음(짧음·잠금 등)은 되풀이하지 않으므로 세지 않는다: 먼저 되풀이할 음을 다 정한 뒤 센다
+  const playerOf = new Map(song.tracks.map((t) => [t.id, t.playerId]));
+  const keyOf = (tg: { trackId: string; note: Note }) => `${playerOf.get(tg.trackId)}|${tg.note.start.n}/${tg.note.start.d}`;
+  const together = new Map<string, number>();
+  const ready: { tg: (typeof targets)[number]; run: () => void }[] = [];
+  for (const tg of targets) {
     if (options.locked?.has(tg.trackId)) {
       skipped.locked++;
       continue;
@@ -162,9 +235,30 @@ export function planTrill(song: Song, picked: readonly Note[], options: TrillOpt
         continue;
       }
     }
+    // 끊어 치기는 뒤 음과 &로 이어진 본음에 쓰지 않는다 (쉼표가 끼면 이어 받던 뒤 음을 새로 치게 된다)
+    if (staccato && main.tie === "next") {
+      skipped.tied++;
+      continue;
+    }
     const plan = trillPieces(main.dur, main.pitch, options, shortest);
     if (!plan.ok) {
       skipped[plan.why]++;
+      continue;
+    }
+    // 끊어 치기: 나눈 음마다 그 음 길이의 앞 절반만 소리, 나머지는 쉼표. 둘 다 게임 최단 이상이고 정확히 써져야 한다.
+    // 트랙의 마지막 음이면 마지막 조각은 끊지 않는다 (끝 쉼표는 남지 않아 곡 끝·되풀이 길이가 짧아지므로)
+    const lastOfTrack = !own.some((n) => cmp(n.start, main.start) > 0);
+    const cut = (i: number) => staccato && !(lastOfTrack && i === plan.pieces.length - 1);
+    const soundOf = (p: { dur: Rat }) => mul(p.dur, rat(1, 2));
+    if (
+      staccato &&
+      plan.pieces.some((p, i) => {
+        if (!cut(i)) return false;
+        const sound = soundOf(p);
+        return cmp(sound, shortest) < 0 || !options.canWrite(sound) || !options.canWrite(sub(p.dur, sound));
+      })
+    ) {
+      skipped.unwritable++;
       continue;
     }
     // & 사슬: 트릴 음을 모두 이을 때, 또는 본음이 뒤 음에 &로 이어질 때 그 사슬의 높이 차를 재생처럼 접어 잰다
@@ -178,33 +272,50 @@ export function planTrill(song: Song, picked: readonly Note[], options: TrillOpt
         continue;
       }
     }
-    const tabString = options.stringOf?.(main) ?? main.tabString;
-    let at = main.start;
-    const notes: Note[] = plan.pieces.map((p, i) => {
-      const last = i === plan.pieces.length - 1;
-      const { made: _made, lab, ...body } = main;
-      const n: Note = {
-        ...body,
-        id: newId(),
-        start: at,
-        dur: p.dur,
-        pitch: p.pitch,
-        // 마지막 음은 본음의 &를 이어받는다 (뒤 음과 이어져 있었으면 그대로)
-        tie: last ? main.tie : tie ? "next" : "none",
-        // 실험실 표시(고스트·하모닉스)는 본음 높이 음에만 남긴다
-        ...(lab && p.pitch === main.pitch ? { lab } : {}),
-        ...(tabString !== undefined ? { tabString } : {}),
-      };
-      at = add(at, p.dur);
-      return n;
+    ready.push({
+      tg,
+      run: () => {
+        const tabString = options.stringOf?.(main) ?? main.tabString;
+        const starts: Rat[] = [];
+        let from = main.start;
+        for (const p of plan.pieces) {
+          starts.push(from);
+          from = add(from, p.dur);
+        }
+        // &로 이으면 게임은 사슬 첫 음 v로만 울리므로 v 모양은 쓰지 않는다 (전체 낮추기만)
+        const lower =
+          options.volume?.lower === "auto" ? ((together.get(keyOf(tg)) ?? 1) > 1 ? profile.ornamentRepeatLower.chord : profile.ornamentRepeatLower.single) : (options.volume?.lower ?? 0);
+        const volume = options.volume ? { ...options.volume, lower, ...(tie ? { pattern: "same" as const } : {}) } : undefined;
+        const vols = trillVolumes(main.vol, starts, volume, profile.volume);
+        const notes: Note[] = plan.pieces.map((p, i) => {
+          const last = i === plan.pieces.length - 1;
+          const { made: _made, lab, ...body } = main;
+          const n: Note = {
+            ...body,
+            id: newId(),
+            start: starts[i]!,
+            dur: cut(i) ? soundOf(p) : p.dur,
+            pitch: p.pitch,
+            vol: vols[i]!,
+            // 마지막 음은 본음의 &를 이어받는다 (뒤 음과 이어져 있었으면 그대로)
+            tie: staccato ? "none" : last ? main.tie : tie ? "next" : "none",
+            // 실험실 표시(고스트·하모닉스)는 본음 높이 음에만 남긴다
+            ...(lab && p.pitch === main.pitch ? { lab } : {}),
+            ...(tabString !== undefined ? { tabString } : {}),
+          };
+          return n;
+        });
+        const changes = new Map<string, Note | null>([[main.id, null], ...notes.map((n) => [n.id, n] as const)]);
+        tracks.set(tg.trackId, replaceNotes(tracks.get(tg.trackId) ?? [], changes, new Set(notes.map((n) => n.id))));
+        touched.add(tg.trackId);
+        ids.push(...notes.map((n) => n.id));
+        made++;
+        pieces += notes.length;
+      },
     });
-    const changes = new Map<string, Note | null>([[main.id, null], ...notes.map((n) => [n.id, n] as const)]);
-    tracks.set(tg.trackId, replaceNotes(tracks.get(tg.trackId) ?? [], changes, new Set(notes.map((n) => n.id))));
-    touched.add(tg.trackId);
-    ids.push(...notes.map((n) => n.id));
-    made++;
-    pieces += notes.length;
   }
+  for (const { tg } of ready) together.set(keyOf(tg), (together.get(keyOf(tg)) ?? 0) + 1);
+  for (const { run } of ready) run();
   const changes = song.tracks.filter((t) => touched.has(t.id)).map((t) => ({ trackId: t.id, notes: tracks.get(t.id)! }));
   return { changes, made, pieces, ids, skipped };
 }

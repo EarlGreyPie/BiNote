@@ -38,12 +38,18 @@
 
   // Esc는 판을 닫는 데만 쓴다 (재생 멈춤 단축키로 넘기지 않는다)
   function onwindowkeydown(e: KeyboardEvent) {
-    if (open && e.key === "Escape") {
+    if (!open || e.key !== "Escape") return;
+    // 뒤에 다른 창(단축키 창 등)이 열려 초점이 그쪽에 있으면 Esc는 그 창 몫이다. 판은 조용히 닫기만 한다
+    // (초점이 그냥 도구줄 단추 같은 판 밖에 있을 뿐이면 판을 닫는 데 쓰고 재생 멈춤으로 넘기지 않는다)
+    const focused = document.activeElement;
+    if (focused && !root.contains(focused) && !pop?.contains(focused) && focused.closest("dialog[open], [role='dialog'], [aria-modal='true']")) {
       open = false;
-      e.preventDefault();
-      e.stopPropagation();
-      button?.focus();
+      return;
     }
+    open = false;
+    e.preventDefault();
+    e.stopPropagation();
+    button?.focus();
   }
 </script>
 

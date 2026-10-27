@@ -1,6 +1,8 @@
 import { execSync } from "node:child_process";
-import { copyFileSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 import { defineConfig, type Plugin } from "vite";
 import { changelogSection } from "./src/lib/releaseNotes";
@@ -20,7 +22,14 @@ function precacheList(info: { version: string }, notes: string): Plugin {
       outDir = config.build.outDir;
     },
     generateBundle(_, bundle) {
-      files = Object.keys(bundle).filter((f) => !f.endsWith(".map"));
+      // 실험실 받아 적기(basic-pitch·텐서플로)는 쓰는 사람만 처음 쓸 때 받는다: 미리 담지 않는다
+      const lab = (f: string) => {
+        const item = bundle[f]!;
+        if (f.includes("pitch.worker")) return true;
+        // 받아 적기 조각 = basic-pitch를 담은 조각 (텐서플로도 함께 든다). 앱 첫 화면 조각에는 들지 않는다
+        return item.type === "chunk" && !item.isEntry && item.moduleIds.some((id) => id.includes("@spotify/basic-pitch"));
+      };
+      files = Object.keys(bundle).filter((f) => !f.endsWith(".map") && !lab(f));
     },
     writeBundle() {
       const path = join(outDir, "sw.js");
@@ -38,6 +47,34 @@ function precacheList(info: { version: string }, notes: string): Plugin {
       writeFileSync(path, sw);
       // 앱 자체 라이선스(GPL-3.0) 본문을 라이선스 고지 옆에 둔다. 정보 화면에서 오프라인으로도 열린다
       copyFileSync(new URL("../../LICENSE", import.meta.url), join(outDir, "licenses", "GPL-3.0.txt"));
+    },
+  };
+}
+
+/**
+ * 실험실 받아 적기 모델(basic-pitch, Apache-2.0)을 패키지에서 꺼내 basic-pitch/ 아래에 둔다.
+ * 빌드에는 그대로 옮기고(미리 담기 목록에는 넣지 않음), 개발 서버는 패키지 파일을 그대로 보낸다
+ */
+function basicPitchModel(): Plugin {
+  const dir = join(dirname(createRequire(import.meta.url).resolve("@spotify/basic-pitch/package.json")), "model");
+  const files = ["model.json", "group1-shard1of1.bin"];
+  let outDir = "dist";
+  return {
+    name: "mmlce-basic-pitch-model",
+    configResolved(config) {
+      outDir = config.build.outDir;
+    },
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const name = files.find((f) => req.url?.endsWith(`/basic-pitch/${f}`));
+        if (!name) return next();
+        res.setHeader("Content-Type", name.endsWith(".json") ? "application/json" : "application/octet-stream");
+        res.end(readFileSync(join(dir, name)));
+      });
+    },
+    writeBundle() {
+      mkdirSync(join(outDir, "basic-pitch"), { recursive: true });
+      for (const f of files) copyFileSync(join(dir, f), join(outDir, "basic-pitch", f));
     },
   };
 }
@@ -100,7 +137,15 @@ export default defineConfig({
   define: { __MMLCE_BUILD__: JSON.stringify(build), __MMLCE_NOTES__: JSON.stringify(notes) },
   // GitHub Pages 등 하위 경로에 올려도 되도록 상대 경로로 만든다
   base: "./",
-  plugins: [svelte(), precacheList(build, notes)],
+  plugins: [svelte(), precacheList(build, notes), basicPitchModel()],
+  // basic-pitch는 tfjs 전체를 부르지만 쓰는 것은 계산·모델 읽기뿐이다 (src/lib/tfjs.ts)
+  // basic-pitch의 MIDI 파일 쓰기(@tonejs/midi)는 쓰지 않아 빈 자리로 둔다 (src/lib/tonejsStub.ts)
+  resolve: {
+    alias: [
+      { find: /^@tensorflow\/tfjs$/, replacement: fileURLToPath(new URL("./src/lib/tfjs.ts", import.meta.url)) },
+      { find: /^@tonejs\/midi$/, replacement: fileURLToPath(new URL("./src/lib/tonejsStub.ts", import.meta.url)) },
+    ],
+  },
   // 화면 배율: 소스의 px를 rem으로 바꾼다 (src/lib/uiScale.ts)
   css: { postcss: { plugins: [pxToRemPlugin()] } },
 });

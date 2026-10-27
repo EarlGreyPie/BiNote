@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { cmp, emptySong, rat, type Note, type Rat, type Song } from "@mmlce/core";
 import { quantizeTake, type TakeNote } from "../src/lib/midiRecord";
-import { assignTake, clearRange, planChanges, recordTarget, replaceRange, takeGhosts, type RecordMode } from "../src/lib/recordPlan";
+import { assignTake, clearRange, liveTarget, planChanges, recordTarget, replaceRange, takeGhosts, type RecordMode } from "../src/lib/recordPlan";
 import { previousVolume } from "../src/lib/midiInput";
 import { scoreGroups } from "../src/lib/scores";
 
@@ -150,6 +150,51 @@ describe("녹음할 트랙 고르기 (recordTarget)", () => {
     const off = placeTake(one, take, { addTracks: false });
     expect(off.newTracks).toEqual([]);
     expect(off.dropped).toBe(2);
+  });
+});
+
+describe("녹음 중 곡이 바뀐 뒤 넣을 곳 (liveTarget)", () => {
+  it("녹음 트랙을 다른 연주자의 악보로 옮기면 그 트랙에는 넣지 않는다", () => {
+    const s = song(2);
+    const target = recordTarget(s, scoreGroups(s, 3), "t0", new Set(["t0"]), new Set(), 3, true)!;
+    const moved: Song = { ...s, players: [...s.players, { id: "p2", name: "", instrument: { canonical: "piano" } }], tracks: s.tracks.map((t) => (t.id === "t0" ? { ...t, playerId: "p2" } : t)) };
+    const live = liveTarget(moved, scoreGroups(moved, 3), target, new Set(), 3);
+    expect(live.trackIds).toEqual([]);
+    const assign = assignTake(moved, live, [tn(60, r(0), r(1, 4))], G, "overdub", vol);
+    expect(planChanges(assign).changes.map((c) => c.trackId)).not.toContain("t0");
+  });
+
+  it("같은 연주자의 다른 악보로 넘어간 트랙은 빼고, 남은 악보에만 넣는다", () => {
+    const s = song(4); // 악보 1: t0–t2, 악보 2: t3
+    const target = recordTarget(s, scoreGroups(s, 3), "t0", new Set(["t0", "t2"]), new Set(), 3, true)!;
+    // t2를 맨 뒤로 옮겨 둘째 악보로 넘어감
+    const order = ["t0", "t1", "t3", "t2"];
+    const moved: Song = { ...s, tracks: order.map((id) => s.tracks.find((t) => t.id === id)!) };
+    const live = liveTarget(moved, scoreGroups(moved, 3), target, new Set(), 3);
+    expect(live.trackIds).toEqual(["t0"]);
+    expect(live.room).toBe(0);
+  });
+
+  it("녹음할 트랙 하나만 다른 악보로 옮기면 그 트랙을 따라가지 않는다", () => {
+    const s = song(4); // 악보 1: t0–t2, 악보 2: t3
+    const target = recordTarget(s, scoreGroups(s, 3), "t2", new Set(["t2"]), new Set(), 3, true)!;
+    const order = ["t0", "t1", "t3", "t2"];
+    const moved: Song = { ...s, tracks: order.map((id) => s.tracks.find((t) => t.id === id)!) };
+    const live = liveTarget(moved, scoreGroups(moved, 3), target, new Set(), 3);
+    expect(live.trackIds).toEqual([]);
+    expect(live.groupTrackIds).toEqual(["t0", "t1", "t3"]);
+  });
+
+  it("그대로면 시작 때와 같고, 녹음 트랙이 모두 지워져도 새 트랙 자리는 마지막 악보에 남는다", () => {
+    const s = song(1);
+    const target = recordTarget(s, scoreGroups(s, 3), "t0", undefined, new Set(), 3, true)!;
+    expect(liveTarget(s, scoreGroups(s, 3), target, new Set(), 3)).toEqual(target);
+    const two = song(2);
+    const t2 = recordTarget(two, scoreGroups(two, 3), "t1", undefined, new Set(), 3, true)!;
+    const gone: Song = { ...two, tracks: two.tracks.filter((t) => t.id !== "t1") };
+    const live = liveTarget(gone, scoreGroups(gone, 3), t2, new Set(), 3);
+    expect(live.trackIds).toEqual([]);
+    expect(live.room).toBe(1);
   });
 });
 
