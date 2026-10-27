@@ -1,4 +1,4 @@
-import { CHORD_KIND_IDS, cmp, defaultLengthLimit, type ArpGuess, type ArpOrder, type ArpSource, type ArpStyle, type ChordKind, type Note, type Rat, type Song } from "@mmlce/core";
+import { CHORD_KIND_IDS, cmp, defaultLengthLimit, type ArpAccent, type ArpGuess, type ArpOrder, type ArpSource, type ArpStyle, type ChordKind, type Note, type Rat, type Song } from "@mmlce/core";
 import type { LengthName } from "./roll";
 import { isGameLengthName } from "./tuplet";
 
@@ -14,6 +14,10 @@ export interface ArpChoice {
   readonly style: ArpStyle;
   readonly order: ArpOrder;
   readonly length: ArpLength;
+  /** 따로 길이를 줄 음 (none이면 모든 음이 length) */
+  readonly accent: "none" | ArpAccent;
+  /** 따로 길이 */
+  readonly accentLength: ArpLength;
   readonly octaves: 1 | 2 | 3;
   readonly repeat: boolean;
   readonly clear: boolean;
@@ -44,7 +48,7 @@ export function arpMadeOfGuess(guess: Extract<ArpGuess, { ok: true }>): ArpMade 
   const name = n === 1 ? `${d}` : n === 3 && d % 2 === 0 ? `${d / 2}.` : undefined;
   const length: ArpLength = name !== undefined && (ARP_LENGTHS.includes(name as never) || isGameLengthName(name, defaultLengthLimit())) ? (name as ArpLength) : "grid";
   return {
-    choice: { source: "together", chord: DEFAULT_ARP.chord, style: guess.style, order: guess.order, length, octaves: guess.octaves, repeat: guess.repeat, clear: guess.clearChordTracks, fold: 0 },
+    choice: { source: "together", chord: DEFAULT_ARP.chord, style: guess.style, order: guess.order, length, accent: "none", accentLength: DEFAULT_ARP.accentLength, octaves: guess.octaves, repeat: guess.repeat, clear: guess.clearChordTracks, fold: 0 },
     excluded: [],
   };
 }
@@ -57,12 +61,14 @@ export function storeArpChoice(choice: ArpChoice): string {
   return JSON.stringify({ ...choice, v: ARP_STORE_VERSION });
 }
 
-export const DEFAULT_ARP: ArpChoice = { source: "together", chord: "major", style: "spread", order: "up", length: "16", octaves: 1, repeat: true, clear: true, fold: 0 };
+export const DEFAULT_ARP: ArpChoice = { source: "together", chord: "major", style: "spread", order: "up", length: "16", accent: "none", accentLength: "8", octaves: 1, repeat: true, clear: true, fold: 0 };
 
 /** 저장해 둔 값을 읽는다. 모르는 값은 기본으로 */
 export function parseArpChoice(raw: unknown): ArpChoice {
   const v = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
   const pick = <T>(value: unknown, allowed: readonly T[], fallback: T): T => (allowed.includes(value as T) ? (value as T) : fallback);
+  // 잇단음은 게임이 받는 한 토막이면 받는다 (곡 프로필로 다시 거르는 건 창이 한다)
+  const lengthOf = (value: unknown, fallback: ArpLength): ArpLength => (isGameLengthName(value, defaultLengthLimit()) ? (value as ArpLength) : pick(value, ARP_LENGTHS, fallback));
   const octaves = pick(v.octaves, [1, 2, 3] as const, DEFAULT_ARP.octaves);
   const repeat = typeof v.repeat === "boolean" ? v.repeat : DEFAULT_ARP.repeat;
   // 예전(beta.21까지, 판 없음)에는 깔기 + 옥타브 1 + 반복 끔이 굴려 치기였다
@@ -73,8 +79,10 @@ export function parseArpChoice(raw: unknown): ArpChoice {
     chord: pick(v.chord, CHORD_KIND_IDS, DEFAULT_ARP.chord),
     style: old && style === "strum" && octaves === 1 && !repeat ? "roll" : style,
     order: pick(v.order, ["up", "down", "updown", "random"] as const, DEFAULT_ARP.order),
-    // 잇단음은 게임이 받는 한 토막이면 받는다 (곡 프로필로 다시 거르는 건 창이 한다)
-    length: isGameLengthName(v.length, defaultLengthLimit()) ? v.length : pick(v.length, ARP_LENGTHS, DEFAULT_ARP.length),
+    length: lengthOf(v.length, DEFAULT_ARP.length),
+    // 따로 길이가 없는 예전 값·만든 기록은 모든 음이 같은 길이
+    accent: pick(v.accent, ["none", "low", "high", "both"] as const, DEFAULT_ARP.accent),
+    accentLength: lengthOf(v.accentLength, DEFAULT_ARP.accentLength),
     octaves,
     repeat,
     clear: typeof v.clear === "boolean" ? v.clear : DEFAULT_ARP.clear,

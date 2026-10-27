@@ -125,3 +125,16 @@ describe("MML로 내보내기: 다음에 복사할 트랙", () => {
     expect(isCopied({ ...s, tempo: [{ at: rat(0), bpm: 90 }] }, copied, "a")).toBe(false);
   });
 });
+
+describe("analyzeSong 글자 수 검사", () => {
+  it("원문이 있는 트랙은 원문 글자 수로 char-limit을 내지 않는다 (내보낼 때 글자 수로 본다)", () => {
+    const profile = { ...MOBILE_PROFILE, charLimitPerScore: 20 };
+    const text = "/* 주석이 길어서 원문만 한도를 넘는다 */\nc4";
+    const a: Track = { ...track("a", "p1", text), mml: { text } };
+    const b = track("b", "p1", "cdefgab>cdefgab>cdefgab");
+    const result = analyzeSong(song([a, b]), profile);
+    expect(result.tracks[0]!.diagnostics.map((d) => d.code)).not.toContain("char-limit");
+    // 원문이 없는 트랙(출력기 글)은 그대로 알린다
+    expect(result.tracks[1]!.diagnostics.map((d) => d.code)).toContain("char-limit");
+  });
+});

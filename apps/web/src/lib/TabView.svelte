@@ -42,6 +42,8 @@
 
   interface Props {
     song: Song;
+    /** MIDI 건반 녹음 중 친 음 (격자에 맞춘 것). 넣기 전 미리 보기라 곡과 따로 녹음 색 숫자로 그린다 */
+    ghost?: readonly { readonly start: Rat; readonly dur: Rat; readonly pitch: number; readonly kind?: "placed" | "dropped" | "cleared" }[];
     /** 이 키가 앱의 옥타브 올리기·내리기 명령인지 (키 설정을 따른다). 고른 음이 있으면 타브가 먹지 않고 앱에 넘긴다 */
     octaveKey?: (e: KeyboardEvent) => boolean;
     /** 원곡 파형 띠 (피아노롤과 같은 값). offset = 원곡 어긋남(초, 원곡이 늦으면 양수) */
@@ -127,7 +129,7 @@
     themeKey?: string;
   }
 
-  let { song, themeKey = "", octaveKey, wave, onwaveoffset, activeTrackId, tuning, playhead, onunplayable, division, noteDur, noteLength, noteLengths = NOTE_LENGTHS, tupletLength, ontuplet, lengthLimit, onnotelength, onedit, onnewtrack, onfull, maxTracks = Infinity, onpreview, volume = $bindable(), volumeRange, colors, locked, laneTrackIds, onlanetoggle, onclearlane, melodyIds, padByMouse = false, onevent, oncursor, onlayers, onpastefull, ondot, onalign, memory, onmemory, work, followCursor = true, playCursor, loop, onseek, onplaycursor, onloop }: Props = $props();
+  let { song, ghost = [], themeKey = "", octaveKey, wave, onwaveoffset, activeTrackId, tuning, playhead, onunplayable, division, noteDur, noteLength, noteLengths = NOTE_LENGTHS, tupletLength, ontuplet, lengthLimit, onnotelength, onedit, onnewtrack, onfull, maxTracks = Infinity, onpreview, volume = $bindable(), volumeRange, colors, locked, laneTrackIds, onlanetoggle, onclearlane, melodyIds, padByMouse = false, onevent, oncursor, onlayers, onpastefull, ondot, onalign, memory, onmemory, work, followCursor = true, playCursor, loop, onseek, onplaycursor, onloop }: Props = $props();
 
   // 위쪽에 마디 번호 줄과 변속 줄 두 칸(위 칸 템포, 아래 칸 박자·마커), 원곡이 있으면 그 아래 파형 띠를 두고 그 아래에 첫 줄
   // 숫자판을 띄운 동안은 지판 자리를 위해 띠를 숨긴다 (도구 띠를 숨기는 것과 같은 규칙)
@@ -204,6 +206,9 @@
   /** 음 id → 트랙 id (여러 트랙을 모아 보일 때 숫자에 트랙 색을 칠한다) */
   const trackOf = $derived(new Map(tracks.flatMap((t) => t.notes.map((n) => [n.id, t.id] as const))));
   const events = $derived(assignTab(tracks.flatMap((t) => struckNotes(t.notes)), tuning, new Map(), slides));
+  /** 녹음 중 친 음의 줄·프렛 (곡 음과 따로 배정한다) */
+  // 넣을 음만 숫자로 (빠질 음·비울 음은 피아노롤에서만 보인다)
+  const ghostEvents = $derived(ghost.length === 0 ? [] : assignTab(ghost.filter((n) => (n.kind ?? "placed") === "placed").map((n, i) => ({ id: `ghost${i}`, start: n.start, dur: n.dur, pitch: n.pitch, vol: 0, tie: "none" as const })), tuning));
 
   /** 타브 커서: 시간(격자에 맞춤)과 줄(1 = 가장 높은 줄) */
   // 피아노롤에 갔다 와도 전에 있던 커서 그대로 (그 사이 곡이 짧아져도 지우지 않는다)
@@ -1323,6 +1328,21 @@
       g.lineTo(fretBoxLeft(x(b.t)) - 1, y(b.string) - tilt);
       g.stroke();
       g.globalAlpha = 1;
+    }
+    // 녹음 중 친 음: 녹음 색 칸에 프렛 숫자 (곡 숫자 위에)
+    g.textAlign = "left";
+    for (const e of ghostEvents) {
+      const left = fretBoxLeft(x(toFloat(e.start)));
+      if (left > width + 20 || left < LEFT - 40) continue;
+      for (const { at } of e.notes) {
+        if (!at) continue;
+        const text = String(at.fret);
+        const w = g.measureText(text).width + 4;
+        g.fillStyle = css("--danger");
+        box(at.string, left, w);
+        g.fillStyle = "#fff";
+        g.fillText(text, left + 2, y(at.string) + fontPx * 0.36);
+      }
     }
     // 볼륨 줄: 고르는 트랙 음의 v (피아노롤 볼륨 숫자와 같은 규칙). 프렛 숫자와 같은 왼쪽 끝에, 앞 숫자와 겹치면 건너뛴다.
     // 고른 음이면 진하게. 그리기만 한다 (누르기는 지판 칸 규칙 그대로)

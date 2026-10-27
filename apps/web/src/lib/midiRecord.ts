@@ -1,6 +1,4 @@
-import { add, cmp, div, gridLines, meterAt, meterGrid, mul, placeNote, positionToSeconds, rat, secondsToWhole, sub, toFloat, type Note, type Rat, type Song } from "@mmlce/core";
-import type { ScoreGroup } from "./scores";
-import type { ChordPlan } from "./midiInput";
+import { add, div, gridLines, meterAt, meterGrid, mul, positionToSeconds, rat, secondsToWhole, toFloat, type Rat, type Song } from "@mmlce/core";
 
 /**
  * MIDI 건반 녹음(실험실): 곡을 들으며 친 건반을 격자에 맞춰 음으로 넣는다.
@@ -52,75 +50,6 @@ export function quantizeTake(keys: readonly TakeKey[], grid: Rat, from: Rat): Ta
     out.push({ ...n });
   }
   return out.map((n) => ({ pitch: n.pitch, velocity: n.velocity, start: add(from, mul(grid, rat(n.a))), dur: mul(grid, rat(n.b - n.a)) }));
-}
-
-const overlaps = (a: { start: Rat; dur: Rat }, start: Rat, end: Rat) => cmp(a.start, end) < 0 && cmp(start, add(a.start, a.dur)) < 0;
-
-/**
- * 녹음한 음을 트랙에 나눠 넣는다. 고른 트랙부터 같은 악보의 다음 트랙들(잠긴 트랙은 건너뜀), 모자라면 악보 트랙 한도까지 더한 새 트랙 순서로,
- * 같은 시각에 친 음은 높은 음부터 그 자리가 빈 첫 트랙에 넣는다 (트랙은 한 번에 한 음).
- * - 곡에 이미 있던 음은 지우지 않는다. 그 자리는 찬 것으로 보고 다음 트랙에 넣는다 (덧녹음)
- * - 같은 트랙의 앞 녹음 음이 격자 한 칸 이하로만 겹치면(이어 치기에서 조금 늦게 뗀 것) 앞 음을 끊고 같은 트랙에 넣는다.
- *   그래야 선율이 트랙을 옮겨 다니지 않는다
- * - 넣을 트랙이 없으면 버리고 그 수를 센다
- */
-export function placeTake(
-  song: Song,
-  groups: readonly ScoreGroup[],
-  activeTrackId: string,
-  take: readonly TakeNote[],
-  grid: Rat,
-  volumeOf: (track: readonly Note[], at: Rat, velocity: number) => number,
-  maxTracks = Infinity,
-  locked: ReadonlySet<string> = new Set(),
-): ChordPlan {
-  const active = song.tracks.find((t) => t.id === activeTrackId);
-  if (!active) return { changes: [], newTracks: [], dropped: 0 };
-  const group = groups.find((g) => g.trackIds.includes(activeTrackId));
-  const after = group ? group.trackIds.slice(group.trackIds.indexOf(activeTrackId) + 1) : [];
-  const existing = [activeTrackId, ...after.filter((id) => !locked.has(id))].map((id) => song.tracks.find((t) => t.id === id)!).filter(Boolean);
-  const lastOfPlayer = !group || groups.filter((g) => g.playerId === group.playerId).at(-1) === group;
-  const room = lastOfPlayer ? Math.max(0, maxTracks - (group?.trackIds.length ?? 1)) : 0;
-  // 트랙마다: 원래 음과 녹음해 넣는 음
-  const lanes = existing.map((t) => ({ base: t.notes as readonly Note[], added: [] as Note[], id: t.id as string | undefined }));
-  for (let k = 0; k < room; k++) lanes.push({ base: [], added: [], id: undefined });
-  const stamp = Date.now().toString(36);
-  let dropped = 0;
-  let serial = 0;
-  for (const n of [...take].sort((a, b) => cmp(a.start, b.start) || b.pitch - a.pitch)) {
-    const end = add(n.start, n.dur);
-    const fits = (lane: (typeof lanes)[number]) => {
-      if (lane.base.some((o) => overlaps(o, n.start, end))) return false;
-      const hit = lane.added.filter((o) => overlaps(o, n.start, end));
-      if (hit.length === 0) return true;
-      // 앞에서 시작해 격자 한 칸 이하로 겹친 녹음 음 하나면 끊을 수 있다
-      return hit.length === 1 && cmp(hit[0]!.start, n.start) < 0 && cmp(sub(add(hit[0]!.start, hit[0]!.dur), n.start), grid) <= 0;
-    };
-    // 새 트랙은 원래 트랙 뒤에 있어, 앞 새 트랙을 다 쓴 뒤에야 다음 새 트랙을 연다
-    const pick = lanes.find(fits);
-    if (!pick) {
-      dropped++;
-      continue;
-    }
-    pick.added = pick.added.map((o) => (overlaps(o, n.start, end) ? { ...o, dur: sub(n.start, o.start) } : o));
-    const volBase = pick.id !== undefined ? [...pick.base, ...pick.added] : [...active.notes];
-    pick.added.push({
-      id: `${pick.id ?? `${active.playerId}.r`}.rec${stamp}${serial++}`,
-      start: n.start,
-      dur: n.dur,
-      pitch: n.pitch,
-      vol: volumeOf(volBase, n.start, n.velocity),
-      tie: "none",
-    });
-  }
-  const changes: { trackId: string; notes: Note[] }[] = [];
-  const newTracks: Note[][] = [];
-  for (const lane of lanes) {
-    if (lane.added.length === 0) continue;
-    if (lane.id === undefined) newTracks.push(lane.added);
-    else changes.push({ trackId: lane.id, notes: lane.added.reduce<Note[]>((notes, n) => placeNote(notes, n), [...lane.base]) });
-  }
-  return { changes, newTracks, dropped };
 }
 
 /** 메트로놈 딸깍 하나: 곡 시각(초), 마디 첫 박이면 accent */
@@ -190,13 +119,15 @@ interface Session {
 
 /**
  * MIDI 건반 녹음 (실험실). 곡을 재생하며 누른 건반의 시각을 곡 초로 모으고, 끝낼 때 곡 위치(온음표)로 바꿔 돌려준다.
- * 격자 맞추기와 트랙 나누기는 midiRecord.ts가 한다
+ * 격자 맞추기는 quantizeTake, 트랙 나누기는 recordPlan.ts가 한다
  */
 export class MidiRecorder {
   /** 녹음 중이면 시작 자리와 모은 음 수 */
   status: RecordStatus | undefined;
   /** status가 바뀔 때 (화면에 보이려고) */
   onstatus: ((status: RecordStatus | undefined) => void) | undefined;
+  /** 녹음 중 모은 건반이 바뀌거나 누르고 있는 건반이 길어질 때 (치는 대로 화면에 보이려고) */
+  onlive: (() => void) | undefined;
   private session: Session | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
 
@@ -228,6 +159,7 @@ export class MidiRecorder {
     const heard = this.clock.heardSeconds();
     if (heard === undefined) return;
     s.now = Math.max(s.now, heard);
+    if (s.held.size > 0) this.onlive?.();
     if (!s.metronome) return;
     const to = secondsToWhole(s.song.tempo, Math.max(0, heard) + CLICK_AHEAD);
     if (to <= s.clickedTo) return;
@@ -242,6 +174,7 @@ export class MidiRecorder {
     s.now = Math.max(s.now, at);
     this.release(s, pitch, at);
     s.held.set(pitch, { velocity, on: at });
+    this.onlive?.();
   }
 
   keyOff(pitch: number): void {
@@ -272,6 +205,20 @@ export class MidiRecorder {
     s.held.delete(pitch);
     s.keys.push({ pitch, velocity: held.velocity, on: held.on, off: Math.max(held.on, at) });
     this.setStatus({ from: s.from, count: s.keys.length, run: s.run });
+    this.onlive?.();
+  }
+
+  /**
+   * 녹음 중 지금까지 친 건반 (곡 위치, 온음표). 누르고 있는 건반은 지금 들리는 시각(멈췄으면 멈춘 시각)까지로 본다.
+   * 치는 동안 화면에 미리 보이는 데만 쓴다 (넣는 것은 end가 돌려준 것)
+   */
+  live(): { from: Rat; keys: TakeKey[] } | undefined {
+    const s = this.session;
+    if (!s) return undefined;
+    const now = s.cut ? s.now : Math.max(s.now, this.clock.heardSeconds() ?? s.now);
+    const whole = (sec: number) => secondsToWhole(s.song.tempo, Math.max(0, sec));
+    const keys = [...s.keys, ...[...s.held].map(([pitch, h]) => ({ pitch, velocity: h.velocity, on: h.on, off: Math.max(h.on, now) }))];
+    return { from: s.from, keys: keys.map((k) => ({ pitch: k.pitch, velocity: k.velocity, on: whole(k.on), off: whole(k.off) })) };
   }
 
   /**
@@ -292,14 +239,14 @@ export class MidiRecorder {
   }
 }
 
-/** 녹음이 넣을 곳: 시작할 때의 곡 기록(owner)과 고른 트랙 */
-export interface RecordJob<O> {
+/** 녹음이 넣을 곳: 시작할 때의 곡 기록(owner)과 넣을 곳(target, 시작할 때 정한 녹음 트랙) */
+export interface RecordJob<O, T = string> {
   readonly owner: O;
-  readonly trackId: string;
+  readonly target: T;
 }
 
 /** 녹음 흐름이 앱에 바라는 것 */
-export interface RecordHost<O> {
+export interface RecordHost<O, T = string> {
   /** 지금 곡 기록 (곡을 바꾸면 다른 것이 된다) */
   owner(): O | undefined;
   /** 녹음 줄이 열려 있고 실험실이 켜져 있는지 */
@@ -310,7 +257,7 @@ export interface RecordHost<O> {
   /** 건반을 녹음으로 보낼지 */
   capture(on: boolean): void;
   /** 모은 건반을 넣는다 (격자 맞추기·트랙 나누기·commit) */
-  apply(take: { from: Rat; keys: TakeKey[] }, job: RecordJob<O>): void;
+  apply(take: { from: Rat; keys: TakeKey[] }, job: RecordJob<O, T>): void;
   /** 시작한 곡이 아니어서 넣지 않았다 */
   lost(): void;
 }
@@ -320,14 +267,14 @@ export interface RecordHost<O> {
  * - 재생 준비를 기다리는 동안 닫기·실험실 끄기·곡 바꾸기·새 녹음이 오면(end) 요청 세대가 바뀌어, 준비가 끝나도 시작하지 않는다
  * - 녹음은 시작한 곡 기록(owner)에만 넣는다. 곡을 바꾸기 전에 end를 부르면 앞 곡에 넣고, 바뀐 뒤 끝나면 넣지 않는다
  */
-export class RecordFlow<O> {
+export class RecordFlow<O, T = string> {
   private token = 0;
   private pending = false;
-  private job: RecordJob<O> | undefined;
+  private job: RecordJob<O, T> | undefined;
 
   constructor(
     private readonly recorder: MidiRecorder,
-    private readonly host: RecordHost<O>,
+    private readonly host: RecordHost<O, T>,
   ) {}
 
   /** 준비 중이거나 녹음 중 */
@@ -335,7 +282,7 @@ export class RecordFlow<O> {
     return this.pending || this.recorder.recording;
   }
 
-  async start(trackId: string, song: Song, from: Rat, metronome: boolean): Promise<boolean> {
+  async start(target: T, song: Song, from: Rat, metronome: boolean): Promise<boolean> {
     this.end();
     const owner = this.host.owner();
     if (owner === undefined) return false;
@@ -351,7 +298,7 @@ export class RecordFlow<O> {
       if (run !== undefined) this.host.stop();
       return false;
     }
-    this.job = { owner, trackId };
+    this.job = { owner, target };
     this.recorder.begin(song, from, run, metronome);
     return true;
   }

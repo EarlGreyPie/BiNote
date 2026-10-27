@@ -20,6 +20,9 @@
     type LabResult,
     isSoloInstrument,
     barBeatAt,
+    barsOfRange,
+    headsInBars,
+    type BarRange,
     meterAt,
     meterGrid,
     measureStart,
@@ -40,7 +43,7 @@
     breakTimbreTies,
     madeOf,
     madeTracks,
-    guessArpeggio,
+    guessArpeggioAround,
     restoreMade,
     sameNotes,
     type MadeRestore,
@@ -132,6 +135,10 @@
     type BookPlan,
     type BookProgress,
     type FewerBooks,
+    gameCharCounts,
+    reviewFolds,
+    applyFoldShifts,
+    type FoldPhrase,
   } from "@mmlce/mml";
   import { analyzeSong, noteSpan, spanAt, textTimeline } from "./lib/analysis";
   import { trackSoundingRange, type CanonicalOf } from "./lib/instrumentRange";
@@ -161,7 +168,8 @@
   import ReferenceBar from "./lib/ReferenceBar.svelte";
   import TapBar from "./lib/TapBar.svelte";
   import RecordBar from "./lib/RecordBar.svelte";
-  import { countIn, MidiRecorder, placeTake, quantizeTake, RecordFlow, type RecordJob, type RecordStatus, type TakeKey } from "./lib/midiRecord";
+  import { countIn, MidiRecorder, quantizeTake, RecordFlow, type RecordJob, type RecordStatus, type TakeKey } from "./lib/midiRecord";
+  import { assignTake, planChanges, recordTarget, takeGhosts, type RecordGhost, type RecordMode, type RecordTarget } from "./lib/recordPlan";
   import { alignBarTempo, attackStarts, boundToSong, tempoOutOfRange, barStart, bpmAt, nearestBar, nearestBeat, offIntervals, onsetNear, pairBarTempo, previousBar, snapTaps, tapMarks, tapTempos, type BarDragMode, type TapReview, type TapUnit } from "./lib/tempoSync";
   import SongChecks from "./lib/SongChecks.svelte";
   import TrackPane from "./lib/TrackPane.svelte";
@@ -209,6 +217,7 @@
   import TempoChangeDialog from "./lib/TempoChangeDialog.svelte";
   import TempoRampDialog from "./lib/TempoRampDialog.svelte";
   import OffgridDialog from "./lib/OffgridDialog.svelte";
+  import FoldReviewDialog from "./lib/FoldReviewDialog.svelte";
   import SettingsDialog from "./lib/SettingsDialog.svelte";
   import StatusBar, { type StatusPanel } from "./lib/StatusBar.svelte";
   import Toolbar, { type RollLayer } from "./lib/Toolbar.svelte";
@@ -227,6 +236,8 @@
   import MadeRestoreDialog from "./lib/MadeRestoreDialog.svelte";
   import LabNoteDialog from "./lib/LabNoteDialog.svelte";
   import ReverbDialog from "./lib/ReverbDialog.svelte";
+  import LoudnessCompareDialog from "./lib/LoudnessCompareDialog.svelte";
+  import type { ReferencePower } from "./lib/loudnessCompare";
   import { reverbPrefs, stampTail } from "./lib/reverbPrefs.svelte";
   import { LAB_FEATURES, labs, type LabFeatureId } from "./lib/labs.svelte";
   import { Playback } from "./lib/playback.svelte";
@@ -523,6 +534,7 @@
       const keep = saved ?? reference ?? { offsetMs: 0, volume: 0.8 };
       reference = { name: file.name, duration, offsetMs: keep.offsetMs, volume: keep.volume };
       referencePeaks = engine.referencePeaks();
+      referencePower = undefined;
       engine.setReferenceOffset(keep.offsetMs / 1000);
       engine.setReferenceVolume(keep.volume);
     } catch (e) {
@@ -549,6 +561,8 @@
     engine.clearReference();
     reference = undefined;
     referencePeaks = undefined;
+    referencePower = undefined;
+    loudnessOpen = false;
   }
 
   function removeVideo() {
@@ -617,6 +631,34 @@
   // 악보 하나에 담는 트랙 수는 악기마다 (오르골 3)
   const chordsOf = $derived((playerId: string) => maxChordsOf(profile, song?.players.find((p) => p.id === playerId)?.instrument.canonical));
   const groups = $derived(song ? scoreGroups(song, chordsOf) : []);
+  /**
+   * 트랙마다 내보낼 때(악보 단위로 다시 쓴 게임 글) 글자 수. 원문은 주석·줄바꿈·겹친 v·l까지 세어 게임 글보다 길 수 있어
+   * 트랙 목록·편집기·상태줄의 한도 표시는 이 수로 한다. 다시 쓰기는 무거우므로 고친 뒤 잠깐 쉬었을 때 센다 (처음 열 때는 바로)
+   */
+  let exportCount = $state.raw<{ readonly song: Song; readonly chars: ReadonlyMap<string, number> } | undefined>(undefined);
+  const exportChars = $derived(exportCount?.chars);
+  $effect(() => {
+    const s = song;
+    const chords = chordsOf;
+    const pasteLimit = profile.maxChordsPerPlayer;
+    const limit = profile.charLimitPerScore;
+    if (!s) {
+      exportCount = undefined;
+      return;
+    }
+    const count = () => {
+      try {
+        exportCount = { song: s, chars: gameCharCounts(s, chords, pasteLimit, limit) };
+      } catch {
+        exportCount = undefined;
+      }
+    };
+    // 다른 곡을 열었거나 트랙이 늘고 줄면 바로 센다 (옛 곡의 수를 잠깐이라도 보이지 않게)
+    const before = untrack(() => exportCount);
+    const same = before !== undefined && before.song.meta === s.meta && before.song.tracks.length === s.tracks.length && before.song.tracks.every((t, k) => t.id === s.tracks[k]!.id);
+    const timer = setTimeout(count, same ? EXPORT_CHARS_DELAY_MS : 0);
+    return () => clearTimeout(timer);
+  });
   /** 멜로디 트랙 (음량 레인 여러 트랙 그리기) */
   const melodyIds = $derived(song ? melodyTrackIds(song, groups) : new Set<string>());
   /** 음량 레인에 고른 트랙과 같이 그리는 트랙 (트랙 목록 Ctrl+클릭) */
@@ -1146,6 +1188,8 @@
 
   /** 자동 보존을 이만큼 기다려도 끝나지 않으면 실패로 본다 (막은 화면이 풀리지 않는 일이 없게) */
   const UPDATE_SAVE_WAIT_MS = 15_000;
+  /** 고친 뒤 이만큼 쉬면 내보낼 때 글자 수를 다시 센다 */
+  const EXPORT_CHARS_DELAY_MS = 300;
 
   /**
    * 새 판으로 바꾸기 전: 화면 입력을 막고, 편집 중인 입력을 넣고 자동 보존한다. 막은 뒤라 기다리는 동안
@@ -1375,6 +1419,7 @@
     trill = fresh.trill;
     labDialog = fresh.labDialog;
     reverbDialog = fresh.reverbDialog;
+    loudnessOpen = fresh.loudnessOpen;
     transposing = fresh.transposing;
     voicing = fresh.voicing;
     tempoChangeOpen = fresh.tempoChangeOpen;
@@ -1633,14 +1678,16 @@
   const recordPrefs = $state(
     loadStored(RECORD_KEY, (raw) => {
       try {
-        const v = raw ? (JSON.parse(raw) as { grid?: number; speed?: number; metronome?: boolean }) : {};
+        const v = raw ? (JSON.parse(raw) as { grid?: number; speed?: number; metronome?: boolean; mode?: string; addTracks?: boolean }) : {};
         return {
           grid: RECORD_GRIDS.includes(v.grid as (typeof RECORD_GRIDS)[number]) ? (v.grid as number) : 16,
           speed: typeof v.speed === "number" && v.speed >= 0 && v.speed < RECORD_SPEEDS.length ? Math.floor(v.speed) : 0,
           metronome: v.metronome !== false,
+          mode: (v.mode === "replace" ? "replace" : "overdub") as RecordMode,
+          addTracks: v.addTracks !== false,
         };
       } catch {
-        return { grid: 16, speed: 0, metronome: true };
+        return { grid: 16, speed: 0, metronome: true, mode: "overdub" as RecordMode, addTracks: true };
       }
     }),
   );
@@ -1652,12 +1699,67 @@
   let recordResult = $state("");
   const recorder = new MidiRecorder({ heardSeconds: () => engine.heardSeconds(), click: (at, accent) => engine.click(at, accent) });
   let recordStatus = $state<RecordStatus | undefined>(undefined);
-  recorder.onstatus = (status) => (recordStatus = status);
+  recorder.onstatus = (status) => {
+    recordStatus = status;
+    if (!status) recordLive = [];
+  };
+  /**
+   * 녹음할 트랙: 녹음 줄에서 고른 트랙들. 고른 트랙이 없거나 다른 악보 트랙만 있으면 지금 트랙과 그 뒤 트랙들 (recordTarget).
+   * 보기 상태라 곡·기록에 넣지 않는다
+   */
+  let recordArmed = $state.raw<ReadonlySet<string> | undefined>(undefined);
+  const recordLimitOf = (s: Song, trackId: string | undefined) => {
+    const track = s.tracks.find((tr) => tr.id === trackId);
+    return maxChordsOf(profile, s.players.find((p) => p.id === track?.playerId)?.instrument.canonical);
+  };
+  const recordTargetNow = $derived(song ? recordTarget(song, groups, activeTrackId, recordArmed, lockedIds, recordLimitOf(song, activeTrackId), recordPrefs.addTracks) : undefined);
+  /** 녹음 줄에 보일 트랙 단추: 고른 트랙이 든 악보의 트랙들 (악보 안 번호와 이름) */
+  const recordTargets = $derived.by(() => {
+    const target = recordTargetNow;
+    if (!song || !target) return [];
+    return target.groupTrackIds.map((id, k) => {
+      const track = song!.tracks.find((tr) => tr.id === id);
+      return { id, label: track?.name ? `${k + 1} ${track.name}` : String(k + 1), armed: target.trackIds.includes(id), locked: lockedIds.has(id) };
+    });
+  });
+  /** 녹음 줄에서 트랙 하나를 녹음할 트랙에 넣거나 뺀다 (지금 정해진 트랙에서 시작) */
+  function toggleRecordArm(trackId: string) {
+    const target = recordTargetNow;
+    if (!target || lockedIds.has(trackId)) return;
+    const next = new Set(target.trackIds);
+    if (next.has(trackId)) next.delete(trackId);
+    else next.add(trackId);
+    // 하나는 남긴다 (모두 빼면 저절로 정하는 트랙으로 돌아가 단추가 그대로 보여 헷갈린다)
+    if (next.size > 0) recordArmed = next;
+  }
+  /** 녹음 중 친 음이 들어갈 모양 (치는 대로 롤·타브에 미리 보인다. 넣는 것과 같은 assignTake 결과라 보이는 대로 들어간다) */
+  let recordLive = $state.raw<readonly RecordGhost[]>([]);
+  /** 녹음 중인 녹음의 넣을 곳 (시작할 때 정한 것) */
+  let recordTargetActive: RecordTarget | undefined;
+  /** 모은 건반을 넣을 모양으로: 격자 맞추기 → 트랙 나누기. 미리 보기와 넣기가 같이 쓴다 */
+  function assignRecord(s: Song, target: RecordTarget, take: { from: Rat; keys: TakeKey[] }) {
+    const grid = rat(1, recordPrefs.grid);
+    const notes = quantizeTake(take.keys, grid, take.from);
+    const useVelocity = midiKeys.velocity;
+    const live = {
+      ...target,
+      // 녹음 중에 지워지거나 잠긴 트랙에는 넣지 않는다
+      trackIds: target.trackIds.filter((id) => s.tracks.some((tr) => tr.id === id) && !lockedIds.has(id)),
+    };
+    const assign = assignTake(s, live, notes, grid, recordPrefs.mode, (track, where, vel) => (useVelocity ? volumeForVelocity(profile, vel) : previousVolume(track, where)));
+    return { notes, assign };
+  }
+  recorder.onlive = () => {
+    const live = recorder.live();
+    const target = recordTargetActive;
+    recordLive = live && target && history ? takeGhosts(assignRecord(history.song, target, live).assign, colors) : [];
+  };
   // 재생이 멈추는 그 순간의 자리로 누르고 있던 건반을 닫는다 (멈춘 뒤 고치는 effect는 늦다)
   engine.onStopping = (heard) => recorder.cut(heard);
-  const canRecord = $derived(!!song && packs.length > 0 && !!activeTrackId && editable(activeTrackId) && !picking);
+  // 사운드팩이 없어도 녹음한다 (곡 소리 없이 메트로놈만). 넣을 트랙이 하나도 없으면(모두 잠김, 더할 수도 없음) 시작하지 않는다
+  const canRecord = $derived(!!song && !!recordTargetNow && (recordTargetNow.trackIds.length > 0 || recordTargetNow.room > 0) && !picking);
 
-  const recordFlow = new RecordFlow<History>(recorder, {
+  const recordFlow = new RecordFlow<History, RecordTarget>(recorder, {
     owner: () => history,
     open: () => recordOpen && labs.on,
     play: async () => {
@@ -1675,13 +1777,15 @@
   let recordStart: { song: Song; from: Rat; rate: number } | undefined;
 
   async function startRecord() {
-    if (!history || !activeTrackId || !canRecord) return;
+    const target = recordTargetNow;
+    if (!history || !target || !canRecord) return;
     midiKeys.flushPending();
     const s = history.song;
     const from = measureStart(s.timeSig, stepCursor() ?? ZERO);
     recordStart = { song: s, from, rate: RECORD_SPEEDS[recordPrefs.speed] ?? 1 };
     recordResult = "";
-    await recordFlow.start(activeTrackId, s, from, recordPrefs.metronome);
+    recordTargetActive = target;
+    await recordFlow.start(target, s, from, recordPrefs.metronome);
   }
 
   /** 녹음을 지금 끝낸다 (준비 중이면 취소, 녹음 중이면 시작한 곡에 넣는다). 곡 바꾸기 전·줄 닫기·실험실 끄기가 부른다 */
@@ -1689,41 +1793,33 @@
     recordFlow.end();
   }
 
-  /** 모은 건반을 격자에 맞춰 시작한 트랙부터 넣는다 (실행 취소 한 번) */
-  function applyRecord(take: { from: Rat; keys: TakeKey[] }, job: RecordJob<History>) {
+  /** 모은 건반을 미리 보인 그대로 넣는다 (실행 취소 한 번). 곡을 바꾸는 길은 여기 commit 하나 */
+  function applyRecord(take: { from: Rat; keys: TakeKey[] }, job: RecordJob<History, RecordTarget>) {
+    recordTargetActive = undefined;
+    recordLive = [];
     if (!history) return;
-    const trackId = job.trackId;
-    const grid = rat(1, recordPrefs.grid);
-    const notes = quantizeTake(take.keys, grid, take.from);
+    const s = history.song;
+    if (!s.players.some((p) => p.id === job.target.playerId) && !s.tracks.some((tr) => tr.playerId === job.target.playerId)) {
+      recordResult = t("ui.midiRecordLost");
+      return;
+    }
+    const { notes, assign } = assignRecord(s, job.target, take);
     if (notes.length === 0) {
       recordResult = t("ui.midiRecordEmpty");
       return;
     }
-    const s = history.song;
-    const active = s.tracks.find((tr) => tr.id === trackId);
-    if (!active || !editable(trackId)) {
-      recordResult = t("ui.midiRecordLost");
+    const first = assign.lanes.find((l) => l.trackId !== undefined);
+    const instrument = s.tracks.find((tr) => tr.id === first?.trackId)?.instrument;
+    const limit = recordLimitOf(s, first?.trackId ?? job.target.trackIds[0]);
+    const dropped = assign.dropped.length;
+    const { changes, newTracks } = planChanges(assign);
+    if (changes.length === 0 && newTracks.length === 0) {
+      recordResult = assign.lanes.length === 0 ? t("ui.midiRecordLost") : t("ui.midiChordFull", { limit, n: dropped });
       return;
     }
-    const limit = maxChordsOf(profile, s.players.find((p) => p.id === active.playerId)?.instrument.canonical);
-    const useVelocity = midiKeys.velocity;
-    const plan = placeTake(
-      s,
-      groups,
-      trackId,
-      notes,
-      grid,
-      (track, where, vel) => (useVelocity ? volumeForVelocity(profile, vel) : previousVolume(track, where)),
-      limit,
-      lockedIds,
-    );
-    if (plan.changes.length === 0 && plan.newTracks.length === 0) {
-      recordResult = t("ui.midiChordFull", { limit, n: plan.dropped });
-      return;
-    }
-    const command = setTracksNotesAddingTracks(active.playerId, plan.changes, plan.newTracks, (n) => t("ui.newTrackName", { n }), t("ui.labMidiRecord"), active.instrument);
+    const command = setTracksNotesAddingTracks(job.target.playerId, changes, newTracks, (n) => t("ui.newTrackName", { n }), t("ui.labMidiRecord"), instrument);
     if (!commit(command)) return;
-    recordResult = t("ui.midiRecordDone", { n: notes.length - plan.dropped }) + (plan.dropped > 0 ? " · " + t("ui.midiChordFull", { limit, n: plan.dropped }) : "");
+    recordResult = t("ui.midiRecordDone", { n: notes.length - dropped }) + (dropped > 0 ? " · " + t("ui.midiChordFull", { limit, n: dropped }) : "");
   }
   // 정지·다른 재생(자리 옮기기 등)이면 녹음을 끝내고 넣는다
   $effect(() => {
@@ -1735,6 +1831,11 @@
   $effect(() => {
     if (!labs.on && recordOpen) untrack(() => closeRecord());
   });
+  /** 녹음 단축키: 녹음 중(준비 중 포함)이면 멈추고 넣기, 아니면 녹음 시작 (건반이 연결돼 있을 때) */
+  function toggleRecording() {
+    if (recordFlow.busy) return endRecording();
+    if (midiKeys.status && canRecord) void startRecord();
+  }
   function toggleRecord() {
     if (recordOpen) return closeRecord();
     recordOpen = true;
@@ -2345,6 +2446,42 @@
     runIfChanged(fixOffgrid(fixes, t("ui.offgrid")));
   }
 
+  /**
+   * 접힘 검토 창 (곡 메뉴, 곡 검사의 접힘 줄). 실측 음역 밖이라 게임이 접어 내는 음이 있는 구간마다
+   * 구간째 옥타브를 옮기는 방법을 견준다. 열려 있는 동안 곡이 바뀌면 다시 본다
+   */
+  let foldOpen = $state(false);
+  /** 곡 검사와 같은 악기 해석 (번호로만 아는 악기는 실제 악기로) */
+  const foldInstrumentOf = $derived((track: Track) => {
+    const ref = trackInstrument(song!, track);
+    return canonicalOf(ref.canonical, ref.program, ref.packId) ?? ref.canonical;
+  });
+  const folds = $derived(foldOpen && song ? reviewFolds(song, profile, foldInstrumentOf) : []);
+  function goToFold(phrase: FoldPhrase) {
+    const track = song?.tracks.find((tr) => tr.id === phrase.trackId);
+    const note = track?.notes.find((n) => n.id === phrase.noteIds[0]);
+    if (track && note) goToCheck(track, note);
+  }
+  /** 구간과 앞뒤 한 박을 그대로 또는 옮긴 대로 들려준다 (곡 전체 트랙을 같이) */
+  function listenFold(phrase: FoldPhrase, shift: number) {
+    if (!song) return;
+    const target = applyFoldShifts(song, [{ phrase, shift }])?.apply(song) ?? song;
+    const beat = rat(1, 4);
+    const from = cmp(phrase.start, beat) > 0 ? sub(phrase.start, beat) : rat(0);
+    const to = add(phrase.end, beat);
+    clearTimeout(offgridTimer);
+    void playback.play(target, toFloat(from), undefined);
+    const seconds = positionToSeconds(target.tempo, to) - positionToSeconds(target.tempo, from);
+    offgridTimer = setTimeout(stop, Math.max(0, seconds) * 1000 + 150);
+  }
+  function applyFolds(picks: readonly { phrase: FoldPhrase; shift: number }[]) {
+    if (!song) return;
+    const locked = lockedNames(picks.filter((p) => p.shift !== 0).map((p) => p.phrase.trackId));
+    if (locked && !confirm(t("ui.offgridLockedConfirm", { names: locked }))) return;
+    const command = applyFoldShifts(song, picks, t("ui.foldReview"));
+    if (command) runIfChanged(command);
+  }
+
   /** 음 목록 (보기 메뉴): 고른 트랙의 음을 키보드·화면 낭독기로 찾아 고르는 길 */
   let noteListOpen = $state(false);
 
@@ -2938,7 +3075,8 @@
 
   // 아르페지오로 알아보기: 기록 없는 아르페지오(전 판에서 만들었거나 .mml로 다시 연 곡)를 고른 음의 배치로 짐작해 만든 기록을 남긴다.
   // 고른 음만 본다 (보통 선율도 아르페지오와 모양이 같을 수 있어 곡을 저절로 훑지 않는다). 짐작한 화음을 보여 주고 물어본 뒤 넣는다 (실행 취소 한 칸)
-  const canAdoptArp = $derived(!!song && selectedNotes.length >= 3 && madeHere.length === 0);
+  // 한 음만 골라도 된다: 못 찾으면 그 둘레(같은 악보에서 시간이 겹쳐 이어지는 음, 그 트랙에서 빈틈없이 이어진 음)로 넓혀 본다
+  const canAdoptArp = $derived(!!song && selectedNotes.length >= 1 && madeHere.length === 0);
   function adoptArpeggio() {
     if (!history || !canAdoptArp) return;
     const song0 = history.song;
@@ -2951,7 +3089,7 @@
       used.add(id);
       return id;
     };
-    const guess = guessArpeggio(song0, selectedNotes, newId, lockedIds);
+    const guess = guessArpeggioAround(song0, selectedNotes, newId, lockedIds);
     if (!guess.ok) {
       error = t(guess.reason === "made" ? "ui.arpAdoptMade" : guess.reason === "score" ? "ui.arpAdoptScore" : "ui.arpAdoptNone");
       if (guess.blocking.length > 0) selectNoteIds(guess.blocking);
@@ -2979,10 +3117,10 @@
   // 실험실 (설정 → 실험실을 켰을 때만 메뉴가 보인다): 고른 음을 고스트 노트·하모닉스로 (실행 취소 한 칸).
   // 피아노롤은 고른 음, 타브는 고른 음이나 없으면 커서 자리 음. 타브에서 열면 음이 놓인 줄·프렛을 넘겨 자연 하모닉스를 계산한다
   let labDialog = $state.raw<
-    { kind: Exclude<LabFeatureId, "reverb" | "midiRecord" | "tempoRamp" | "videoBars" | "arpFold">; picked: readonly Note[]; positions?: ReadonlyMap<string, { string: number; fret: number; open: number }> } | undefined
+    { kind: Exclude<LabFeatureId, "reverb" | "midiRecord" | "tempoRamp" | "videoBars" | "arpFold" | "loudness">; picked: readonly Note[]; positions?: ReadonlyMap<string, { string: number; fret: number; open: number }> } | undefined
   >(undefined);
   const canLab = $derived(!!song && (viewMode === "roll" ? selectedNotes.length > 0 : selectedNotes.length > 0 || !!tabArp));
-  function openLab(kind: Exclude<LabFeatureId, "reverb" | "midiRecord" | "tempoRamp" | "videoBars" | "arpFold">) {
+  function openLab(kind: Exclude<LabFeatureId, "reverb" | "midiRecord" | "tempoRamp" | "videoBars" | "arpFold" | "loudness">) {
     if (!song || !canLab || !labs.on) return;
     if (viewMode === "roll") {
       labDialog = { kind, picked: selectedNotes };
@@ -3011,6 +3149,17 @@
     if (!song || !activeTrackId || !labs.on) return;
     reverbDialog = { trackId: activeTrackId, picked: selectedNotes };
   }
+  // 실험실 원곡 대조 셈여림 (보기만): 원곡 세기 요약은 처음 열 때 한 번 만들고 원곡을 바꾸면 버린다
+  let loudnessOpen = $state(false);
+  let referencePower = $state.raw<ReferencePower | undefined>(undefined);
+  function openLoudness() {
+    if (!song || !reference || !labs.on) return;
+    referencePower ??= engine.referencePower();
+    if (referencePower) loudnessOpen = true;
+  }
+  $effect(() => {
+    if (!labs.on && loudnessOpen) loudnessOpen = false;
+  });
   function stampReverb(trackId: string, noteId: string, at: Rat) {
     if (!song || !history || !labs.on) return;
     const used = new Set(song.tracks.flatMap((tr) => tr.notes.map((n) => n.id)));
@@ -3051,7 +3200,7 @@
     run: openTempoRamp,
   });
   const labsMenu: MenuItem[] = $derived([
-    ...LAB_FEATURES.filter((f) => f.id !== "reverb" && f.id !== "midiRecord" && f.id !== "tempoRamp" && f.id !== "videoBars" && f.id !== "arpFold").map((f) => ({ label: t(f.label) + "…", title: t(f.help), disabled: !canLab, run: () => openLab(f.id as Exclude<LabFeatureId, "reverb" | "midiRecord" | "tempoRamp" | "videoBars" | "arpFold">) })),
+    ...LAB_FEATURES.filter((f) => f.id !== "reverb" && f.id !== "midiRecord" && f.id !== "tempoRamp" && f.id !== "videoBars" && f.id !== "arpFold" && f.id !== "loudness").map((f) => ({ label: t(f.label) + "…", title: t(f.help), disabled: !canLab, run: () => openLab(f.id as Exclude<LabFeatureId, "reverb" | "midiRecord" | "tempoRamp" | "videoBars" | "arpFold" | "loudness">) })),
     { separator: true },
     { label: t("ui.labReverb") + "…", title: t("ui.labReverbHelp"), disabled: !song || !activeTrackId, run: openReverb },
     { label: t("ui.labReverbStampCursor"), title: t("ui.labReverbStampCursorHelp"), disabled: !song || !activeTrackId, run: stampReverbAtCursor },
@@ -3060,6 +3209,8 @@
     { label: t("ui.labVideoBars"), title: t("ui.labVideoBarsHelp"), checked: videoBarsOpen, disabled: !song, run: toggleVideoBars },
     { separator: true },
     tempoRampItem,
+    { separator: true },
+    { label: t("ui.labLoudness") + "…", title: reference ? t("ui.labLoudnessHelp") : t("ui.loudnessNoReference"), disabled: !song || !reference, run: openLoudness },
   ]);
 
   const editMenu: MenuItem[] = $derived([
@@ -3132,6 +3283,7 @@
       ],
     },
     { label: t("ui.offgrid") + "…", title: t("ui.offgridHelp"), disabled: !song, run: () => (offgridOpen = true) },
+    { label: t("ui.foldReview") + "…", title: t("ui.foldReviewHelp"), disabled: !song, run: () => (foldOpen = true) },
     { separator: true },
     { label: t("ui.addTrackMenu"), title: t("ui.addTrackHelp"), disabled: !activePlayer, run: addTrackToPlayer },
     { label: t("ui.addScoreMenu"), title: t("ui.addPlayerHelp"), disabled: !song, run: () => (addScoreOpen = true) },
@@ -3279,9 +3431,16 @@
   }
 
   /** 범위에 드는 트랙과 그 안에서 바꿀 음 id (없으면 트랙 전체) */
-  function volumeTargets(scope: TransposeScope): { track: Track; notes: readonly Note[]; picked?: ReadonlySet<string> }[] {
+  function volumeTargets(scope: TransposeScope, bars?: readonly BarRange[]): { track: Track; notes: readonly Note[]; picked?: ReadonlySet<string> }[] {
     if (!song) return [];
-    if (scope !== "selection") return transposeTargets(scope).map(({ track }) => ({ track, notes: track.notes }));
+    if (scope !== "selection" && !bars) return transposeTargets(scope).map(({ track }) => ({ track, notes: track.notes }));
+    if (scope !== "selection") {
+      // 마디 범위: 범위 안에서 시작하는 소리만. 범위에 소리가 없는 트랙은 빼서 잠금 확인에도 끼지 않게 한다
+      const timeSig = song.timeSig;
+      return transposeTargets(scope)
+        .map(({ track }) => ({ track, notes: track.notes, picked: headsInBars(track.notes, timeSig, bars!) }))
+        .filter((x) => x.picked.size > 0);
+    }
     // 타브는 한 연주자의 여러 트랙에서 고른다. 고른 음은 곡 트랙의 음 그대로라 객체로 찾는다
     const chosen = new Set(editor?.selection() ?? []);
     return song.tracks
@@ -3289,7 +3448,7 @@
       .filter((x) => x.picked.size > 0);
   }
 
-  function checkVolume(scope: TransposeScope, change: VolumeChange): VolumeCheck {
+  function checkVolume(scope: TransposeScope, change: VolumeChange, bars?: readonly BarRange[]): VolumeCheck {
     let count = 0;
     let changed = 0;
     let clamped = 0;
@@ -3298,7 +3457,7 @@
     let after: [number, number] | undefined;
     const widen = (a: [number, number] | undefined, b: readonly [number, number] | undefined): [number, number] | undefined =>
       !b ? a : !a ? [b[0], b[1]] : [Math.min(a[0], b[0]), Math.max(a[1], b[1])];
-    for (const { notes, picked } of volumeTargets(scope)) {
+    for (const { notes, picked } of volumeTargets(scope, bars)) {
       const r = changeVolumes(notes, change, profile, picked);
       count += r.count;
       changed += r.changed;
@@ -3310,9 +3469,9 @@
     return { count, changed, clamped, viaTie, before, after };
   }
 
-  function applyVolume(scope: TransposeScope, change: VolumeChange) {
+  function applyVolume(scope: TransposeScope, change: VolumeChange, bars?: readonly BarRange[]) {
     if (!history) return;
-    const targets = volumeTargets(scope);
+    const targets = volumeTargets(scope, bars);
     const locked = lockedNames(targets.map(({ track }) => track.id));
     if (locked && !confirm(t("ui.volumeLockedConfirm", { names: locked }))) return;
     const changes = targets.flatMap(({ track, notes, picked }) => {
@@ -3658,6 +3817,10 @@
       }
       case "tempo.tap":
         return tap();
+      case "record.toggle":
+        if (!recordOpen || !labs.on) return false;
+        toggleRecording();
+        return true;
       case "event.tempo":
       case "event.marker":
         // 타브에서도 된다 (마커는 타브에 그리지 않고 피아노롤 이벤트 줄에서만 보인다)
@@ -3808,6 +3971,12 @@
       if (!event.repeat) tap();
       return;
     }
+    // MIDI 건반 녹음 줄이 열려 있으면 녹음 시작 / 멈추고 넣기 (탭 템포와 같이 버튼에 초점이 있어도 먹게)
+    if (recordOpen && labs.on && commandFor(bindings, key) === "record.toggle" && !target?.closest?.(TEXT_INPUT)) {
+      event.preventDefault();
+      if (!event.repeat) toggleRecording();
+      return;
+    }
     // MIDI 건반을 켜 두면 숫자 키는 새 음 길이, 0은 쉼표 (글 치는 곳은 빼고. 버튼에 초점이 있어도 먹게)
     if (midiKeys.status && !target?.closest?.(TEXT_INPUT) && midiStepKey(key)) {
       event.preventDefault();
@@ -3836,7 +4005,7 @@
   );
   const statusChars = $derived.by(() => {
     const text = analysis?.tracks.find((a) => a.track.id === activeTrackId)?.text;
-    return text === undefined ? undefined : { count: text.length, limit: profile.charLimitPerScore };
+    return text === undefined ? undefined : { count: exportChars?.get(activeTrackId!) ?? text.length, limit: profile.charLimitPerScore };
   });
   const instrumentCount = $derived(packs.reduce((n, p) => n + p.instruments.length, 0));
 
@@ -4107,6 +4276,18 @@
     onclose={() => (labDialog = undefined)}
   />
 {/if}
+{#if loudnessOpen && song && referencePower}
+  <LoudnessCompareDialog
+    {song}
+    {profile}
+    power={referencePower}
+    offsetMs={reference?.offsetMs ?? 0}
+    {loop}
+    now={nowAt}
+    onseek={seekTo}
+    onclose={() => (loudnessOpen = false)}
+  />
+{/if}
 {#if reverbDialog && song}
   {@const d = reverbDialog}
   <ReverbDialog {song} trackId={d.trackId} picked={d.picked} {profile} locked={lockedIds} onapply={applyLab} onclose={() => (reverbDialog = undefined)} />
@@ -4153,6 +4334,7 @@
     ]}
     initialScope={volumeOpen.scope}
     initialVol={volumeOpen.vol}
+    loopBars={song && loop ? barsOfRange(song.timeSig, asRat(loop[0]), asRat(loop[1])) : undefined}
     {profile}
     check={checkVolume}
     onapply={applyVolume}
@@ -4275,6 +4457,9 @@
     onapply={applyTempoRamp}
     onclose={() => (tempoRampOpen = false)}
   />
+{/if}
+{#if foldOpen && song}
+  <FoldReviewDialog {song} {profile} phrases={folds} instrumentOf={foldInstrumentOf} ongo={goToFold} onlisten={listenFold} onapply={applyFolds} onclose={() => (foldOpen = false)} />
 {/if}
 {#if offgridOpen && song}
   <OffgridDialog {song} fixes={offgrid} ongo={goToOffgrid} onlisten={listenOffgrid} onfix={applyOffgrid} onclose={() => (offgridOpen = false)} />
@@ -4407,6 +4592,7 @@
       <RecordBar
         recording={recordStatus?.count}
         {canRecord}
+        silent={packs.length === 0}
         connected={!!midiKeys.status}
         grid={recordPrefs.grid}
         grids={RECORD_GRIDS}
@@ -4416,6 +4602,13 @@
         onspeed={(n) => setRecordPref({ speed: n })}
         metronome={recordPrefs.metronome}
         onmetronome={(on) => setRecordPref({ metronome: on })}
+        targets={recordTargets}
+        ontarget={toggleRecordArm}
+        addTracks={recordPrefs.addTracks}
+        canAdd={recordTargetNow?.canAdd ?? false}
+        onaddtracks={(on) => setRecordPref({ addTracks: on })}
+        mode={recordPrefs.mode}
+        onmode={(mode) => setRecordPref({ mode })}
         result={recordResult}
         onrecord={() => void startRecord()}
         onstop={stop}
@@ -4500,6 +4693,7 @@
         <PianoRoll
           bind:this={roll}
           {song}
+          ghost={recordLive}
           {activeTrackId}
           {orientation}
           {division}
@@ -4556,6 +4750,7 @@
       {:else}
         <TabView
           {song}
+          ghost={recordLive}
           {themeKey}
           wave={showWave && reference && referencePeaks ? { peaks: referencePeaks, offset: reference.offsetMs / 1000 } : undefined}
           onwaveoffset={(sec) => setReferenceOffset(Math.round(sec * 1000))}
@@ -4643,6 +4838,7 @@
           {activeTrackId}
           {fileName}
           charLimit={profile.charLimitPerScore}
+          {exportChars}
           dock={paneDock}
           {portrait}
           trackInstrument={ownInstrument}
@@ -4787,6 +4983,7 @@
     onseek={seekTo}
     ondistribute={(source) => (spreadOpen = { source })}
     onsplit={runSplit}
+    onchecks={() => (statusPanel = "checks")}
     onclose={() => (outputOpen = false)}
   />
 {/if}
@@ -4828,7 +5025,7 @@
 {/snippet}
 
 {#snippet checksPanel()}
-  {#if analysis && song}<SongChecks {song} diagnostics={analysis.song} ongo={goToCheck} onbreaktimbre={breakTimbre} />{/if}
+  {#if analysis && song}<SongChecks {song} diagnostics={analysis.song} ongo={goToCheck} onbreaktimbre={breakTimbre} onfoldreview={() => ((statusPanel = undefined), (foldOpen = true))} />{/if}
 {/snippet}
 
 {#snippet helpPanel()}

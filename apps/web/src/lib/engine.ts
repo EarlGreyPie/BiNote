@@ -17,6 +17,7 @@ import { getProfile, positionToSeconds, type GameProfile, type Rat, type Song } 
 import type { WorkletSynthesizer } from "spessasynth_lib";
 import processorUrl from "spessasynth_lib/dist/spessasynth_processor.min.js?url";
 import { computePeaks, type Peaks } from "./waveform";
+import { computePower, type ReferencePower } from "./loudnessCompare";
 import { previewPitch } from "./instrumentRange";
 import { PreviewVoices } from "./previewVoices";
 import { preparePlay } from "./playPlan";
@@ -821,6 +822,13 @@ export class Engine {
     const r = this.reference;
     if (!r) return undefined;
     return computePeaks(Array.from({ length: r.numberOfChannels }, (_, i) => r.getChannelData(i)), r.sampleRate);
+  }
+
+  /** 불러온 원곡의 소리 세기 요약 (실험실 원곡 대조 셈여림). 디코딩해 둔 것을 다시 쓴다 */
+  referencePower(): ReferencePower | undefined {
+    const r = this.reference;
+    if (!r) return undefined;
+    return computePower(Array.from({ length: r.numberOfChannels }, (_, i) => r.getChannelData(i)), r.sampleRate);
   }
 
   /** 원곡 파일(음원·영상)을 불러와 길이(초)를 돌려준다 */

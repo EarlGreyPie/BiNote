@@ -58,9 +58,10 @@
   });
 
   /** 게임이 받는 길이만 (점음표·셋잇단 포함, 길이 순, 격자는 그대로). 정해 둔 잇단음과 지난번에 쓴 잇단음도 끼운다 */
-  const lengths = $derived(withLengths(lengthsFor(lengthRange, ARP_LENGTHS), [...(tupletLength ? [tupletLength] : []), choice.length], lengthRange, true));
+  const lengths = $derived(withLengths(lengthsFor(lengthRange, ARP_LENGTHS), [...(tupletLength ? [tupletLength] : []), choice.length, choice.accentLength], lengthRange, true));
   /** 기억해 둔 길이가 게임 한도 밖이면 격자 */
   const length = $derived(lengths.includes(choice.length) ? choice.length : "grid");
+  const accentLength = $derived(lengths.includes(choice.accentLength) ? choice.accentLength : "grid");
 
   /** 실제로 쓰는 화음 음 가져오기: 굴려 치기는 원래 음을 늦추기만 해서 코드 이름이면 같은 시간 음 */
   const src = $derived<ArpSource>(choice.style === "roll" && choice.source === "chord" ? "together" : choice.source);
@@ -103,6 +104,7 @@
         style: choice.style,
         order: choice.order,
         step: noteLengthOf(length, division),
+        ...(choice.accent !== "none" ? { accent: { which: choice.accent, step: noteLengthOf(accentLength, division) } } : {}),
         octaves: choice.octaves,
         repeat: choice.repeat,
         clearChordTracks: choice.clear,
@@ -155,8 +157,8 @@
   function apply() {
     if (!ok) return;
     // 격자 길이는 지금 격자 이름으로 남긴다 (다시 고칠 때 격자를 바꿨어도 같은 길이)
-    const used = length === "grid" && lengths.includes(String(division) as ArpChoice["length"]) ? (String(division) as ArpChoice["length"]) : length;
-    onapply(result, { choice: { ...choice, length: used }, excluded: [...excluded] });
+    const named = (l: ArpChoice["length"]) => (l === "grid" && lengths.includes(String(division) as ArpChoice["length"]) ? (String(division) as ArpChoice["length"]) : l);
+    onapply(result, { choice: { ...choice, length: named(length), accentLength: named(accentLength) }, excluded: [...excluded] });
     dialog.close();
   }
 
@@ -203,6 +205,24 @@
     <select value={length} onchange={(e) => set({ length: e.currentTarget.value as ArpChoice["length"] })}>
       {#each lengths as l (l)}<option value={l}>{lengthLabel(l)}</option>{/each}
     </select>
+    <span>{t("ui.arpAccent")}</span>
+    <span class="row inline">
+      <select aria-label={t("ui.arpAccent")} value={choice.accent} onchange={(e) => set({ accent: e.currentTarget.value as ArpChoice["accent"] })}>
+        <option value="none">{t("ui.arpAccentNone")}</option>
+        <option value="low">{t("ui.arpAccentLow")}</option>
+        <option value="high">{t("ui.arpAccentHigh")}</option>
+        <option value="both">{t("ui.arpAccentBoth")}</option>
+      </select>
+      {#if choice.accent !== "none"}
+        <select aria-label={t("ui.arpAccentLength")} value={accentLength} onchange={(e) => set({ accentLength: e.currentTarget.value as ArpChoice["length"] })}>
+          {#each lengths as l (l)}<option value={l}>{lengthLabel(l)}</option>{/each}
+        </select>
+      {/if}
+    </span>
+    {#if choice.accent !== "none"}
+      <span></span>
+      <span class="muted help">{t(choice.style === "roll" ? "ui.arpAccentRollHelp" : "ui.arpAccentHelp")}</span>
+    {/if}
     {#if choice.style !== "roll"}
       <span>{t("ui.arpOctaves")}</span>
       <select value={choice.octaves} onchange={(e) => set({ octaves: Number(e.currentTarget.value) as ArpChoice["octaves"] })}>
@@ -307,6 +327,9 @@
     gap: 6px 12px;
     flex-wrap: wrap;
     margin: 8px 0;
+  }
+  .grid > .inline {
+    margin: 0;
   }
   .preview {
     display: block;

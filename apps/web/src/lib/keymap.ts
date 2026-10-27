@@ -40,6 +40,7 @@ export const COMMANDS = [
   "event.tempo",
   "event.marker",
   "tempo.tap",
+  "record.toggle",
   "play.toggle",
   "play.start",
   "play.stop",
@@ -95,6 +96,8 @@ const COMMON: Bindings = {
   "event.marker": ["Alt+M"],
   // 탭 템포를 켰을 때만 쓴다 (꺼져 있으면 키를 그대로 넘긴다)
   "tempo.tap": ["T"],
+  // MIDI 건반 녹음 줄(실험실)이 열려 있을 때만 쓴다: 녹음 시작 / 멈추고 넣기
+  "record.toggle": ["R"],
   "track.moveUp": ["Alt+Shift+Up"],
   "track.moveDown": ["Alt+Shift+Down"],
   "play.start": ["F5"],

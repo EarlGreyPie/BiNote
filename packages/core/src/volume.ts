@@ -1,4 +1,5 @@
-import type { Note } from "./model.js";
+import type { Note, TimeSigEvent } from "./model.js";
+import { barAt, inBars, type BarRange } from "./meter.js";
 import type { GameProfile } from "./profile.js";
 import { applyVolumes, tieChains } from "./note-edit.js";
 
@@ -97,4 +98,18 @@ export function volumeSpan(notes: readonly Note[], picked?: ReadonlySet<string>)
     hi = Math.max(hi, head.vol);
   }
   return lo === Infinity ? undefined : [lo, hi];
+}
+
+/**
+ * 마디 범위 안에서 시작하는 소리(& 사슬은 첫 음)의 id. changeVolumes·volumeSpan의 picked로 쓴다.
+ * 게임은 사슬 첫 음 v만 읽으므로, 범위 앞에서 시작해 범위로 이어지는 사슬은 넣지 않고
+ * 범위 안에서 시작해 밖으로 이어지는 사슬은 넣는다
+ */
+export function headsInBars(notes: readonly Note[], timeSig: readonly TimeSigEvent[], ranges: readonly BarRange[]): Set<string> {
+  const out = new Set<string>();
+  for (const chain of tieChains(notes)) {
+    const head = chain[0]!;
+    if (inBars(ranges, barAt(timeSig, head.start))) out.add(head.id);
+  }
+  return out;
 }

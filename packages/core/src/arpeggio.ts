@@ -1,4 +1,4 @@
-import { add, cmp, mul, rat, sub, ZERO, type Rat } from "./rat.js";
+import { add, cmp, sub, ZERO, type Rat } from "./rat.js";
 import type { Note, Song } from "./model.js";
 import type { PitchRange } from "./profile.js";
 import { replaceNotes } from "./note-edit.js";
@@ -14,6 +14,8 @@ export type ArpSource = "together" | "selected" | "chord";
 /** 방식: 한 트랙에 펼치기 / 굴려 치기(원래 음을 두고 시작만 늦춤) / 트랙 돌아가며 되풀이(새 음을 만들어 깔기) */
 export type ArpStyle = "spread" | "roll" | "strum";
 export type ArpOrder = "up" | "down" | "updown" | "random";
+/** 따로 길이를 줄 음: 맨 아래음(베이스) / 맨 위음(멜로디) / 둘 다 */
+export type ArpAccent = "low" | "high" | "both";
 
 /** 코드 종류: 근음에서 쌓는 반음 간격 */
 export const CHORD_KINDS = {
@@ -39,6 +41,11 @@ export interface ArpOptions {
   readonly order: ArpOrder;
   /** 음 하나의 길이 (온음표 단위) */
   readonly step: Rat;
+  /**
+   * 따로 길이: 고른 음(맨 아래음·맨 위음)은 step 대신 이 길이를 쓴다. 길이는 그 음에서 다음 음이 나오기까지의 간격이다
+   * (펼치기·되풀이는 그 음 길이, 굴려 치기는 다음 음을 늦추는 간격). 맨 아래·맨 위는 한 번 도는 순서 안에서 가장 낮은·높은 음
+   */
+  readonly accent?: { readonly which: ArpAccent; readonly step: Rat };
   /** 옥타브 넓이 1~3. 2 이상이면 화음 음을 한 옥타브씩 올려(아래로면 내려) 이어 붙인다 */
   readonly octaves: number;
   /** 켜면 칸이 찰 때까지 되풀이, 끄면 한 번만 돌고 마지막 음을 칸 끝까지 늘린다 */
@@ -225,21 +232,39 @@ export function arpSequence(cell: Pick<ArpCell, "pitches" | "start">, options: P
 }
 
 /**
- * 칸 [start, end)에 순서대로 놓을 음 자리. 음마다 step씩 늦게 시작하고, 칸 끝을 넘으면 칸 끝에서 자른다.
- * 반복을 끄면 한 번만 돌고 마지막 음을 칸 끝까지 늘린다
+ * 칸 [start, end)에 순서대로 놓을 음 자리. 음마다 그 음 길이(stepAt, 없으면 step)만큼 뒤에 다음 음이 시작하고, 칸 끝을 넘으면 칸 끝에서 자른다.
+ * 반복을 끄면 한 번만 돌고 마지막 음을 칸 끝까지 늘린다. stepAt은 한 번 도는 순서의 자리(index)를 받는다
  */
-export function arpTimes(cell: Pick<ArpCell, "start" | "end">, count: number, step: Rat, repeat: boolean): { start: Rat; dur: Rat; index: number }[] {
+export function arpTimes(
+  cell: Pick<ArpCell, "start" | "end">,
+  count: number,
+  step: Rat,
+  repeat: boolean,
+  stepAt: (index: number) => Rat = () => step,
+): { start: Rat; dur: Rat; index: number }[] {
   const out: { start: Rat; dur: Rat; index: number }[] = [];
-  if (count === 0 || cmp(step, ZERO) <= 0) return out;
+  if (count === 0 || Array.from({ length: count }, (_, k) => stepAt(k)).some((x) => cmp(x, ZERO) <= 0)) return out;
+  let start = cell.start;
   for (let i = 0; ; i++) {
     if (!repeat && i >= count) break;
-    const start = add(cell.start, mul(step, rat(i)));
     if (cmp(start, cell.end) >= 0) break;
+    const own = stepAt(i % count);
     const room = sub(cell.end, start);
     const lastOnce = !repeat && i === count - 1;
-    out.push({ start, dur: lastOnce || cmp(step, room) > 0 ? room : step, index: i % count });
+    out.push({ start, dur: lastOnce || cmp(own, room) > 0 ? room : own, index: i % count });
+    start = add(start, own);
   }
   return out;
+}
+
+/** 한 번 도는 순서(pitches)의 자리마다 음 길이: 따로 길이를 고른 맨 아래음·맨 위음은 accent 길이, 나머지는 step */
+export function arpSteps(pitches: readonly number[], options: Pick<ArpOptions, "step" | "accent">): (index: number) => Rat {
+  const { accent } = options;
+  if (!accent || pitches.length < 2) return () => options.step;
+  const low = Math.min(...pitches);
+  const high = Math.max(...pitches);
+  const special = (p: number) => (accent.which !== "high" && p === low) || (accent.which !== "low" && p === high);
+  return (index) => (special(pitches[index]!) ? accent.step : options.step);
 }
 
 /**
@@ -312,7 +337,7 @@ export function planArpeggio(song: Song, trackId: string, picked: readonly Note[
     if (locked.has(trackId)) return { ...empty, single, outOfRange, lockedSkipped: 1 };
     const planned = seqs.map(({ cell, pitches }) => ({
       cell,
-      made: arpTimes(cell, pitches.length, options.step, options.repeat).map((t) => fresh(cell, t.start, t.dur, pitches[t.index]!, trackId)),
+      made: arpTimes(cell, pitches.length, options.step, options.repeat, arpSteps(pitches, options)).map((t) => fresh(cell, t.start, t.dur, pitches[t.index]!, trackId)),
     }));
     // 한 규칙: 받아들인 칸 전체로 고른 트랙의 최종 음(rewrite 결과)을 먼저 만들고, 그 최종 음에서 칸마다 본다.
     // 칸의 새 음이 하나도 남지 않거나, 지울 화음 트랙 음의 높이가 그 칸의 남은 새 음에 없으면 그 칸은 만들지 않는다
@@ -380,7 +405,7 @@ export function planArpeggio(song: Song, trackId: string, picked: readonly Note[
   /** 칸마다 놓을 음(줄과 함께)과 지울 원래 음 */
   const plans: { cell: ArpCell; made: { lane: number; note: Note }[]; removes: { trackId: string; noteId: string }[] }[] = [];
   for (const { cell, pitches } of seqs) {
-    const times = arpTimes(cell, pitches.length, options.step, options.repeat);
+    const times = arpTimes(cell, pitches.length, options.step, options.repeat, arpSteps(pitches, options));
     // 첫 바퀴에서 원래 화음 음과 같은 높이는 그 음이 있던 트랙(줄)을 먼저 쓴다 (멜로디·베이스 트랙이 뒤바뀌지 않게).
     // 다음 바퀴는 같은 줄을 되풀이한다
     const order: number[] = [];
@@ -504,7 +529,10 @@ function rollChord(song: Song, trackId: string, cells: readonly ArpCell[], singl
     // 있는 음을 옮기므로 음역으로 빼지 않는다. 위아래·무작위도 높이마다 한 자리 (처음 나온 차례)
     const { pitches } = arpSequence(cell, { ...options, octaves: 1, range: { low: 0, high: 127 } });
     const slot = [...new Set(pitches)];
-    const at = (pitch: number) => add(cell.start, mul(options.step, rat(slot.indexOf(pitch))));
+    // 자리마다 늦추는 간격은 앞 음들의 길이를 더한 것 (따로 길이를 고른 음은 그 길이)
+    const stepOf = arpSteps(slot, options);
+    const offsets = slot.reduce<Rat[]>((acc, _, k) => [...acc, k === 0 ? ZERO : add(acc[k - 1]!, stepOf(k - 1))], []);
+    const at = (pitch: number) => add(cell.start, offsets[slot.indexOf(pitch)]!);
     if (fold !== undefined && cell.sources.some((x) => !kept.has(x.trackId))) {
       const plan = foldCell(song, cell, at, kept, locked);
       if (plan) {

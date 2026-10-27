@@ -29,6 +29,8 @@ export interface SongViewReset {
   readonly trill: undefined;
   readonly labDialog: undefined;
   readonly reverbDialog: undefined;
+  /** 실험실 원곡 대조 셈여림 창 */
+  readonly loudnessOpen: false;
   readonly transposing: undefined;
   readonly voicing: undefined;
   readonly tempoChangeOpen: false;
@@ -64,6 +66,7 @@ export function freshSongView(viewGen: number): SongViewReset {
     trill: undefined,
     labDialog: undefined,
     reverbDialog: undefined,
+    loudnessOpen: false,
     transposing: undefined,
     voicing: undefined,
     tempoChangeOpen: false,

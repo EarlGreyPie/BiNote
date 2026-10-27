@@ -22,6 +22,8 @@
     /** 지금 올린 사운드팩 파일 이름들. 둘 이상일 때만 팩 고르기를 보인다 */
     packLabels?: readonly string[];
     charLimit: number;
+    /** 내보낼 때 글자 수 (게임에 넣는 글). 한도는 이 수로 견주고, 원문과 다르면 원문 글자 수도 곁에 보인다 */
+    exportCount?: number | undefined;
     /** 머리 줄에 끄기·솔로를 둔다 (구조 목록이 안 보이는 아래 배치) */
     showListen: boolean;
     reveal: { from: number; to: number; focus: boolean; nonce: number } | undefined;
@@ -48,9 +50,10 @@
     onclose?: (() => void) | undefined;
   }
 
-  let { track, index, text, diagnostics, color, instrument, instrumentLabel, pack, packLabels = [], charLimit, showListen, reveal, playing, follow = false, oninstrument, onpack, onlisten, onedit, onundo, onredo, ongodiag, onrename, onclose, locked = false, onlock, hold = false }: Props = $props();
+  let { track, index, text, diagnostics, color, instrument, instrumentLabel, pack, packLabels = [], charLimit, exportCount, showListen, reveal, playing, follow = false, oninstrument, onpack, onlisten, onedit, onundo, onredo, ongodiag, onrename, onclose, locked = false, onlock, hold = false }: Props = $props();
 
-  const over = $derived(text.length > charLimit);
+  const count = $derived(exportCount ?? text.length);
+  const over = $derived(count > charLimit);
   const first = $derived(diagnostics[0]);
   // 고른 팩이 지금 없어도 항목에 남겨 "(없음)"을 붙인다 (곡의 값은 지우지 않는다)
   const packMissing = $derived(pack !== undefined && !packLabels.includes(pack));
@@ -91,7 +94,10 @@
       </select>
     {/if}
     <span class="muted">{t("ui.notes", { count: track.notes.length })}</span>
-    <span class={over ? "over" : "muted"}>{text.length} / {charLimit}</span>
+    {#if exportCount !== undefined && exportCount !== text.length}
+      <span class="muted" title={t("ui.sourceCharsHelp")}>{t("ui.sourceChars", { count: text.length })}</span>
+    {/if}
+    <span class={over ? "over" : "muted"} title={t("ui.exportCharsHelp")}>{count} / {charLimit}</span>
     <span class="spacer"></span>
     {#if showListen}
       <button class="ms" class:lit={track.mute} title={t("ui.mute")} onclick={() => onlisten({ mute: !track.mute })}>{t("ui.muteShort")}</button>

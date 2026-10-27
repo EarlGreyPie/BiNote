@@ -1,4 +1,4 @@
-import { add, cmp, mul, rat, toFloat, ZERO, type Rat } from "./rat.js";
+import { add, cmp, div, mul, rat, sub, toFloat, ZERO, type Rat } from "./rat.js";
 import type { TimeSigEvent } from "./model.js";
 
 /** 박자표 분모로 쓸 수 있는 값 (2의 거듭제곱) */
@@ -92,4 +92,63 @@ export function barBeatAt(timeSig: readonly TimeSigEvent[], at: Rat): { bar: num
     bar += Math.ceil((toFloat(next.at) - toFloat(sig.at)) / measureLen - 1e-9);
   }
   return { bar, beat: 1 };
+}
+
+function floorDiv(a: Rat, b: Rat): number {
+  const q = div(a, b);
+  return (q.n - (((q.n % q.d) + q.d) % q.d)) / q.d;
+}
+
+/** 위치의 마디 번호(1부터). barBeatAt과 같은 규칙을 분수로 정확히 센다 (마디선 위 음은 그 마디의 첫 음) */
+export function barAt(timeSig: readonly TimeSigEvent[], at: Rat): number {
+  const sigs = [...timeSig].sort((a, b) => cmp(a.at, b.at));
+  const segments = sigs.length === 0 || cmp(sigs[0]!.at, ZERO) > 0 ? [{ at: ZERO, beats: 4, unit: 4 }, ...sigs] : sigs;
+  let bar = 1;
+  for (let i = 0; i < segments.length; i++) {
+    const sig = segments[i]!;
+    const next = segments[i + 1];
+    const { measure } = meterGrid(sig);
+    if (!next || cmp(at, next.at) < 0) return bar + Math.max(0, floorDiv(sub(at, sig.at), measure));
+    // 박자가 바뀌기 전 덜 찬 마디도 한 마디로 센다
+    bar += -floorDiv(sub(sig.at, next.at), measure);
+  }
+  return bar;
+}
+
+/** [from, to) 구간이 걸친 마디 [첫, 끝] (마디 번호, 1부터). to가 마디선이면 그 마디는 넣지 않는다 */
+export function barsOfRange(timeSig: readonly TimeSigEvent[], from: Rat, to: Rat): readonly [number, number] {
+  const first = barAt(timeSig, from);
+  const last = barAt(timeSig, to) - (cmp(measureStart(timeSig, to), to) === 0 ? 1 : 0);
+  return [first, Math.max(first, last)];
+}
+
+/** 마디 범위 [첫, 끝] (끝이 Infinity면 곡 끝까지) */
+export type BarRange = readonly [number, number];
+
+/**
+ * 사람이 적은 마디 목록을 읽는다. "12-16, 20", "3 5 7", "20-"(20마디부터 끝까지).
+ * ~·–·〜도 -로 읽는다. 거꾸로 적은 범위(16-12)는 바로잡는다. 읽을 수 없으면 undefined
+ */
+export function parseBarList(text: string): BarRange[] | undefined {
+  const tokens = text
+    .replace(/[~–—〜～]/g, "-")
+    .replace(/\s*-\s*/g, "-")
+    .split(/[,，、;\s]+/)
+    .filter((s) => s !== "");
+  if (tokens.length === 0) return undefined;
+  const out: BarRange[] = [];
+  for (const token of tokens) {
+    const m = /^(\d+)(?:-(\d*))?$/.exec(token);
+    if (!m) return undefined;
+    const a = Number(m[1]);
+    const b = m[2] === undefined ? a : m[2] === "" ? Infinity : Number(m[2]);
+    if (!Number.isSafeInteger(a) || a < 1 || (b !== Infinity && (!Number.isSafeInteger(b) || b < 1))) return undefined;
+    out.push(a <= b ? [a, b] : [b, a]);
+  }
+  return out;
+}
+
+/** 마디 번호가 범위들 가운데 하나에 드는지 */
+export function inBars(ranges: readonly BarRange[], bar: number): boolean {
+  return ranges.some(([a, b]) => bar >= a && bar <= b);
 }

@@ -727,3 +727,58 @@ describe("굴려 치기 트랙 접기: 남는 트랙의 짧은 화음 음", () =
     expect(r.changes.find((c) => c.trackId === "t3")?.notes.some((x) => x.id === "nx") ?? true).toBe(true);
   });
 });
+
+describe("따로 길이 (맨 아래음·맨 위음)", () => {
+  const at = (xs: ReturnType<typeof arpTimes>) => xs.map((x) => `${x.index}@${x.start.n}/${x.start.d}+${x.dur.n}/${x.dur.d}`);
+  const pick = (s: Song) => [s.tracks[0]!.notes[0]!];
+  const of = (s: Song, r: ReturnType<typeof planArpeggio>, id: string) => shape(r.changes.find((c) => c.trackId === id)?.notes ?? s.tracks.find((t) => t.id === id)!.notes);
+
+  it("자리마다 음 길이: 그 음 길이만큼 뒤에 다음 음이 시작하고 되풀이해도 같은 자리에 같은 길이", () => {
+    const steps = [rat(1, 8), rat(1, 16), rat(1, 16)];
+    expect(at(arpTimes({ start: rat(0), end: rat(1, 2) }, 3, rat(1, 16), true, (i) => steps[i]!))).toEqual([
+      "0@0/1+1/8", "1@1/8+1/16", "2@3/16+1/16", "0@1/4+1/8", "1@3/8+1/16", "2@7/16+1/16",
+    ]);
+  });
+
+  it("펼치기: 맨 아래음 8, 나머지 16 (반복 끄면 마지막 음은 칸 끝까지)", () => {
+    const s = chordSong();
+    const r = planArpeggio(s, "t1", pick(s), { ...base, repeat: false, accent: { which: "low", step: rat(1, 8) } }, newId);
+    expect(of(s, r, "t1")).toEqual(["60@0/1+1/8", "64@1/8+1/16", "67@3/16+1/16"]);
+  });
+
+  it("펼치기: 둘 다면 맨 아래음과 맨 위음이 길고, 되풀이 바퀴마다 같다", () => {
+    const s = songOf({ t1: [n("c", 0, 4, 60)], t2: [n("e", 0, 4, 64)], t3: [n("g", 0, 4, 67)] });
+    const r = planArpeggio(s, "t1", pick(s), { ...base, accent: { which: "both", step: rat(1, 8) } }, newId);
+    expect(of(s, r, "t1").slice(0, 5)).toEqual(["60@0/1+1/8", "64@1/8+1/16", "67@3/16+1/8", "60@5/16+1/8", "64@7/16+1/16"]);
+  });
+
+  it("굴려 치기: 맨 아래음 다음 음은 8만큼, 그다음은 16만큼 늦게. 끝은 원래 그대로", () => {
+    const s = chordSong();
+    const r = planArpeggio(s, "t1", pick(s), { ...base, style: "roll", repeat: false, accent: { which: "low", step: rat(1, 8) } }, newId);
+    expect(of(s, r, "t1")).toEqual(["60@0/1+1/4"]);
+    expect(of(s, r, "t2")).toEqual(["64@1/8+1/8"]);
+    expect(of(s, r, "t3")).toEqual(["67@3/16+1/16", "69@1/2+1/4"]);
+  });
+
+  it("굴려 치기 아래로: 맨 위음이 먼저 나오고 그 뒤 간격이 따로 길이", () => {
+    const s = chordSong();
+    const r = planArpeggio(s, "t1", pick(s), { ...base, style: "roll", order: "down", repeat: false, accent: { which: "high", step: rat(1, 8) } }, newId);
+    expect(of(s, r, "t3")[0]).toBe("67@0/1+1/4");
+    expect(of(s, r, "t2")).toEqual(["64@1/8+1/8"]);
+    expect(of(s, r, "t1")).toEqual(["60@3/16+1/16"]);
+  });
+
+  it("되풀이: 트랙을 돌아가며 맨 아래음 뒤만 길게 띄운다", () => {
+    const s = chordSong();
+    const r = planArpeggio(s, "t1", pick(s), { ...base, style: "strum", repeat: false, accent: { which: "low", step: rat(1, 8) } }, newId);
+    const starts = r.changes.flatMap((c) => c.notes).filter((x) => cmp(x.start, rat(1, 4)) < 0).map((x) => `${x.pitch}@${x.start.n}/${x.start.d}`).sort();
+    expect(starts).toEqual(["60@0/1", "64@1/8", "67@3/16"]);
+  });
+
+  it("따로 길이가 없으면 전과 같다", () => {
+    const s = chordSong();
+    const a = planArpeggio(s, "t1", pick(s), { ...base, style: "roll", repeat: false }, () => "y");
+    const b = planArpeggio(s, "t1", pick(s), { ...base, style: "roll", repeat: false, accent: { which: "low", step: rat(1, 16) } }, () => "y");
+    expect(b.changes).toEqual(a.changes);
+  });
+});

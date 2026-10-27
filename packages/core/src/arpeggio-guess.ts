@@ -1,4 +1,4 @@
-import { add, cmp, eq, sub, type Rat } from "./rat.js";
+import { add, cmp, eq, sub, ZERO, type Rat } from "./rat.js";
 import type { Note, Song } from "./model.js";
 import type { ArpOrder, ArpStyle } from "./arpeggio.js";
 import type { MadeNotes } from "./made.js";
@@ -58,7 +58,10 @@ export type ArpGuess =
 
 interface Entry {
   readonly trackId: string;
+  /** &로 이은 음은 하나로 본 음 (시작은 첫 음, 길이는 사슬 전체) */
   readonly note: Note;
+  /** 곡에 있는 실제 음 (& 사슬이면 사슬 음 모두) */
+  readonly members: readonly Note[];
 }
 
 const end = (n: { start: Rat; dur: Rat }) => add(n.start, n.dur);
@@ -133,8 +136,12 @@ function isUpdownTail(seq: readonly number[], p: number): boolean {
   return seq[top - (seq.length - 1 - top) - 1] === p;
 }
 
-/** 여러 트랙에 걸친 음을 칸으로 (어느 음도 걸치지 않는 자리에서 끊는다). 되풀이·굴려 치기 모양이 아니면 undefined */
-function laneCells(entries: readonly Entry[]): RawCell[] | undefined {
+/**
+ * 여러 트랙에 걸친 음을 칸으로 (어느 음도 걸치지 않는 자리에서 끊는다). 되풀이·굴려 치기 모양인 칸만 (아닌 칸은 뺀다)
+ * - 굴려 치기: 칸 안에서 트랙마다 음이 하나이고 같은 간격으로 하나씩 늦게 시작한다 (끝은 원래 끝이라 저마다 달라도 된다)
+ * - 되풀이: 같은 간격으로 하나씩 늦게 시작하고, 트랙마다 다음 음 앞이나 칸 끝에서 끝난다
+ */
+function laneCells(entries: readonly Entry[]): (RawCell & { roll: boolean })[] {
   const sorted = [...entries].sort((a, b) => cmp(a.note.start, b.note.start));
   const groups: Entry[][] = [];
   let reach: Rat | undefined;
@@ -143,21 +150,22 @@ function laneCells(entries: readonly Entry[]): RawCell[] | undefined {
     groups[groups.length - 1]!.push(x);
     reach = !reach || cmp(end(x.note), reach) > 0 ? end(x.note) : reach;
   }
-  const cells: RawCell[] = [];
+  const cells: (RawCell & { roll: boolean })[] = [];
   for (const list of groups) {
     const start = list[0]!.note.start;
     const last = list.reduce((m, x) => (cmp(end(x.note), m) > 0 ? end(x.note) : m), end(list[0]!.note));
-    if (list.length < 2 || new Set(list.map((x) => x.trackId)).size < 2) return undefined;
+    const tracks = new Set(list.map((x) => x.trackId));
+    if (list.length < 2 || tracks.size < 2) continue;
     const step = sub(list[1]!.note.start, start);
-    for (let i = 0; i < list.length; i++) {
-      const x = list[i]!;
-      if (x.note.tie === "next") return undefined;
-      if (i > 0 && !eq(sub(x.note.start, list[i - 1]!.note.start), step)) return undefined;
-      // 같은 트랙 다음 음 앞에서 끊기거나 칸 끝까지
+    if (cmp(step, ZERO) <= 0 || !list.every((x, i) => i === 0 || eq(sub(x.note.start, list[i - 1]!.note.start), step))) continue;
+    const roll = tracks.size === list.length;
+    // 같은 트랙 다음 음 앞에서 끊기거나 칸 끝까지
+    const strum = list.every((x, i) => {
       const next = list.slice(i + 1).find((y) => y.trackId === x.trackId);
-      if (!eq(end(x.note), next ? next.note.start : last)) return undefined;
-    }
-    cells.push({ entries: list, start, end: last });
+      return eq(end(x.note), next ? next.note.start : last);
+    });
+    if (!roll && !strum) continue;
+    cells.push({ entries: list, start, end: last, roll });
   }
   return cells;
 }
@@ -181,8 +189,25 @@ export function guessArpeggio(song: Song, picked: readonly Note[], newId: () => 
   const ids = new Set(picked.map((n) => n.id));
   const liveRecords = new Set((song.made ?? []).map((r) => r.id));
   const entries: Entry[] = [];
-  for (const t of song.tracks) for (const n of t.notes) if (ids.has(n.id)) entries.push({ trackId: t.id, note: n });
-  const made = entries.filter((x) => x.note.made !== undefined && liveRecords.has(x.note.made)).map((x) => x.note.id);
+  for (const t of song.tracks) {
+    // &로 이은 고른 음은 하나로 본다 (사슬 머리부터)
+    const mine = t.notes.filter((n) => ids.has(n.id)).sort((a, b) => cmp(a.start, b.start));
+    let chain: Note[] = [];
+    const flush = () => {
+      if (chain.length === 0) return;
+      const head = chain[0]!;
+      const tail = chain[chain.length - 1]!;
+      entries.push({ trackId: t.id, note: { ...head, dur: sub(end(tail), head.start), tie: tail.tie }, members: chain });
+      chain = [];
+    };
+    for (const n of mine) {
+      const prev = chain.at(-1);
+      if (!(prev && prev.tie === "next" && eq(end(prev), n.start))) flush();
+      chain.push(n);
+    }
+    flush();
+  }
+  const made = entries.flatMap((x) => x.members).filter((n) => n.made !== undefined && liveRecords.has(n.made)).map((n) => n.id);
   if (made.length > 0) return { ok: false, reason: "made", blocking: made };
   const players = new Set(entries.map((x) => song.tracks.find((t) => t.id === x.trackId)!.playerId));
   if (players.size > 1) return { ok: false, reason: "score", blocking: [] };
@@ -193,12 +218,12 @@ export function guessArpeggio(song: Song, picked: readonly Note[], newId: () => 
   const trackIds = new Set(entries.map((x) => x.trackId));
 
   // 되풀이·굴려 치기
-  const lanes = trackIds.size > 1 ? laneCells(entries) : undefined;
-  if (lanes) {
+  const lanes = trackIds.size > 1 ? laneCells(entries) : [];
+  if (lanes.length > 0) {
     const shapes = lanes.map((c) => ({ cell: c, ...shapeOf(c.entries.map((x) => x.note.pitch)), step: sub(c.entries[1]!.note.start, c.start) }));
     const kept = shapes.filter((s) => new Set(s.cell.entries.map((x) => x.note.pitch)).size > 1);
     if (kept.length === 0) return none;
-    const roll = kept.every((s) => new Set(s.cell.entries.map((x) => x.trackId)).size === s.cell.entries.length);
+    const roll = kept.every((s) => s.cell.roll);
     const first = kept[0]!;
     const trackId = first.cell.entries[0]!.trackId;
     const before = new Map<string, Note[]>();
@@ -208,7 +233,8 @@ export function guessArpeggio(song: Song, picked: readonly Note[], newId: () => 
         if (seen.has(x.trackId)) continue;
         seen.add(x.trackId);
         const list = before.get(x.trackId) ?? [];
-        list.push(origin(newId(), cell.start, cell.end, x.note.pitch, x.note));
+        // 굴려 치기는 원래 음 끝이 그대로다
+        list.push(origin(newId(), cell.start, roll ? end(x.note) : cell.end, x.note.pitch, x.note));
         before.set(x.trackId, list);
       }
     }
@@ -323,6 +349,51 @@ function groupsOf(byTrack: ReadonlyMap<string, Note[]>, order: readonly { id: st
 
 function afterOf(entries: readonly Entry[], covered: ReadonlySet<string>, order: readonly { id: string }[]): MadeNotes[] {
   return order
-    .map((t) => ({ trackId: t.id, notes: entries.filter((x) => x.trackId === t.id && covered.has(x.note.id)).map((x) => x.note) }))
+    .map((t) => ({ trackId: t.id, notes: entries.filter((x) => x.trackId === t.id && covered.has(x.note.id)).flatMap((x) => x.members) }))
     .filter((g) => g.notes.length > 0);
+}
+
+/**
+ * 고른 음에서 짐작하고, 못 찾으면 고른 음 둘레로 넓혀 본다 (한 음만 골라도 되게):
+ * 같은 악보에서 고른 음과 시간이 겹쳐 이어지는 음 묶음(되풀이·굴려 치기), 고른 음 트랙에서 빈틈없이 이어진 음(펼치기)
+ */
+export function guessArpeggioAround(song: Song, picked: readonly Note[], newId: () => string, locked: ReadonlySet<string> = new Set()): ArpGuess {
+  const direct = guessArpeggio(song, picked, newId, locked);
+  if (direct.ok || direct.reason !== "none" || picked.length === 0) return direct;
+  const ids = new Set(picked.map((n) => n.id));
+  const owner = new Map<string, Song["tracks"][number]>();
+  for (const t of song.tracks) for (const n of t.notes) if (ids.has(n.id)) owner.set(n.id, t);
+  const players = new Set([...owner.values()].map((t) => t.playerId));
+  if (players.size !== 1) return direct;
+  const score = song.tracks.filter((t) => t.playerId === [...players][0]);
+  // 1) 시간이 겹쳐 이어지는 음 묶음 (어느 음도 걸치지 않는 자리에서 끊는다)
+  const all = score.flatMap((t) => t.notes).sort((a, b) => cmp(a.start, b.start));
+  const groups: Note[][] = [];
+  let reach: Rat | undefined;
+  for (const n of all) {
+    if (!reach || cmp(n.start, reach) >= 0) groups.push([]);
+    groups[groups.length - 1]!.push(n);
+    reach = !reach || cmp(end(n), reach) > 0 ? end(n) : reach;
+  }
+  const crossing = groups.filter((g) => g.some((n) => ids.has(n.id))).flat();
+  // 2) 고른 음 트랙에서 빈틈없이 이어진 음 (앞뒤로)
+  const runs: Note[] = [];
+  for (const t of new Set(owner.values())) {
+    const sorted = [...t.notes].sort((a, b) => cmp(a.start, b.start));
+    for (let i = 0; i < sorted.length; i++) {
+      if (!ids.has(sorted[i]!.id)) continue;
+      let lo = i;
+      let hi = i;
+      while (lo > 0 && eq(end(sorted[lo - 1]!), sorted[lo]!.start)) lo--;
+      while (hi < sorted.length - 1 && eq(end(sorted[hi]!), sorted[hi + 1]!.start)) hi++;
+      runs.push(...sorted.slice(lo, hi + 1));
+    }
+  }
+  for (const wider of [crossing, runs]) {
+    const uniq = [...new Map(wider.map((n) => [n.id, n])).values()];
+    if (uniq.length <= picked.length) continue;
+    const r = guessArpeggio(song, uniq, newId, locked);
+    if (r.ok) return r;
+  }
+  return direct;
 }

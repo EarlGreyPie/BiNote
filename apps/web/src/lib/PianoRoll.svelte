@@ -36,7 +36,7 @@
   import { selectKeys } from "./selectKeys.svelte";
   import { heldKeys } from "./selectKeys";
   import { t } from "./i18n.svelte";
-  import { drawRoll } from "./rollDraw";
+  import { drawRoll, type GhostNote } from "./rollDraw";
   import type { CanonicalOf } from "./instrumentRange";
   import { carryViewStart, type ViewMemory } from "./viewCarry";
   import { Pinch, pinchRatio, type PinchFrame } from "./pinch";
@@ -96,6 +96,8 @@
     /** 트랙 id → 화면 색. 없으면 트랙에 저장된 색 */
     colors?: ReadonlyMap<string, string>;
     song: Song;
+    /** MIDI 건반 녹음 중 친 음 (격자에 맞춘 것). 넣기 전 미리 보기라 곡과 따로 그린다 */
+    ghost?: readonly GhostNote[];
     activeTrackId: string | undefined;
     orientation: Orientation;
     /** 격자: 온음표의 1/division */
@@ -195,7 +197,7 @@
     onlanetoggle?: ((trackId: string) => void) | undefined;
   }
 
-  let { cursor, loop, oncursor, onloop, song: fullSong, activeTrackId, orientation, division, playhead, onnotes, onselecttrack, onpicknote, onpreview, onseek, showEvents = false, video = $bindable(), videoPlay = $bindable(false), speedStep = $bindable(0), onspeedpicked, pitchRange = [12, 119], wave, look, themeKey = "", seconds, rate = 1, colors, tool = "pen", onreverb, noteDur, volume, onvolume, lightKeys = false, canonicalOf, memory, onmemory, work, visibleTrackIds, selectMove = false, locked, pickOthers = true, onevent, oneventmove, onalignbar, bardragtext, onwaveoffset, pickedEvent, onpickevent, ontempowheel, laneTrackIds, melodyIds, onvolumes, onclearlane, onlanetoggle }: Props =
+  let { cursor, loop, oncursor, onloop, song: fullSong, ghost = [], activeTrackId, orientation, division, playhead, onnotes, onselecttrack, onpicknote, onpreview, onseek, showEvents = false, video = $bindable(), videoPlay = $bindable(false), speedStep = $bindable(0), onspeedpicked, pitchRange = [12, 119], wave, look, themeKey = "", seconds, rate = 1, colors, tool = "pen", onreverb, noteDur, volume, onvolume, lightKeys = false, canonicalOf, memory, onmemory, work, visibleTrackIds, selectMove = false, locked, pickOthers = true, onevent, oneventmove, onalignbar, bardragtext, onwaveoffset, pickedEvent, onpickevent, ontempowheel, laneTrackIds, melodyIds, onvolumes, onclearlane, onlanetoggle }: Props =
     $props();
 
   /** 레이어: 고른 트랙이 든 보기만 그리고 다루는 곡 (나머지 트랙은 롤에서 보이지도 눌리지도 않는다) */
@@ -744,6 +746,7 @@
       song,
       activeId: active?.id,
       dragNotes: drag ? (drag.mode === "move" ? [drag.note, ...drag.moved] : [drag.note]) : [],
+      ghost,
       selected,
       box: boxing?.from ? undefined : boxing,
       head,

@@ -14,9 +14,11 @@
     ongo: (track: Track, note: Note) => void;
     /** 음색 경계를 넘는 &를 모두 끊기 (실행 취소 한 칸) */
     onbreaktimbre?: () => void;
+    /** 접힘 검토 창 열기 */
+    onfoldreview?: () => void;
   }
 
-  let { song, diagnostics, ongo, onbreaktimbre }: Props = $props();
+  let { song, diagnostics, ongo, onbreaktimbre, onfoldreview }: Props = $props();
   const timbreCount = $derived(diagnostics.filter((d) => d.code === "tie-across-boundary").length);
 
   function noteOf(d: SongDiagnostic): { track: Track; note: Note } | undefined {
@@ -47,6 +49,10 @@
     return [...out.values()].sort((a, b) => (rank[a.level] ?? 3) - (rank[b.level] ?? 3));
   });
 
+  /** 자리 단추를 모두 펼친 묶음 (처음엔 12개까지만) */
+  let expanded = $state<ReadonlySet<string>>(new Set());
+  const SHOWN = 12;
+
   function go(d: SongDiagnostic) {
     const hit = noteOf(d);
     if (hit) ongo(hit.track, hit.note);
@@ -61,10 +67,15 @@
         <li class={g.level}>
           <span class="muted">{g.where}</span> {g.text}
           {#if g.items.length > 1}<span class="muted">×{g.items.length}</span>{/if}
-          {#each g.items.slice(0, 12) as item, k (k)}
+          {#each expanded.has(g.key) ? g.items : g.items.slice(0, SHOWN) as item, k (k)}
             {#if item.label}<button class="small place" title={t("ui.checkGo")} onclick={() => go(item.d)}>{item.label}</button>{/if}
           {/each}
-          {#if g.items.length > 12}<span class="muted">…</span>{/if}
+          {#if g.items.length > SHOWN && !expanded.has(g.key)}
+            <button class="small" onclick={() => (expanded = new Set([...expanded, g.key]))}>{t("ui.checkMore", { count: g.items.length - SHOWN })}</button>
+          {/if}
+          {#if g.code === "pitch-fold" && onfoldreview}
+            <button class="small" title={t("ui.foldReviewHelp")} onclick={onfoldreview}>{t("ui.foldReview")}…</button>
+          {/if}
           {#if g.code === "tie-across-boundary" && onbreaktimbre}
             <button class="small" title={t("ui.breakTimbreTiesHelp")} onclick={onbreaktimbre}>{t("ui.breakTimbreTiesAll", { n: timbreCount })}</button>
           {/if}

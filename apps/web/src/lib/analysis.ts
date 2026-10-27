@@ -34,7 +34,8 @@ function channel(song: Song, track: Track, profile: GameProfile): ChannelResult 
   const result: ChannelResult = {
     profile,
     text: source.text,
-    diagnostics: [...parsed.diagnostics, ...validateChannel(source.text, parsed, profile)],
+    // 원문 글자 수는 게임에 넣는 글 수가 아니다 (주석·줄바꿈·겹친 v·l은 내보낼 때 빠진다). 한도는 내보낼 때 글자 수로 본다 (gameCharCounts)
+    diagnostics: [...parsed.diagnostics, ...validateChannel(source.text, parsed, profile).filter((d) => !(track.mml && d.code === "char-limit"))],
     spans: parsed.notes.map((n) => n.span),
   };
   // 원문에서 읽은 트랙만 담아 둔다 (출력한 글은 곡 템포에 따라 달라짐)

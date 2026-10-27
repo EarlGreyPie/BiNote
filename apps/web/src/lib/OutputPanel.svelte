@@ -29,10 +29,12 @@
     /** 화음 분산 창 열기 (처음 고를 보내는 트랙 = 한도를 넘는 첫 트랙) */
     ondistribute: (source?: string) => void;
     onsplit: () => void;
+    /** 접힘·오류·경고 표시를 누르면 창을 닫고 상태줄 검사 목록을 연다 (그 자리로 가는 단추가 있다) */
+    onchecks: () => void;
     onclose: () => void;
   }
 
-  let { song, rows, tempo, profile, chordsOf, copied, oncopied, ontrack, onseek, ondistribute, onsplit, onclose }: Props = $props();
+  let { song, rows, tempo, profile, chordsOf, copied, oncopied, ontrack, onseek, ondistribute, onsplit, onchecks, onclose }: Props = $props();
   const limit = $derived(profile.charLimitPerScore);
   const tempoRange = $derived(profile.tempo);
   /** 붙여넣기 한 번에 넣을 수 있는 트랙 수 */
@@ -90,8 +92,22 @@
   let keptTempo = $state<readonly TempoEvent[] | undefined>(undefined);
   const tempoMap = $derived(tempoPick?.tempo ?? keptTempo);
 
+  /** 붙여넣는 글 안의 트랙 순서 = 체크한 순서 (곡 구조는 그대로). 악보 체크·미리 체크는 곡 순서로 붙는다 */
+  const songOrder = (ids: readonly string[]) => song.tracks.map((tr) => tr.id).filter((id) => ids.includes(id));
+  const pasteOrder = $derived(chosen);
+  const reordered = $derived(chosen.some((id, k) => id !== songOrder(chosen)[k]));
+  function shiftOrder(id: string, step: -1 | 1) {
+    const list = [...chosen];
+    const k = list.indexOf(id);
+    const j = k + step;
+    if (k < 0 || j < 0 || j >= list.length) return;
+    [list[k], list[j]] = [list[j]!, list[k]!];
+    picked = list;
+    justCopied = 0;
+  }
+
   const paste = $derived(
-    chosen.length > 0 ? gamePaste(song, chosen, chordsOf, pickLimit, { tempo: withTempo, tempoMap, charLimit: limit }) : undefined,
+    chosen.length > 0 ? gamePaste(song, chosen, chordsOf, pickLimit, { tempo: withTempo, tempoMap, charLimit: limit, order: reordered ? pasteOrder : undefined }) : undefined,
   );
   const pastedCount = (id: string) => paste?.written.get(id)?.length;
   const pasteOver = $derived(paste ? [...paste.written.values()].some((text) => text.length > limit) : false);
@@ -199,9 +215,9 @@
           <span>{instrumentName(row.instrument)}</span>
           <span class="muted">{t("ui.outputTracks", { count: row.tracks.length, max: row.maxChords })}</span>
           {#if ids.every(done)}<span class="badge ok">{t("ui.exportCopiedMark")}</span>{/if}
-          {#if row.fold > 0}<span class="badge warn" title={t("ui.outputChecksHint")}>{t("ui.outputFold", { count: row.fold })}</span>{/if}
-          {#if row.errors > 0}<span class="badge bad" title={t("ui.outputChecksHint")}>{t("ui.outputErrors", { count: row.errors })}</span>{/if}
-          {#if row.warnings > 0}<span class="badge warn" title={t("ui.outputChecksHint")}>{t("ui.outputWarnings", { count: row.warnings })}</span>{/if}
+          {#if row.fold > 0}<button class="badge warn link" title={t("ui.outputChecksHint")} onclick={() => closeThen(onchecks)}>{t("ui.outputFold", { count: row.fold })}</button>{/if}
+          {#if row.errors > 0}<button class="badge bad link" title={t("ui.outputChecksHint")} onclick={() => closeThen(onchecks)}>{t("ui.outputErrors", { count: row.errors })}</button>{/if}
+          {#if row.warnings > 0}<button class="badge warn link" title={t("ui.outputChecksHint")} onclick={() => closeThen(onchecks)}>{t("ui.outputWarnings", { count: row.warnings })}</button>{/if}
         </div>
         {#if open}
           <div class="tracks">
@@ -245,6 +261,19 @@
       </div>
     {:else if keptTempo}
       <p class="muted note">{t("ui.exportTempoKept", { tempo: tempoText(keptTempo) })}</p>
+    {/if}
+    {#if pasteOrder.length > 1}
+      <div class="paste-order">
+        <span class="muted" title={t("ui.exportOrderHelp")}>{t("ui.exportOrder")}</span>
+        {#each pasteOrder as id, k (id)}
+          <span class="chip">
+            <button class="small" disabled={k === 0} title={t("ui.exportOrderEarlier")} aria-label={t("ui.exportOrderEarlier")} onclick={() => shiftOrder(id, -1)}>‹</button>
+            <span>{k + 1}. {nameOf(id)}</span>
+            <button class="small" disabled={k === pasteOrder.length - 1} title={t("ui.exportOrderLater")} aria-label={t("ui.exportOrderLater")} onclick={() => shiftOrder(id, 1)}>›</button>
+          </span>
+        {/each}
+        {#if reordered}<button class="small" onclick={() => (picked = songOrder(chosen))}>{t("ui.exportOrderReset")}</button>{/if}
+      </div>
     {/if}
     {#if silent.length > 0}<p class="muted note" title={t("ui.pasteSilentHint")}>{t("ui.pasteSilent", { count: silent.length })} · {t("ui.pasteSilentHint")}</p>{/if}
     {#if silentOver.length > 0}<p class="note bad">{t("ui.outputSilentOver", { names: silentOver.join(", "), limit })}</p>{/if}
@@ -318,6 +347,28 @@
   }
   .badge {
     font-size: 0.85em;
+  }
+  .paste-order {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 8px;
+    margin: 4px 0;
+  }
+  .paste-order .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 0 2px;
+  }
+  button.badge.link {
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    text-decoration: underline dotted;
   }
   .tracks {
     display: flex;

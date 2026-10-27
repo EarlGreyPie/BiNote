@@ -17,7 +17,7 @@
 </script>
 
 <script lang="ts">
-  import { dbOfVolume, volumeForDb, type GameProfile } from "@mmlce/core";
+  import { dbOfVolume, parseBarList, volumeForDb, type BarRange, type GameProfile } from "@mmlce/core";
   import { t } from "./i18n.svelte";
 
   interface Props {
@@ -26,12 +26,15 @@
     profile: Pick<GameProfile, "volume" | "volumeCurve">;
     /** 처음 보여 줄 한 값 (범위 안 음들의 가운데 v 등) */
     initialVol: number;
-    check: (scope: TransposeScope, change: VolumeChange) => VolumeCheck;
-    onapply: (scope: TransposeScope, change: VolumeChange) => void;
+    /** 반복 구간이 걸친 마디 [첫, 끝]. 반복 구간이 없으면 undefined */
+    loopBars?: BarRange | undefined;
+    /** bars: 바꿀 마디 범위 (undefined면 모든 마디). 고른 음 범위에는 쓰지 않는다 */
+    check: (scope: TransposeScope, change: VolumeChange, bars: readonly BarRange[] | undefined) => VolumeCheck;
+    onapply: (scope: TransposeScope, change: VolumeChange, bars: readonly BarRange[] | undefined) => void;
     onclose: () => void;
   }
 
-  let { scopes, initialScope, profile, initialVol, check, onapply, onclose }: Props = $props();
+  let { scopes, initialScope, profile, initialVol, loopBars, check, onapply, onclose }: Props = $props();
 
   let dialog: HTMLDialogElement;
   // svelte-ignore state_referenced_locally
@@ -44,8 +47,16 @@
   const min = $derived(profile.volume.min);
   const max = $derived(profile.volume.max);
   const change = $derived<VolumeChange>(mode === "set" ? { kind: "set", vol } : mode === "shift" ? { kind: "shift", by } : { kind: "db", db });
-  const result = $derived(check(scope, change));
-  const span = (s: readonly [number, number] | undefined) => (!s ? "—" : s[0] === s[1] ? `v${s[0]}` : `v${s[0]}~v${s[1]}`);
+  // 마디: 모든 마디 / 선택 마디(반복 구간) / 적은 마디
+  let barMode = $state<"all" | "loop" | "typed">("all");
+  let barText = $state("");
+  const typedBars = $derived(parseBarList(barText));
+  const bars = $derived<readonly BarRange[] | undefined>(
+    scope === "selection" || barMode === "all" ? undefined : barMode === "loop" ? (loopBars ? [loopBars] : []) : (typedBars ?? []),
+  );
+  const barSpan = (b: BarRange) => (b[0] === b[1] ? `${b[0]}` : `${b[0]}-${b[1]}`);
+  const result = $derived(check(scope, change, bars));
+  const span = (s: readonly [number, number] | undefined) => (!s ? "—" : s[0] === s[1] ? `v${s[0]}` : `v${s[0]}-v${s[1]}`);
   const dbText = (d: number) => (d === -Infinity ? t("ui.volumeSilent") : d === 0 ? "0 dB" : `−${Math.abs(d).toFixed(1)} dB`);
 
   $effect(() => {
@@ -59,7 +70,7 @@
 
   function apply() {
     if (result.changed === 0) return;
-    onapply(scope, change);
+    onapply(scope, change, bars);
     dialog.close();
   }
 </script>
@@ -71,6 +82,26 @@
       <label><input type="radio" name="scope" value={s.id} bind:group={scope} /> {s.label}</label>
     {/each}
   </div>
+  {#if scope !== "selection"}
+    <div class="row">
+      <span>{t("ui.volumeBars")}</span>
+      <label><input type="radio" name="bars" value="all" bind:group={barMode} /> {t("ui.volumeBarsAll")}</label>
+      <label title={loopBars ? undefined : t("ui.volumeBarsNoLoop")}>
+        <input type="radio" name="bars" value="loop" bind:group={barMode} disabled={!loopBars} />
+        {loopBars ? t("ui.volumeBarsLoop", { bars: barSpan(loopBars) }) : t("ui.volumeBarsLoopNone")}
+      </label>
+      <label><input type="radio" name="bars" value="typed" bind:group={barMode} /> {t("ui.volumeBarsTyped")}</label>
+      {#if barMode === "typed"}
+        <!-- svelte-ignore a11y_autofocus -->
+        <input class="bars" type="text" inputmode="text" autofocus placeholder={t("ui.volumeBarsPlaceholder")} bind:value={barText} aria-label={t("ui.volumeBarsTyped")} />
+      {/if}
+    </div>
+    {#if barMode === "typed" && barText.trim() !== "" && !typedBars}
+      <p class="warn">{t("ui.volumeBarsInvalid")}</p>
+    {:else if barMode !== "all"}
+      <p class="muted small">{t("ui.volumeBarsHelp")}</p>
+    {/if}
+  {/if}
   <div class="row">
     <label><input type="radio" name="mode" value="set" bind:group={mode} /> {t("ui.volumeSet")}</label>
     <label><input type="radio" name="mode" value="shift" bind:group={mode} /> {t("ui.volumeShift")}</label>
@@ -172,6 +203,9 @@
   }
   input[type="number"] {
     width: 4.5em;
+  }
+  input.bars {
+    width: 9em;
   }
   .spacer {
     flex: 1;

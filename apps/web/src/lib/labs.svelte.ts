@@ -8,13 +8,13 @@ import { loadStored, saveStored } from "./persist";
 const LABS_KEY = "mmlce.labs";
 const BUTTON_NAMES_KEY = "mmlce.labs.buttonNames";
 
-export type LabFeatureId = "ghost" | "harmonic" | "reverb" | "midiRecord" | "tempoRamp" | "videoBars" | "arpFold";
+export type LabFeatureId = "ghost" | "harmonic" | "reverb" | "midiRecord" | "tempoRamp" | "videoBars" | "arpFold" | "loudness";
 
 export interface LabFeature {
   readonly id: LabFeatureId;
   /** 메뉴·설정에 쓰는 이름과 설명 문구 키 */
-  readonly label: "ui.labGhost" | "ui.labHarmonic" | "ui.labReverb" | "ui.labMidiRecord" | "ui.tempoRamp" | "ui.labVideoBars" | "ui.labArpFold";
-  readonly help: "ui.labGhostHelp" | "ui.labHarmonicHelp" | "ui.labReverbHelp" | "ui.labMidiRecordHelp" | "ui.tempoRampHelp" | "ui.labVideoBarsHelp" | "ui.labArpFoldHelp";
+  readonly label: "ui.labGhost" | "ui.labHarmonic" | "ui.labReverb" | "ui.labMidiRecord" | "ui.tempoRamp" | "ui.labVideoBars" | "ui.labArpFold" | "ui.labLoudness";
+  readonly help: "ui.labGhostHelp" | "ui.labHarmonicHelp" | "ui.labReverbHelp" | "ui.labMidiRecordHelp" | "ui.tempoRampHelp" | "ui.labVideoBarsHelp" | "ui.labArpFoldHelp" | "ui.labLoudnessHelp";
 }
 
 /** 실험실 기능 목록 (메뉴와 설정 설명이 이 순서를 따른다) */
@@ -27,6 +27,8 @@ export const LAB_FEATURES: readonly LabFeature[] = [
   { id: "videoBars", label: "ui.labVideoBars", help: "ui.labVideoBarsHelp" },
   // 메뉴 항목 없이 아르페지오 창(굴려 치기) 안에 칸이 생긴다
   { id: "arpFold", label: "ui.labArpFold", help: "ui.labArpFoldHelp" },
+  // 보기만: 곡을 바꾸지 않는다 (원곡을 불러온 곡에서 실험실 메뉴)
+  { id: "loudness", label: "ui.labLoudness", help: "ui.labLoudnessHelp" },
 ];
 
 export const labs = $state({

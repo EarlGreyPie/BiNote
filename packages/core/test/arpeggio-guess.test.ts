@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adoptMade, emptySong, guessArpeggio, planArpeggio, rat, restoreMade, unmarkNotes, type ArpOptions, type ArpOrder, type Note, type Song, type Track } from "../src/index.js";
+import { adoptMade, emptySong, guessArpeggio, guessArpeggioAround, planArpeggio, rat, restoreMade, unmarkNotes, type ArpOptions, type ArpOrder, type Note, type Song, type Track } from "../src/index.js";
 
 /** 8분음표 단위로 음을 만든다 */
 const n = (id: string, start: number, dur: number, pitch: number, vol = 10): Note => ({ id, start: rat(start, 8), dur: rat(dur, 8), pitch, vol, tie: "none" });
@@ -128,5 +128,41 @@ describe("기록 없는 아르페지오 알아보기", () => {
     expect(again).toMatchObject({ ok: false, reason: "made" });
     // 그사이 붙은 음에는 다시 붙이지 않는다
     expect(adoptMade(adopted, { tool: "arpeggio", options: {}, picked: [] }, g.before, g.after)).toBe(adopted);
+  });
+
+  it("굴려 치기는 원래 음 끝이 달라도 알아보고, 피아노롤처럼 한 음만 골라도 둘레를 묶는다", () => {
+    // 베이스가 더 긴 화음을 굴려 친다
+    const original = songOf({ t1: [n("c", 0, 8, 48)], t2: [n("e", 0, 4, 64)], t3: [n("g", 0, 4, 67)], t4: [n("x", 8, 2, 50)] });
+    const made = arpeggiate(original, { style: "roll", step: rat(1, 32) });
+    // 다른 트랙 음은 고를 수 없으니 한 음만
+    const one = made.tracks[0]!.notes.slice(0, 1);
+    expect(guessArpeggio(made, one, newId)).toMatchObject({ ok: false, reason: "none" });
+    const g = guessArpeggioAround(made, one, newId);
+    if (!g.ok) throw new Error(g.reason);
+    expect(g).toMatchObject({ style: "roll", step: rat(1, 32), skipped: 0 });
+    const adopted = adoptMade(made, { tool: "arpeggio", options: {}, trackId: g.trackId, picked: g.picked }, g.before, g.after);
+    const plan = restoreMade(adopted, [adopted.made!.at(-1)!.id]);
+    if (!plan.ok) throw new Error(plan.reason);
+    const byId = new Map(plan.changes.map((c) => [c.trackId, c.notes]));
+    expect(shape({ ...adopted, tracks: adopted.tracks.map((t) => ({ ...t, notes: byId.get(t.id) ?? t.notes })) })).toEqual(shape(original));
+  });
+
+  it("펼치기도 한 음만 골라 그 트랙에서 이어진 음으로 넓힌다", () => {
+    const original = chords();
+    const made = arpeggiate(original, {});
+    const g = guessArpeggioAround(made, made.tracks[0]!.notes.slice(3, 4), newId);
+    expect(g.ok && [g.style, g.cells.length]).toEqual(["spread", 2]);
+  });
+
+  it("&로 이은 음은 하나로 본다", () => {
+    // 굴려 치기 뒤 각 음을 &로 둘로 나눈 것
+    const tied = songOf({
+      t1: [{ ...n("c1", 0, 2, 60), tie: "next" }, n("c2", 2, 2, 60)],
+      t2: [n("e0", 0, 1, 40), { ...n("e1", 1, 1, 64), tie: "next" }, n("e2", 2, 2, 64)],
+      t3: [n("g0", 0, 1, 41), { ...n("g1", 2, 1, 67), tie: "next" }, n("g2", 3, 1, 67)],
+    });
+    const picked = tied.tracks.flatMap((t) => t.notes.filter((x) => !x.id.endsWith("0")));
+    const g = guessArpeggio(tied, picked, newId);
+    expect(g.ok && [g.style, g.after.flatMap((a) => a.notes.map((x) => x.id)).sort()]).toEqual(["roll", ["c1", "c2", "e1", "e2", "g1", "g2"]]);
   });
 });

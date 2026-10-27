@@ -18,6 +18,7 @@ import {
   timbreBoundaries,
   toFloat,
   type Note,
+  type Rat,
   type Song,
 } from "@mmlce/core";
 import {
@@ -40,6 +41,18 @@ import {
   type RollView,
 } from "./roll";
 
+/**
+ * 녹음 중 미리 보이는 음 (아직 곡에 넣지 않았다). kind: placed = 넣을 음(color = 들어갈 트랙 색),
+ * dropped = 트랙이 모자라 빠질 음, cleared = 바꿔 녹음으로 비울 원래 음. 없으면 placed
+ */
+export interface GhostNote {
+  readonly start: Rat;
+  readonly dur: Rat;
+  readonly pitch: number;
+  readonly kind?: "placed" | "dropped" | "cleared";
+  readonly color?: string | undefined;
+}
+
 /** 피아노롤 한 장을 그릴 때 필요한 것 (PianoRoll.svelte가 넘긴다) */
 export interface RollDrawOptions {
   readonly view: RollView;
@@ -47,6 +60,8 @@ export interface RollDrawOptions {
   readonly activeId: string | undefined;
   /** 끌고 있는 음들 (원래 자리 대신 끄는 자리에 그린다) */
   readonly dragNotes: readonly Note[];
+  /** MIDI 건반 녹음 중 친 음 (트랙과 상관없이 높이대로 녹음 색 테두리로) */
+  readonly ghost?: readonly GhostNote[] | undefined;
   readonly selected: ReadonlySet<string>;
   /** Ctrl+끌기 고르기 상자 (시간·높이) */
   readonly box: { readonly t0: number; readonly p0: number; readonly t1: number; readonly p1: number } | undefined;
@@ -352,6 +367,48 @@ export function drawRoll(canvas: HTMLCanvasElement, o: RollDrawOptions): void {
     });
   }
   g.globalAlpha = 1;
+
+  // 녹음 중 친 음 (곡 음 위에): 넣을 음은 들어갈 트랙 색으로 옅게 채우고 녹음 색 테두리,
+  // 빠질 음은 흐린 점선, 바꿔 녹음으로 비울 원래 음은 흐린 점선에 가로줄
+  if (o.ghost && o.ghost.length > 0) {
+    const rec = o.css("--danger");
+    const muted = o.css("--muted");
+    for (const n of o.ghost) {
+      const st = toFloat(n.start);
+      const du = toFloat(n.dur);
+      if (st > to || st + du < from || n.pitch < low || n.pitch > high) continue;
+      const r = noteRect(v, st, du, n.pitch);
+      const kind = n.kind ?? "placed";
+      if (kind === "placed") {
+        g.fillStyle = n.color ?? rec;
+        g.globalAlpha = 0.45;
+        g.fillRect(r.x + 0.5, r.y + 0.5, Math.max(2, r.w - 1), Math.max(2, r.h - 1));
+        g.globalAlpha = 1;
+        g.strokeStyle = rec;
+        g.lineWidth = 1.5;
+        g.strokeRect(r.x + 1, r.y + 1, Math.max(1, r.w - 2), Math.max(1, r.h - 2));
+        continue;
+      }
+      if (kind === "cleared") {
+        // 비울 음은 바탕색으로 덮어 흐리게 (고른 트랙 음 위에서도 보이게)
+        g.fillStyle = o.css("--panel");
+        g.globalAlpha = 0.6;
+        g.fillRect(r.x, r.y, r.w, r.h);
+        g.globalAlpha = 1;
+      }
+      g.strokeStyle = muted;
+      g.lineWidth = 1.5;
+      g.setLineDash([3, 3]);
+      g.strokeRect(r.x + 1, r.y + 1, Math.max(1, r.w - 2), Math.max(1, r.h - 2));
+      g.setLineDash([]);
+      if (kind === "cleared") {
+        g.beginPath();
+        g.moveTo(r.x + 1, r.y + r.h / 2);
+        g.lineTo(r.x + r.w - 1, r.y + r.h / 2);
+        g.stroke();
+      }
+    }
+  }
 
   // 음표 볼륨 숫자: 고르는 트랙 음을 다 그린 뒤(고른 음 고리 위)에. 가로 롤은 음 시작 위쪽 바깥, 세로 롤은 음 시작(아래 끝) 오른쪽 바깥.
   // 음을 그리는 영역 밖(마디 번호·이벤트 줄·파형 띠·건반·음량 레인)으로 넘어가지 않게 자른다

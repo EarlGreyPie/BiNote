@@ -1,4 +1,4 @@
-import { cmp, DEFAULT_BPM, getProfile, ZERO, type Song, type TempoEvent, type TrackText } from "@mmlce/core";
+import { cmp, DEFAULT_BPM, getProfile, ZERO, type Song, type LengthLimit, type TempoEvent, type Track, type TrackText } from "@mmlce/core";
 import { mmlAt, pasteTrackIds, scoreChunks, type ScoreChunk } from "./clipboard.js";
 import { sameSound } from "./compare.js";
 import { parseTrackText, trackSource } from "./edit.js";
@@ -6,6 +6,30 @@ import { optimizeMml } from "./optimizer.js";
 import { placeTempo, placeTempoByScore, type TempoMove } from "./tempo-placement.js";
 import { bpmBefore, padScore, scoreEnd, tempoBefore } from "./score-end.js";
 import { audibleTempo, sameTempo, spliceText, surgicalSource, tempoTokens } from "./tempo-text.js";
+
+/** 트랙마다 출력기로 다시 쓴 글. 트랙은 고치면 새 객체가 되므로, 같은 트랙·같은 템포 자리면 다시 쓰지 않는다 */
+const rewriteCache = new WeakMap<Track, { key: string; text: string | undefined }>();
+
+/** 출력기로 다시 쓴 글. 다시 읽은 음이 원래 음과 다르면(출력기가 쓸 수 없는 길이) undefined */
+function rewritten(track: Track, tempo: readonly TempoEvent[], lengths: LengthLimit): string | undefined {
+  const key = JSON.stringify([tempo, lengths]);
+  const hit = rewriteCache.get(track);
+  if (hit && hit.key === key) return hit.text;
+  const notes = [...track.notes].sort((a, b) => cmp(a.start, b.start));
+  const text = optimizeMml(notes, { tempo, lengths }).text;
+  const out = sameSound(parseTrackText(track.id, { text }).notes, notes) ? text : undefined;
+  rewriteCache.set(track, { key, text: out });
+  return out;
+}
+
+/**
+ * 처음 자리 t120은 쓰지 않는다. 게임은 붙여넣은 글에 템포가 없으면 t120으로 치므로(다른 붙여넣기에서 이어받지 않음)
+ * 소리는 같고 4자를 아낀다. 끝 쉼표를 지키는 t(score-end.ts)는 따로 붙는다
+ */
+export function withoutDefaultStart(tempo: readonly TempoEvent[]): TempoEvent[] {
+  const first = tempo[0];
+  return first && cmp(first.at, ZERO) === 0 && first.bpm === DEFAULT_BPM ? tempo.slice(1) : [...tempo];
+}
 
 /** 게임에 붙여넣을 악보 하나 */
 export interface GameScore extends ScoreChunk {
@@ -38,15 +62,14 @@ export function gameScores(
 ): GameScore[] {
   const moved = new Map<string, TempoMove[]>();
   const lengths = getProfile(song.meta.profileId).length;
-  const placed = placeTempoByScore(song, maxChords, moved);
+  const placed = placeTempoByScore({ ...song, tempo: withoutDefaultStart(audibleTempo(song.tempo)) }, maxChords, moved);
   const chunks = scoreChunks(song, maxChords);
   /** 트랙마다 쓴 글. 출력기로 정확히 쓸 수 없으면 화면의 글 그대로 (asIs) */
   const written = new Map<string, { text: string; asIs: boolean }>();
   for (const id of chunks.flatMap((c) => c.trackIds)) {
     const t = song.tracks.find((x) => x.id === id)!;
-    const notes = [...t.notes].sort((a, b) => cmp(a.start, b.start));
-    const text = optimizeMml(notes, { tempo: placed.get(t.id) ?? [], lengths }).text;
-    written.set(id, sameSound(parseTrackText(t.id, { text }).notes, notes) ? { text, asIs: false } : { text: trackSource(song, t).text, asIs: true });
+    const text = rewritten(t, placed.get(t.id) ?? [], lengths);
+    written.set(id, text !== undefined ? { text, asIs: false } : { text: trackSource(song, t).text, asIs: true });
   }
   // 다시 쓴 글이 원문 끝 쉼표를 잃어 악보가 짧아지지 않게 악보 길이를 지킨다 (score-end.ts)
   for (const chunk of chunks) {
@@ -61,6 +84,19 @@ export function gameScores(
     const pasted = pasteTrackIds(song, chunk, maxChords, pasteLimit);
     return { ...chunk, texts, text: mmlAt(pasted.map((id) => (id === null ? "" : written.get(id)!.text))), pasted, asIs, moved: moved.get(chunk.trackIds[0]!) ?? [] };
   });
+}
+
+/**
+ * 트랙마다 게임에 넣을 글의 글자 수 (악보 단위로 내보낼 때, gameScores와 같은 글).
+ * 원문은 주석·줄바꿈·빈칸과 겹친 v·l까지 들어 있어 게임에 넣는 글보다 길 수 있으므로, 한도는 이 수로 견준다
+ */
+export function gameCharCounts(
+  song: Song,
+  maxChords: number | ((playerId: string) => number),
+  pasteLimit?: number,
+  charLimit?: number,
+): Map<string, number> {
+  return new Map(gameScores(song, maxChords, pasteLimit, charLimit).flatMap((s) => s.texts.map((x) => [x.trackId, x.text.length] as const)));
 }
 
 /** 고른 트랙을 한 번에 붙여넣는 글 (MML로 내보내기 창) */
@@ -86,6 +122,16 @@ export interface GamePasteOptions {
   readonly tempoMap?: readonly TempoEvent[] | undefined;
   /** 트랙당 글자 한도 (끝 채움을 한도 안 글에 먼저 붙인다) */
   readonly charLimit?: number;
+  /** 붙여넣는 글 안의 고른 트랙 순서 (곡은 그대로). 없거나 빠진 트랙은 곡 트랙 순서로 뒤에 */
+  readonly order?: readonly string[] | undefined;
+}
+
+/** 붙여넣는 채널에서 고른 트랙 자리만 order 순서로 다시 채운다 (빈 채널·소리 없는 트랙 자리는 그대로) */
+export function orderPasted(pasted: readonly (string | null)[], selected: readonly string[], order: readonly string[] | undefined): (string | null)[] {
+  if (!order || order.length === 0) return [...pasted];
+  const wanted = [...order.filter((id) => selected.includes(id)), ...selected.filter((id) => !order.includes(id))];
+  let k = 0;
+  return pasted.map((id) => (id !== null && selected.includes(id) ? wanted[k++]! : id));
 }
 
 /** 원문에서 t를 모두 지운다 (문법 오류가 있어 손댈 수 없으면 그대로) */
@@ -111,21 +157,20 @@ export function gamePaste(
   const order = song.tracks.map((t) => t.id);
   const trackIds = order.filter((id) => selected.includes(id));
   const chunk = scoreChunks(song, maxChords).find((c) => c.trackIds.length === trackIds.length && c.trackIds.every((id, k) => id === trackIds[k]));
-  const pasted = chunk ? pasteTrackIds(song, chunk, maxChords, pasteLimit) : trackIds;
+  const pasted = orderPasted(chunk ? pasteTrackIds(song, chunk, maxChords, pasteLimit) : trackIds, trackIds, options.order);
   const ids = pasted.filter((id): id is string => id !== null);
   const tracks = ids.map((id) => song.tracks.find((t) => t.id === id)!);
   const end = scoreEnd(tracks);
   const map = audibleTempo(options.tempoMap ?? song.tempo);
   const startsAtZero = map.length > 0 && cmp(map[0]!.at, ZERO) === 0;
-  const tempo = options.tempo ? tempoBefore(startsAtZero ? map : [{ at: ZERO, bpm: DEFAULT_BPM }, ...map], cmp(end, ZERO) > 0 ? end : { n: 1, d: 1 }) : [];
+  const tempo = options.tempo ? withoutDefaultStart(tempoBefore(startsAtZero ? map : [{ at: ZERO, bpm: DEFAULT_BPM }, ...map], cmp(end, ZERO) > 0 ? end : { n: 1, d: 1 })) : [];
   const moved: TempoMove[] = [];
   const placed = placeTempo(tracks.map((t) => t.notes), tempo, moved);
   const written = new Map<string, string>();
   const asIs: string[] = [];
   tracks.forEach((t, k) => {
-    const notes = [...t.notes].sort((a, b) => cmp(a.start, b.start));
-    const text = optimizeMml(notes, { tempo: placed[k] ?? [], lengths }).text;
-    if (sameSound(parseTrackText(t.id, { text }).notes, notes)) written.set(t.id, text);
+    const text = rewritten(t, placed[k] ?? [], lengths);
+    if (text !== undefined) written.set(t.id, text);
     else {
       const source = trackSource(song, t);
       written.set(t.id, options.tempo ? source.text : withoutTempo(source));

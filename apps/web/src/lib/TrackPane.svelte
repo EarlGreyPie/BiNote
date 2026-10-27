@@ -27,6 +27,8 @@
     activeTrackId: string | undefined;
     fileName: string;
     charLimit: number;
+    /** 트랙마다 내보낼 때 글자 수 (없거나 아직 안 셌으면 원문 글자 수를 보인다) */
+    exportChars?: ReadonlyMap<string, number> | undefined;
     dock: "right" | "bottom";
     portrait: boolean;
     trackInstrument: (track: Track) => string;
@@ -58,14 +60,14 @@
     hold?: boolean;
   }
 
-  let { song, groups, tracks, colors, activeTrackId, fileName, charLimit, dock, portrait, trackInstrument, trackInstrumentLabel, trackPack, packLabels, actions, reveal, playing, follow = false, moreItems, onedit, onundo, onredo, ongodiag, extraTrackIds = [], playingOf, oncloseextra, top, hold = false }: Props = $props();
+  let { song, groups, tracks, colors, activeTrackId, fileName, charLimit, exportChars, dock, portrait, trackInstrument, trackInstrumentLabel, trackPack, packLabels, actions, reveal, playing, follow = false, moreItems, onedit, onundo, onredo, ongodiag, extraTrackIds = [], playingOf, oncloseextra, top, hold = false }: Props = $props();
 
   let portraitView = $state<"structure" | "mml">("structure");
   // 세로 화면에서 롤의 음을 두 번 눌러(또는 검사로) 글 자리로 가라고 하면 편집기 쪽을 보여 준다
   $effect(() => {
     if (portrait && reveal?.focus) portraitView = "mml";
   });
-  const chars = $derived(new Map(tracks.map((a) => [a.track.id, a.text.length])));
+  const chars = $derived(new Map(tracks.map((a) => [a.track.id, exportChars?.get(a.track.id) ?? a.text.length])));
   const checks = $derived(new Map(tracks.map((a) => [a.track.id, a.diagnostics.length])));
   const active = $derived(tracks.find((a) => a.track.id === activeTrackId));
   /** 악보 안에서 몇 번째 트랙인지 (1부터) */
@@ -113,6 +115,7 @@
             track={active.track}
             index={activeIndex}
             text={active.text}
+            exportCount={exportChars?.get(active.track.id)}
             diagnostics={active.diagnostics}
             color={colors.get(active.track.id) ?? active.track.color}
             instrument={trackInstrument(active.track)}
@@ -143,6 +146,7 @@
               track={extra.track}
               index={indexOf(extra.track.id)}
               text={extra.text}
+              exportCount={exportChars?.get(extra.track.id)}
               diagnostics={extra.diagnostics}
               color={colors.get(extra.track.id) ?? extra.track.color}
               instrument={trackInstrument(extra.track)}
