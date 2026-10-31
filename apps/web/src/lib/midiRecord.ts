@@ -62,15 +62,21 @@ export interface Click {
 const secondsAt = (song: Song, at: number) => positionToSeconds(song.tempo, rat(Math.round(at * 3840), 3840));
 
 /**
- * 예비박: 녹음 시작(from, 마디 시작) 앞 한 마디의 박. 박 길이는 from의 템포·박자로 잰다.
- * seconds는 그 마디 길이(곡 초). 재생 속도가 느리면 오디오에서는 그만큼 길어진다
+ * 예비박: 시작 자리(from) 앞 한 마디의 박. 박 길이는 from의 템포·박자로 잰다.
+ * seconds는 그 마디 길이(곡 초). 재생 속도가 느리면 오디오에서는 그만큼 길어진다.
+ * from이 박 가운데(일시정지한 자리 등)면 딸깍을 곡의 박 자리에 맞춰 당긴다. 그래야 예비박과 이어지는 곡 박이 엇박이 되지 않는다
+ * (녹음은 마디 시작에서 하므로 그대로)
  */
 export function countIn(song: Song, from: Rat): { clicks: Click[]; seconds: number } {
   const { beat, measure } = meterGrid(meterAt(song.timeSig, from));
   const base = positionToSeconds(song.tempo, from);
   const beatSeconds = positionToSeconds(song.tempo, add(from, beat)) - base;
   const beats = Math.max(1, Math.round(toFloat(div(measure, beat))));
-  const clicks = Array.from({ length: beats }, (_, k) => ({ at: base - (beats - k) * beatSeconds, accent: k === 0 }));
+  // 마지막 딸깍: from 바로 앞(같은 자리는 빼고)의 박. from이 박 위면 한 박 앞
+  const f = toFloat(from);
+  const before = beatClicks(song, Math.max(0, f - toFloat(beat)), f + 1e-9).at(-1);
+  const gap = before && base - before.at > 1e-6 ? Math.min(beatSeconds, base - before.at) : beatSeconds;
+  const clicks = Array.from({ length: beats }, (_, k) => ({ at: base - gap - (beats - 1 - k) * beatSeconds, accent: k === 0 }));
   return { clicks, seconds: beats * beatSeconds };
 }
 
@@ -81,6 +87,111 @@ export function beatClicks(song: Song, from: number, to: number): Click[] {
     .map((l) => ({ at: secondsAt(song, l.at), accent: l.kind === "measure" }));
 }
 
+/**
+ * 재생 시작 뒤 [a, b) 시각의 박 딸깍. 시각은 시작 자리(from)부터 흐른 곡 시간(초)이고,
+ * 반복(loop, 곡 초)이면 회차마다 이어 센다 (2회차 첫 박 = loop). 시작 앞(음수)에는 박이 없다 (예비박은 countIn)
+ */
+export function runClicks(song: Song, from: Rat, loop: number | undefined, a: number, b: number): Click[] {
+  const base = positionToSeconds(song.tempo, from);
+  // 한 회차 안의 [lo, hi) (시작 자리부터 곡 초). 칸 경계에 걸친 박이 앞뒤 두 칸에 다 들거나 빠지지 않게 같은 기준으로 자른다
+  const span = (lo: number, hi: number, shift: number) =>
+    beatClicks(song, secondsToWhole(song.tempo, base + lo), secondsToWhole(song.tempo, base + hi) + 1e-9)
+      .map((c) => ({ at: c.at - base, accent: c.accent }))
+      .filter((c) => c.at >= lo - 1e-6 && c.at < hi - 1e-6)
+      .map((c) => ({ at: c.at + shift, accent: c.accent }));
+  const lo = Math.max(0, a);
+  if (!(b > lo)) return [];
+  if (loop === undefined || !(loop > 0)) return span(lo, b, 0);
+  const out: Click[] = [];
+  for (let k = Math.floor(lo / loop); k * loop < b; k++) {
+    const from = Math.max(lo, k * loop) - k * loop;
+    const to = Math.min(b, (k + 1) * loop) - k * loop;
+    if (to > from) out.push(...span(from, to, k * loop));
+  }
+  return out;
+}
+
+/** 메트로놈이 쓰는 재생 시계. 시각은 이번 재생 시작 자리부터 흐른 곡 시간(초)이고, 반복해도 처음으로 돌아가지 않고 계속 는다 */
+export interface MetronomeClock {
+  /** 지금 들리는 시각. 예비박 동안은 음수. 재생 중이 아니면 undefined */
+  heard(): number | undefined;
+  /** 이 시각에 딸깍 (이미 지난 시각이면 엔진이 버린다) */
+  click(at: number, accent: boolean): void;
+}
+
+/** 메트로놈을 울릴 재생 하나 */
+export interface MetronomeRun {
+  readonly song: Song;
+  /** 재생 시작 자리 (반복이면 구간 시작) */
+  readonly from: Rat;
+  /** 반복 길이(곡 초). 있으면 이 길이마다 시작 자리로 돌아간다 */
+  readonly loop?: number | undefined;
+  /** 시작 앞 한 마디 예비박 */
+  readonly countIn: boolean;
+  /** 박마다 딸깍 (끄면 예비박만) */
+  readonly beats: boolean;
+}
+
+/** 메트로놈을 이만큼(곡 초) 앞서 예약한다 */
+const CLICK_AHEAD = 1.5;
+const TICK_MS = 100;
+
+/**
+ * 메트로놈: 재생에 맞춰 박마다 딸깍(마디 첫 박은 높게)을 조금씩 앞서 예약한다. 예비박도 여기서 넣는다.
+ * MIDI 건반 녹음과 일반 재생이 함께 쓴다
+ */
+export class Metronome {
+  private run: MetronomeRun | undefined;
+  /** 박을 예약해 둔 곳까지 (시작 뒤 곡 초) */
+  private clickedTo = 0;
+  /** 마지막으로 예약한 박 (칸 경계에서 같은 박을 두 번 넣지 않으려고) */
+  private last = -Infinity;
+  private timer: ReturnType<typeof setInterval> | undefined;
+
+  constructor(private readonly clock: MetronomeClock) {}
+
+  /** 박을 울리는 중인지 (예비박만 넣었으면 아니다) */
+  get running(): boolean {
+    return this.timer !== undefined;
+  }
+
+  /** 재생이 시작된 뒤 부른다. 재생 중에 켜면 지금 들리는 자리부터 울린다 */
+  begin(run: MetronomeRun): void {
+    this.end();
+    const base = positionToSeconds(run.song.tempo, run.from);
+    if (run.countIn) for (const c of countIn(run.song, run.from).clicks) this.clock.click(c.at - base, c.accent);
+    if (!run.beats) return;
+    this.run = run;
+    this.clickedTo = Math.max(0, this.clock.heard() ?? 0);
+    this.last = -Infinity;
+    this.tick();
+    this.timer = setInterval(() => this.tick(), TICK_MS);
+  }
+
+  /** 지금 + 조금 앞까지의 박을 예약한다. 보통 타이머가 부르고, 시험에서는 직접 부른다 */
+  tick(): void {
+    const run = this.run;
+    if (!run) return;
+    const heard = this.clock.heard();
+    if (heard === undefined) return;
+    const to = Math.max(0, heard) + CLICK_AHEAD;
+    if (to <= this.clickedTo) return;
+    for (const c of runClicks(run.song, run.from, run.loop, this.clickedTo, to)) {
+      if (c.at <= this.last + 1e-6) continue;
+      this.clock.click(c.at, c.accent);
+      this.last = c.at;
+    }
+    this.clickedTo = to;
+  }
+
+  /** 더 예약하지 않는다 (이미 예약한 딸깍은 엔진이 정지할 때 끈다) */
+  end(): void {
+    clearInterval(this.timer);
+    this.timer = undefined;
+    this.run = undefined;
+  }
+}
+
 /** 녹음에 쓰는 재생 쪽 기능 (엔진) */
 export interface RecordClock {
   /** 지금 들리는 곡 시각(초). 예비박 동안은 시작 자리보다 앞. 재생 중이 아니면 undefined */
@@ -88,10 +199,6 @@ export interface RecordClock {
   /** 곡 시각(초)에 메트로놈 딸깍 */
   click(songSeconds: number, accent: boolean): void;
 }
-
-/** 메트로놈을 이만큼(곡 초) 앞서 예약한다 */
-const CLICK_AHEAD = 1.5;
-const TICK_MS = 100;
 
 /** 녹음 중 화면에 보일 것 */
 export interface RecordStatus {
@@ -106,9 +213,6 @@ interface Session {
   readonly from: Rat;
   /** 재생 번호 (다른 재생이 시작되면 녹음을 끝낸다) */
   readonly run: number;
-  readonly metronome: boolean;
-  /** 메트로놈을 예약해 둔 곳까지 (위치, 온음표 실수) */
-  clickedTo: number;
   /** 마지막으로 잰 곡 시각(초). 정지 뒤 누르고 있던 건반의 끝으로 쓴다 */
   now: number;
   /** 재생이 멈춘 순간(cut). 그 뒤 시계는 다른 재생이거나 없으므로 건반·시각을 더 받지 않는다 */
@@ -130,8 +234,19 @@ export class MidiRecorder {
   onlive: (() => void) | undefined;
   private session: Session | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
+  /** 녹음 메트로놈. 시각은 녹음 시작 자리부터 흐른 곡 초 (녹음은 반복하지 않는다) */
+  private readonly metronome: Metronome;
+  private fromSeconds = 0;
 
-  constructor(private readonly clock: RecordClock) {}
+  constructor(private readonly clock: RecordClock) {
+    this.metronome = new Metronome({
+      heard: () => {
+        const heard = this.session?.cut ? undefined : clock.heardSeconds();
+        return heard === undefined ? undefined : heard - this.fromSeconds;
+      },
+      click: (at, accent) => clock.click(this.fromSeconds + at, accent),
+    });
+  }
 
   private setStatus(status: RecordStatus | undefined): void {
     this.status = status;
@@ -146,8 +261,9 @@ export class MidiRecorder {
   begin(song: Song, from: Rat, run: number, metronome: boolean): void {
     this.end();
     const fromSeconds = positionToSeconds(song.tempo, from);
-    this.session = { song, from, run, metronome, clickedTo: toFloat(from), now: fromSeconds, cut: false, keys: [], held: new Map() };
-    if (metronome) for (const c of countIn(song, from).clicks) this.clock.click(c.at, c.accent);
+    this.session = { song, from, run, now: fromSeconds, cut: false, keys: [], held: new Map() };
+    this.fromSeconds = fromSeconds;
+    if (metronome) this.metronome.begin({ song, from, countIn: true, beats: true });
     this.setStatus({ from, count: 0, run });
     this.tick();
     this.timer = setInterval(() => this.tick(), TICK_MS);
@@ -160,11 +276,6 @@ export class MidiRecorder {
     if (heard === undefined) return;
     s.now = Math.max(s.now, heard);
     if (s.held.size > 0) this.onlive?.();
-    if (!s.metronome) return;
-    const to = secondsToWhole(s.song.tempo, Math.max(0, heard) + CLICK_AHEAD);
-    if (to <= s.clickedTo) return;
-    for (const c of beatClicks(s.song, s.clickedTo, to)) this.clock.click(c.at, c.accent);
-    s.clickedTo = to;
   }
 
   keyOn(pitch: number, velocity: number): void {
@@ -197,6 +308,7 @@ export class MidiRecorder {
     s.cut = true;
     clearInterval(this.timer);
     this.timer = undefined;
+    this.metronome.end();
   }
 
   private release(s: Session, pitch: number, at: number): void {
@@ -228,6 +340,7 @@ export class MidiRecorder {
   end(): { song: Song; from: Rat; keys: TakeKey[] } | undefined {
     clearInterval(this.timer);
     this.timer = undefined;
+    this.metronome.end();
     const s = this.session;
     this.session = undefined;
     if (!s) return undefined;

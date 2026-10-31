@@ -1,4 +1,5 @@
 <script lang="ts" module>
+  import { findNext, findPrevious, openSearchPanel } from "@codemirror/search";
   import { Annotation, StateEffect, StateField } from "@codemirror/state";
   import { Decoration, EditorView as View, type DecorationSet } from "@codemirror/view";
   /** 바깥에서 넣은 변경 표시. 이건 다시 명령으로 돌려보내지 않는다 */
@@ -42,16 +43,44 @@
   export function flushAllEditors(): void {
     for (const flush of flushers) flush();
   }
+
+  /** 열려 있는 편집기와 그 주인 트랙 id (찾기 단축키가 갈 곳) */
+  const views = new Map<View, string | undefined>();
+
+  export type EditorSearch = "find" | "replace" | "next" | "prev";
+
+  /**
+   * 찾기·바꾸기 단축키(Ctrl+F·Ctrl+H·F3·Shift+F3). 초점이 든 편집기, 없으면 owner(고른 트랙) 편집기에서 한다.
+   * 잠근 트랙은 바꾸기 칸이 없어 찾기만 열린다. 열린 편집기가 없으면 false (키를 브라우저에 그대로 넘긴다)
+   */
+  export function searchEditor(mode: EditorSearch, owner: string | undefined): boolean {
+    const active = document.activeElement;
+    const list = [...views];
+    const view = list.find(([v]) => active && v.dom.contains(active))?.[0] ?? list.find(([, o]) => o === owner)?.[0];
+    if (!view) return false;
+    if (mode === "next") return findNext(view);
+    if (mode === "prev") return findPrevious(view);
+    openSearchPanel(view);
+    if (mode === "replace") {
+      const field = view.dom.querySelector<HTMLInputElement>(".cm-search input[name=replace]");
+      field?.focus();
+      field?.select();
+    }
+    return true;
+  }
 </script>
 
 <script lang="ts">
   import { defaultKeymap } from "@codemirror/commands";
   import { linter, lintGutter, setDiagnostics, type Diagnostic } from "@codemirror/lint";
+  import { closeSearchPanel, search } from "@codemirror/search";
   import { Compartment, EditorState } from "@codemirror/state";
   import { mmlPad } from "./mmlPad.svelte";
   import { EditorView, keymap } from "@codemirror/view";
   import { onMount, untrack } from "svelte";
+  import { i18n, t } from "./i18n.svelte";
   import { mmlHighlight, mmlTheme } from "./mml-highlight";
+  import { searchPhrases } from "./mmlSearch";
 
   interface Props {
     text: string;
@@ -73,9 +102,14 @@
     follow?: boolean;
     /** 잠근 트랙: 글을 고칠 수 없다 (고르기·복사는 된다) */
     readonly?: boolean;
+    /**
+     * 사용자가 글 커서를 옮기면 그 글 자리 (누르기·방향키·찾기). 글을 치는 중이거나 아직 곡에 반영 안 된 글이면 부르지 않는다.
+     * 롤에서 고른 음으로 커서가 옮겨 간 것(reveal)과 실행 취소로 바뀐 글은 알리지 않는다 (서로 되부르지 않게)
+     */
+    oncursor?: ((pos: number, owner: string | undefined) => void) | undefined;
   }
 
-  let { text, diagnostics, onedit, onundo, onredo, reveal, playing, follow = false, owner, readonly = false }: Props = $props();
+  let { text, diagnostics, onedit, onundo, onredo, reveal, playing, follow = false, owner, readonly = false, oncursor }: Props = $props();
   // 남은 입력을 닫힐 때 저장하므로 주인은 만들 때 값으로 고정한다
   const ownerAtMount = untrack(() => owner);
 
@@ -84,6 +118,9 @@
   const inputMode = new Compartment();
   const inputModeFor = (pad: boolean) => EditorView.contentAttributes.of(pad ? { inputmode: "none" } : {});
   const readOnlyMode = new Compartment();
+  /** 찾기 칸 문구 (CodeMirror 영어 문구를 화면 언어로). 언어를 바꾸면 다시 넣는다 */
+  const phrases = new Compartment();
+  const phrasesNow = () => EditorState.phrases.of(searchPhrases(t));
 
   let host: HTMLDivElement;
   let view: EditorView | undefined;
@@ -109,8 +146,13 @@
             { key: "Mod-z", run: () => (flush(), onundo(), true) },
             { key: "Mod-y", run: () => (flush(), onredo(), true) },
             { key: "Mod-Shift-z", run: () => (flush(), onredo(), true) },
+            // 찾기 칸은 Esc로 닫는다 (닫혀 있으면 Esc는 앱의 재생 멈춤으로 간다). Ctrl+F·H·F3은 앱 단축키(keymap.ts)가 searchEditor로 연다
+            { key: "Escape", run: closeSearchPanel, scope: "editor search-panel" },
             ...defaultKeymap,
           ]),
+          // 바꾸기는 글 고치기와 같아서, 잠깐 멈춘 뒤 실행 취소 한 칸으로 곡에 들어간다 (모두 바꾸기도 한 칸)
+          search({ top: true }),
+          phrases.of(phrasesNow()),
           EditorView.lineWrapping,
           mmlHighlight,
           mmlTheme,
@@ -119,6 +161,10 @@
           linter(null),
           lintGutter(),
           EditorView.updateListener.of((u) => {
+            // 글을 고치지 않고 커서만 옮겼으면 알린다. 곡에 반영 안 된 글이면 글 자리가 곡과 어긋나므로 알리지 않는다
+            if (u.selectionSet && !u.docChanged && timer === undefined && oncursor && !u.transactions.some((tr) => tr.annotation(external))) {
+              if (u.state.doc.toString() === text) oncursor(u.state.selection.main.head, ownerAtMount);
+            }
             if (!u.docChanged || u.transactions.every((tr) => tr.annotation(external))) return;
             clearTimeout(timer);
             timer = setTimeout(() => {
@@ -140,9 +186,11 @@
         ],
       }),
     });
+    views.set(view, ownerAtMount);
     return () => {
       flush();
       flushers.delete(flush);
+      if (view) views.delete(view);
       if (mmlPad.target === view) mmlPad.target = undefined;
       view?.destroy();
     };
@@ -166,6 +214,11 @@
   $effect(() => {
     const ro = readonly;
     view?.dispatch({ effects: readOnlyMode.reconfigure(EditorState.readOnly.of(ro)) });
+  });
+
+  $effect(() => {
+    void i18n.locale;
+    view?.dispatch({ effects: phrases.reconfigure(phrasesNow()) });
   });
 
   $effect(() => {
@@ -199,6 +252,8 @@
     view.dispatch({
       selection: { anchor: from },
       effects: [markNote.of({ from, to }), View.scrollIntoView(from, { y: "nearest" })],
+      // 롤에서 고른 음을 보여 주는 것이라 다시 롤로 알리지 않는다
+      annotations: external.of(true),
     });
     if (at.focus) view.focus();
   });

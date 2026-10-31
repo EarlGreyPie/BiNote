@@ -43,6 +43,23 @@ describe("채널 검사", () => {
     const out = validateChannel(text, parseMml(text), MOBILE_PROFILE);
     expect(out[0]).toMatchObject({ level: "error", code: "char-limit", span: [2400, 2405] });
   });
+
+  it("o 범위 밖 옥타브와 MML로 쓸 수 없는 높이는 경고", () => {
+    const text = "o10c o0<<c";
+    const out = validateChannel(text, parseMml(text), MOBILE_PROFILE);
+    expect(out.map((d) => d.code)).toEqual(["octave-range", "pitch-unwritable"]);
+    expect(out.every((d) => d.level === "warning")).toBe(true);
+    expect(text.slice(...out[0]!.span)).toBe("o10");
+    expect(out[0]!.params).toEqual({ value: 10, min: 0, max: 9 });
+    expect(text.slice(...out[1]!.span)).toBe("c");
+    expect(out[1]!.span[0]).toBe(9);
+  });
+
+  it("경계 이름으로 쓸 수 있는 o0c-·o0c<b·o9b+는 알리지 않는다", () => {
+    expect(codes("o0c- o0c<b o9b+ o9>c")).toEqual([]);
+    expect(codes("o0<c")).toEqual(["pitch-unwritable"]);
+    expect(codes("o9b++")).toEqual(["pitch-unwritable"]);
+  });
 });
 
 describe("곡 검사", () => {
@@ -97,6 +114,16 @@ describe("곡 검사", () => {
     // 재생과 같은 식: 붙인 음의 샘플 구간으로 바꿔 타며 위치를 이어 간다 (감사에서 어긋났던 두 경우)
     expect(cut("t120o4d+1&e2")).toEqual([]);
     expect(cut("t120o4e1&d1")).toEqual([["t1.1", 3.9]]);
+  });
+
+  it("붙임 사슬을 끊는 높이 차는 프로필(tieBendLimit)에서 읽는다", () => {
+    const cut = (text: string, tieBendLimit: number) =>
+      validateSong(song([track("t1", text)]), { ...MOBILE_PROFILE, tieBendLimit })
+        .filter((d) => d.code === "sample-cut")
+        .map((d) => d.noteId);
+    // c와 d(2반음)를 이으면 한 사슬이라 샘플이 끝나지만, 한도가 1이면 d를 새로 쳐서 끊기지 않는다
+    expect(cut("t120o4c1&d1", 24)).toEqual(["t1.1"]);
+    expect(cut("t120o4c1&d1", 1)).toEqual([]);
   });
 
   it("소리 줄어듦을 켜면 거의 안 들리게 된 뒤에도 이어지는 음을 알려 준다 (실험실, 정보)", () => {

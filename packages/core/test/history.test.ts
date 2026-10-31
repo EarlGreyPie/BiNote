@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { emptySong, findOverlaps, History, rat, replaceSong, type Track } from "../src/index.js";
+import { emptySong, findOverlaps, History, rat, replaceSong, type Command, type Track } from "../src/index.js";
 
 const meta = { title: "t", author: "EarlGreyPie", profileId: "mobile" };
 
@@ -14,12 +14,49 @@ describe("History", () => {
     });
     expect(h.run(replaceSong("rename", b))).toBe(a);
     expect(h.refused).toBe(true);
+    expect(h.refusal).toBe("guard");
     expect(h.canUndo).toBe(false);
     expect(seen).toEqual(["rename"]);
     expect(h.run(replaceSong("text", b), { unchecked: true })).toBe(b);
     expect(h.refused).toBe(false);
     expect(h.canUndo).toBe(true);
     expect(seen).toEqual(["rename"]);
+  });
+
+  it("명령이나 검사가 분수 범위를 넘어 RangeError를 던지면 편집만 거절하고 앱은 이어 간다", () => {
+    const a = emptySong(meta);
+    const b = { ...a, meta: { ...meta, title: "b" } };
+    const overflow: Command = {
+      label: "overflow",
+      apply: () => {
+        throw new RangeError("분수 값이 안전한 정수 범위를 넘었습니다");
+      },
+      invert: () => overflow,
+    };
+    const h = new History(a);
+    expect(h.run(overflow)).toBe(a);
+    expect(h.refused).toBe(true);
+    expect(h.refusal).toBe("range");
+    expect(h.canUndo).toBe(false);
+    // 검사 안에서 넘쳐도 같다
+    const g = new History(a, () => {
+      throw new RangeError("넘침");
+    });
+    expect(g.run(replaceSong("rename", b))).toBe(a);
+    expect(g.refusal).toBe("range");
+    // 다음 편집은 그대로 된다
+    expect(h.run(replaceSong("rename", b))).toBe(b);
+    expect(h.refused).toBe(false);
+    expect(h.refusal).toBeUndefined();
+    // RangeError가 아닌 예외(코드 잘못)는 숨기지 않는다
+    const broken: Command = {
+      label: "broken",
+      apply: () => {
+        throw new TypeError("x");
+      },
+      invert: () => broken,
+    };
+    expect(() => h.run(broken)).toThrow(TypeError);
   });
 
   it("실행 취소와 다시 실행", () => {

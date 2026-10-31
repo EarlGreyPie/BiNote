@@ -4,18 +4,19 @@ import { fewerOf, planSplit, type BooksRequest, type SplitRequest } from "./spli
 
 export { fewerOf, planSplit, type BooksRequest, type SplitRequest };
 import type { Schedule, SlotPatch } from "@mmlce/audio/browser";
+import { errorLog } from "./diagnostics";
 import { WorkerJob } from "./workerJob";
 import { transcribePitch, type PitchRequest } from "./pitchTranscribe";
 import type { TimedNote } from "@mmlce/midi";
 
 /** 악보책 나누기 (Web Worker) */
 export function splitJob(makeWorker = workerMaker(() => new Worker(new URL("./split.worker.ts", import.meta.url), { type: "module" }))) {
-  return new WorkerJob<SplitRequest, BookPlan, BookProgress>(makeWorker, planSplit);
+  return new WorkerJob<SplitRequest, BookPlan, BookProgress>(makeWorker, planSplit, { name: "split", log: errorLog });
 }
 
 /** 트랙 사이 음을 고르게 옮겨 악보책 권 수를 줄일 수 있는지 (Web Worker). 줄일 수 없으면 undefined */
 export function booksJob(makeWorker = workerMaker(() => new Worker(new URL("./books.worker.ts", import.meta.url), { type: "module" }))) {
-  return new WorkerJob<BooksRequest, FewerBooks | undefined>(makeWorker, fewerOf);
+  return new WorkerJob<BooksRequest, FewerBooks | undefined>(makeWorker, fewerOf, { name: "books", log: errorLog });
 }
 
 
@@ -45,12 +46,12 @@ export async function renderWavFile(request: WavRequest, onProgress: (fraction: 
 
 /** WAV 저장 (Web Worker) */
 export function wavJob(makeWorker = workerMaker(() => new Worker(new URL("./wav.worker.ts", import.meta.url), { type: "module" }))) {
-  return new WorkerJob<WavRequest, WavResult>(makeWorker, renderWavFile);
+  return new WorkerJob<WavRequest, WavResult>(makeWorker, renderWavFile, { name: "wav", log: errorLog });
 }
 
 /** 브라우저 안 받아 적기 (Web Worker, 실험실). 워커가 실패하면 화면 쪽에서 돈다 */
 export function pitchJob(makeWorker = workerMaker(() => new Worker(new URL("./pitch.worker.ts", import.meta.url), { type: "module" }))) {
-  return new WorkerJob<PitchRequest, TimedNote[]>(makeWorker, transcribePitch);
+  return new WorkerJob<PitchRequest, TimedNote[]>(makeWorker, transcribePitch, { name: "transcribe", log: errorLog });
 }
 
 function workerMaker(make: () => Worker): (() => Worker) | undefined {

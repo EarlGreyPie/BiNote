@@ -1,3 +1,5 @@
+import { errorLog, errorText, type ErrorLog } from "./diagnostics";
+
 /** 워커에 보내는 요청 (번호 + 내용) */
 export interface JobRequest<Req> {
   readonly id: number;
@@ -14,16 +16,22 @@ export type JobReply<Res, P = number> =
  * 무거운 계산을 Web Worker에서 돌린다. 한 번에 하나만: 새로 시작하거나 취소하면 돌던 계산은 멈추고
  * (워커를 끝내고 다음에 새로 만든다) 그 결과는 undefined로 끝난다. 요청마다 번호를 붙여 늦게 온 답은 버린다.
  * 워커를 못 쓰는 곳(시험 환경 등)이나 워커가 실패하면 화면 쪽에서 local로 계산한다.
- * local은 진행률을 자주 알려야 한다: 취소된 뒤에는 그 콜백이 예외를 던져 계산을 멈춘다
+ * local은 진행률을 자주 알려야 한다: 취소된 뒤에는 그 콜백이 예외를 던져 계산을 멈춘다.
+ * 실패해 undefined로 끝나면 그 까닭을 lastError에 남긴다 (워커가 알린 오류와 화면 쪽 오류를 함께).
+ * 워커가 실패한 일 자체도 최근 오류(진단 정보)에 "worker:이름"으로 적는다. 화면 쪽 계산이 대신 해내도 남아서,
+ * 어느 기기에서 워커가 안 돌아 무거운 계산이 화면 쪽으로 넘어왔는지 신고로 알 수 있다
  */
 export class WorkerJob<Req, Res, P = number> {
   private worker: Worker | undefined;
   private seq = 0;
   private pending: { id: number; done: (result: Res | undefined) => void } | undefined;
+  private failure: string | undefined;
 
   constructor(
     private readonly makeWorker: (() => Worker) | undefined,
     private readonly local: (request: Req, onProgress: (progress: P) => void) => Res | Promise<Res>,
+    /** 최근 오류에 적을 이름 ("split", "wav" 같은)과 적을 곳 (시험에서는 따로) */
+    private readonly report: { readonly name: string; readonly log: Pick<ErrorLog, "note"> } = { name: "job", log: errorLog },
   ) {}
 
   /** 지금 계산 중인지 */
@@ -31,13 +39,22 @@ export class WorkerJob<Req, Res, P = number> {
     return this.pending !== undefined;
   }
 
+  /** 마지막 계산이 실패했으면 그 까닭 (취소는 실패가 아니다). 새로 시작하면 지운다 */
+  get lastError(): string | undefined {
+    return this.failure;
+  }
+
   run(request: Req, onProgress: (progress: P) => void = () => {}): Promise<Res | undefined> {
     this.cancel();
+    this.failure = undefined;
     const id = ++this.seq;
+    /** 워커가 알린 오류 (화면 쪽으로 다시 계산해도 실패하면 함께 남긴다) */
+    let workerError: string | undefined;
     return new Promise((resolve) => {
-      const done = (result: Res | undefined) => {
+      const done = (result: Res | undefined, failure?: string) => {
         if (this.pending?.id !== id) return;
         this.pending = undefined;
+        this.failure = failure;
         resolve(result);
       };
       this.pending = { id, done };
@@ -50,8 +67,11 @@ export class WorkerJob<Req, Res, P = number> {
         if (this.pending?.id !== id) return;
         try {
           done(await this.local(request, localProgress));
-        } catch {
-          done(undefined);
+        } catch (e) {
+          // 취소로 멈춘 것은 실패가 아니다 (그때는 이미 다른 요청이거나 끝난 뒤라 done이 무시된다)
+          if (e instanceof JobCancelled) return done(undefined);
+          const local = errorText(e);
+          done(undefined, workerError && workerError !== local ? `${workerError} / ${local}` : local);
         }
       };
       const worker = this.ensureWorker();
@@ -65,11 +85,20 @@ export class WorkerJob<Req, Res, P = number> {
         if (reply.id !== id || this.pending?.id !== id) return;
         if ("progress" in reply) onProgress(reply.progress);
         else if ("result" in reply) done(reply.result);
-        else this.fallBack(local);
+        else {
+          workerError = `worker: ${reply.error}`;
+          this.report.log.note(`worker:${this.report.name}`, reply.error);
+          this.fallBack(local);
+        }
       };
       worker.onerror = (event) => {
         event.preventDefault();
-        if (this.pending?.id === id) this.fallBack(local);
+        if (this.pending?.id !== id) return;
+        // 워커 파일을 못 읽었을 때도 온다 (그때는 message가 비어 있기도 하다)
+        const reason = event.message || "failed to start";
+        workerError = `worker: ${reason}`;
+        this.report.log.note(`worker:${this.report.name}`, reason);
+        this.fallBack(local);
       };
       worker.postMessage({ id, request } satisfies JobRequest<Req>);
     });
@@ -95,8 +124,10 @@ export class WorkerJob<Req, Res, P = number> {
     if (this.worker || !this.makeWorker) return this.worker;
     try {
       this.worker = this.makeWorker();
-    } catch {
+    } catch (e) {
+      // 워커를 만들지 못했다 (모듈 워커를 못 쓰는 브라우저 등): 화면 쪽에서 계산하고 까닭은 최근 오류에 남긴다
       this.worker = undefined;
+      this.report.log.note(`worker:${this.report.name}`, e);
     }
     return this.worker;
   }
@@ -130,7 +161,7 @@ export function serveJob<Req, Res, P = number>(
       const result = await work(request, (progress) => scope.postMessage({ id, progress } satisfies JobReply<Res, P>));
       scope.postMessage({ id, result } satisfies JobReply<Res>, transfer(result));
     } catch (e) {
-      scope.postMessage({ id, error: String(e) } satisfies JobReply<Res>);
+      scope.postMessage({ id, error: errorText(e) } satisfies JobReply<Res>);
     }
   };
 }

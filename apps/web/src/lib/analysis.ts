@@ -1,4 +1,4 @@
-import { add, cmp, toFloat, type GameProfile, type Note, type Song, type Track } from "@mmlce/core";
+import { add, cmp, toFloat, type GameProfile, type Note, type Rat, type Song, type Track } from "@mmlce/core";
 import {
   parseTrackText,
   trackSource,
@@ -44,6 +44,12 @@ function channel(song: Song, track: Track, profile: GameProfile): ChannelResult 
 }
 
 /**
+ * 음을 짚어도 편집기 밑줄로 옮기지 않고 곡 검사 목록에 남기는 진단. 여러 트랙에 걸친 순간이라 한 트랙 글에 묶기 어렵고,
+ * 목록에서 그 자리로 가고 고치기 창을 연다
+ */
+const SONG_LIST_CODES: ReadonlySet<string> = new Set(["fast-run-drop"]);
+
+/**
  * 곡 전체를 검사한다. 음을 짚는 곡 검사(음색 경계 & 등)는 그 음이 원문에서 차지한
  * 자리로 옮겨 편집기에 밑줄로 보이게 하고, 나머지(채널 수 등)는 따로 돌려준다.
  */
@@ -60,7 +66,7 @@ export function analyzeSong(song: Song, profile: GameProfile, options: ValidateS
     const index = entry && d.noteId ? entry.track.notes.findIndex((n) => n.id === d.noteId) : -1;
     const span = entry?.result.spans[index];
     // 원문이 있는 트랙만 음 순서가 원문 순서와 같다 (출력한 글은 음이 나뉠 수 있음)
-    if (entry?.track.mml && span) {
+    if (entry?.track.mml && span && !SONG_LIST_CODES.has(d.code)) {
       const list = located.get(entry.track.id) ?? [];
       list.push(d.params ? { level: d.level, code: d.code, params: d.params, span } : { level: d.level, code: d.code, span });
       located.set(entry.track.id, list);
@@ -134,4 +140,61 @@ export function spanAt(timeline: readonly TimedSpan[], at: number): readonly [nu
   }
   const n = found >= 0 ? timeline[found] : undefined;
   return n && at < n.end ? n.span : undefined;
+}
+
+/** MML 편집기 글 커서가 가리키는 곡 자리 */
+export interface TextCursorHit {
+  /** 곡 시각 (온음표 단위). 음·쉼표 위면 그 시작, 명령·빈칸이면 다음 음·쉼표 시작, 글 끝이면 마지막 음·쉼표 끝 */
+  readonly at: Rat;
+  /** 커서가 음 글자 위(또는 바로 뒤)면 롤의 그 음 */
+  readonly note?: Note;
+}
+
+/** 트랙 글의 음·쉼표를 글 자리 순으로 (글 커서 → 곡 자리를 셀 때) */
+export interface TextItems {
+  /** 음·쉼표의 글 자리와 곡 시작. k는 음 순번 (쉼표는 -1) */
+  readonly items: readonly { readonly span: readonly [number, number]; readonly start: Rat; readonly k: number }[];
+  /** 읽은 음 (parseTrackText 순서) */
+  readonly notes: readonly Note[];
+  /** 글 끝의 곡 시각 */
+  readonly end: Rat;
+}
+
+// 방향키를 누를 때마다 다시 읽지 않게 마지막 곡·트랙 하나를 담아 둔다. 원문 없는 트랙은 글을 새로 쓰므로(optimizeMml) 음이 많으면 무겁다.
+// 곡·트랙은 고치면 새 객체가 되므로 같은 객체면 글도 같다
+let lastItems: { song: Song; track: Track; value: TextItems } | undefined;
+
+/** 트랙 글의 음·쉼표 자리. 같은 곡·트랙이면 지난번 것을 그대로 준다 */
+export function textItems(song: Song, track: Track): TextItems {
+  if (lastItems && lastItems.song === song && lastItems.track === track) return lastItems.value;
+  const source = trackSource(song, track);
+  const { parsed, notes } = parseTrackText(track.id, source);
+  const shift = (r: Rat) => (source.offset ? add(r, source.offset) : r);
+  const items = [
+    ...parsed.notes.map((n, k) => ({ span: n.span, start: notes[k]!.start, k })),
+    ...parsed.rests.map((r) => ({ span: r.span, start: shift(r.start), k: -1 })),
+  ].sort((a, b) => a.span[0] - b.span[0]);
+  const value: TextItems = { items, notes, end: shift(parsed.end) };
+  lastItems = { song, track, value };
+  return value;
+}
+
+/**
+ * 글 커서 자리(pos) → 곡 자리와 그 자리 음. 편집기 커서를 롤·재생 커서·상태줄 마디:박으로 잇는다.
+ * 커서가 음 글자 안이면 그 음, 음 바로 뒤("c4|")도 그 음으로 본다. 두 음 사이("c4|d4")는 뒤 음이다
+ */
+export function textCursorAt(song: Song, track: Track, pos: number): TextCursorHit {
+  const { items, notes, end } = textItems(song, track);
+  const hit = items.find((x) => x.span[0] <= pos && pos < x.span[1]) ?? items.find((x) => x.span[1] === pos);
+  if (!hit) {
+    const next = items.find((x) => x.span[0] >= pos);
+    return { at: next ? next.start : end };
+  }
+  if (hit.k < 0) return { at: hit.start };
+  const piece = notes[hit.k]!;
+  // 원문이 있으면 음 순서가 같다. 출력한 글은 템포 때문에 음이 나뉠 수 있어, 같은 높이로 그 자리에 걸린 음을 찾는다
+  const note =
+    (track.mml ? track.notes[hit.k] : undefined) ??
+    track.notes.find((n) => n.pitch === piece.pitch && cmp(n.start, piece.start) <= 0 && cmp(piece.start, add(n.start, n.dur)) < 0);
+  return note ? { at: hit.start, note } : { at: hit.start };
 }

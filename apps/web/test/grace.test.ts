@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { add, cmp, defaultLengthLimit, gameLengths, graceMax, History, MOBILE_PROFILE, planGrace, rat, type GraceOptions, type Note, type Rat, type Song } from "@mmlce/core";
+import { add, cmp, defaultLengthLimit, gameLengths, graceMax, History, MOBILE_PROFILE, planGrace, rat, sub, type GraceOptions, type Note, type Rat, type Song } from "@mmlce/core";
 import { addTrack, addPlayer, canWriteExactly, newSong, setTracksNotes } from "@mmlce/mml";
 import { newUnwritableTrack, unwritableLengths } from "../src/lib/writable";
 
@@ -55,6 +55,14 @@ describe("박 위에서 (본음이 늦게 시작)", () => {
   it("&로 잇기: 꾸밈음이 모두 &로 본음까지 이어진다", () => {
     const r = run(songOf([n("a", rat(0), rat(1, 4))]), ["a"], { offsets: [0, 2], length: rat(1, 32), tie: true });
     expect(shape(notesOf(r, "t1"))).toEqual(["60@0/1+1/32&", "62@1/32+1/32&", "60@1/16+3/16"]);
+  });
+
+  it("&로 이을 때 높이 차 한도는 프로필(tieBendLimit)에서 읽는다", () => {
+    const s = songOf([n("a", rat(0), rat(1, 4))]);
+    const picked = s.tracks.flatMap((tr) => tr.notes);
+    const options = { ...base, offsets: [-5], tie: true };
+    expect(planGrace(s, picked, options, MOBILE_PROFILE, newId).skipped.bend).toBe(0);
+    expect(planGrace(s, picked, options, { ...MOBILE_PROFILE, tieBendLimit: 4 }, newId).skipped.bend).toBe(1);
   });
 
   it("&로 이을 때 높이 차가 너무 크면 건너뛴다", () => {
@@ -289,5 +297,74 @@ describe("성질: 어떤 길이·잇단음·방식이든 쓸 수 없는 길이�
       }
     }
     expect(applied).toBeGreaterThan(100);
+  });
+});
+
+describe("많은 음 (점검 S35: 트랙마다 한 번 정렬·한 번 넣기)", () => {
+  /** 겹치지 않는 음 count개 (쉼표·&·여러 길이를 섞는다). starts를 주면 그 시작을 쓴다 (화음) */
+  const lineOf = (prefix: string, count: number, seed: number, starts?: readonly Rat[]): Note[] => {
+    let x = seed;
+    const next = () => (x = (x * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+    const durs = [rat(1, 4), rat(1, 8), rat(3, 16), rat(1, 6), rat(1, 2), rat(1, 12), rat(1, 32)];
+    const out: Note[] = [];
+    let at = rat(0);
+    for (let i = 0; i < count; i++) {
+      const start = starts?.[i] ?? (next() < 0.3 ? add(at, rat(1, 16)) : at);
+      const room = starts?.[i + 1] ? sub(starts[i + 1]!, start) : undefined;
+      let dur = durs[Math.floor(next() * durs.length)]!;
+      if (room && cmp(dur, room) > 0) dur = room;
+      out.push(n(`${prefix}${i}`, start, dur, 48 + Math.floor(next() * 30), { vol: 1 + Math.floor(next() * 15), tie: next() < 0.3 ? "next" : "none" }));
+      at = add(start, dur);
+    }
+    return out.reverse();
+  };
+
+  it("겹친 음이 있는 트랙이 곡에 있어(하나씩 넣기) 없어도(모아 넣기) 결과가 같다", () => {
+    const messy = [n("z1", rat(0), rat(1, 2)), n("z2", rat(1, 4), rat(1, 2))];
+    const kinds: Partial<GraceOptions>[] = [
+      { timing: "on" },
+      { timing: "on", tie: true, offsets: [-1, 2] },
+      { timing: "before" },
+      { timing: "before", tie: true, offsets: [3, 1], length: rat(1, 32) },
+    ];
+    for (let seed = 1; seed <= 12; seed++) {
+      const t1 = lineOf("a", 40, seed);
+      // 같은 연주자의 다른 트랙은 t1 시작을 함께 써서 화음 음(박 위에서 함께 늦어지는 음)이 생기게
+      const starts = [...t1].reverse().map((x) => x.start);
+      const t2 = lineOf("b", 40, seed * 7, seed % 2 === 0 ? starts : undefined);
+      const picked = [...t1, ...t2].filter((_, i) => i % 3 !== 1).map((x) => x.id);
+      for (const options of kinds) {
+        k = 0;
+        const clean = run(songOf(t1, t2), picked, options);
+        k = 0;
+        const slow = run(songOf(t1, t2, messy), picked, options);
+        expect(JSON.stringify(clean)).toBe(JSON.stringify(slow));
+      }
+    }
+  });
+
+  it("모아 넣어도, 뒤가 떨어진 &로 끝나는 음 바로 뒤에 붙는 박 앞 꾸밈음은 그 음과 이어지지 않는다 (하나씩 넣던 때와 같게)", () => {
+    // b는 &로 끝나지만 뒤 음(c)과 떨어져 있다. 앞 본음 a를 고칠 때 이 &가 풀리므로, c의 꾸밈음이 b 끝에 바로 붙어도 잇지 않는다
+    const notes = [n("a", rat(1, 8), rat(1, 8)), n("b", rat(1, 4), rat(1, 8), 60, { tie: "next" }), n("c", rat(1, 2), rat(1, 4))];
+    const options: Partial<GraceOptions> = { timing: "before", offsets: [-2, -1], length: rat(1, 16) };
+    k = 0;
+    const clean = run(songOf(notes), ["a", "c"], options);
+    expect(shape(notesOf(clean, "t1"))).toEqual(["58@0/1+1/16", "59@1/16+1/16", "60@1/8+1/8", "60@1/4+1/8", "58@3/8+1/16", "59@7/16+1/16", "60@1/2+1/4"]);
+    k = 0;
+    const slow = run(songOf(notes, [], [n("z1", rat(0), rat(1, 2)), n("z2", rat(1, 4), rat(1, 2))]), ["a", "c"], options);
+    expect(JSON.stringify(clean)).toBe(JSON.stringify(slow));
+  });
+
+  it("2000음에 꾸밈음 붙이기·최대 개수 재기도 금방 끝난다", () => {
+    // 첫 음 앞에 쉼표를 두어 박 앞에서도 모든 음에 붙는다
+    const line = Array.from({ length: 2000 }, (_, i) => n(`a${i}`, rat(i + 1, 4), rat(1, 4)));
+    const s = songOf(line);
+    const t = performance.now();
+    expect(graceMax(s, line, base, MOBILE_PROFILE)).toBe(15);
+    const on = run(s, line.map((x) => x.id));
+    const before = run(s, line.map((x) => x.id), { timing: "before" });
+    expect(performance.now() - t).toBeLessThan(5000);
+    expect(on.made).toBe(2000);
+    expect(before.made).toBe(2000);
   });
 });

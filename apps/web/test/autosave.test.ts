@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AutosaveQueue, AutosaveTracker } from "../src/lib/autosave";
+import { AutosaveQueue, AutosaveTracker, noteSave, SAVE_FAIL_LIMIT, SAVE_HEALTHY, saveTrouble } from "../src/lib/autosave";
 
 describe("AutosaveTracker", () => {
   it("연 그대로면 적지 않고, 고친 상태는 적는다", () => {
@@ -181,5 +181,26 @@ describe("AutosaveQueue", () => {
     finishB(true);
     await expect(back).resolves.toBeUndefined();
     expect(tracker.dirty("A")).toBe(false);
+  });
+});
+
+describe("자동 보존 상태 (보존 안 됨 배지)", () => {
+  it("잇달아 SAVE_FAIL_LIMIT번 실패해야 알리고, 한 번 적히면 거둔다", () => {
+    let h = SAVE_HEALTHY;
+    for (let i = 1; i < SAVE_FAIL_LIMIT; i++) {
+      h = noteSave(h, "failed");
+      expect(saveTrouble(h)).toBeUndefined();
+    }
+    h = noteSave(h, "failed");
+    expect(saveTrouble(h)).toBe("failed");
+    h = noteSave(h, "saved");
+    expect(saveTrouble(h)).toBeUndefined();
+    expect(h.failures).toBe(0);
+  });
+
+  it("공간이 꽉 찬 것은 한 번에 알린다", () => {
+    expect(saveTrouble(noteSave(SAVE_HEALTHY, "quota"))).toBe("quota");
+    // 다음 실패의 까닭이 다르면 그 까닭을 따른다
+    expect(saveTrouble(noteSave(noteSave(SAVE_HEALTHY, "quota"), "failed"))).toBe("failed");
   });
 });

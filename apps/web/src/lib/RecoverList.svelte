@@ -6,11 +6,13 @@
   /** 자동 보존해 둔 지난 작업 목록. 곡이 없는 첫 화면과 "지난 작업 되살리기" 창에서 쓴다 */
   interface Props {
     works: readonly WorkSummary[];
+    /** 다른 탭에서 열려 있는 작업 id. 되살리면 사본으로 연다 */
+    elsewhere?: ReadonlySet<string> | undefined;
     onrestore: (id: string) => void;
     onforget: (id: string) => void;
   }
 
-  let { works, onrestore, onforget }: Props = $props();
+  let { works, elsewhere, onrestore, onforget }: Props = $props();
 
   function when(ms: number): string {
     return new Date(ms).toLocaleString(i18n.locale, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
@@ -29,8 +31,9 @@
             <strong>{w.title || w.fileName || t("ui.recoverUntitled")}</strong>
             {#if w.title && w.fileName}<span class="muted">{w.fileName}</span>{/if}
             <span class="muted small">{t("ui.recoverMeta", { tracks: w.trackCount, notes: w.noteCount, time: when(w.savedAt) })}</span>
+            {#if elsewhere?.has(w.id)}<span class="small elsewhere" title={t("ui.recoverOpenElsewhereHelp")}>{t("ui.recoverOpenElsewhere")}</span>{/if}
           </div>
-          <button class="primary small" onclick={() => onrestore(w.id)}>{t("ui.recoverRestore")}</button>
+          <button class="primary small" title={elsewhere?.has(w.id) ? t("ui.recoverOpenElsewhereHelp") : undefined} onclick={() => onrestore(w.id)}>{t("ui.recoverRestore")}</button>
           <button class="small" onclick={() => onforget(w.id)}>{t("ui.recoverForget")}</button>
         </li>
       {/each}
@@ -77,6 +80,9 @@
   }
   .small {
     font-size: 0.85em;
+  }
+  .elsewhere {
+    color: var(--danger);
   }
   p {
     margin: 8px 0 0;

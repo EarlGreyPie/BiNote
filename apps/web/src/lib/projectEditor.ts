@@ -1,5 +1,5 @@
-import { defaultLengthLimit, type Song } from "@mmlce/core";
-import type { ProjectEditor } from "@mmlce/fileio";
+import { defaultLengthLimit, type Extras, type Song } from "@mmlce/core";
+import type { ProjectEditor, ProjectWriteOptions } from "@mmlce/fileio";
 import { isTuningName, type ScoreTuning, type TuningName } from "./tunings";
 import { NOTE_LENGTHS, type NoteLength } from "./roll";
 import { isGameLengthName, isGridDivision } from "./tuplet";
@@ -49,6 +49,39 @@ export interface EditorState {
   readonly video?: VideoFit;
   /** 트랙 id → 보기 상태 (숨기거나 잠근 트랙만) */
   readonly trackView?: Readonly<Record<string, TrackViewState>>;
+}
+
+/** 화면 상태의 아는 칸 이름. EditorState에 칸을 더하면 여기에도 더해야 타입 검사를 지난다 */
+const EDITOR_KEYS: ReadonlySet<string> = new Set(
+  Object.keys({
+    activeTrackId: true,
+    division: true,
+    noteLength: true,
+    viewMode: true,
+    tuning: true,
+    capo: true,
+    scoreTunings: true,
+    reference: true,
+    video: true,
+    trackView: true,
+  } satisfies Record<keyof EditorState, true>),
+);
+
+/** 연 프로젝트 파일에서 이 판이 모르는 것 (더 새 판이 더한 것): 맨 위 필드와 화면 상태 칸. 저장할 때 그대로 다시 적는다 */
+export interface KeptFields {
+  readonly file?: Extras;
+  readonly editor?: ProjectEditor;
+}
+
+/** 읽은 프로젝트에서 다시 적을 모르는 필드를 고른다 (프로젝트가 아닌 파일이면 빈 것) */
+export function keptFields(result: { readonly editor?: ProjectEditor; readonly extras?: Extras }): KeptFields {
+  const rest = Object.entries(result.editor ?? {}).filter(([k]) => !EDITOR_KEYS.has(k));
+  return { ...(result.extras ? { file: result.extras } : {}), ...(rest.length > 0 ? { editor: Object.fromEntries(rest) } : {}) };
+}
+
+/** 프로젝트로 쓸 때의 설정: 지금 화면 상태에 연 파일의 모르는 칸을 더한다 (열고 저장만 해도 사라지지 않게) */
+export function projectWriteOptions(editor: EditorState, kept: KeptFields, app: string): ProjectWriteOptions {
+  return { editor: { ...kept.editor, ...editor }, app, ...(kept.file ? { extras: kept.file } : {}) };
 }
 
 type Obj = Record<string, unknown>;

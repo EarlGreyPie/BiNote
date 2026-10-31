@@ -1,3 +1,5 @@
+import { estimateSpace, type StorageSpace } from "./storageSpace";
+
 /**
  * 서비스 워커 등록과 새 판 안내, 저장 공간 지속 요청.
  * 새 판은 바로 바꾸지 않고 기다리게 한다. 열려 있는 탭이 옛 판 파일을 계속 쓸 수 있어야
@@ -17,6 +19,8 @@ export const pwa = $state<{
   /** 새 판으로 바꾸는 중 (저장하고 새로고침을 기다린다). 이때는 바꾸기 단추를 다시 누를 수 없다 */
   applying: boolean;
   storage: "unknown" | "persisted" | "best-effort" | "unsupported";
+  /** 이 사이트가 쓰는 공간과 한도 (checkSpace로 읽는다). 브라우저가 알려 주지 않으면 undefined */
+  space: StorageSpace | undefined;
 }>({
   updateReady: false,
   newVersion: null,
@@ -25,6 +29,7 @@ export const pwa = $state<{
   updateFailed: false,
   applying: false,
   storage: "unknown",
+  space: undefined,
 });
 
 let waiting: ServiceWorker | null = null;
@@ -175,6 +180,11 @@ export async function checkStorage(): Promise<void> {
   } catch {
     pwa.storage = "unsupported";
   }
+}
+
+/** 쓰는 공간과 남은 공간을 읽어 둔다 (설정 창, 공간이 꽉 차 자동 보존이 실패했을 때) */
+export async function checkSpace(): Promise<void> {
+  pwa.space = await estimateSpace();
 }
 
 /**

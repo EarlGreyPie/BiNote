@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { emptySong, MOBILE_PROFILE, type Player, type Song, type Track } from "@mmlce/core";
-import { distributeChords, freeRuns, mergeTies, optimizeMml, parseTrackText } from "../src/index.js";
+import { emptySong, MOBILE_PROFILE, rat, type Player, type Song, type Track } from "@mmlce/core";
+import { distributeChords, distributeSong, freeRuns, mergeTies, optimizeMml, parseTrackText, settleDistributed } from "../src/index.js";
 
 const piano: Player = { id: "p1", name: "피아노", instrument: { canonical: "piano" } };
 const flute: Player = { id: "p2", name: "플루트", instrument: { canonical: "flute" } };
@@ -68,5 +68,59 @@ describe("트랙 악기가 다른 화음 분산", () => {
     const r = distributeChords(song, MOBILE_PROFILE);
     expect(r.moved).toBe(0);
     expect(r.song.tracks[1]!.notes).toHaveLength(0);
+  });
+});
+
+describe("화음 분산의 소리 묶음과 적용 확인 (점검 S08)", () => {
+  const busy = "l16 " + "cdefgab>c<".repeat(10) + " r1 r1 r1";
+  const profile = { ...MOBILE_PROFILE, charLimitPerScore: 60 };
+
+  it("끈 트랙이나 채널 볼륨·팬이 다른 트랙으로는 음을 옮기지 않는다 (화음 분산 창과 같은 기준)", () => {
+    const quiet = "r1 r1 r1 r1 r1 r1 o3 c1 c1";
+    const base = song([track("a", busy), track("b", quiet)]);
+    // 같은 소리 묶음이면 옮긴다
+    expect(distributeChords(base, profile).moved).toBeGreaterThan(0);
+    for (const change of [{ mute: true }, { mix: { volume: 80 } }, { mix: { pan: 20 } }]) {
+      const s = { ...base, tracks: [base.tracks[0]!, { ...base.tracks[1]!, ...change }] };
+      const r = distributeChords(s, profile);
+      expect(r.moved).toBe(0);
+      expect(r.song.tracks[1]!.notes).toHaveLength(s.tracks[1]!.notes.length);
+    }
+  });
+
+  it("같은 연주자라도 다른 악보(오르골 3+3의 둘째 대) 트랙으로는 옮기지 않는다", () => {
+    const box: Player = { id: "p1", name: "오르골", instrument: { canonical: "music-box" } };
+    // 첫 악보의 b·c는 쉬는 곳이 없고, 둘째 악보의 d만 비어 있다
+    const full = "l16 " + "c".repeat(100) + " r1 r1 r1";
+    const s = { ...song([track("a", busy), track("b", full), track("c", full), track("d", "")]), players: [box] };
+    const r = distributeChords(s, profile);
+    expect(r.moved).toBe(0);
+    expect(r.song.tracks[3]!.notes).toHaveLength(0);
+  });
+
+  it("글자 수 줄이기가 곡을 그대로 두면(kept) 원문이 지워진 옮긴 곡을 넣지 않는다", () => {
+    const read = track("u", "t100c4", "p2");
+    const { mml: _mml, ...bare } = read;
+    // 출력기로 정확히 쓸 수 없는 길이(1/240)라 글자 수 줄이기가 곡을 그대로 둔다
+    const u = { ...bare, notes: read.notes.map((n) => ({ ...n, dur: rat(1, 240) })) };
+    const s = song([track("a", busy), track("b", "r1 r1 r1 r1 r1 r1 o3 c1 c1"), u]);
+    expect(distributeChords(s, profile).moved).toBeGreaterThan(0);
+    const settled = settleDistributed(s, distributeChords(s, profile).song, profile);
+    expect(settled.kept).toBe("notes");
+    expect(settled.song).toBe(s);
+    expect(distributeSong(profile).apply(s)).toBe(s);
+  });
+
+  it("옮긴 뒤 게임 소리가 달라지면 곡을 그대로 둔다", () => {
+    const s = song([track("a", "cdef"), { ...track("b", ""), mute: true }]);
+    // 끈 트랙으로 음을 옮긴 곡 (distributeChords는 이렇게 옮기지 않지만, 확인이 막는지 본다)
+    const moved = { ...s, tracks: [{ ...s.tracks[0]!, notes: [] }, { ...s.tracks[1]!, notes: s.tracks[0]!.notes }] };
+    const settled = settleDistributed(s, moved, MOBILE_PROFILE);
+    expect(settled.kept).toBe("sound");
+    expect(settled.song).toBe(s);
+    // 소리가 같으면 다시 쓴 곡을 넣는다
+    const same = song([track("a", "cdef"), track("b", "")]);
+    const ok = { ...same, tracks: [{ ...same.tracks[0]!, notes: [] }, { ...same.tracks[1]!, notes: same.tracks[0]!.notes }] };
+    expect(settleDistributed(same, ok, MOBILE_PROFILE).kept).toBeUndefined();
   });
 });

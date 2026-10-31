@@ -24,3 +24,9 @@ body:
     attributes:
       label: 기기·브라우저 / Device & browser
       placeholder: Windows 11 Chrome, iPad Safari, Galaxy Tab Chrome …
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: 진단 정보 / Diagnostics
+      description: 설정 맨 아래 "BiNote 정보…"를 열고 "진단 정보 복사"를 눌러 여기에 붙여 넣어 주세요. 판·브라우저·켠 실험실·최근 오류가 들어가고 곡 내용은 들어가지 않아요 / Press "Copy diagnostics" in the About BiNote window and paste it here. It has the version, browser, Labs settings and recent errors, but not your song
+      render: text

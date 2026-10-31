@@ -102,3 +102,32 @@ function addRat(a: Rat, b: Rat): Rat {
 function add4(k: number): Rat {
   return addRat(rat(1, 4), rat(k, 16));
 }
+
+describe("옥타브 범위 끝 음", () => {
+  it("첫 음이나 o로 옮길 때도 pitch 11은 o0c-, 132는 o9b+로 쓴다 (o-1·o10을 쓰지 않는다)", () => {
+    const cases: PrintableNote[][] = [
+      [n(rat(0), rat(1, 4), 11)],
+      [n(rat(0), rat(1, 4), 132)],
+      [n(rat(0), rat(1, 4), 60), n(rat(1, 4), rat(1, 4), 11), n(rat(1, 2), rat(1, 4), 132)],
+      [n(rat(0), rat(1, 4), 12), n(rat(1, 4), rat(1, 4), 11)],
+    ];
+    for (const notes of cases) {
+      for (const enharmonic of [true, false]) {
+        const out = optimizeMml(notes, { enharmonic });
+        expect(out.text).not.toMatch(/o-|o1\d/);
+        const back = parseMml(out.text);
+        expect(back.diagnostics).toEqual([]);
+        expect(sameSound(back.notes, mergeTies(notes))).toBe(true);
+      }
+    }
+    expect(optimizeMml([n(rat(0), rat(1, 4), 11)]).text).toBe("o0c-");
+    expect(optimizeMml([n(rat(0), rat(1, 4), 132)]).text).toBe("o9b+");
+  });
+
+  it("쓸 수 없는 높이는 단순 출력기로 넘겨 옥타브를 옮겨 쓰고 알린다", () => {
+    const out = optimizeMml([n(rat(0), rat(1, 4), 5)]);
+    expect(out.text).not.toMatch(/o-/);
+    expect(parseMml(out.text).notes.map((x) => x.pitch)).toEqual([17]);
+    expect(out.diagnostics.map((d) => d.code)).toEqual(["pitch-unwritable"]);
+  });
+});

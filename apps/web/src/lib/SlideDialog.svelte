@@ -234,7 +234,7 @@
       {t("ui.slideSkipped", { gap: s.gap, same: s.same, short: s.short, tied: s.tied, unsplittable: s.unsplittable })}
     </p>
   {/if}
-  {#if s.bend > 0}<p class="warn">{t("ui.slideBend", { n: s.bend })}</p>{/if}
+  {#if s.bend > 0}<p class="warn">{t("ui.slideBend", { n: s.bend, limit: profile.tieBendLimit })}</p>{/if}
   {#if s.zone > 0}<p class="muted">{t("ui.slideZoneSkipped", { n: s.zone })}</p>{/if}
   {#if result.zoneBreaks > 0}<p class="muted"><span class="zone-key"></span>{t("ui.slideZoneBreaks", { n: result.zoneBreaks })}</p>{/if}
   {#if result.zoneCrossings > 0}<p class="warn"><span class="zone-key"></span>{t("ui.slideZoneCrossings", { n: result.zoneCrossings })}</p>{/if}

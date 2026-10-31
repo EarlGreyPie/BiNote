@@ -22,6 +22,7 @@
     "ui.helpRoll8",
     "ui.helpRoll9",
     "ui.helpRoll10",
+    "ui.helpRoll11",
   ];
   const TAB: readonly MessageKey[] = ["ui.helpTab1", "ui.helpTab2", "ui.helpTab3", "ui.helpTab4", "ui.helpTab5"];
   const lines = $derived(viewMode === "roll" ? ROLL : TAB);

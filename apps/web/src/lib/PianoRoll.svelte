@@ -11,6 +11,7 @@
     noteBefore,
     pasteClip,
     positionToSeconds,
+    placeLoss,
     placeNote,
     rat,
     removeNotes,
@@ -21,6 +22,8 @@
     toFloat,
     toggleTie,
     type Note,
+    type NoteClip,
+    type PlaceLoss,
     type Rat,
     type Song,
   } from "@mmlce/core";
@@ -48,6 +51,7 @@
   import { LaneGesture } from "./laneGesture.svelte";
   import { tabEventPrefs } from "./tabEventPrefs.svelte";
   import { scaledPx } from "./uiScaleNow.svelte";
+  import { EDGE_SPEED, edgeScroll, freeDivision, notesBeside } from "./editNav";
   import { fallShift, fallSpeed, SPEED_FRAME_GAP, SPEED_FRAME_WIDTH, SPEED_PICK_GAP, speedPickLost, speedPickPress, speedPickWheel, toGray } from "./videoSpeed";
   import {
     bpmAt,
@@ -84,6 +88,11 @@
     axes,
     inLane,
     LANE_GUTTER,
+    clampKeyZoom,
+    clampTimeZoom,
+    zoomAnchor,
+    zoomKeysAt,
+    zoomTimeAt,
   } from "./roll";
 
   interface Props {
@@ -110,6 +119,8 @@
     onselecttrack: (trackId: string) => void;
     /** 음을 눌러 골랐을 때 (MML 글에서 그 자리를 보여 준다). 두 번 누르면 focus = true */
     onpicknote?: (trackId: string, note: Note, focus: boolean) => void;
+    /** 음을 놓거나 옮겨서 겹친 다른 음이 잘리거나 지워졌을 때 (곡에 넣은 뒤에만 부른다) */
+    ontrim?: (loss: PlaceLoss) => void;
     /** 건반 띠를 누르거나 음을 누르는 동안 그 높이를 미리 들려준다 (on = false면 끈다) */
     onpreview?: (pitch: number, on: boolean) => void;
     /** 마디 번호 줄을 누르면 그 자리로 (3MLE처럼 원하는 곳부터 재생) */
@@ -198,7 +209,7 @@
     onlanetoggle?: ((trackId: string) => void) | undefined;
   }
 
-  let { cursor, loop, oncursor, onloop, song: fullSong, ghost = [], activeTrackId, orientation, division, playhead, onnotes, onselecttrack, onpicknote, onpreview, onseek, showEvents = false, video = $bindable(), videoPlay = $bindable(false), speedStep = $bindable(0), onspeedpicked, pitchRange = [12, 119], wave, look, themeKey = "", seconds, rate = 1, colors, tool = "pen", onreverb, noteDur, volume, onvolume, lightKeys = false, canonicalOf, memory, onmemory, work, visibleTrackIds, selectMove = false, locked, pickOthers = true, onevent, oneventmove, onalignbar, bardragtext, onwaveoffset, pickedEvent, onpickevent, ontempowheel, laneTrackIds, melodyIds, onvolumes, onclearlane, onlanetoggle }: Props =
+  let { cursor, loop, oncursor, onloop, song: fullSong, ghost = [], activeTrackId, orientation, division, playhead, onnotes, onselecttrack, onpicknote, ontrim, onpreview, onseek, showEvents = false, video = $bindable(), videoPlay = $bindable(false), speedStep = $bindable(0), onspeedpicked, pitchRange = [12, 119], wave, look, themeKey = "", seconds, rate = 1, colors, tool = "pen", onreverb, noteDur, volume, onvolume, lightKeys = false, canonicalOf, memory, onmemory, work, visibleTrackIds, selectMove = false, locked, pickOthers = true, onevent, oneventmove, onalignbar, bardragtext, onwaveoffset, pickedEvent, onpickevent, ontempowheel, laneTrackIds, melodyIds, onvolumes, onclearlane, onlanetoggle }: Props =
     $props();
 
   /** 레이어: 고른 트랙이 든 보기만 그리고 다루는 곡 (나머지 트랙은 롤에서 보이지도 눌리지도 않는다) */
@@ -435,9 +446,6 @@
     if (Math.abs(stretch - video.stretch) > 1e-6) untrack(() => video && (video = { ...video, stretch }));
   });
 
-  /** 롤 가로 확대 한도 (휠·핀치와 같다) */
-  const clampZoom = (z: number) => Math.min(2000, Math.max(5, z));
-
   // 속도 맞추기: 잰 영상 속도(원본 px/초) × 시간 축 배율 = 화면에서 떨어지는 속도가 롤의 px/초가 되게 롤 가로 확대를 둔다.
   // 롤 크기(건반 칸)나 늘이기 배율이 바뀌면 다시 맞춘다 (가로 확대·화면 자리가 바뀐 것으로는 돌지 않는다). 템포는 지금 화면 시작 자리의 것
   $effect(() => {
@@ -446,7 +454,7 @@
     const time = ((keys * pxPerKey) / videoSize[0]) * video.stretch;
     const speed = video.speed;
     untrack(() => {
-      const zoom = clampZoom(matchRollZoom(speed * time, bpmAt(song.tempo, start)));
+      const zoom = clampTimeZoom(matchRollZoom(speed * time, bpmAt(song.tempo, start)));
       if (Math.abs(zoom - pxPerWhole) > 1e-6) pxPerWhole = zoom;
     });
   });
@@ -602,6 +610,8 @@
   // 음량 레인: 레인 트랙의 이음 사슬마다 막대 하나. 붓은 손이 지나간 막대마다 그 높이 값, 직선은 누른 자리에서 뗀 자리까지.
   // 여러 트랙을 같이 고르면(트랙 목록 Ctrl+클릭) 멜로디 트랙은 그은 값, 나머지는 그 순간 높이 자리마다 차이를 더한다
   const volumeRange = $derived((PROFILES[song.meta.profileId] ?? MOBILE_PROFILE).volume);
+  /** 게임에서 쓸 수 있는 가장 짧은 음 길이 (온음표의 1/n). 끄는 중 Alt로 격자를 끌 때 이 칸으로 움직인다 */
+  const lengthMax = $derived((PROFILES[song.meta.profileId] ?? MOBILE_PROFILE).length.max);
   /** 레인에 그리는 트랙: 고른 트랙이 먼저, 같이 고른 트랙(보이는 것만)이 뒤에 */
   const laneTracks = $derived.by((): LaneTrack[] => {
     if (!active) return [];
@@ -737,6 +747,19 @@
     return getComputedStyle(host).getPropertyValue(name).trim() || "#888";
   }
 
+  /** 끄는 음을 지금 놓으면 고르는 트랙에서 잘리거나 지워질 음 (놓을 때 placeNote·replaceNotes와 같은 규칙) */
+  const dragLoss = $derived.by((): PlaceLoss | undefined => {
+    if (!drag || !active) return undefined;
+    const moving = drag.mode === "move" ? [drag.note, ...drag.moved] : [drag.note];
+    const loss = placeLoss(active.notes, new Map(moving.map((n) => [n.id, n])));
+    return loss.cut.size + loss.removed.size > 0 ? loss : undefined;
+  });
+
+  /** 곡에 넣은 뒤, 넣기 전에 잰 손해(loss)가 있으면 알린다. onnotes가 거절했으면(false) 알리지 않는다 */
+  function noteTrim(done: boolean | void, loss: PlaceLoss) {
+    if (done !== false && loss.cut.size + loss.removed.size > 0) ontrim?.(loss);
+  }
+
   $effect(() => {
     void fonts.loaded;
     void showEvents;
@@ -747,6 +770,7 @@
       song,
       activeId: active?.id,
       dragNotes: drag ? (drag.mode === "move" ? [drag.note, ...drag.moved] : [drag.note]) : [],
+      loss: dragLoss,
       ghost,
       selected,
       box: boxing?.from ? undefined : boxing,
@@ -929,9 +953,9 @@
     // 시간 축: 화면 시작에서 그 점까지 거리(px)
     const along = (pt: readonly [number, number]) => (horizontal ? pt[0] - KEYBOARD : height - KEYBOARD - pt[1]);
     const midTime = s.start + along(f.mid0) / s.pxPerWhole;
-    pxPerWhole = Math.min(2000, Math.max(5, s.pxPerWhole * pinchRatio(f.gap0[ti]!, f.gap[ti]!)));
+    pxPerWhole = clampTimeZoom(s.pxPerWhole * pinchRatio(f.gap0[ti]!, f.gap[ti]!));
     start = Math.max(0, midTime - along(f.mid) / pxPerWhole);
-    const k = Math.min(40, Math.max(4, Math.round(s.pxPerKey * pinchRatio(f.gap0[pi]!, f.gap[pi]!))));
+    const k = clampKeyZoom(s.pxPerKey * pinchRatio(f.gap0[pi]!, f.gap[pi]!));
     const next = horizontal
       ? s.edgePitch - f.mid0[1] / s.pxPerKey + f.mid[1] / k
       : s.edgePitch + f.mid0[0] / s.pxPerKey - f.mid[0] / k;
@@ -1197,6 +1221,16 @@
       preview(stripKey(e));
       return;
     }
+    if (!marking && !boxing && !drag) {
+      hover(e);
+      return;
+    }
+    followPointer(e);
+    autoScroll(e);
+  }
+
+  /** 반복 구간 긋기·상자 고르기·음 끌기를 손 위치에 맞춘다 (가장자리 자동 넘김이 화면을 넘긴 뒤에도 부른다) */
+  function followPointer(e: PointerEvent) {
     if (marking) {
       const at = pointer(e);
       if (at.time !== undefined) marking = [marking[0], toFloat(snapNearest(at.time, division))];
@@ -1209,20 +1243,19 @@
       boxing = { t0: boxing.t0, p0: boxing.p0, t1: at.time ?? boxing.t1, p1: at.pitch };
       return;
     }
-    if (!drag) {
-      hover(e);
-      return;
-    }
+    if (!drag) return;
     const at = pointer(e);
     const time = at.time ?? (orientation === "horizontal" ? start : visibleTime(view)[1]);
-    const minimum = rat(1, division);
+    // 끄는 중에 Alt를 누르고 있으면 격자를 끄고 게임 최단 길이 칸으로 (Alt+클릭은 &잇기라, 잡은 뒤에 누른다)
+    const grid = e.altKey ? freeDivision(division, lengthMax) : division;
+    const minimum = rat(1, grid);
     if (!drag.live) {
       // 누르기만 하거나 손이 조금 떨린 것은 끌기가 아니다
       if (Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) < drag.slop) return;
       drag = { ...drag, live: true };
     }
     // 움직인 만큼을 격자 칸 단위로 (원래 자리가 격자 밖이면 그 어긋남을 그대로 둔다)
-    const step = drag.mode === "create" ? rat(0) : rat(Math.round((time - drag.t0) * division), division);
+    const step = drag.mode === "create" ? rat(0) : rat(Math.round((time - drag.t0) * grid), grid);
     if (drag.mode === "move") {
       const o = drag.original;
       let dt = step;
@@ -1243,10 +1276,39 @@
       const dur = add(drag.original.dur, step);
       drag = { ...drag, note: { ...drag.note, dur: cmp(dur, floor) < 0 ? floor : dur } };
     } else {
-      const end = snapNearest(time, division);
+      const end = snapNearest(time, grid);
       const dur = sub(end, drag.note.start);
       drag = { ...drag, note: { ...drag.note, dur: cmp(dur, minimum) < 0 ? minimum : dur } };
     }
+  }
+
+  /** 가장자리 자동 넘김: 마지막 손 위치와 기다리는 화면 틀 */
+  let edgeEvent: PointerEvent | undefined;
+  let edgeFrame = 0;
+  /** 손이 시간 축 끝 띠에 얼마나 들어갔는지 (−1~1, 0이면 안 넘김) */
+  function edgeFactor(e: PointerEvent): number {
+    const [x, y] = canvasXY(e);
+    const along = orientation === "horizontal" ? x - KEYBOARD : height - KEYBOARD - y;
+    return edgeScroll(along, axes(view).time);
+  }
+  /** 끄는 손이 화면 끝에 닿으면 손을 멈춰 두어도 화면을 계속 넘긴다 (누르기만 한 것은 넘기지 않는다) */
+  function autoScroll(e: PointerEvent) {
+    edgeEvent = e;
+    if (edgeFrame || (drag && !drag.live) || edgeFactor(e) === 0) return;
+    edgeFrame = requestAnimationFrame(edgeStep);
+  }
+  function edgeStep() {
+    edgeFrame = 0;
+    const e = edgeEvent;
+    // 손을 뗐거나 끌기를 그만두었으면 멈춘다
+    if (!e || !(marking || boxing || drag)) return;
+    const f = edgeFactor(e);
+    const next = Math.max(0, start + (f * EDGE_SPEED) / pxPerWhole);
+    if (f === 0 || next === start) return;
+    start = next;
+    // 같은 손 위치라도 화면이 넘어갔으니 끌던 것을 다시 맞춘다
+    followPointer(e);
+    autoScroll(e);
   }
 
   /** 마우스를 음 위에 올리면 옮기기·길이 바꾸기 자리를 커서 모양으로 알려 준다 */
@@ -1349,7 +1411,8 @@
     if (d.mode === "move" && d.group.length > 0) {
       if (cmp(d.original.start, d.note.start) === 0 && d.original.pitch === d.note.pitch) return;
       const changes = new Map<string, Note | null>([d.note, ...d.moved].map((n) => [n.id, n]));
-      onnotes(active.id, replaceNotes(active.notes, changes), "음 옮기기");
+      const loss = placeLoss(active.notes, changes);
+      noteTrim(onnotes(active.id, replaceNotes(active.notes, changes), "음 옮기기"), loss);
       return;
     }
     if (d.mode !== "create") {
@@ -1357,7 +1420,8 @@
       if (cmp(o.start, d.note.start) === 0 && cmp(o.dur, d.note.dur) === 0 && o.pitch === d.note.pitch) return;
     }
     const label = d.mode === "create" ? "음 넣기" : d.mode === "move" ? "음 옮기기" : "음 길이";
-    onnotes(active.id, placeNote(active.notes, d.note), label);
+    const loss = placeLoss(active.notes, new Map([[d.note.id, d.note]]));
+    noteTrim(onnotes(active.id, placeNote(active.notes, d.note), label), loss);
   }
 
   /**
@@ -1385,7 +1449,9 @@
       if (next !== n) changes.set(n.id, next);
     }
     if (changes.size === 0) return true;
-    onnotes(active.id, replaceNotes(active.notes, changes), label);
+    // 정보 칸에서 길이를 늘리는 것처럼 고르지 않은 뒤 음을 먹을 수 있으므로 알린다
+    const loss = placeLoss(active.notes, changes);
+    noteTrim(onnotes(active.id, replaceNotes(active.notes, changes), label), loss);
     const removed = [...changes].filter(([, n]) => n === null).map(([id]) => id);
     if (removed.length > 0) selected = new Set([...selected].filter((id) => !removed.includes(id)));
     return true;
@@ -1411,14 +1477,41 @@
    */
   export function pasteAt(at: Rat | number | undefined, label: string): Rat | undefined {
     const clip = noteClipboard.clip;
-    if (!active || !clip) return undefined;
+    if (!clip) return undefined;
     const from = at === undefined ? clip.origin : typeof at === "number" ? snapNearest(at, 3840) : at;
-    const pasted = pasteClip(clip, from, freshIds("p"));
+    return placeClip(clip, from, "p", label);
+  }
+
+  /** 음 묶음을 고른 트랙의 from에 새 id로 놓고 놓은 음을 고른다. 놓은 끝 위치, 못 놓았으면 undefined */
+  function placeClip(clip: NoteClip, from: Rat, kind: string, label: string): Rat | undefined {
+    if (!active) return undefined;
+    const pasted = pasteClip(clip, from, freshIds(kind));
+    const changes = new Map(pasted.map((n) => [n.id, n]));
+    const loss = placeLoss(active.notes, changes);
     // 거절되면(잠근 트랙 등) 곡이 그대로이므로 고른 음도 그대로 둔다
-    if (onnotes(active.id, replaceNotes(active.notes, new Map(pasted.map((n) => [n.id, n]))), label) === false) return undefined;
+    if (onnotes(active.id, replaceNotes(active.notes, changes), label) === false) return undefined;
+    noteTrim(true, loss);
     selected = new Set(pasted.map((n) => n.id));
     reveal(toFloat(from));
     return add(from, clip.length);
+  }
+
+  /**
+   * 고른 음을 바로 뒤(고른 음의 첫 시작부터 마지막 끝까지 길이만큼 뒤)에 한 벌 더 놓고 새로 놓은 음을 고른다.
+   * 한 번 더 누르면 그 뒤에 또 이어 놓인다. 앱 클립보드는 건드리지 않는다. 고른 음이 없으면 false
+   */
+  export function duplicateSelection(label: string): boolean {
+    const clip = clipNotes(selectedNotes);
+    if (!clip) return false;
+    placeClip(clip, add(clip.origin, clip.length), "d", label);
+    return true;
+  }
+
+  /** 고른 트랙에서 at 앞(시작이 at보다 앞) 또는 뒤(시작이 at이거나 그 뒤)의 음을 모두 고른다. 고를 음이 없어도 고르기는 바꾼다 */
+  export function selectBeside(at: Rat, side: "before" | "after"): boolean {
+    if (!active) return false;
+    selected = new Set(notesBeside(active.notes, at, side));
+    return true;
   }
 
   /** 고른 트랙의 음을 모두 고른다 */
@@ -1525,6 +1618,11 @@
   }
 
   function onkeydown(e: KeyboardEvent) {
+    // 끄는 중의 Alt(격자 끄기)는 브라우저 메뉴 줄로 넘기지 않는다
+    if (e.key === "Alt" && drag) {
+      e.preventDefault();
+      return;
+    }
     // 재는 중에는 화살표로 음을 옮기지 않는다 (Esc는 앱이 받아 재기를 그만둔다)
     if (speedStep !== 0) return;
     if (!active || activeLocked || selectedNotes.length === 0 || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
@@ -1540,19 +1638,28 @@
     else if (e.key === along.back && notes.every((n) => cmp(n.start, step) >= 0)) shift = (n) => ({ ...n, start: sub(n.start, step) });
     if (!shift) return;
     e.preventDefault();
-    onnotes(active.id, replaceNotes(active.notes, new Map(notes.map((n) => [n.id, shift(n)]))), "음 옮기기");
+    const changes = new Map(notes.map((n) => [n.id, shift(n)]));
+    const loss = placeLoss(active.notes, changes);
+    noteTrim(onnotes(active.id, replaceNotes(active.notes, changes), "음 옮기기"), loss);
   }
 
-  /** 확대·축소. time = 가로(시간) 폭, pitch = 건반 한 칸 높이. factor > 1이면 확대 */
-  export function zoom(axis: "time" | "pitch", factor: number) {
-    if (axis === "time") pxPerWhole = Math.min(2000, Math.max(20, pxPerWhole * factor));
-    else {
-      // 가운데 음이 그대로 보이게 칸 높이를 바꾼다
-      const [low, high] = visiblePitch(view);
-      const center = (low + high) / 2;
-      pxPerKey = Math.min(40, Math.max(4, Math.round(pxPerKey * factor)));
-      const span = visiblePitch(view)[1] - visiblePitch(view)[0];
-      edgePitch = Math.round(orientation === "horizontal" ? Math.min(127, center + span / 2) : Math.max(0, center - span / 2));
+  /**
+   * 확대·축소. time = 가로(시간) 폭, pitch = 건반 한 칸 높이. factor > 1이면 확대.
+   * at = 기준점(캔버스 좌표, 휠은 마우스 자리). 없으면 시간 축은 보이는 재생선·커서, 음 축은 가운데가 기준이다
+   */
+  export function zoom(axis: "time" | "pitch", factor: number, at?: readonly [number, number]) {
+    const horizontal = orientation === "horizontal";
+    if (axis === "time") {
+      // 건반 띠 위처럼 곡 위치가 없는 자리면 단추와 같은 기준을 쓴다
+      const anchor = (at && fromScreen(view, at[0], at[1]).time) ?? zoomAnchor(visibleTime(view), head, cursor);
+      const next = zoomTimeAt(start, pxPerWhole, factor, anchor);
+      start = next.start;
+      pxPerWhole = next.pxPerWhole;
+    } else {
+      const along = at ? (horizontal ? at[1] : at[0]) : axes(view).pitch / 2;
+      const next = zoomKeysAt(orientation, edgePitch, pxPerKey, factor, along);
+      edgePitch = next.edgePitch;
+      pxPerKey = next.pxPerKey;
     }
   }
 
@@ -1562,12 +1669,12 @@
     if (notes.length === 0) return;
     const end = Math.max(...notes.map((n) => toFloat(n.start) + toFloat(n.dur)));
     const timeAxis = orientation === "horizontal" ? width - KEYBOARD : height - KEYBOARD;
-    pxPerWhole = Math.min(2000, Math.max(5, (timeAxis - 20) / Math.max(end, 0.25)));
+    pxPerWhole = clampTimeZoom((timeAxis - 20) / Math.max(end, 0.25));
     start = 0;
     const low = Math.min(...notes.map((n) => n.pitch)) - 2;
     const high = Math.max(...notes.map((n) => n.pitch)) + 2;
     const pitchAxis = orientation === "horizontal" ? axes(view).pitch - 28 : axes(view).pitch;
-    pxPerKey = Math.min(40, Math.max(3, Math.floor(pitchAxis / (high - low + 1))));
+    pxPerKey = clampKeyZoom(Math.floor(pitchAxis / (high - low + 1)));
     edgePitch = orientation === "horizontal" ? Math.min(127, high) : Math.max(0, low);
   }
 
@@ -1617,12 +1724,13 @@
       return;
     }
     if ((e.ctrlKey || e.metaKey) && e.shiftKey) {
-      // Ctrl+Shift+휠: 건반 높이(음 축) 확대·축소
-      zoom("pitch", e.deltaY > 0 ? 0.85 : 1.18);
+      // Ctrl+Shift+휠: 건반 높이(음 축) 확대·축소. 마우스 아래 음이 그 자리에 머문다
+      zoom("pitch", e.deltaY > 0 ? 0.85 : 1.18, canvasXY(e));
       return;
     }
     if (e.ctrlKey || e.metaKey) {
-      zoom("time", e.deltaY > 0 ? 0.85 : 1.18);
+      // Ctrl+휠: 시간 축 확대·축소. 마우스 아래 곡 위치가 그 자리에 머문다
+      zoom("time", e.deltaY > 0 ? 0.85 : 1.18, canvasXY(e));
       return;
     }
     if (e.shiftKey) {
@@ -1653,8 +1761,10 @@
       onended={() => (videoPlay = false)}
     ></video>
   {/if}
+  <!-- data-testid: 화면 연기 시험(e2e)이 롤을 찾는 이름 -->
   <canvas
     bind:this={canvas}
+    data-testid="piano-roll"
     style:width="{width}px"
     style:height="{height}px"
     {onpointerdown}
@@ -1673,6 +1783,9 @@
       waveDrag = undefined;
       erasing = false;
       drag = undefined;
+      // 긋던 반복 구간·상자도 버린다 (남아 있으면 가장자리 자동 넘김이 손을 뗀 뒤에도 화면을 계속 넘긴다)
+      marking = undefined;
+      boxing = undefined;
       onKeys = false;
       preview(undefined);
     }}

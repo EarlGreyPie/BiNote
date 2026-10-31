@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { add, assignTab, clipLayers, cmp, gridLines, harmonicLabel, isGhost, mul, pasteClip, rat, splitNote, sub, toFloat, type LengthLimit, type Note, type Rat, type Song, type TabPosition, type TabTuning } from "@mmlce/core";
+  import { add, assignTab, clipLayers, cmp, gridLines, harmonicLabel, isGhost, mul, pasteClip, rat, splitNote, sub, toFloat, type LengthLimit, type Note, type NoteClip, type Rat, type Song, type TabPosition, type TabTuning } from "@mmlce/core";
   import { t } from "./i18n.svelte";
   import { Pinch, pinchRatio } from "./pinch";
   import { typeFretDigit, type DigitNote, pinShownStrings, placeTabNote, removeTabNote, setTabNoteLength, shownStrings, tieTabNote, type TabEdit } from "./tabInput";
@@ -751,7 +751,23 @@
     const clip = noteClipboard.clip;
     if (!clip || !player || tracks.length === 0) return undefined;
     ensureCursorVisible();
-    const from = cursor?.at ?? clip.origin;
+    return placeClip(clip, cursor?.at ?? clip.origin, label);
+  }
+
+  /**
+   * 고른 음을 트랙 나눔 그대로 바로 뒤(고른 음의 첫 시작부터 마지막 끝까지 길이만큼 뒤)에 한 벌 더 놓는다.
+   * 붙여넣기와 같이 놓은 음을 고르고 커서를 놓은 끝으로 옮긴다. 앱 클립보드는 건드리지 않는다. 고른 음이 없으면 false
+   */
+  export function duplicateSelection(label: string): boolean {
+    const clip = clipLayers(tracks.map((t) => t.notes.filter((n) => selected.has(n.id))));
+    if (!clip || !player) return false;
+    placeClip(clip, add(clip.origin, clip.length), label);
+    return true;
+  }
+
+  /** 음 묶음을 from에 놓는다 (붙여넣기·복제). 놓은 끝 위치, 못 놓았으면 undefined */
+  function placeClip(clip: NoteClip, from: Rat, label: string): Rat | undefined {
+    if (!player) return undefined;
     const stamp = `${player}.tp${Date.now().toString(36)}${(pasteCount++).toString(36)}`;
     let k = 0;
     const newId = () => `${stamp}.${k++}`;

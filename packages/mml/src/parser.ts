@@ -33,7 +33,8 @@ export interface ParseOptions {
 
 /** 원문에 쓴 숫자 값. 검사기가 프로필 범위와 비교한다 (파서는 범위를 모른다) */
 export interface WrittenValue {
-  readonly kind: "tempo" | "length" | "dots" | "volume";
+  /** octave는 o 명령에 쓴 숫자만 (<·>로 옮긴 옥타브는 음 높이로 검사한다) */
+  readonly kind: "tempo" | "length" | "dots" | "volume" | "octave";
   readonly value: number;
   readonly span: readonly [number, number];
 }
@@ -211,7 +212,10 @@ export function parseMml(text: string, options: ParseOptions = {}): ParseResult 
           i++;
           const num = readInt();
           if (num === undefined) diag("error", "o-number", from, i);
-          else octave = num;
+          else {
+            octave = num;
+            written("octave", num, from, i);
+          }
           continue;
         }
         case "<":

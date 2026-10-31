@@ -1,7 +1,6 @@
-import { add, cmp, eq, type GameProfile, type Note, type Rat, type Song } from "@mmlce/core";
+import { add, cmp, eq, type GameProfile, type Note, type Song } from "@mmlce/core";
 import { distributeChords } from "./distribute.js";
-import { compactResult } from "./edit.js";
-import { trackEnd } from "./score-end.js";
+import { settleDistributed } from "./edit.js";
 import { splitSong, type SplitResult } from "./split.js";
 
 /**
@@ -30,8 +29,9 @@ export function fewerBooks(song: Song, profile: GameProfile, books: number, lock
     const limit = Math.floor(profile.charLimitPerScore * target * share);
     const spread = distributeChords(song, profile, { limit, ...(locked ? { locked } : {}) });
     if (spread.moved === 0) continue;
-    // 글자 수 줄이기가 곡을 그대로 두면(kept) 옮긴 곡은 원문이 지워져 끝 길이를 잃으므로 이 옮기기는 버린다
-    const compacted = compactResult(spread.song, profile, locked, endsOf(song));
+    // 글자 수 줄이기가 곡을 그대로 두면(kept) 옮긴 곡은 원문이 지워져 끝 길이를 잃으므로 이 옮기기는 버린다.
+    // 게임 소리가 달라져도 버린다 (적용하는 distributeSong과 같은 확인)
+    const compacted = settleDistributed(song, spread.song, profile, locked);
     if (compacted.kept) continue;
     const next = compacted.song;
     const parts = splitSong(next, profile).parts.length;
@@ -88,12 +88,11 @@ export function planBooks(song: Song, profile: GameProfile, options: PlanOptions
   const locked = options.locked;
   const room = spread ? roomFor(song, locked) : undefined;
   const distribute = (channel?: number) => distributeChords(song, profile, { ...(channel === undefined ? {} : { limit: channel }), ...(locked ? { locked } : {}) });
-  // 음을 옮긴 트랙은 원문이 지워지므로, 옮기기 전 트랙 길이(원문 끝 쉼표 포함)를 지킬 길이로 넘긴다 (화음 분산 명령과 같게)
-  const ends = endsOf(song);
-  // 글자 수 줄이기가 곡을 그대로 두면(kept) undefined: 옮긴 곡은 원문이 지워져 끝 길이를 잃으므로 그 옮기기는 버린다
+  // 음을 옮긴 곡을 글자 수 줄이기로 다시 쓰고 게임 소리를 확인한다 (화음 분산 명령과 같게, settleDistributed).
+  // 그대로 두면(kept) undefined: 옮긴 곡은 원문이 지워져 끝 길이를 잃거나 소리가 달라지므로 그 옮기기는 버린다
   const compact = {
     apply: (moved: Song): Song | undefined => {
-      const r = compactResult(moved, profile, locked, ends);
+      const r = settleDistributed(song, moved, profile, locked);
       return r.kept ? undefined : r.song;
     },
   };
@@ -184,9 +183,4 @@ function chains(notes: readonly Note[]): number {
     if (!(prev && prev.tie === "next" && eq(add(prev.start, prev.dur), n.start))) count++;
   });
   return count;
-}
-
-/** 음을 옮기기 전 트랙 길이 (원문 끝 쉼표 포함). 옮긴 뒤 다시 쓴 글이 이 길이를 지키게 compactResult에 넘긴다 */
-function endsOf(song: Song): ReadonlyMap<string, Rat> {
-  return new Map(song.tracks.map((t) => [t.id, trackEnd(t)]));
 }

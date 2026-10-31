@@ -119,6 +119,12 @@ describe("게임 제약", () => {
     expect(run(after, ["a", "b"]).skipped.bend).toBe(1);
   });
 
+  it("높이 차 한도는 프로필(tieBendLimit)에서 읽는다", () => {
+    // 모바일(24반음)에서는 만드는 10반음 미끄러짐도 한도를 4로 줄인 프로필에서는 건너뛴다
+    expect(run(pair(60, 70), ["a", "b"], { path: "direct" }).skipped.bend).toBe(0);
+    expect(run(pair(60, 70), ["a", "b"], { path: "direct" }, { ...MOBILE_PROFILE, tieBendLimit: 4 }).skipped.bend).toBe(1);
+  });
+
   it("샘플 끝에 닿는 사슬을 센다", () => {
     const tiny = { ...MOBILE_PROFILE, sampleSeconds: { "folk-guitar": [{ from: 0, seconds: 0.3 }] } };
     expect(run(pair(60, 62), ["a", "b"], {}, tiny).sampleCut).toBe(1);

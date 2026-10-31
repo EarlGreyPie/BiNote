@@ -16,9 +16,16 @@
     onbreaktimbre?: () => void;
     /** 접힘 검토 창 열기 */
     onfoldreview?: () => void;
+    /** 연주 누락음 고치기 창 열기 (실험실) */
+    onfastrun?: () => void;
   }
 
-  let { song, diagnostics, ongo, onbreaktimbre, onfoldreview }: Props = $props();
+  let { song, diagnostics, ongo, onbreaktimbre, onfoldreview, onfastrun }: Props = $props();
+
+  /** 한 트랙이 아니라 악보(연주자)의 여러 트랙에 걸친 진단: 악보 이름으로 묶어 보인다 (짚는 음은 가장 이른 착지 음) */
+  const scoreWide = (d: SongDiagnostic) => d.code === "fast-run-drop";
+  /** 실측 전 기준으로 내는 진단 (실측 전 표시를 단다) */
+  const pendingHelp = (code: string) => (code === "fast-run-drop" ? t("ui.fastRunPendingHelp") : undefined);
   const timbreCount = $derived(diagnostics.filter((d) => d.code === "tie-across-boundary").length);
 
   function noteOf(d: SongDiagnostic): { track: Track; note: Note } | undefined {
@@ -28,6 +35,7 @@
   }
 
   function whereOf(d: SongDiagnostic): string {
+    if (scoreWide(d) && d.playerId) return song.players.find((p) => p.id === d.playerId)?.name ?? "";
     if (d.trackId) return song.tracks.find((tr) => tr.id === d.trackId)?.name ?? "";
     if (d.playerId) return song.players.find((p) => p.id === d.playerId)?.name ?? "";
     return "";
@@ -37,7 +45,7 @@
     const out = new Map<string, { key: string; level: string; code: string; where: string; text: string; items: { d: SongDiagnostic; label: string }[] }>();
     for (const d of diagnostics) {
       const text = diag(d);
-      const key = `${d.level}|${d.trackId ?? d.playerId ?? ""}|${text}`;
+      const key = `${d.level}|${(scoreWide(d) ? d.playerId : undefined) ?? d.trackId ?? d.playerId ?? ""}|${text}`;
       let g = out.get(key);
       if (!g) out.set(key, (g = { key, level: d.level, code: d.code, where: whereOf(d), text, items: [] }));
       const hit = noteOf(d);
@@ -65,7 +73,9 @@
     <ul class="notices">
       {#each groups as g (g.key)}
         <li class={g.level}>
-          <span class="muted">{g.where}</span> {g.text}
+          <span class="muted">{g.where}</span>
+          {#if pendingHelp(g.code)}<span class="pending" title={pendingHelp(g.code)}>{t("ui.pendingTag")}</span>{/if}
+          {g.text}
           {#if g.items.length > 1}<span class="muted">×{g.items.length}</span>{/if}
           {#each expanded.has(g.key) ? g.items : g.items.slice(0, SHOWN) as item, k (k)}
             {#if item.label}<button class="small place" title={t("ui.checkGo")} onclick={() => go(item.d)}>{item.label}</button>{/if}
@@ -75,6 +85,9 @@
           {/if}
           {#if g.code === "pitch-fold" && onfoldreview}
             <button class="small" title={t("ui.foldReviewHelp")} onclick={onfoldreview}>{t("ui.foldReview")}…</button>
+          {/if}
+          {#if g.code === "fast-run-drop" && onfastrun}
+            <button class="small" title={t("ui.labNoteDropHelp")} onclick={onfastrun}>{t("ui.fastRunFix")}…</button>
           {/if}
           {#if g.code === "tie-across-boundary" && onbreaktimbre}
             <button class="small" title={t("ui.breakTimbreTiesHelp")} onclick={onbreaktimbre}>{t("ui.breakTimbreTiesAll", { n: timbreCount })}</button>

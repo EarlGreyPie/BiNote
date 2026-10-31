@@ -1,8 +1,8 @@
 import { add, cmp, mul, rat, sub, ZERO, type Rat } from "./rat.js";
 import type { Note, Song } from "./model.js";
-import { foldPitch, soundingRangeOf, TIE_BEND_LIMIT, type GameProfile } from "./profile.js";
+import { foldPitch, soundingRangeOf, type GameProfile } from "./profile.js";
 import { shortestLength } from "./note-length.js";
-import { replaceNotes } from "./note-edit.js";
+import { isCleanTrack, replaceNotes, trackIndex, type TrackIndex } from "./note-edit.js";
 
 /**
  * 꾸밈음: 고른 음(본음) 앞에 짧은 음을 몇 개 붙인다. MML에는 길이 없는 꾸밈음이 없으므로 어느 한쪽 길이를 실제로 깎는다.
@@ -90,7 +90,7 @@ function targetsOf(song: Song, picked: readonly Note[]): Target[] {
       if (!was || n.pitch > was.note.pitch) groups.set(key, { trackId: tr.id, note: n });
     }
   }
-  const sortedOf = new Map(song.tracks.map((t) => [t.id, [...t.notes].sort((a, b) => cmp(a.start, b.start))] as const));
+  const indexOf = new Map(song.tracks.map((t) => [t.id, trackIndex(t.notes)] as const));
   return [...groups.values()]
     .sort((a, b) => cmp(a.note.start, b.note.start))
     .map((g) => {
@@ -98,51 +98,50 @@ function targetsOf(song: Song, picked: readonly Note[]): Target[] {
       const voices = song.tracks
         .filter((t) => t.id !== g.trackId && t.playerId === playerId)
         .flatMap((t) => {
-          const sorted = sortedOf.get(t.id)!;
-          return sorted.filter((n) => cmp(n.start, g.note.start) === 0 && !isHeld(sorted, n)).map((n) => ({ trackId: t.id, id: n.id }));
+          const index = indexOf.get(t.id)!;
+          return index.startingAt(g.note.start).filter((n) => !index.isHeld(n)).map((n) => ({ trackId: t.id, id: n.id }));
         });
       return { trackId: g.trackId, id: g.note.id, voices };
     });
 }
 
-/** 시작 순으로 놓은 트랙 음에서 n 바로 앞 음 (n보다 먼저 시작하는 마지막 음) */
-function before(sorted: readonly Note[], n: Note): Note | undefined {
-  let prev: Note | undefined;
-  for (const x of sorted) {
-    if (x.id === n.id || cmp(x.start, n.start) >= 0) break;
-    prev = x;
-  }
-  return prev;
-}
-
-/** 바로 앞 음이 &로 이어 주는 음인지 (새로 치지 않는 음) */
-function isHeld(sorted: readonly Note[], n: Note): boolean {
-  const prev = before(sorted, n);
-  return !!prev && prev.tie === "next" && cmp(end(prev), n.start) === 0;
+/**
+ * 지금 곡(tracks)의 트랙 색인을 트랙 음 배열마다 한 번만 만든다. 트랙이 바뀌면(새 배열) 새로 만든다.
+ * 최대 개수를 잴 때는 본음마다 개수를 바꿔 가며 여러 번 자리를 보므로, 그때마다 트랙을 다시 정렬하지 않게
+ */
+function indexer(tracks: ReadonlyMap<string, readonly Note[]>): (trackId: string) => TrackIndex {
+  const made = new WeakMap<readonly Note[], TrackIndex>();
+  const none: readonly Note[] = [];
+  return (trackId) => {
+    const notes = tracks.get(trackId) ?? none;
+    let index = made.get(notes);
+    if (!index) made.set(notes, (index = trackIndex(notes)));
+    return index;
+  };
 }
 
 type Fit = { ok: true } | { ok: false; why: keyof GraceSkipped };
 
 /** 지금 곡(tracks)에서 본음 하나에 길이 total(= 개수 × 길이)의 꾸밈음 자리가 나는지. 바꿀 음을 함께 돌려준다 */
 function room(
-  tracks: ReadonlyMap<string, readonly Note[]>,
+  indexOf: (trackId: string) => TrackIndex,
   target: Target,
   total: Rat,
   options: Pick<GraceOptions, "timing" | "canWrite" | "locked">,
   shortest: Rat,
 ): Fit & { edits?: { trackId: string; note: Note }[]; main?: Note } {
-  const own = [...(tracks.get(target.trackId) ?? [])].sort((a, b) => cmp(a.start, b.start));
-  const main = own.find((n) => n.id === target.id);
+  const own = indexOf(target.trackId);
+  const main = own.sorted[own.indexOf(target.id)];
   if (!main) return { ok: false, why: "short" };
   if (options.locked?.has(target.trackId)) return { ok: false, why: "locked" };
-  if (isHeld(own, main)) return { ok: false, why: "tied" };
+  if (own.isHeld(main)) return { ok: false, why: "tied" };
   /** 길이가 최단 이상이고 정확히 써지는지 */
   const keep = (dur: Rat): Fit => (cmp(dur, shortest) < 0 ? { ok: false, why: "short" } : options.canWrite(dur) ? { ok: true } : { ok: false, why: "unwritable" });
   if (options.timing === "on") {
     // 본음과 편집 전에 정한 화음 음이 함께 늦게 시작한다 (지금 곡에서 그 음을 id로 찾는다. 이미 옮겨졌으면 자리가 달라 건너뜀)
     const voices: { trackId: string; note: Note }[] = [{ trackId: target.trackId, note: main }];
     for (const v of target.voices) {
-      const note = tracks.get(v.trackId)?.find((n) => n.id === v.id);
+      const note = indexOf(v.trackId).get(v.id);
       if (note && cmp(note.start, main.start) === 0) voices.push({ trackId: v.trackId, note });
     }
     for (const v of voices) {
@@ -151,8 +150,7 @@ function room(
       if (!fit.ok) return fit;
       // 화음 음 앞 쉼표는 늦춘 만큼 길어진다 (본음 앞은 꾸밈음이 채운다). 길어진 쉼표도 정확히 써져야 한다
       if (v.note.id === main.id) continue;
-      const sorted = [...(tracks.get(v.trackId) ?? [])].sort((a, b) => cmp(a.start, b.start));
-      const prev = before(sorted, v.note);
+      const prev = indexOf(v.trackId).before(v.note);
       const gap = sub(add(v.note.start, total), prev ? end(prev) : ZERO);
       if (!options.canWrite(gap)) return { ok: false, why: "unwritable" };
     }
@@ -166,11 +164,11 @@ function room(
 
 /**
  * 박 앞 자리: 음 main 바로 앞 [main 시작 − total, main 시작)을 비운다 (꾸밈음·슬라이드가 함께 쓴다). 그 자리의 앞 음은 꼬리를 깎고,
- * 쉼표는 줄어든다. 깎고 남는 앞 음은 최단 길이 이상이고, 남는 앞 음·쉼표는 정확히 써져야 한다. own은 시작 순으로 놓은 트랙 음.
- * prev는 꼬리를 깎은 앞 음 (쉼표에서 가져오면 없음)
+ * 쉼표는 줄어든다. 깎고 남는 앞 음은 최단 길이 이상이고, 남는 앞 음·쉼표는 정확히 써져야 한다. own은 시작 순으로 놓은 트랙 음
+ * (또는 그 색인). prev는 꼬리를 깎은 앞 음 (쉼표에서 가져오면 없음)
  */
 export function roomBefore(
-  own: readonly Note[],
+  own: readonly Note[] | TrackIndex,
   main: Note,
   total: Rat,
   canWrite: (dur: Rat) => boolean,
@@ -178,7 +176,7 @@ export function roomBefore(
 ): { ok: true; prev?: Note } | { ok: false; why: "short" | "unwritable" } {
   const from = sub(main.start, total);
   if (cmp(from, ZERO) < 0) return { ok: false, why: "short" };
-  const prev = before(own, main);
+  const prev = ("isHeld" in own ? own : trackIndex(own)).before(main);
   if (!prev || cmp(end(prev), from) <= 0) {
     // 앞이 쉼표: 남는 쉼표도 정확히 써져야 한다 (0이면 쉼표가 없어진다)
     const gap = sub(from, prev ? end(prev) : ZERO);
@@ -198,10 +196,10 @@ export function roomBefore(
  * 본음 하나에 붙일 수 있는 최대 개수 (자리 판정만. 높이·& 높이 차는 보지 않는다). 남는 길이가 써지지 않는 개수는 건너뛴다.
  * 새로 치지 않는 음이나 잠근 트랙이 낀 본음은 어차피 건너뛰므로 undefined (최대 개수를 정하지 않는다)
  */
-function maxFor(tracks: ReadonlyMap<string, readonly Note[]>, target: Target, length: Rat, options: Pick<GraceOptions, "timing" | "canWrite" | "locked">, shortest: Rat): number | undefined {
+function maxFor(indexOf: (trackId: string) => TrackIndex, target: Target, length: Rat, options: Pick<GraceOptions, "timing" | "canWrite" | "locked">, shortest: Rat): number | undefined {
   let best = 0;
   for (let k = 1; k <= GRACE_MAX; k++) {
-    const r = room(tracks, target, mul(length, rat(k)), options, shortest);
+    const r = room(indexOf, target, mul(length, rat(k)), options, shortest);
     if (r.ok) best = k;
     else if (r.why === "tied" || r.why === "locked") return undefined;
     else if (r.why === "short") break;
@@ -212,9 +210,9 @@ function maxFor(tracks: ReadonlyMap<string, readonly Note[]>, target: Target, le
 /** 고른 음 모두에 붙일 수 있는 최대 개수 (본음마다 잰 값 중 가장 작은 것). 잴 본음이 없으면 undefined */
 export function graceMax(song: Song, picked: readonly Note[], options: Pick<GraceOptions, "length" | "timing" | "canWrite" | "locked">, profile: GameProfile): number | undefined {
   const shortest = shortestLength(profile.length);
-  const tracks = new Map<string, readonly Note[]>(song.tracks.map((t) => [t.id, t.notes]));
+  const indexOf = indexer(new Map<string, readonly Note[]>(song.tracks.map((t) => [t.id, t.notes])));
   const each = targetsOf(song, picked)
-    .map((tg) => maxFor(tracks, tg, options.length, options, shortest))
+    .map((tg) => maxFor(indexOf, tg, options.length, options, shortest))
     .filter((m): m is number => m !== undefined);
   return each.length === 0 ? undefined : Math.min(...each);
 }
@@ -235,8 +233,16 @@ export function planGrace(song: Song, picked: readonly Note[], options: GraceOpt
   const touched = new Set<string>();
   const ids: string[] = [];
   let made = 0;
+  const indexOf = indexer(tracks);
+  // 깔끔한 트랙(음이 겹치지 않음)에서는 앞 본음을 고친 것이 뒤 본음의 자리 판정을 바꾸지 않는다 (고치는 곳이 그 본음과
+  // 바로 앞 음·같은 때 화음 음뿐이다). 그래서 트랙마다 첫 바꿈만 바로 넣고 나머지는 모아 replaceNotes를 한 번 더 부른다
+  // (본음마다 트랙 전체를 다시 정리하면 음 수의 제곱으로 느려진다). 첫 바꿈을 따로 넣는 까닭: 그때 뒤가 떨어진 &가 모두
+  // 풀리므로, 뒤에 넣는 꾸밈음이 그 & 바로 뒤에 붙어도 이어지지 않는다 (하나씩 넣던 때와 같게).
+  // 겹친 음이 있는 트랙이 있으면 예전처럼 본음마다 고친 곡에서 다시 본다
+  const batch = song.tracks.every((t) => isCleanTrack(t.notes));
+  const pending = new Map<string, Map<string, Note>>();
   for (const tg of targets) {
-    const fit = room(tracks, tg, total, options, shortest);
+    const fit = room(indexOf, tg, total, options, shortest);
     if (!fit.ok) {
       skipped[fit.why]++;
       continue;
@@ -247,15 +253,15 @@ export function planGrace(song: Song, picked: readonly Note[], options: GraceOpt
       skipped.range++;
       continue;
     }
-    const own = [...(tracks.get(tg.trackId) ?? [])].sort((a, b) => cmp(a.start, b.start));
+    const own = indexOf(tg.trackId).sorted;
     if (options.tie) {
       // & 사슬: 첫 꾸밈음부터 본음과 본음에 이어진 음까지. 재생처럼 접은 높이로 첫 음과의 차를 잰다
       const range = soundingRangeOf(profile, options.instrumentOf?.(tg.trackId));
       const chain: number[] = [...pitches, main.pitch];
-      let at = own.findIndex((n) => n.id === main.id);
+      let at = indexOf(tg.trackId).indexOf(main.id);
       while (own[at]?.tie === "next" && own[at + 1] && cmp(end(own[at]!), own[at + 1]!.start) === 0) chain.push(own[++at]!.pitch);
       const head = foldPitch(pitches[0]!, range);
-      if (chain.some((p) => Math.abs(foldPitch(p, range) - head) > TIE_BEND_LIMIT)) {
+      if (chain.some((p) => Math.abs(foldPitch(p, range) - head) > profile.tieBendLimit)) {
         skipped.bend++;
         continue;
       }
@@ -280,12 +286,17 @@ export function planGrace(song: Song, picked: readonly Note[], options: GraceOpt
     for (const e of fit.edits ?? []) put(e.trackId, e.note);
     for (const g of graces) put(tg.trackId, g);
     for (const [trackId, changes] of byTrack) {
-      tracks.set(trackId, replaceNotes(tracks.get(trackId) ?? [], changes, new Set(changes.keys())));
+      if (batch && touched.has(trackId)) {
+        const later = pending.get(trackId) ?? new Map<string, Note>();
+        for (const [id, n] of changes) later.set(id, n);
+        pending.set(trackId, later);
+      } else tracks.set(trackId, replaceNotes(tracks.get(trackId) ?? [], changes, new Set(changes.keys())));
       touched.add(trackId);
     }
     ids.push(...graces.map((g) => g.id), main.id, ...(fit.edits ?? []).filter((e) => e.note.id !== main.id && options.timing === "on").map((e) => e.note.id));
     made++;
   }
+  for (const [trackId, changes] of pending) tracks.set(trackId, replaceNotes(tracks.get(trackId) ?? [], changes, new Set(changes.keys())));
   const changes = song.tracks.filter((t) => touched.has(t.id)).map((t) => ({ trackId: t.id, notes: tracks.get(t.id)! }));
   return { changes, made, ids, skipped, max, tooMany: false };
 }

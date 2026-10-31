@@ -1,3 +1,4 @@
+import type { Extras } from "@mmlce/core";
 import {
   decodeText,
   looksLikeMmlAt,
@@ -12,8 +13,8 @@ import {
 } from "@mmlce/fileio";
 import { t } from "./i18n.svelte";
 
-/** 프로젝트 파일이면 편집 화면 상태도 함께 */
-export type OpenResult = ReadResult & { readonly editor?: ProjectEditor };
+/** 프로젝트 파일이면 편집 화면 상태와 모르는 맨 위 필드도 함께 */
+export type OpenResult = ReadResult & { readonly editor?: ProjectEditor; readonly extras?: Extras };
 
 /**
  * 확장자로 형식을 고른다. 프로젝트 확장자(PROJECT_EXTENSIONS)는 MMLCE 프로젝트, .mmi는 마비꼬, 게임 MML@ 글이면 그것으로,

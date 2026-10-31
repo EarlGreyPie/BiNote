@@ -147,6 +147,76 @@ describe("quantize", () => {
     expect(m.tripletBeats).toBe(1);
     expect(m.notes.map((n) => key(n.start))).toEqual(["0/1", "1/24", "1/16", "1/12", "1/8", "1/6", "3/16", "5/24"]);
   });
+
+  it("박을 넘는 4분 셋잇단은 시작이 하나뿐인 박도 셋잇단으로 맞춰 조각나지 않는다", () => {
+    // 4분 셋잇단 6음 + 다음 박 (320tick 간격). 예전에는 1/3이 있는 박을 정규로 맞춰 11/32+5/32 같은 조각이 되었다
+    const notes = [0, 320, 640, 960, 1280, 1600, 1920].map((t) => raw(t, 320));
+    for (const grid of ["auto", 16, 32] as const) {
+      const q = quantize([{ id: "a", notes }], tempo, { grid });
+      expect(q.notes.map((n) => key(n.start))).toEqual(["0/1", "1/6", "1/3", "1/2", "2/3", "5/6", "1/1"]);
+      expect(q.notes.slice(0, 6).map((n) => key(n.dur))).toEqual(Array(6).fill("1/6"));
+    }
+    // 흔들려 친 4분 셋잇단과 8분음표가 섞여도 셋잇단 자리를 지킨다
+    const jitter = [6, -8, 10, -4, 8, -10, 4];
+    const bar = [0, 240, 480, 720, 960, 1280, 1600];
+    const mixed = [0, 1, 2].flatMap((b) => bar.map((t, i) => raw(Math.max(0, b * 1920 + t + jitter[(i + b) % 7]!), 200)));
+    const q = quantize([{ id: "a", notes: mixed }], tempo);
+    const want = [0, 1, 2].flatMap((b) => bar.map((t) => key(rat(b * 1920 + t, 1920))));
+    expect(q.notes.map((n) => key(n.start))).toEqual(want);
+  });
+
+  it("4분 셋잇단 곡을 자동 격자로 맞춰도 다른 파트의 4분음표 끝이 1/6로 밀리지 않는다", () => {
+    // 4분 격자의 셋잇단 칸(1/6)에는 1/4 자리가 없다. 그래서 4분 격자를 고르면 셋잇단 박에서 조금 일찍 끊은 4분음표가 1/6로 줄었다
+    const melody = [0, 320, 640, 960, 1280, 1600, 1920, 2400, 2880, 3360].map((t) => raw(t, t < 1920 ? 320 : 480, 72));
+    const chords = [0, 960, 1920, 2880].map((t) => raw(t, 440, 48));
+    const q = quantize([{ id: "m", notes: melody }, { id: "a", notes: chords }], tempo);
+    expect(q.grid).toBe(8);
+    expect(q.notes.filter((n) => n.part === "m").slice(0, 6).map((n) => key(n.start))).toEqual(["0/1", "1/6", "1/3", "1/2", "2/3", "5/6"]);
+    expect(q.notes.filter((n) => n.part === "a").map((n) => key(n.dur))).toEqual(Array(4).fill("1/4"));
+    // 셋잇단 박이 없는 4분음표 곡은 그대로 4분 격자를 고른다
+    expect(quantize([{ id: "a", notes: chords }], tempo).grid).toBe(4);
+  });
+
+  it("2분 셋잇단도 셋잇단으로 맞춘다", () => {
+    const notes = [0, 640, 1280, 1920].map((t) => raw(t, 640));
+    const q = quantize([{ id: "a", notes }], tempo, { grid: 16 });
+    expect(q.notes.map((n) => key(n.start))).toEqual(["0/1", "1/3", "2/3", "1/1"]);
+    expect(q.notes.slice(0, 3).map((n) => key(n.dur))).toEqual(Array(3).fill("1/3"));
+  });
+
+  it("4분 5잇단은 1/20 칸으로 맞추고, 같은 곡의 16분음표 박은 그대로 둔다", () => {
+    // 5잇단 5음(96tick 간격) + 16분 4음. 예전에는 32분 격자로 1/32·1/16 조각이 되었다
+    const notes = [0, 96, 192, 288, 384, 480, 600, 720, 840].map((t) => raw(t, 96));
+    const q = quantize([{ id: "a", notes }], tempo);
+    expect(q.grid).toBe(16);
+    expect(q.quintupletBeats).toBe(1);
+    expect(q.notes.map((n) => key(n.start))).toEqual(["0/1", "1/20", "1/10", "3/20", "1/5", "1/4", "5/16", "3/8", "7/16"]);
+    expect(q.notes.slice(0, 5).map((n) => key(n.dur))).toEqual(Array(5).fill("1/20"));
+    // 셋잇단을 끄면 5잇단도 쓰지 않는다
+    expect(quantize([{ id: "a", notes }], tempo, { grid: 16, triplets: false }).quintupletBeats).toBe(0);
+  });
+
+  it("흔들려 친 정규 리듬(엇박 16분·점음표·16분 연타)은 셋잇단·5잇단으로 잘못 보지 않는다", () => {
+    // 엇박 16분만 있는 박이 이어지는 곳, 점8분+16분, 16분 4음, 8분. ±15ms 안팎으로 흔든다
+    const bar = [120, 600, 960, 1320, 1440, 1560, 1680, 1800, 2280, 2400, 2760, 3120, 3240, 3600];
+    let s = 7;
+    const rand = () => ((s = (s * 1103515245 + 12345) % 2 ** 31) / 2 ** 31) * 2 - 1;
+    for (const bpm of [80, 120, 160]) {
+      const span = (0.015 * bpm * PPQ) / 60;
+      const notes = [0, 1, 2, 3].flatMap((b) =>
+        bar.map((t) => {
+          const tick = Math.max(0, Math.round(b * 3840 + t + rand() * span));
+          return { ...raw(tick, 100), seconds: (tick / PPQ) * (60 / bpm) };
+        }),
+      );
+      const q = quantize([{ id: "a", notes }], [{ at: rat(0), bpm }]);
+      expect(q.grid).toBe(16);
+      expect(q.tripletBeats).toBe(0);
+      expect(q.quintupletBeats).toBe(0);
+      const want = [0, 1, 2, 3].flatMap((b) => bar.map((t) => key(rat(b * 3840 + t, 1920))));
+      expect(q.notes.map((n) => key(n.start))).toEqual(want);
+    }
+  });
 });
 
 describe("compressChords", () => {
@@ -257,6 +327,17 @@ describe("midiToSong", () => {
   };
   const count = (r: ReturnType<typeof midiToSong>) => r.song.tracks.reduce((s, t) => s + t.notes.length, 0);
   const dropped = (r: ReturnType<typeof midiToSong>) => r.compressed.reduce((s, c) => s + c.dropped, 0);
+
+  it("4분 셋잇단·4분 5잇단을 가져오면 음을 잃지 않고 c6·c20 같은 길이로 적는다", () => {
+    const tri = [0, 320, 640, 960, 1280, 1600].map((t): [number, number, number] => [60 + t / 320, t, 320]);
+    const quint = [0, 96, 192, 288, 384].map((t, i): [number, number, number] => [72 + i, 1920 + t, 96]);
+    const r = song(120, [[...tri, ...quint, [60, 2400, 480]]], [{ parts: [0], chords: 1 }], {});
+    expect(count(r)).toBe(12);
+    const notes = r.song.tracks.flatMap((t) => t.notes);
+    expect(notes.slice(0, 6).map((n) => key(n.dur))).toEqual(Array(6).fill("1/6"));
+    expect(notes.slice(6, 11).map((n) => key(n.start))).toEqual(["1/1", "21/20", "11/10", "23/20", "6/5"]);
+    expect(optimizeMml(r.song.tracks[0]!.notes).text).toMatch(/l6cc\+dd\+ef>l20cc\+dd\+e/);
+  });
 
   it("밀린 음 곧게 맞추기를 켜면 64분 격자에서 조금씩 밀어 친 정규 음을 셋잇단으로 맞추지 않는다", () => {
     // 점16분음표를 줄곧 41tick(약 40ms) 늦게 친다. 96분 칸에 1tick 차로 맞아 셋잇단으로 고른다

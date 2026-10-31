@@ -36,6 +36,8 @@ export interface SongViewReset {
   readonly tempoChangeOpen: false;
   readonly tempoRampOpen: false;
   readonly meterOpen: false;
+  /** 곡 정보 창 (옛 곡의 제목·지은이·메모를 들고 있다) */
+  readonly songInfoOpen: false;
   /** 어긋난 길이 찾기 창 (옛 곡의 고칠 자리를 들고 있다) */
   readonly offgridOpen: false;
   /** 악보책 나누기 결과, 글자 수 줄이기 결과 글 */
@@ -72,6 +74,7 @@ export function freshSongView(viewGen: number): SongViewReset {
     tempoChangeOpen: false,
     tempoRampOpen: false,
     meterOpen: false,
+    songInfoOpen: false,
     offgridOpen: false,
     split: undefined,
     compactNote: "",

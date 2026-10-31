@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { emptySong, MOBILE_PROFILE, rat, type Note, type Song } from "@mmlce/core";
-import { buildSchedule, velocityForVolume } from "../src/index.js";
+import { emptySong, MOBILE_PROFILE, positionToSeconds, PROFILES, rat, type Note, type Song } from "@mmlce/core";
+import { BEND_RANGE, buildSchedule, velocityForVolume } from "../src/index.js";
 
 const n = (id: string, start: [number, number], dur: [number, number], pitch: number, extra: Partial<Note> = {}): Note => ({
   id, start: rat(...start), dur: rat(...dur), pitch, vol: 8, tie: "none", ...extra,
@@ -55,6 +55,17 @@ describe("buildSchedule", () => {
     expect(s.events.map((e) => [e.type, e.time, e.note, e.bend ?? null])).toEqual([
       ["on", 0, 60, null], ["bend", 1, 60, 2], ["bend", 1.5, 60, -3], ["off", 2, 60, null], ["bend", 2, 60, 0],
     ]);
+  });
+
+  it("다른 음 붙임을 다시 칠지는 프로필 높이 차 한도(tieBendLimit)로 정한다", () => {
+    const tied = song([{ notes: [n("a", [0, 1], [1, 4], 60, { tie: "next" }), n("b", [1, 4], [1, 4], 64)] }]);
+    expect(buildSchedule(tied, MOBILE_PROFILE).events.map((e) => e.type)).toEqual(["on", "bend", "off", "bend"]);
+    // 한도를 3반음으로 줄이면 4반음 위 e는 새로 친다
+    expect(buildSchedule(tied, { ...MOBILE_PROFILE, tieBendLimit: 3 }).events.map((e) => [e.type, e.note])).toEqual([
+      ["on", 60], ["off", 60], ["on", 64], ["off", 64],
+    ]);
+    // 신스 벤드 범위는 프로필 한도보다 좁으면 안 된다
+    for (const profile of Object.values(PROFILES)) expect(BEND_RANGE, profile.id).toBeGreaterThanOrEqual(profile.tieBendLimit);
   });
 
   it("다른 음 붙임은 샘플 안 위치를 이어 가며 새 음 샘플 끝에서 끝난다 (게임 실측과 비교)", () => {
@@ -155,5 +166,24 @@ describe("buildSchedule: 트랙에서 고른 사운드팩", () => {
       { key: "t2@pack-b.dls", instrument: "piano", program: 21, pack: "pack-b.dls" },
     ]);
     expect(asked).toEqual([undefined, "pack-b.dls"]);
+  });
+});
+
+describe("buildSchedule: 템포가 많은 긴 곡 (점검 S35)", () => {
+  it("켜고 끄는 시각이 positionToSeconds와 똑같고, 6트랙 × 2000음 · 템포 400개도 금방 만든다", () => {
+    const line = (t: number) => Array.from({ length: 2000 }, (_, i) => n(`${t}-${i}`, [i, 4], [1, 4], 48 + ((i * 5 + t) % 30)));
+    const base = song(Array.from({ length: 6 }, (_, t) => ({ notes: line(t) })));
+    const tempo = Array.from({ length: 400 }, (_, i) => ({ at: rat(i * 5, 4), bpm: 60 + ((i * 37) % 200) }));
+    const s: Song = { ...base, tempo };
+    const t = performance.now();
+    const out = buildSchedule(s, MOBILE_PROFILE);
+    expect(performance.now() - t).toBeLessThan(2000);
+    const ons = out.events.filter((e) => e.type === "on" && e.trackId === "t1").map((e) => e.time);
+    expect(ons).toEqual(line(0).map((x) => positionToSeconds(tempo, x.start)));
+    const from = rat(7, 3);
+    const late = buildSchedule(s, MOBILE_PROFILE, { from });
+    // 걸쳐 있는 음(9/4~10/4)은 그 위치에서 바로, 다음 음은 시작까지 남은 초 뒤에
+    const lateOns = late.events.filter((e) => e.type === "on" && e.trackId === "t1").map((e) => e.time);
+    expect(lateOns.slice(0, 2)).toEqual([0, positionToSeconds(tempo, rat(10, 4)) - positionToSeconds(tempo, from)]);
   });
 });

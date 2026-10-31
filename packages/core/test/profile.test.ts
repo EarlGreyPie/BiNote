@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chainFadeEnd, chainSampleEnd, decayDbAt, heldMeanDb, foldPitch, getProfile, instrumentByName, maxChordsOf, MOBILE_PROFILE, sampleSecondsAt, soundingRangeOf } from "../src/index.js";
+import { chainFadeEnd, chainSampleEnd, decayDbAt, heldMeanDb, foldPitch, getProfile, INSTRUMENTS, instrumentByName, isPending, LAB_STEP_MAX, maxChordsOf, MOBILE_PROFILE, pendingIn, pendingItem, sampleSecondsAt, soundingRangeOf, TRILL_VOLUME_DEPTH_LIMIT, volumeStepMax, type GameProfile } from "../src/index.js";
 
 describe("MOBILE_PROFILE", () => {
   it("확인된 인게임 한도", () => {
@@ -113,5 +113,69 @@ describe("소리 줄어듦 (기타, 팩 샘플로 잼)", () => {
   it("40dB까지 재지 못한 깊이는 샘플 끝으로 본다 (샬루모 o5a+는 13dB만 줄고 끊긴다)", () => {
     const steps = [{ at: 0, pitch: 70 }];
     expect(chainFadeEnd(P, "chalumeau", steps, 20)).toBe(chainSampleEnd(P, "chalumeau", steps));
+  });
+});
+
+describe("실측 전 항목 (pending)", () => {
+  const keys = MOBILE_PROFILE.pending.map((p) => p.key);
+
+  it("항목마다 이름이 하나씩이고 설명과 적은 날이 있다", () => {
+    expect(new Set(keys).size).toBe(keys.length);
+    for (const p of MOBILE_PROFILE.pending) {
+      expect(p.note.length).toBeGreaterThan(0);
+      expect(p.since).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    }
+  });
+
+  it("이미 실측한 볼륨 곡선·악기별 음역·트레몰로 빠르기는 실측 전이 아니다", () => {
+    for (const measured of ["volumeCurve", "soundingRangeInstruments", "ornamentFastRate"]) expect(keys).not.toContain(measured);
+  });
+
+  it("주석에만 있던 실측 전 항목이 목록에 있다", () => {
+    for (const key of ["fourthTrackSound", "mobileInstrumentPrograms", "trillVolumePattern", "tieBendLimit", "lengthAfterTie", "octaveCrossingAccidental"] as const)
+      expect(isPending(MOBILE_PROFILE, key)).toBe(true);
+  });
+
+  it("악기를 주면 그 악기에 걸린 항목만 실측 전으로 본다", () => {
+    expect(isPending(MOBILE_PROFILE, "sampleDecay", "cat-harmonica")).toBe(true);
+    expect(isPending(MOBILE_PROFILE, "sampleDecay", "piano")).toBe(false);
+    // 악기 목록이 없는 항목은 어느 악기든 실측 전
+    expect(isPending(MOBILE_PROFILE, "tieBendLimit", "piano")).toBe(true);
+    expect(pendingItem(MOBILE_PROFILE, "sampleDecay", "cymbal")?.scope).toBe("sound");
+    // 목록에서 지우면(실측하면) 더는 실측 전이 아니다
+    const measured: GameProfile = { ...MOBILE_PROFILE, pending: MOBILE_PROFILE.pending.filter((p) => p.key !== "tieBendLimit") };
+    expect(isPending(measured, "tieBendLimit")).toBe(false);
+  });
+
+  it("곳(scope)마다 고를 수 있다", () => {
+    const syntax = pendingIn(MOBILE_PROFILE, "syntax").map((p) => p.key);
+    expect(syntax).toContain("lengthAfterTie");
+    expect(syntax).not.toContain("sampleDecay");
+  });
+
+  it("감쇠가 실측 전인 악기는 감쇠 값이 없고, 감쇠 값이 있는 악기는 실측 전이 아니다", () => {
+    for (const id of pendingItem(MOBILE_PROFILE, "sampleDecay")!.instruments!) expect(MOBILE_PROFILE.sampleDecay[id]).toBeUndefined();
+    for (const id of Object.keys(MOBILE_PROFILE.sampleDecay)) expect(isPending(MOBILE_PROFILE, "sampleDecay", id)).toBe(false);
+    // 새 악기를 더하면 감쇠를 재서 넣거나 실측 전으로 적어야 한다 (둘 다 없으면 검사기가 아는 것으로 읽는다)
+    for (const { id } of INSTRUMENTS) expect(MOBILE_PROFILE.sampleDecay[id] !== undefined || isPending(MOBILE_PROFILE, "sampleDecay", id), id).toBe(true);
+  });
+
+  it("악기 번호가 실측 전인 악기는 악기 목록에도 번호가 없다", () => {
+    const unknown = INSTRUMENTS.filter((i) => i.program === undefined).map((i) => i.id);
+    expect([...pendingItem(MOBILE_PROFILE, "mobileInstrumentPrograms")!.instruments!].sort()).toEqual([...unknown].sort());
+  });
+});
+
+describe("프로필에서 계산하는 한도", () => {
+  it("v 단계 상한은 v 범위 전체", () => {
+    expect(volumeStepMax(MOBILE_PROFILE)).toBe(15);
+    expect(volumeStepMax({ ...MOBILE_PROFILE, volume: { min: 1, max: 20 } })).toBe(19);
+    // 프로필이 닿지 않는 설정 읽기용 상수도 모바일 프로필에서 계산한다
+    expect(LAB_STEP_MAX).toBe(volumeStepMax(MOBILE_PROFILE));
+    expect(TRILL_VOLUME_DEPTH_LIMIT).toBe(volumeStepMax(MOBILE_PROFILE));
+  });
+
+  it("붙인 음을 다시 치지 않는 높이 차는 프로필 값", () => {
+    expect(MOBILE_PROFILE.tieBendLimit).toBe(24);
   });
 });

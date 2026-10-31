@@ -89,3 +89,28 @@ export class AutosaveQueue<T> {
     return job;
   }
 }
+
+/** 자동 보존이 이만큼 잇달아 실패하면 상태줄에 "보존 안 됨"을 띄운다 (한 번은 잠깐 막힌 것일 수 있다) */
+export const SAVE_FAIL_LIMIT = 2;
+
+/** 자동 보존이 잘 되고 있는지: 잇단 실패 수와 마지막 실패 까닭 */
+export interface SaveHealth {
+  readonly failures: number;
+  readonly reason: "quota" | "failed" | undefined;
+}
+
+export const SAVE_HEALTHY: SaveHealth = { failures: 0, reason: undefined };
+
+/** 저장 결과 하나를 더한다. 한 번이라도 적히면 처음으로 돌아간다 */
+export function noteSave(health: SaveHealth, result: "saved" | "quota" | "failed"): SaveHealth {
+  return result === "saved" ? SAVE_HEALTHY : { failures: health.failures + 1, reason: result };
+}
+
+/**
+ * 알릴 문제. 공간이 꽉 찬 것은 기다려도 풀리지 않아 바로 알리고, 그 밖은 SAVE_FAIL_LIMIT번 잇달아 실패해야 알린다.
+ * 알릴 것이 없으면 undefined
+ */
+export function saveTrouble(health: SaveHealth): "quota" | "failed" | undefined {
+  if (health.reason === "quota") return "quota";
+  return health.failures >= SAVE_FAIL_LIMIT ? health.reason : undefined;
+}

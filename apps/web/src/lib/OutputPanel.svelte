@@ -4,6 +4,7 @@
   import { instrumentName, t } from "./i18n.svelte";
   import Icon from "./Icon.svelte";
   import { isCopied, nextExportPick, trackStamp, type OutputRow, type TempoAdvice } from "./output";
+  import { scaleText, tempoConvertNotice, tempoConvertPlan, type TempoConvertOutcome } from "./tempoConvert";
 
   /**
    * MML로 내보내기 (출력 점검판, 파일·곡 메뉴). 구조 목록처럼 악보 줄 아래에 트랙 줄을 두고, 모든 악보의 트랙에서
@@ -26,6 +27,11 @@
     ontrack: (trackId: string) => void;
     /** 템포 자리로 커서 옮기기 */
     onseek: (at: Rat) => void;
+    /**
+     * 범위 밖 템포 안내 한 줄을 실제 시간 유지 템포 변환으로 고친다 (실행 취소 한 칸). 결과를 돌려주고,
+     * 잠근 트랙 확인에서 그만두면 undefined
+     */
+    onconvert: (advice: TempoAdvice) => TempoConvertOutcome | undefined;
     /** 화음 분산 창 열기 (처음 고를 보내는 트랙 = 한도를 넘는 첫 트랙) */
     ondistribute: (source?: string) => void;
     onsplit: () => void;
@@ -34,7 +40,7 @@
     onclose: () => void;
   }
 
-  let { song, rows, tempo, profile, chordsOf, copied, oncopied, ontrack, onseek, ondistribute, onsplit, onchecks, onclose }: Props = $props();
+  let { song, rows, tempo, profile, chordsOf, copied, oncopied, ontrack, onseek, onconvert, ondistribute, onsplit, onchecks, onclose }: Props = $props();
   const limit = $derived(profile.charLimitPerScore);
   const tempoRange = $derived(profile.tempo);
   /** 붙여넣기 한 번에 넣을 수 있는 트랙 수 */
@@ -159,6 +165,21 @@
     justCopied = sent.trackIds.length;
   }
 
+  /**
+   * 실제 시간 유지 템포 변환을 누른 결과. 거절은 그 줄 아래에(곡이 그대로인 동안), 바꾼 알림은 안내 맨 위에
+   * (그 줄은 범위 안이 되어 사라지므로. 실행 취소 등으로 곡이 바뀌면 지운다) 보인다
+   */
+  let convertNote = $state.raw<{ song: Song; key?: string; text: string; bad: boolean } | undefined>(undefined);
+  const adviceKey = (a: TempoAdvice) => `${a.at.n}/${a.at.d}`;
+  const shownNote = $derived(convertNote?.song === song ? convertNote : undefined);
+  function convert(a: TempoAdvice) {
+    const before = song;
+    const outcome = onconvert(a);
+    if (!outcome) return;
+    const note = tempoConvertNotice(before, a, outcome, profile.length.max, t);
+    convertNote = outcome.kind === "done" ? { song: outcome.song, text: note.text, bad: false } : { song: before, key: adviceKey(a), text: note.text, bad: note.bad };
+  }
+
   const overCount = $derived(rows.filter((r) => r.over).length);
   const fixCount = $derived(rows.filter((r) => r.over || r.errors > 0).length);
   const allCopied = $derived(rows.length > 0 && rows.every((r) => trackIdsOf(r).every(done)));
@@ -175,14 +196,22 @@
   </header>
   <p class="muted help">{t("ui.outputHelp", { max: pickLimit })}</p>
 
-  {#if tempo.length > 0 || overCount > 0}
+  {#if tempo.length > 0 || overCount > 0 || (shownNote && !shownNote.key)}
     <ul class="advice">
-      {#each tempo as a (`${a.at.n}/${a.at.d}`)}
+      {#if shownNote && !shownNote.key}<li class="ok" role="status">{shownNote.text}</li>{/if}
+      {#each tempo as a (adviceKey(a))}
+        {@const plan = tempoConvertPlan(song, a, tempoRange)}
         <li class="warn">
           {a.high
             ? t("ui.outputTempoHigh", { bpm: a.bpm, bar: a.bar, beat: a.beat, min: tempoRange.min, max: tempoRange.max, factor: a.factor, to: a.to, quarter: 4 * a.factor })
             : t("ui.outputTempoLow", { bpm: a.bpm, bar: a.bar, beat: a.beat, min: tempoRange.min, max: tempoRange.max, factor: a.factor, to: a.to })}
-          <span class="acts"><button class="small" onclick={() => closeThen(() => onseek(a.at))}>{t("ui.outputTempoGo")}</button></span>
+          <span class="acts">
+            {#if plan}
+              <button class="small" title={t("ui.outputTempoConvertHelp", { to: a.to, scale: scaleText(plan.scale) })} onclick={() => convert(a)}>{t("ui.outputTempoConvert")}</button>
+            {/if}
+            <button class="small" onclick={() => closeThen(() => onseek(a.at))}>{t("ui.outputTempoGo")}</button>
+          </span>
+          {#if shownNote?.key === adviceKey(a)}<p class="note" class:bad={shownNote.bad} role="status">{shownNote.text}</p>{/if}
         </li>
       {/each}
       {#if overCount > 0}
@@ -332,6 +361,9 @@
     display: inline-flex;
     gap: 6px;
     margin-left: 6px;
+  }
+  .advice .ok {
+    color: var(--accent);
   }
   .advice .warn,
   .badge.warn {

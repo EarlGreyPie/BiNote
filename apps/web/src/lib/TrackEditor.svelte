@@ -39,6 +39,8 @@
     onredo: () => void;
     /** 첫 검사 자리로 */
     ongodiag: (from: number, to: number) => void;
+    /** 글 커서를 옮겼다 (그 글 자리). 롤·재생 커서·상태줄이 따라간다 */
+    oncursor?: ((pos: number) => void) | undefined;
     /** 머리 줄 이름을 두 번 눌러 바꾸기 */
     onrename: (name: string) => void;
     /** 잠근 트랙이면 글을 고칠 수 없다. 머리 줄 자물쇠로 풀고 잠근다 */
@@ -50,7 +52,7 @@
     onclose?: (() => void) | undefined;
   }
 
-  let { track, index, text, diagnostics, color, instrument, instrumentLabel, pack, packLabels = [], charLimit, exportCount, showListen, reveal, playing, follow = false, oninstrument, onpack, onlisten, onedit, onundo, onredo, ongodiag, onrename, onclose, locked = false, onlock, hold = false }: Props = $props();
+  let { track, index, text, diagnostics, color, instrument, instrumentLabel, pack, packLabels = [], charLimit, exportCount, showListen, reveal, playing, follow = false, oninstrument, onpack, onlisten, onedit, onundo, onredo, ongodiag, oncursor, onrename, onclose, locked = false, onlock, hold = false }: Props = $props();
 
   const count = $derived(exportCount ?? text.length);
   const over = $derived(count > charLimit);
@@ -135,6 +137,7 @@
         {playing}
         {follow}
         readonly={locked || hold}
+        oncursor={oncursor ? (pos) => oncursor(pos) : undefined}
       />
     </div>
   {/key}

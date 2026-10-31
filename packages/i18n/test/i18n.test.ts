@@ -17,6 +17,14 @@ describe("translate", () => {
     }
   });
 
+  it("& 사슬 높이 차 안내는 숫자를 박지 않고 프로필 한도를 끼워 넣는다", () => {
+    for (const l of LOCALES) {
+      const text = translate(l, "ui.slideBend", { n: 2, limit: 12 });
+      expect(text, l).toContain("12");
+      expect(text, l).not.toContain("24");
+    }
+  });
+
   it("진단 코드를 문구로", () => {
     expect(describeDiagnostic("ko", { code: "tick-rounded", params: { bpm: 120 } })).toContain("t120");
     expect(describeDiagnostic("ko", { code: "no-such-code" })).toBe("no-such-code");

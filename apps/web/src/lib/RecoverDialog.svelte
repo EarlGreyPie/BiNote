@@ -6,12 +6,14 @@
   /** 파일 메뉴 "지난 작업 되살리기": 곡을 연 뒤에도 자동 보존한 작업을 고른다 */
   interface Props {
     works: readonly WorkSummary[];
+    /** 다른 탭에서 열려 있는 작업 id */
+    elsewhere?: ReadonlySet<string> | undefined;
     onrestore: (id: string) => void;
     onforget: (id: string) => void;
     onclose: () => void;
   }
 
-  let { works, onrestore, onforget, onclose }: Props = $props();
+  let { works, elsewhere, onrestore, onforget, onclose }: Props = $props();
 
   let dialog: HTMLDialogElement;
   $effect(() => {
@@ -20,7 +22,7 @@
 </script>
 
 <dialog bind:this={dialog} {onclose}>
-  <RecoverList {works} {onrestore} {onforget} />
+  <RecoverList {works} {elsewhere} {onrestore} {onforget} />
   <div class="actions">
     <button onclick={() => dialog.close()}>{t("ui.close")}</button>
   </div>

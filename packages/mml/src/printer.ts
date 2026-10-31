@@ -1,4 +1,4 @@
-import { add, cmp, defaultLengthLimit, eq, gameLengths, sub, ZERO, type LengthLimit, type Rat, type TempoEvent } from "@mmlce/core";
+import { add, cmp, defaultLengthLimit, eq, gameLengths, MOBILE_PROFILE, sub, ZERO, type GameProfile, type LengthLimit, type Rat, type TempoEvent } from "@mmlce/core";
 import type { Diagnostic } from "./parser.js";
 import { continues, dropDanglingTies } from "./compare.js";
 
@@ -18,6 +18,8 @@ export interface PrintOptions {
   readonly volume?: number;
   /** 한 토막으로 쓸 수 있는 음길이 한도 (GameProfile.length). 없으면 defaultLengthLimit() */
   readonly lengths?: LengthLimit;
+  /** o 명령으로 쓸 수 있는 옥타브 (GameProfile.octave). 없으면 모바일 프로필 값 */
+  readonly octaves?: GameProfile["octave"];
 }
 
 export interface PrintResult {
@@ -32,6 +34,29 @@ interface Piece {
 }
 
 const NAMES = ["c", "c+", "d", "d+", "e", "f", "f+", "g", "g+", "a", "a+", "b"] as const;
+
+/**
+ * MML로 쓸 수 있는 음 높이 [low, high] (MIDI 번호). 가장 낮은 옥타브의 c-부터 가장 높은 옥타브의 b+까지다
+ * (모바일 o0~o9면 o0c- = 11부터 o9b+ = 132까지). 밖의 음은 o-1처럼 다시 읽을 수 없는 옥타브가 있어야 쓸 수 있다
+ */
+export function mmlPitchRange(octaves: GameProfile["octave"] = MOBILE_PROFILE.octave): { readonly low: number; readonly high: number } {
+  return { low: (octaves.min + 1) * 12 - 1, high: (octaves.max + 1) * 12 + 12 };
+}
+
+/** 쓸 수 있는 높이로 옥타브째 옮긴 음 (게임도 범위 밖 음은 옥타브째 접어 낸다). 이미 안이면 그대로 */
+function intoWritable(pitch: number, range: { readonly low: number; readonly high: number }): number {
+  if (pitch < range.low) return pitch + 12 * Math.ceil((range.low - pitch) / 12);
+  if (pitch > range.high) return pitch - 12 * Math.ceil((pitch - range.high) / 12);
+  return pitch;
+}
+
+/** 옥타브 범위 안에서 이 음을 쓰는 옥타브와 이름. 범위 끝 음(o0c-, o9b+)은 c-·b+로 쓴다 */
+function spell(pitch: number, octaves: GameProfile["octave"]): { readonly octave: number; readonly name: string } {
+  const octave = Math.floor(pitch / 12) - 1;
+  if (octave < octaves.min) return { octave: octaves.min, name: "c-" };
+  if (octave > octaves.max) return { octave: octaves.max, name: "b+" };
+  return { octave, name: NAMES[((pitch % 12) + 12) % 12]! };
+}
 
 const tableCache = new Map<string, Piece[]>();
 
@@ -179,6 +204,8 @@ function printWith(
 
   let octave = options.octave ?? 4;
   let volume = options.volume ?? 8;
+  const octaves = options.octaves ?? MOBILE_PROFILE.octave;
+  const writable = mmlPitchRange(octaves);
   if (defaultLength !== 4) out.push(`l${defaultLength}`);
 
   let pos: Rat = ZERO;
@@ -250,7 +277,12 @@ function printWith(
     if (cmp(note.start, pos) > 0) writeRest(note.start);
     flushTempo(pos);
 
-    const noteOctave = Math.floor(note.pitch / 12) - 1;
+    // 쓸 수 없는 높이(o0c-보다 낮은 음 등)는 o-1로 쓰면 다시 읽을 수 없으므로 옥타브째 옮겨 쓰고 알린다
+    const pitch = intoWritable(note.pitch, writable);
+    if (pitch !== note.pitch) {
+      diagnostics.push({ level: "warning", code: "pitch-unwritable", params: { min: octaves.min, max: octaves.max }, span: [0, 0] });
+    }
+    const { octave: noteOctave, name } = spell(pitch, octaves);
     const diff = noteOctave - octave;
     if (diff === 1) out.push(">");
     else if (diff === -1) out.push("<");
@@ -263,7 +295,6 @@ function printWith(
       volume = note.vol;
     }
 
-    const name = NAMES[((note.pitch % 12) + 12) % 12]!;
     const end = add(note.start, note.dur);
     const segs = segments(note.start, end);
     segs.forEach((seg, k) => {

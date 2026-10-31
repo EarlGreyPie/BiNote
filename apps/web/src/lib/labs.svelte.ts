@@ -12,7 +12,7 @@ const FADE_KEY = "mmlce.labs.fade";
 /** 소리 줄어듦 알림: 가장 클 때보다 이만큼(dB) 작아진 뒤로도 이어지는 음을 검사에서 알린다 */
 export const FADE_DB = 30;
 
-export type LabFeatureId = "ghost" | "harmonic" | "reverb" | "midiRecord" | "tempoRamp" | "videoBars" | "arpFold" | "loudness" | "staff" | "musicXml" | "transcribe";
+export type LabFeatureId = "ghost" | "harmonic" | "reverb" | "midiRecord" | "tempoRamp" | "videoBars" | "arpFold" | "loudness" | "staff" | "musicXml" | "transcribe" | "noteDrop";
 
 /** 고른 음을 바꾸는 창(LabNoteDialog)으로 여는 기능. 나머지는 저마다 메뉴·창이 있다 (새 기능이 이 창으로 잘못 열리지 않게 이름으로 적는다) */
 export type NoteLabId = "ghost" | "harmonic";
@@ -21,8 +21,8 @@ export const isNoteLab = (id: LabFeatureId): id is NoteLabId => id === "ghost" |
 export interface LabFeature {
   readonly id: LabFeatureId;
   /** 메뉴·설정에 쓰는 이름과 설명 문구 키 */
-  readonly label: "ui.labGhost" | "ui.labHarmonic" | "ui.labReverb" | "ui.labMidiRecord" | "ui.tempoRamp" | "ui.labVideoBars" | "ui.labArpFold" | "ui.labLoudness" | "ui.labStaff" | "ui.labMusicXml" | "ui.labTranscribe";
-  readonly help: "ui.labGhostHelp" | "ui.labHarmonicHelp" | "ui.labReverbHelp" | "ui.labMidiRecordHelp" | "ui.tempoRampHelp" | "ui.labVideoBarsHelp" | "ui.labArpFoldHelp" | "ui.labLoudnessHelp" | "ui.labStaffHelp" | "ui.labMusicXmlHelp" | "ui.labTranscribeHelp";
+  readonly label: "ui.labGhost" | "ui.labHarmonic" | "ui.labReverb" | "ui.labMidiRecord" | "ui.tempoRamp" | "ui.labVideoBars" | "ui.labArpFold" | "ui.labLoudness" | "ui.labStaff" | "ui.labMusicXml" | "ui.labTranscribe" | "ui.labNoteDrop";
+  readonly help: "ui.labGhostHelp" | "ui.labHarmonicHelp" | "ui.labReverbHelp" | "ui.labMidiRecordHelp" | "ui.tempoRampHelp" | "ui.labVideoBarsHelp" | "ui.labArpFoldHelp" | "ui.labLoudnessHelp" | "ui.labStaffHelp" | "ui.labMusicXmlHelp" | "ui.labTranscribeHelp" | "ui.labNoteDropHelp";
 }
 
 /** 실험실 기능 목록 (메뉴와 설정 설명이 이 순서를 따른다) */
@@ -43,6 +43,8 @@ export const LAB_FEATURES: readonly LabFeature[] = [
   { id: "musicXml", label: "ui.labMusicXml", help: "ui.labMusicXmlHelp" },
   // 곡 없이도 쓴다: 받아 적은 음은 MIDI 불러오기 창으로 새 곡이 된다 (PC는 Basic Scriptor, 모든 기기는 브라우저 안 basic-pitch)
   { id: "transcribe", label: "ui.labTranscribe", help: "ui.labTranscribeHelp" },
+  // 메뉴 항목 없이 곡 검사에 연주 누락음 위험(fast-run-drop)이 더해지고, 그 줄의 고치기 창으로 고친다 (기준은 GameProfile.fastRunDrop, 실측 전)
+  { id: "noteDrop", label: "ui.labNoteDrop", help: "ui.labNoteDropHelp" },
 ];
 
 export const labs = $state({
@@ -66,6 +68,11 @@ export function setButtonNames(on: boolean): void {
 /** 소리 줄어듦 알림을 지금 쓰는지 */
 export function fadeOn(): boolean {
   return labs.on && labs.fade;
+}
+
+/** 연주 누락음 검사을 지금 쓰는지 (실험실을 켜면 함께 켜진다. 곡은 고치기를 고를 때만 바뀐다) */
+export function noteDropOn(): boolean {
+  return labs.on;
 }
 
 export function setFade(on: boolean): void {

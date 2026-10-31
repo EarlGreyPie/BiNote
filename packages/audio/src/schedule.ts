@@ -1,4 +1,4 @@
-import { add, chainSampleEnd, cmp, eq, foldPitch, positionToSeconds, soundingRangeOf, TIE_BEND_LIMIT, trackInstrument, type GameProfile, type Note, type Rat, type Song } from "@mmlce/core";
+import { add, chainSampleEnd, cmp, eq, foldPitch, soundingRangeOf, tempoClock, trackInstrument, type GameProfile, type Note, type Rat, type Song } from "@mmlce/core";
 
 /** 신스에 보낼 소리 지점. 악기는 아직 실제 팩 번호가 아니라 공통 ID다 */
 export interface VoiceSlot {
@@ -22,8 +22,11 @@ export interface PlaybackEvent {
   readonly bend?: number;
 }
 
-/** 피치 벤드 범위(반음). 이보다 멀리 붙인 음은 새로 친다 */
-export const BEND_RANGE = TIE_BEND_LIMIT;
+/**
+ * 신스에 맞추는 피치 벤드 범위(반음). 붙인 음을 새로 칠지는 profile.tieBendLimit로 정하므로,
+ * 프로필 한도가 이보다 넓어지면 이 값도 넓혀야 벤드가 잘리지 않는다
+ */
+export const BEND_RANGE = 24;
 
 /** 반음 → 14비트 피치 휠 값 (가운데 8192) */
 export function bendValue(semitones: number): number {
@@ -80,7 +83,9 @@ function soundingNotes(notes: readonly Note[]): { note: Note; end: Rat; legatoNe
 
 export function buildSchedule(song: Song, profile: GameProfile, options: ScheduleOptions = {}): Schedule {
   const from = options.from;
-  const offset = from ? positionToSeconds(song.tempo, from) : 0;
+  // 템포 지도는 한 번만 정리한다 (음마다 두 번씩 바꾸므로)
+  const secondsAt = tempoClock(song.tempo);
+  const offset = from ? secondsAt(from) : 0;
   const anySolo = song.tracks.some((t) => t.solo);
   const slots: VoiceSlot[] = [];
   const events: PlaybackEvent[] = [];
@@ -118,14 +123,14 @@ export function buildSchedule(song: Song, profile: GameProfile, options: Schedul
       previousLegato = legatoNext;
       if (from && cmp(end, from) <= 0) continue;
       const startPos = from && cmp(note.start, from) < 0 ? from : note.start;
-      const on = positionToSeconds(song.tempo, startPos) - offset;
-      const off = positionToSeconds(song.tempo, end) - offset;
+      const on = secondsAt(startPos) - offset;
+      const off = secondsAt(end) - offset;
       // 곡 길이는 소리가 샘플 끝에서 먼저 끊겨도 악보상 음 끝까지 (반복·끝 판정이 악보와 맞도록)
       duration = Math.max(duration, off);
       // 게임처럼 악기 범위 밖 음은 옥타브째 접어서 낸다
       const pitch = foldPitch(note.pitch, range);
       const shift = chain ? pitch - chain.pitch : 0;
-      if (legato && chain && Math.abs(shift) <= BEND_RANGE) {
+      if (legato && chain && Math.abs(shift) <= Math.min(profile.tieBendLimit, BEND_RANGE)) {
         // 샘플이 이미 끝났으면 붙인 음도 소리가 없다
         if (on >= chainSampleEnd(profile, instrument, chain.steps)) continue;
         chain.steps.push({ at: on, pitch });

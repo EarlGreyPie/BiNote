@@ -1,6 +1,6 @@
 <script lang="ts">
   import { canWriteExactly, optimizeMml } from "@mmlce/mml";
-  import { add, cmp, planTrill, positionToSeconds, toFloat, TRILL_VOLUME_DEPTH_LIMIT, TRILL_VOLUME_PATTERNS, type GameProfile, type Note, type Rat, type Song, type TrillResult, type TrillVolumePattern } from "@mmlce/core";
+  import { add, cmp, planTrill, positionToSeconds, toFloat, TRILL_VOLUME_PATTERNS, volumeStepMax, type GameProfile, type Note, type Rat, type Song, type TrillResult, type TrillVolumePattern } from "@mmlce/core";
   import { t } from "./i18n.svelte";
   import { lengthLabel } from "./Toolbar.svelte";
   import { lengthsFor, noteLengthOf } from "./roll";
@@ -167,7 +167,7 @@
     decrescendo: "ui.trillVolDecrescendo",
   } as const satisfies Record<TrillVolumePattern, string>;
   /** 0~한도 정수 입력 */
-  const steps = (raw: string) => Math.min(TRILL_VOLUME_DEPTH_LIMIT, Math.max(0, Math.round(Number(raw) || 0)));
+  const steps = (raw: string) => Math.min(volumeStepMax(profile), Math.max(0, Math.round(Number(raw) || 0)));
   const trill = $derived(choice.kind === "trill");
   // &로 잇기는 트릴에서만, 끊어 치기와는 함께 쓰지 않는다 (planTrill과 같은 조건)
   const tieOn = $derived(trill && choice.tie && !choice.staccato);
@@ -211,7 +211,7 @@
         {#each TRILL_VOLUME_PATTERNS as p (p)}<option value={p}>{t(PATTERN_KEY[p])}</option>{/each}
       </select>
       {#if choice.volumePattern !== "same" && !tieOn}
-        <label>{t("ui.trillVolDepth")} <input class="num" type="number" min="0" max={TRILL_VOLUME_DEPTH_LIMIT} value={choice.volumeDepth} onchange={(e) => set({ volumeDepth: steps(e.currentTarget.value) })} /></label>
+        <label>{t("ui.trillVolDepth")} <input class="num" type="number" min="0" max={volumeStepMax(profile)} value={choice.volumeDepth} onchange={(e) => set({ volumeDepth: steps(e.currentTarget.value) })} /></label>
       {/if}
       <span class="row" title={t("ui.trillVolLowerHelp")}>
         {t("ui.trillVolLower")}
@@ -220,7 +220,7 @@
           {t("ui.trillVolLowerAuto", { single: profile.ornamentRepeatLower.single, chord: profile.ornamentRepeatLower.chord })}</label
         >
         {#if choice.volumeLower !== "auto"}
-          <input class="num" type="number" min="0" max={TRILL_VOLUME_DEPTH_LIMIT} value={choice.volumeLower} onchange={(e) => set({ volumeLower: steps(e.currentTarget.value) })} />
+          <input class="num" type="number" min="0" max={volumeStepMax(profile)} value={choice.volumeLower} onchange={(e) => set({ volumeLower: steps(e.currentTarget.value) })} />
         {/if}
       </span>
     </span>
@@ -259,7 +259,7 @@
     {#if s.tied + s.short + s.unwritable + s.locked + s.range > 0}
       <p class="muted">{t("ui.trillSkipped", { tied: s.tied, short: s.short, unwritable: s.unwritable, locked: s.locked, range: s.range })}</p>
     {/if}
-    {#if s.bend > 0}<p class="warn">{t("ui.slideBend", { n: s.bend })}</p>{/if}
+    {#if s.bend > 0}<p class="warn">{t("ui.slideBend", { n: s.bend, limit: profile.tieBendLimit })}</p>{/if}
   {/if}
   <footer>
     <span class="spacer"></span>

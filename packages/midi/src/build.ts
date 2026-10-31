@@ -184,7 +184,7 @@ function exactPlace(parts: readonly MidiPart[]): QuantizeResult {
     ),
   );
   const out = tidy(notes);
-  return { notes: out, grid: 16, tripletBeats: 0, merged: notes.length - out.length, suspect: [] };
+  return { notes: out, grid: 16, tripletBeats: 0, quintupletBeats: 0, merged: notes.length - out.length, suspect: [] };
 }
 
 /**

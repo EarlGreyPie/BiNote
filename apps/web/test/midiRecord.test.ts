@@ -286,6 +286,95 @@ describe("예비박·메트로놈", () => {
   });
 });
 
+describe("일반 재생 메트로놈 (점검 S24)", () => {
+  const t120 = () => ({ ...song(1), tempo: [{ at: r(0), bpm: 120 }] });
+
+  it("시각은 시작 자리부터 흐른 곡 초: 2마디부터 [0, 2)초에 박 넷, 첫 박이 accent", async () => {
+    const { runClicks } = await import("../src/lib/midiRecord");
+    const c = runClicks(t120(), r(1), undefined, 0, 2);
+    expect(c.map((k) => k.at)).toEqual([0, 0.5, 1, 1.5]);
+    expect(c.map((k) => k.accent)).toEqual([true, false, false, false]);
+    // 시작 앞(음수)에는 박이 없다 (예비박은 따로)
+    expect(runClicks(t120(), r(1), undefined, -2, 0)).toEqual([]);
+  });
+
+  it("반복 구간은 회차마다 이어 세고, 경계의 박을 두 번 넣지 않는다", async () => {
+    const { runClicks } = await import("../src/lib/midiRecord");
+    // 한 마디(2초) 반복을 1.3초씩 끊어 물어도 이어 붙이면 0.5초마다 하나씩
+    const cuts = [0, 1.3, 2.6, 3.9, 5.2, 6];
+    const all = cuts.slice(1).flatMap((b, k) => runClicks(t120(), r(0), 2, cuts[k]!, b));
+    expect(all.map((k) => k.at)).toEqual([0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5, 5.5]);
+    expect(all.filter((k) => k.accent).map((k) => k.at)).toEqual([0, 2, 4]);
+  });
+
+  it("박 가운데서 시작한 반복: 구간 안의 박만, 구간 끝(되돌아가는 자리)에는 울리지 않는다", async () => {
+    const { runClicks } = await import("../src/lib/midiRecord");
+    // 1/8 ~ 3/8 (0.25초 ~ 0.75초, 길이 0.5초). 박은 1/4(0.5초) 하나
+    const c = runClicks(t120(), r(1, 8), 0.5, 0, 1.5);
+    expect(c.map((k) => k.at)).toEqual([0.25, 0.75, 1.25]);
+  });
+
+  it("Metronome: 예비박을 넣고 박을 앞서 예약하며, 여러 번 불러도 같은 박은 한 번. 끝내면 더 넣지 않는다", async () => {
+    const { Metronome } = await import("../src/lib/midiRecord");
+    let heard: number | undefined = -2;
+    const clicks: [number, boolean][] = [];
+    const m = new Metronome({ heard: () => heard, click: (at, accent) => clicks.push([at, accent]) });
+    m.begin({ song: t120(), from: r(1), countIn: true, beats: true });
+    expect(m.running).toBe(true);
+    // 예비박 넷은 시작 앞 (-2 ~ -0.5초), 박은 0초부터 1.5초 앞까지
+    expect(clicks.slice(0, 4)).toEqual([
+      [-2, true],
+      [-1.5, false],
+      [-1, false],
+      [-0.5, false],
+    ]);
+    // 100ms마다 한 번씩 3.1초까지 (3.1 + 1.5 = 4.6초 앞까지 예약)
+    for (let k = 1; k <= 51; k++) {
+      heard = -2 + k / 10;
+      m.tick();
+    }
+    const beats = clicks.slice(4).map(([at]) => at);
+    expect(beats).toEqual([0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5]);
+    m.end();
+    expect(m.running).toBe(false);
+    heard = 10;
+    m.tick();
+    expect(clicks.slice(4)).toHaveLength(10);
+  });
+
+  it("박 가운데서 시작하면 예비박을 곡의 박 자리에 맞춘다: 예비박 끝과 곡 첫 박 사이도 한 박", async () => {
+    const { countIn, Metronome } = await import("../src/lib/midiRecord");
+    // 3/8(0.75초, 2박 가운데)에서 일시정지했다가 다시 재생. 박은 0.5초마다라 곡 첫 박은 시작 뒤 0.25초
+    const c = countIn(t120(), r(3, 8));
+    expect(c.seconds).toBeCloseTo(2);
+    expect(c.clicks.map((k) => k.at)).toEqual([-1, -0.5, 0, 0.5]);
+    expect(c.clicks.map((k) => k.accent)).toEqual([true, false, false, false]);
+    const clicks: number[] = [];
+    const m = new Metronome({ heard: () => -2, click: (at) => clicks.push(at) });
+    m.begin({ song: t120(), from: r(3, 8), countIn: true, beats: true });
+    m.end();
+    // 시작 자리부터 잰 시각: 예비박 -1.75 ~ -0.25, 곡 박 0.25부터. 모두 0.5초 간격
+    expect(clicks.slice(0, 5)).toEqual([-1.75, -1.25, -0.75, -0.25, 0.25]);
+    // 박 위에서 시작하면 그대로 (녹음과 같다)
+    expect(countIn(t120(), r(1, 4)).clicks.map((k) => k.at)).toEqual([-1.5, -1, -0.5, 0]);
+  });
+
+  it("Metronome: 재생 중에 켜면 지금 들리는 자리부터, 예비박만 켜면 박은 넣지 않는다", async () => {
+    const { Metronome } = await import("../src/lib/midiRecord");
+    let heard: number | undefined = 3.2;
+    const clicks: number[] = [];
+    const m = new Metronome({ heard: () => heard, click: (at) => clicks.push(at) });
+    m.begin({ song: t120(), from: r(0), countIn: false, beats: true });
+    expect(clicks).toEqual([3.5, 4, 4.5]);
+    m.end();
+    clicks.length = 0;
+    heard = -2;
+    m.begin({ song: t120(), from: r(0), countIn: true, beats: false });
+    expect(m.running).toBe(false);
+    expect(clicks).toEqual([-2, -1.5, -1, -0.5]);
+  });
+});
+
 describe("녹음 모으기", () => {
   it("예비박을 예약하고, 누른 시각을 곡 위치로, 끝낼 때 누르고 있던 건반은 그때 시각에 뗀 것으로", async () => {
     const { MidiRecorder } = await import("../src/lib/midiRecord");

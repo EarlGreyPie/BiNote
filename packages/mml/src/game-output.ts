@@ -1,23 +1,32 @@
-import { cmp, DEFAULT_BPM, getProfile, ZERO, type Song, type LengthLimit, type TempoEvent, type Track, type TrackText } from "@mmlce/core";
+import { cmp, DEFAULT_BPM, getProfile, ZERO, type GameProfile, type Song, type TempoEvent, type Track, type TrackText } from "@mmlce/core";
 import { mmlAt, pasteTrackIds, scoreChunks, type ScoreChunk } from "./clipboard.js";
 import { sameSound } from "./compare.js";
-import { parseTrackText, trackSource } from "./edit.js";
+import { trackSource } from "./edit.js";
 import { optimizeMml } from "./optimizer.js";
+import { parseMml } from "./parser.js";
 import { placeTempo, placeTempoByScore, type TempoMove } from "./tempo-placement.js";
 import { bpmBefore, padScore, scoreEnd, tempoBefore } from "./score-end.js";
-import { audibleTempo, sameTempo, spliceText, surgicalSource, tempoTokens } from "./tempo-text.js";
+import { audibleTempo, gameSource, sameTempo, shortestWriting, spliceText, surgicalSource, tempoTokens } from "./tempo-text.js";
 
-/** 트랙마다 출력기로 다시 쓴 글. 트랙은 고치면 새 객체가 되므로, 같은 트랙·같은 템포 자리면 다시 쓰지 않는다 */
+/** 트랙마다 게임에 넣을 글. 트랙은 고치면 새 객체가 되므로, 같은 트랙·같은 템포 자리면 다시 쓰지 않는다 */
 const rewriteCache = new WeakMap<Track, { key: string; text: string | undefined }>();
 
-/** 출력기로 다시 쓴 글. 다시 읽은 음이 원래 음과 다르면(출력기가 쓸 수 없는 길이) undefined */
-function rewritten(track: Track, tempo: readonly TempoEvent[], lengths: LengthLimit): string | undefined {
-  const key = JSON.stringify([tempo, lengths]);
+/**
+ * 게임에 넣을 글: 출력기로 다시 쓴 글과 원문(템포만 고치고 주석·빈칸을 벗긴 것, gameSource) 가운데
+ * 다시 읽은 음과 템포가 맞는 짧은 쪽. 출력기는 원문을 보지 않으므로 원문보다 길게 쓸 때가 있어 둘을 견준다.
+ * 템포까지 맞는 글이 없으면 음만 맞는 출력기 글, 그것도 아니면(출력기가 쓸 수 없는 길이 등) undefined
+ */
+function rewritten(track: Track, tempo: readonly TempoEvent[], profile: GameProfile): string | undefined {
+  const key = JSON.stringify([tempo, profile.length, profile.octave, profile.volume]);
   const hit = rewriteCache.get(track);
   if (hit && hit.key === key) return hit.text;
   const notes = [...track.notes].sort((a, b) => cmp(a.start, b.start));
-  const text = optimizeMml(notes, { tempo, lengths }).text;
-  const out = sameSound(parseTrackText(track.id, { text }).notes, notes) ? text : undefined;
+  const optimized = optimizeMml(notes, { tempo, lengths: profile.length }).text;
+  // 템포까지 맞는 글이 없으면 음만 맞는 출력기 글을 쓴다 (지금까지와 같다). 출력기가 64분보다 촘촘한 템포 바꿈을
+  // 한 자리에 겹쳐 써서 조금 어긋난 것이라, 화면의 글을 그대로 쓰면(asIs) 이 트랙에 맡긴 템포가 모두 빠지는 것보다 낫다
+  const out =
+    shortestWriting(notes, tempo, [optimized, track.mml ? gameSource(track.mml, tempo, profile) : undefined]) ??
+    (sameSound(parseMml(optimized).notes, notes) ? optimized : undefined);
   rewriteCache.set(track, { key, text: out });
   return out;
 }
@@ -47,9 +56,9 @@ export interface GameScore extends ScoreChunk {
 
 /**
  * 곡을 게임 악보 단위로 쓴다. 게임은 악보(연주자)마다 따로 붙여넣으므로 곡 템포를 악보마다 넣는다
- * (곡 전체에 한 번만 넣으면 그 채널이 없는 악보는 기본 템포로 친다). 글은 최적화 출력기로 다시 쓰고
- * (출력기는 사용자가 쓴 원문보다 길게 쓰지 않는다), 다시 읽은 음이 원래 음과 다르면
- * (출력기가 쓸 수 없는 길이) 그 트랙만 화면의 글을 그대로 쓴다.
+ * (곡 전체에 한 번만 넣으면 그 채널이 없는 악보는 기본 템포로 친다). 글은 트랙마다 최적화 출력기로 다시 쓴 글과
+ * 템포만 고친 원문 가운데 다시 읽은 음·템포가 맞는 짧은 쪽을 쓴다(출력기 글이 원문보다 길 수 있다).
+ * 음이 맞는 글이 하나도 없으면(출력기가 쓸 수 없는 길이 등) 그 트랙만 화면의 글을 그대로 쓴다.
  * 템포 자리가 그 악보 모든 채널에서 음 가운데라 정확히 쪼갤 수 없으면 뒤쪽 가장 가까운 음 경계로 옮겨 쓰고 moved에 적는다.
  */
 export function gameScores(
@@ -61,14 +70,15 @@ export function gameScores(
   charLimit?: number,
 ): GameScore[] {
   const moved = new Map<string, TempoMove[]>();
-  const lengths = getProfile(song.meta.profileId).length;
+  const profile = getProfile(song.meta.profileId);
+  const lengths = profile.length;
   const placed = placeTempoByScore({ ...song, tempo: withoutDefaultStart(audibleTempo(song.tempo)) }, maxChords, moved);
   const chunks = scoreChunks(song, maxChords);
   /** 트랙마다 쓴 글. 출력기로 정확히 쓸 수 없으면 화면의 글 그대로 (asIs) */
   const written = new Map<string, { text: string; asIs: boolean }>();
   for (const id of chunks.flatMap((c) => c.trackIds)) {
     const t = song.tracks.find((x) => x.id === id)!;
-    const text = rewritten(t, placed.get(t.id) ?? [], lengths);
+    const text = rewritten(t, placed.get(t.id) ?? [], profile);
     written.set(id, text !== undefined ? { text, asIs: false } : { text: trackSource(song, t).text, asIs: true });
   }
   // 다시 쓴 글이 원문 끝 쉼표를 잃어 악보가 짧아지지 않게 악보 길이를 지킨다 (score-end.ts)
@@ -153,7 +163,8 @@ export function gamePaste(
   pasteLimit: number,
   options: GamePasteOptions,
 ): GamePaste {
-  const lengths = getProfile(song.meta.profileId).length;
+  const profile = getProfile(song.meta.profileId);
+  const lengths = profile.length;
   const order = song.tracks.map((t) => t.id);
   const trackIds = order.filter((id) => selected.includes(id));
   const chunk = scoreChunks(song, maxChords).find((c) => c.trackIds.length === trackIds.length && c.trackIds.every((id, k) => id === trackIds[k]));
@@ -169,7 +180,7 @@ export function gamePaste(
   const written = new Map<string, string>();
   const asIs: string[] = [];
   tracks.forEach((t, k) => {
-    const text = rewritten(t, placed[k] ?? [], lengths);
+    const text = rewritten(t, placed[k] ?? [], profile);
     if (text !== undefined) written.set(t.id, text);
     else {
       const source = trackSource(song, t);

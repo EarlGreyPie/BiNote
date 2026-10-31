@@ -1,8 +1,19 @@
 import type { Unresolved } from "@mmlce/audio/browser";
-import { positionToSeconds, rat, secondsToWhole, type Song, type TempoEvent } from "@mmlce/core";
+import { positionToSeconds, rat, secondsToWhole, ZERO, type Rat, type Song, type TempoEvent } from "@mmlce/core";
 import type { Engine } from "./engine";
+import { countIn, Metronome } from "./midiRecord";
 
 const asRat = (time: number) => rat(Math.round(time * 960), 960);
+
+/** 재생 하나의 덧붙임 */
+export interface PlayOptions {
+  /** MIDI 건반 녹음: 한 마디 예비박만큼 비우고 시작하고, 곡이 끝나도 정지할 때까지 돈다. 딸깍은 녹음이 따로 울린다 */
+  readonly record?: boolean;
+  /** 시작 앞 한 마디 예비박 (딸깍) */
+  readonly countIn?: boolean;
+  /** 메트로놈을 울리지 않는다 (고친 자리 짧게 듣기) */
+  readonly noClicks?: boolean;
+}
 
 /**
  * 재생 상태: 엔진으로 재생을 시작·정지하고, 화면 갱신 루프로 지금 위치를 따라간다.
@@ -24,10 +35,37 @@ export class Playback {
   tempo: readonly TempoEvent[] = [];
   private generation = 0;
   /** 준비 중(아직 소리 나기 전)인 재생 요청. 그사이 속도를 바꾸면 이것을 새 속도로 다시 요청한다 */
-  pending: { song: Song; start: number | undefined; loop: readonly [number, number] | undefined; rate: number } | undefined;
+  pending: { song: Song; start: number | undefined; loop: readonly [number, number] | undefined; rate: number; options: PlayOptions } | undefined;
+  /** 일반 재생 메트로놈 (녹음 메트로놈은 녹음 쪽에 따로 있다) */
+  private readonly metronome: Metronome;
+  /** 메트로놈을 켰는지 (설정은 playPrefs가 기억하고, 여기는 앱이 넣어 준다) */
+  private clicking = false;
+  /** 지금 재생의 메트로놈 자리. 녹음·짧게 듣기면 없다 (재생 중에 메트로놈을 켜면 여기서 시작한다) */
+  private clickRun: { song: Song; from: Rat; loop: number | undefined } | undefined;
 
   constructor(private readonly engine: Engine) {
-    engine.onEnd = () => (this.playing = false);
+    this.metronome = new Metronome(engine.runClock);
+    engine.onEnd = () => {
+      this.playing = false;
+      // 곡 끝 뒤로 앞서 예약해 둔 딸깍도 끈다
+      this.metronome.end();
+      this.engine.clearClicks();
+      this.clickRun = undefined;
+    };
+  }
+
+  /** 메트로놈 켜기·끄기. 재생 중이면 바로 지금 자리부터 울리거나 남은 딸깍을 끈다 */
+  setMetronome(on: boolean): void {
+    if (this.clicking === on) return;
+    this.clicking = on;
+    if (!on) {
+      this.metronome.end();
+      // 녹음 중이면(clickRun 없음) 녹음 쪽 메트로놈의 딸깍은 그대로 둔다
+      if (this.clickRun) this.engine.clearClicks();
+      return;
+    }
+    const run = this.clickRun;
+    if (run && this.engine.playing) this.metronome.begin({ ...run, countIn: false, beats: true });
   }
 
   /** 지금 곡 시각(초) */
@@ -49,17 +87,23 @@ export class Playback {
    * start(온음표, 없으면 처음)부터 재생. loop가 있으면 그 구간을 끊김 없이 되풀이한다.
    * rate: 재생 속도 (탭 템포를 느리게 찍을 때). 위치·탭 시각은 늘 곡 시간(초)으로 잰다.
    * at: 반복 구간이 있을 때 이 곡 시각(초)이 구간 안이면 처음이 아니라 거기서부터 이어 재생한다 (속도 바꾸기).
-   * record: MIDI 건반 녹음 (예비박 leadIn 오디오 초, 곡이 끝나도 정지할 때까지 돈다)
+   * options: 녹음·예비박·메트로놈 끄기 (PlayOptions). 메트로놈은 setMetronome으로 켠 동안 울린다
    */
-  async play(song: Song, start: number | undefined, loop: readonly [number, number] | undefined, rate = 1, at?: number, record?: { leadIn: number }): Promise<boolean> {
+  async play(song: Song, start: number | undefined, loop: readonly [number, number] | undefined, rate = 1, at?: number, options: PlayOptions = {}): Promise<boolean> {
     const generation = ++this.generation;
-    this.pending = { song, start, loop, rate };
+    this.pending = { song, start, loop, rate, options };
+    // 앞 재생의 박은 더 예약하지 않는다 (이미 예약한 것은 엔진이 새 재생을 시작할 때 끈다)
+    this.metronome.end();
+    this.clickRun = undefined;
     const begin = loop ? loop[0] : start;
     const from = begin !== undefined && begin > 0 ? asRat(begin) : undefined;
     const fromSeconds = from ? positionToSeconds(song.tempo, from) : 0;
     const loopSeconds = loop ? positionToSeconds(song.tempo, asRat(loop[1])) - fromSeconds : undefined;
     const offset = loopSeconds && at !== undefined && at > fromSeconds && at < fromSeconds + loopSeconds ? at - fromSeconds : 0;
-    const result = await this.engine.play(song, from, loopSeconds && loopSeconds > 0 ? loopSeconds : undefined, rate, offset, record);
+    // 예비박 한 마디만큼 비우고 시작한다. 반복 구간 가운데서 이어 재생하면(offset) 예비박을 두지 않는다
+    const counting = options.record || (options.countIn && offset === 0);
+    const lead = counting ? { leadIn: countIn(song, from ?? ZERO).seconds / rate, endless: !!options.record } : undefined;
+    const result = await this.engine.play(song, from, loopSeconds && loopSeconds > 0 ? loopSeconds : undefined, rate, offset, lead);
     if (generation !== this.generation) return false;
     this.pending = undefined;
     this.unresolved = result;
@@ -69,6 +113,11 @@ export class Playback {
     this.position = 0;
     this.playing = true;
     this.runs++;
+    if (!options.record && !options.noClicks && this.engine.playing) {
+      const run = { song, from: from ?? ZERO, loop: loopSeconds && loopSeconds > 0 ? loopSeconds : undefined };
+      this.clickRun = run;
+      if (this.clicking || counting) this.metronome.begin({ ...run, countIn: !!counting, beats: this.clicking });
+    }
     const frame = () => {
       if (generation !== this.generation) return;
       this.position = this.engine.position;
@@ -82,6 +131,8 @@ export class Playback {
   stop(): void {
     this.generation++;
     this.pending = undefined;
+    this.metronome.end();
+    this.clickRun = undefined;
     this.engine.stop();
     this.playing = false;
     this.position = 0;

@@ -20,7 +20,7 @@ export const INSTRUMENTS: readonly InstrumentInfo[] = [
   { id: "violin", program: 22, aliases: ["violin"] },
   { id: "harp", program: 24, aliases: ["harp"] },
   { id: "music-box", program: 29, aliases: ["musicbox"] },
-  // 모바일 전용: 팩마다 번호가 다르다(30/40 등). 인게임 번호는 실측 대기
+  // 모바일 전용: 팩마다 번호가 다르다(30/40 등). 인게임 번호는 실측 전 (프로필 pending mobileInstrumentPrograms)
   { id: "folk-guitar", aliases: ["folkguitar", "guitar"] },
   { id: "harmonica", aliases: ["harmonica"] },
   { id: "cat-harmonica", aliases: ["nyanmonica", "catharmonica"] },

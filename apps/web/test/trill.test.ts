@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { defaultLengthLimit, MOBILE_PROFILE, planTrill, rat, type Note, type Rat, type Song, type TrillOptions } from "@mmlce/core";
+import { add, defaultLengthLimit, MOBILE_PROFILE, planTrill, rat, type Note, type Rat, type Song, type TrillOptions } from "@mmlce/core";
 import { addPlayer, addTrack, canWriteExactly, newSong } from "@mmlce/mml";
 import { parseTrillChoice, parseTrillInput, parseTrillMade, formatTrillInput } from "../src/lib/trillOptions";
 
@@ -83,6 +83,14 @@ describe("트릴", () => {
     expect(r.skipped.bend).toBe(1);
   });
 
+  it("& 사슬 높이 차 한도는 프로필(tieBendLimit)에서 읽는다", () => {
+    const s = songOf([n("a", rat(0), rat(1, 4), 60, { tie: "next" }), n("b", rat(1, 4), rat(1, 4), 64)]);
+    const picked = s.tracks.flatMap((tr) => tr.notes).filter((x) => x.id === "a");
+    expect(planTrill(s, picked, base, MOBILE_PROFILE, newId).skipped.bend).toBe(0);
+    // 트릴 끝 음(62)에서 뒤에 이어진 e(64)까지 2반음: 한도가 1이면 건너뛴다
+    expect(planTrill(s, picked, base, { ...MOBILE_PROFILE, tieBendLimit: 1 }, newId).skipped.bend).toBe(1);
+  });
+
   it("상대 음이 악기 음역 밖이라 접히면 간격이 달라지므로 건너뛴다", () => {
     const r = run(songOf([n("a", rat(0), rat(1, 4), 70)]), ["a"], { offset: -2, instrumentOf: () => "cat-harmonica" });
     expect(r.skipped.range).toBe(1);
@@ -156,7 +164,7 @@ describe("전체 낮추기 자동 (트레몰로 실측 권장값)", () => {
   it("실측값은 프로필에 있고 더는 pending이 아니다", () => {
     expect(MOBILE_PROFILE.ornamentFastRate).toBe(20);
     expect(MOBILE_PROFILE.ornamentFastRateByInstrument.violin).toBeLessThan(20);
-    expect(MOBILE_PROFILE.pending).not.toContain("ornamentFastRate");
+    expect(MOBILE_PROFILE.pending.map((p) => p.key)).not.toContain("ornamentFastRate");
   });
 });
 
@@ -260,5 +268,56 @@ describe("창 설정", () => {
     expect(formatTrillInput(2, tab)).toBe("7");
     expect(formatTrillInput(-6, tab)).toBeUndefined();
     expect(formatTrillInput(1)).toBe("+1");
+  });
+});
+
+describe("많은 음 (점검 S35: 트랙마다 한 번 정렬·한 번 넣기)", () => {
+  /** 겹치지 않는 음 count개 (쉼표·&·여러 길이를 섞는다). 같은 시드면 같은 음 */
+  const lineOf = (prefix: string, count: number, seed: number): Note[] => {
+    let x = seed;
+    const next = () => (x = (x * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+    const durs = [rat(1, 4), rat(1, 8), rat(3, 16), rat(1, 6), rat(1, 2), rat(1, 12)];
+    const out: Note[] = [];
+    let at = rat(0);
+    for (let i = 0; i < count; i++) {
+      const start = next() < 0.3 ? add(at, rat(1, 16)) : at;
+      const dur = durs[Math.floor(next() * durs.length)]!;
+      out.push(n(`${prefix}${i}`, start, dur, 48 + Math.floor(next() * 30), { vol: 1 + Math.floor(next() * 15), tie: next() < 0.3 ? "next" : "none" }));
+      at = add(start, dur);
+    }
+    return out.reverse();
+  };
+
+  it("겹친 음이 있는 트랙이 곡에 있어(하나씩 넣기) 없어도(모아 넣기) 결과가 같다", () => {
+    // 고르지 않은 다른 연주자 트랙에 겹친 음을 두면 예전처럼 본음마다 하나씩 넣는 길로 간다
+    const messy = [n("z1", rat(0), rat(1, 2)), n("z2", rat(1, 4), rat(1, 2))];
+    const kinds: Partial<TrillOptions>[] = [
+      { kind: "tremolo" },
+      { kind: "trill", tie: true, endOnMain: true },
+      { kind: "trill", staccato: true, length: rat(1, 16) },
+      { kind: "tremolo", volume: { pattern: "alternate", depth: 3, lower: "auto" } },
+    ];
+    for (let seed = 1; seed <= 12; seed++) {
+      const t1 = lineOf("a", 40, seed);
+      const t2 = lineOf("b", 40, seed * 7);
+      const picked = [...t1, ...t2].filter((_, i) => i % 3 !== 1).map((x) => x.id);
+      for (const options of kinds) {
+        k = 0;
+        const clean = run(songOf(t1, t2), picked, options);
+        k = 0;
+        const slow = run(songOf(t1, t2, messy), picked, options);
+        expect(JSON.stringify(clean)).toBe(JSON.stringify(slow));
+        expect(clean.made).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it("2000음 트레몰로도 금방 끝난다 (예전에는 본음마다 트랙 전체를 정렬·정리해 수십 초)", () => {
+    const line = Array.from({ length: 2000 }, (_, i) => n(`a${i}`, rat(i, 4), rat(1, 4)));
+    const t = performance.now();
+    const r = run(songOf(line), line.map((x) => x.id), { kind: "tremolo" });
+    expect(performance.now() - t).toBeLessThan(5000);
+    expect(r.made).toBe(2000);
+    expect(notesOf(r, "t1")).toHaveLength(16000);
   });
 });

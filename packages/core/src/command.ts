@@ -59,8 +59,8 @@ export class History {
   private tabMarks = new Map<string, number>();
   private nextMark = 1;
 
-  /** 마지막 run을 검사가 거절했는지 */
-  private wasRefused = false;
+  /** 마지막 run을 거절한 까닭. guard: 검사가 거절, range: 계산 중 분수 값이 안전한 정수 범위를 넘음 */
+  private lastRefusal: "guard" | "range" | undefined;
 
   constructor(
     private current: Song,
@@ -105,22 +105,37 @@ export class History {
     return this.redoStack.length > 0;
   }
 
-  /** 마지막 run을 검사가 거절해 곡이 그대로인지 */
+  /** 마지막 run을 거절해(검사, 또는 분수 계산 범위 넘침) 곡이 그대로인지 */
   get refused(): boolean {
-    return this.wasRefused;
+    return this.lastRefusal !== undefined;
+  }
+
+  /** 마지막 run을 거절한 까닭 (거절하지 않았으면 undefined) */
+  get refusal(): "guard" | "range" | undefined {
+    return this.lastRefusal;
   }
 
   /**
    * 명령을 실행해 기록에 넣는다. 검사(guard)가 거절하면 곡도 기록도 그대로 두고 지금 곡을 돌려준다 (refused가 true).
    * 명령이 곡을 그대로 돌려주면 기록하지 않는다.
+   * 명령이나 검사가 RangeError(분수 값이 안전한 정수 범위를 넘음)를 던지면 앱을 멈추지 않고 같은 식으로 거절한다 (refusal이 "range").
    * unchecked: 검사를 일부러 건너뛰는 길 (MML 글 직접 입력처럼 쓴 글이 곧 출력인 편집)
    */
   run(command: Command, options?: { readonly unchecked?: boolean }): Song {
     const before = this.current;
-    const after = command.apply(before);
-    this.wasRefused = !options?.unchecked && after !== before && this.guard !== undefined && !this.guard(before, after, command);
+    let after: Song;
+    try {
+      after = command.apply(before);
+      this.lastRefusal =
+        !options?.unchecked && after !== before && this.guard !== undefined && !this.guard(before, after, command) ? "guard" : undefined;
+    } catch (e) {
+      // 분수 값이 안전한 정수 범위를 넘으면(서로 다른 불규칙 음길이가 아주 많이 쌓인 곡 등) 앱을 멈추지 않고 이 편집만 거절한다
+      if (!(e instanceof RangeError)) throw e;
+      this.lastRefusal = "range";
+      return before;
+    }
     // 바뀐 것이 없으면 기록하지 않는다 (빈 실행 취소 칸이 생기지 않게)
-    if (this.wasRefused || after === before) return before;
+    if (this.lastRefusal || after === before) return before;
     this.current = after;
     // 새로 생긴 트랙은 같은 id를 쓰던 예전 트랙의 음소거·솔로를 물려받지 않는다
     const existed = new Set(before.tracks.map((t) => t.id));

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { emptySong, type Song } from "@mmlce/core";
-import { editorStateKey, parseEditorState, withTrackView } from "../src/lib/projectEditor";
+import { readProject, writeProject } from "@mmlce/fileio";
+import { editorStateKey, keptFields, parseEditorState, projectWriteOptions, withTrackView } from "../src/lib/projectEditor";
 
 const song: Song = {
   ...emptySong({ title: "", author: "", profileId: "mobile" }),
@@ -107,5 +108,25 @@ describe("영상 화면 채우기·잰 속도 (지시서 26)", () => {
   });
   it("잘못된 속도는 버린다", () => {
     expect(parseEditorState({ video: { ...video, speed: -3 } }, song).video?.speed).toBeUndefined();
+  });
+});
+
+describe("연 프로젝트의 모르는 칸 다시 적기 (점검 S32)", () => {
+  it("화면 상태의 모르는 칸과 맨 위 모르는 필드만 골라 둔다", () => {
+    const kept = keptFields({ editor: { activeTrackId: "t1", division: 16, zoom: 2, trackView: {} }, extras: { share: { id: "abc" } } });
+    expect(kept).toEqual({ file: { share: { id: "abc" } }, editor: { zoom: 2 } });
+    expect(keptFields({})).toEqual({});
+    expect(keptFields({ editor: { division: 8 } })).toEqual({});
+  });
+
+  it("열고 저장하면 모르는 칸이 남고, 아는 칸은 지금 화면 값이 이긴다", () => {
+    const opened = writeProject(song, { editor: { activeTrackId: "t1", division: 16, zoom: 2 }, extras: { share: { id: "abc" } } });
+    const read = readProject(opened);
+    const kept = keptFields(read);
+    const state = { ...parseEditorState(read.editor, read.song), division: 32 };
+    const again = JSON.parse(writeProject(read.song, projectWriteOptions(state, kept, "test")));
+    expect(again.editor).toEqual({ zoom: 2, activeTrackId: "t1", division: 32 });
+    expect(again.share).toEqual({ id: "abc" });
+    expect(again.app).toBe("test");
   });
 });

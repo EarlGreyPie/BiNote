@@ -21,12 +21,19 @@ export const COMMANDS = [
   "edit.undo",
   "edit.redo",
   "edit.selectAll",
+  "edit.selectBefore",
+  "edit.selectAfter",
   "edit.copy",
   "edit.cut",
   "edit.paste",
+  "edit.duplicate",
   "edit.lengthDouble",
   "edit.lengthHalf",
   "edit.dotToggle",
+  "edit.find",
+  "edit.replace",
+  "edit.findNext",
+  "edit.findPrev",
   "edit.transpose",
   "edit.volume",
   "note.delete",
@@ -45,6 +52,10 @@ export const COMMANDS = [
   "play.start",
   "play.stop",
   "play.fromEditCursor",
+  "play.toStart",
+  "play.toEnd",
+  "play.prevBar",
+  "play.nextBar",
   "track.prev",
   "track.next",
   "track.moveUp",
@@ -77,13 +88,23 @@ const COMMON: Bindings = {
   "edit.undo": ["Ctrl+Z"],
   "edit.redo": ["Ctrl+Y", "Ctrl+Shift+Z"],
   "edit.selectAll": ["Ctrl+A"],
+  // 편집 커서 앞·뒤 음 모두 고르기 (Shift+Home / End는 글 칸 밖에서만 받는다)
+  "edit.selectBefore": ["Shift+Home"],
+  "edit.selectAfter": ["Shift+End"],
   "edit.copy": ["Ctrl+C"],
   "edit.cut": ["Ctrl+X"],
   "edit.paste": ["Ctrl+V"],
+  // 고른 음을 바로 뒤에 한 벌 더 (FL·Ableton의 Ctrl+D). 클립보드는 건드리지 않는다
+  "edit.duplicate": ["Ctrl+D"],
   "edit.lengthDouble": ["Ctrl+]"],
   "edit.lengthHalf": ["Ctrl+["],
   // 점음표 붙이기·떼기 (고른 음, 타브는 커서 음, 없으면 새 음 길이)
   "edit.dotToggle": [".", "Num."],
+  // MML 편집기 찾기·바꾸기 (편집기 밖에서 눌러도 고른 트랙 편집기로 간다)
+  "edit.find": ["Ctrl+F"],
+  "edit.replace": ["Ctrl+H"],
+  "edit.findNext": ["F3"],
+  "edit.findPrev": ["Shift+F3"],
   "edit.transpose": ["Alt+P"],
   "note.octaveUp": ["Shift+Up"],
   "note.octaveDown": ["Shift+Down"],
@@ -102,6 +123,9 @@ const COMMON: Bindings = {
   "track.moveDown": ["Alt+Shift+Down"],
   "play.start": ["F5"],
   "play.stop": ["Escape"],
+  // 재생 커서를 곡 처음·끝으로 (재생 중이면 거기서 이어 재생)
+  "play.toStart": ["Home"],
+  "play.toEnd": ["End"],
   // 격자 칸 ×2(성기게)·½(촘촘히). 길이 ×2·½(Ctrl+] / Ctrl+[)과 같은 [ ] 자리에 Shift.
   // 숫자 키(격자·MIDI 건반 스텝)·+/−·점 키와 겹치지 않고, Ctrl+Alt+방향키는 윈도우 화면 회전과 겹칠 수 있어 피한다
   "grid.double": ["Shift+]"],
@@ -117,6 +141,9 @@ const MMLCE: Bindings = {
   "view.tab": ["Alt+T"],
   "view.orientation": ["Alt+O"],
   "view.keymap": ["Ctrl+/"],
+  // 재생 커서를 앞·뒤 마디 첫머리로 (글 칸에서는 낱말 건너뛰기로 둔다)
+  "play.prevBar": ["Ctrl+Left"],
+  "play.nextBar": ["Ctrl+Right"],
   // 타브 보기의 +/−와 같게: 고른 음 길이, 고른 음이 없으면 새 음 길이를 ×2 / ½ (Shift를 눌러 치는 +도)
   "edit.lengthDouble": ["Ctrl+]", "=", "Shift+=", "Num+"],
   "edit.lengthHalf": ["Ctrl+[", "-", "Num-"],
@@ -128,6 +155,9 @@ const MMLCE: Bindings = {
 const MABIICCO: Bindings = {
   ...COMMON,
   "note.delete": ["Delete"],
+  // 마디 앞·뒤로는 재생(F5) 양옆의 F4·F6 (F3은 다음 찾기)
+  "play.prevBar": ["F4"],
+  "play.nextBar": ["F6"],
   ...grid({
     1: ["1", "Num1"],
     2: ["2", "Num2"],
@@ -152,8 +182,17 @@ export interface KeymapSettings {
 
 export const DEFAULT_SETTINGS: KeymapSettings = { preset: "mmlce", overrides: {} };
 
+/**
+ * 키 설정 위에 사용자가 바꾼 것을 덧씌운다. 사용자가 다른 명령에 걸어 둔 키는 키 설정 쪽에서 뺀다:
+ * 새 판에서 키 설정에 새 명령 키(예: Ctrl+D 복제)가 생겨도, 예전에 그 키를 직접 걸어 둔 명령이 그대로 받게
+ */
 export function resolve(settings: KeymapSettings): Bindings {
-  return { ...PRESET_BINDINGS[settings.preset], ...settings.overrides };
+  const taken = new Set(Object.values(settings.overrides).flat());
+  const out: Partial<Record<CommandId, readonly string[]>> = {};
+  for (const [c, keys] of Object.entries(PRESET_BINDINGS[settings.preset]) as [CommandId, readonly string[]][]) {
+    out[c] = c in settings.overrides ? keys : keys.filter((k) => !taken.has(k));
+  }
+  return { ...out, ...settings.overrides };
 }
 
 export function keysOf(bindings: Bindings, command: CommandId): readonly string[] {

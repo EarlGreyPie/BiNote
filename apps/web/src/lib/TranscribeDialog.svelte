@@ -21,6 +21,7 @@
     type ScriptorOptions,
   } from "./basicScriptor";
   import { pitchJob } from "./jobs";
+  import { errorLog } from "./diagnostics";
   import { decodeForPitch, DEFAULT_PITCH_OPTIONS, PitchTooLong, pitchModelUrl, type PitchOptions } from "./pitchTranscribe";
 
   /**
@@ -218,7 +219,10 @@
     if (run !== generation) return;
     if (!notes) {
       running = false;
-      error = t("ui.transcribeBrowserFailed");
+      // 까닭을 알면 함께 보이고 진단 정보(최근 오류)에 남긴다
+      const reason = job.lastError;
+      if (reason) errorLog.note("transcribe", reason);
+      error = reason ? t("ui.withReason", { message: t("ui.transcribeBrowserFailed"), reason }) : t("ui.transcribeBrowserFailed");
       return;
     }
     finish(() => timedPartsToAnalysis([{ name: "basic-pitch", channel: 0, program: 0, notes: notes as readonly TimedNote[] }], when), !!when, fromRef, false);

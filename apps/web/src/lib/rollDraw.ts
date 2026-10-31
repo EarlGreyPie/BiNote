@@ -18,6 +18,7 @@ import {
   timbreBoundaries,
   toFloat,
   type Note,
+  type PlaceLoss,
   type Rat,
   type Song,
 } from "@mmlce/core";
@@ -60,6 +61,8 @@ export interface RollDrawOptions {
   readonly activeId: string | undefined;
   /** 끌고 있는 음들 (원래 자리 대신 끄는 자리에 그린다) */
   readonly dragNotes: readonly Note[];
+  /** 끄는 음을 놓으면 고르는 트랙에서 잘리거나 지워질 음 (placeLoss). 경고 색 사선으로 미리 보여 준다 */
+  readonly loss?: PlaceLoss | undefined;
   /** MIDI 건반 녹음 중 친 음 (트랙과 상관없이 높이대로 녹음 색 테두리로) */
   readonly ghost?: readonly GhostNote[] | undefined;
   readonly selected: ReadonlySet<string>;
@@ -329,6 +332,24 @@ export function drawRoll(canvas: HTMLCanvasElement, o: RollDrawOptions): void {
         g.beginPath();
         g.roundRect(box.x - pad, box.y - pad, box.w + 2 * pad, box.h + 2 * pad, Math.max(radius, 2) + pad);
         g.stroke();
+      }
+      // 끄는 음에 먹힐 음: 잘려 나갈 뒷부분(지워질 음은 통째로)에 경고 색 사선과 테두리.
+      // 끄는 음은 이 트랙 음 목록 맨 뒤라 그 위에 다시 그려지므로 가리지 않는다
+      const loss = isActive ? o.loss : undefined;
+      if (loss && (loss.removed.has(n.id) || loss.cut.has(n.id))) {
+        const keep = loss.removed.has(n.id) ? 0 : toFloat(loss.cut.get(n.id)!);
+        const lost = noteRect(v, st + keep, du - keep, n.pitch);
+        const danger = o.css("--danger");
+        const p = hatch(danger);
+        if (p) {
+          g.globalAlpha = 0.9;
+          g.fillStyle = p;
+          g.fillRect(lost.x, lost.y, lost.w, lost.h);
+        }
+        g.globalAlpha = 1;
+        g.strokeStyle = danger;
+        g.lineWidth = 1.5;
+        g.strokeRect(lost.x + 0.75, lost.y + 0.75, Math.max(1, lost.w - 1.5), Math.max(1, lost.h - 1.5));
       }
     }
     g.globalAlpha = isActive ? 0.95 : track.mute ? 0.3 : 0.5;

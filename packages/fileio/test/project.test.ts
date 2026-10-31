@@ -26,6 +26,17 @@ describe("writeProject / readProject", () => {
     expect(back.tracks[1]!.color).toBe("#e04a8a");
   });
 
+  it("마비꼬 노래 칸 표시(mmiSong)와 트랙 보이기(mix.visible)는 true·false만 받는다 (점검 S07)", () => {
+    const song = sample();
+    const tracks = song.tracks.map((t, i) => (i === 0 ? { ...t, mmiSong: true, mix: { visible: false } } : t));
+    const back = readProject(writeProject({ ...song, tracks })).song;
+    expect(back.tracks.map((t) => [t.mmiSong, t.mix?.visible])).toEqual([[true, false], [undefined, undefined], [undefined, undefined]]);
+    const odd = writeProject({ ...song, tracks }).replace('"mmiSong": true', '"mmiSong": "yes"').replace('"visible": false', '"visible": "false"');
+    const read = readProject(odd);
+    expect(read.song.tracks[0]!.mmiSong).toBeUndefined();
+    expect(read.song.tracks[0]!.mix).toBeUndefined();
+  });
+
   it("읽을 수 없는 트랙 색은 차례대로 주는 색으로 바꾸고 고정도 켜지 않는다 (알림을 남김)", () => {
     const song = sample();
     const tracks = song.tracks.map((t, i) => (i === 0 ? { ...t, color: "not-a-color", colorPinned: true } : i === 1 ? { ...t, color: " ", colorPinned: true } : { ...t, color: "rgb(255, 0, 0)" }));
@@ -173,9 +184,11 @@ describe("writeProject / readProject", () => {
     expect(() => readProject('{"format":"mmlce","version":1}')).toThrowError(expect.objectContaining({ code: "project-broken" }));
   });
 
-  it("더 새 판 파일은 이유를 알려 주고 열지 않는다", () => {
-    const text = writeProject(sample()).replace(`"version": ${PROJECT_VERSION}`, `"version": ${PROJECT_VERSION + 1}`);
-    expect(() => readProject(text)).toThrowError(expect.objectContaining({ code: "project-newer" }));
+  it("더 새 판 파일은 이 판도 읽을 수 있다고 적지 않았으면(minReader) 이유를 알려 주고 열지 않는다", () => {
+    const raw = JSON.parse(writeProject(sample()));
+    delete raw.minReader;
+    raw.version = PROJECT_VERSION + 1;
+    expect(() => readProject(JSON.stringify(raw))).toThrowError(expect.objectContaining({ code: "project-newer" }));
   });
 
   it("깨진 음·겹친 음·범위 밖 v는 고치거나 빼고 진단을 남긴다", () => {

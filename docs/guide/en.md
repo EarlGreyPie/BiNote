@@ -39,6 +39,11 @@ If you use BiNote often, we recommend **adding it to your home screen (installin
 - Safari on iPad or iPhone: Share → Add to Home Screen
 - Chrome on Android: ⋮ → Add to Home screen (Install app)
 
+Once installed, the app can open files directly.
+
+- App installed in Chrome or Edge on PC: open .mme, .mml, .mmi and .mid files from File Explorer and the like with **Open with BiNote** (the "Open with" app). Each file opens in a new window.
+- App installed on Android: BiNote appears in other apps' **Share** menu. Share MML@ text or a score or audio file, and it opens right away in BiNote.
+
 Whether the installed app and a browser tab share storage (sound packs, autosaves) depends on the device.
 
 - PC and Android: they share it if they use the same browser, the same profile and the same address.
@@ -57,6 +62,23 @@ When no song is open, the start screen shows three buttons.
 | Paste MML@ | Opens score text in the in-game `MML@…;` format. Pressing Ctrl+V outside the editors also opens it |
 
 If you were editing a song, a **Recent work** list appears below the buttons. You can bring a song back from here even after reloading or closing the tab.
+
+### Dropping files
+
+Drag a file anywhere onto the BiNote window and it opens right away. While you drag, a hint covers the whole window.
+
+- Scores (.mme, .mml, .mmi, .mid, .musicxml) open the same way as Open score. Source audio and video load as the original, and sound packs (.dls, .sf2, .sf3) are added as sound packs.
+- You can drop one score and one original together. The original fit values saved in the project (offset and so on) are used for the dropped original. If you drop two or more scores or originals, only the first one opens and you are told which files were not opened. Sound packs are all added.
+- If the song has edits not saved as a project, BiNote first asks whether to close the current score.
+- Dropping MML@ text outside the editors opens the **Paste MML@** window.
+
+### Paste MML@
+
+Paste in-game `MML@…;` text to open it. At the bottom of the window, **Open as new song** opens it as a new song and **Add to current song** adds its scores to the current song.
+
+- If the text has several scores, choose **One player per score** or **Join as books**. One player per score makes each score a player, and they all play together. Join as books treats them as score book volumes of one player (book 1, book 2…) and joins them in order, leaving the same gap the game rests when it moves to the next book. Characters are counted per book.
+- If the line right above a score has an instrument name or a book label such as "Vol. 2", "Book 3", "2권" or "(1/3)", BiNote reads it to fill in the player name, instrument and book order. You can change each player's instrument; without such a line, the instrument you picked is used. When joining as books, scores whose names are the same once the book label is removed become one player (a score placed right after another with no line above it joins the previous score's player).
+- **Overwrite current track**: replaces the MML text of the currently selected track with one track from the text (pick it if there are several). You can undo it, and it cannot be used on a locked track.
 
 ### Sound packs
 
@@ -114,10 +136,10 @@ These limits are BiNote's current check values, measured on the Korean server (a
 ## 3. A tour of the screen
 
 ```
-┌ Top bar: File · Edit · Song · View · Undo · Play · Volume · Help (?) · Settings ┐
+┌ Top bar: File · Edit · Song · View · Undo · Play · Play options · Volume · Help (?) · Settings ┐
 ├ Toolbar: Piano roll/Tab · Tools · Grid · New note · Input v · Horizontal|Vertical (panel) · Layer · Zoom · ⋯                 ┤
 ├ Work area: Piano roll (or Tab)  │  Track panel (structure list + MML editor)                  ┤
-└ Status bar: Selected track · Characters · Checks · Sound packs · Help                           ┘
+└ Status bar: Selected track · Characters · MML cursor · Checks · Sound packs · Help              ┘
 ```
 
 ### Menus
@@ -125,11 +147,21 @@ These limits are BiNote's current check values, measured on the Korean server (a
 | Menu | Contents |
 |---|---|
 | File | New score, Open score, Paste MML@, Restore recent work, Save as project (.mme) and Save as, **Save in another format ▸** (3MLE, MabiIcco, MIDI, WAV), Export MML, Add sound pack, Connect MIDI keyboard |
-| Edit | Undo and Redo, Select all, delete, Cut, Copy, paste, **Edit notes ▸** (Length ×2 and ½, dot, volume and octave up/down, tie, split, glue), Arpeggio, Slide, Grace notes, Restore original and Edit again, Recognize as arpeggio |
-| Song | Transpose, Adjust volume, Chord attenuation, Split / merge tracks, Change time signature, **Tempo ▸** (Tap tempo, Clear tempos, Change all tempos, Copy tempo to every score), Find off-beat lengths, Add track and Add score, **Fit the character limit ▸** (Distribute chords, Merge chords, Shrink MML, Split into score books) |
+| Edit | Undo and Redo, Select all, select all notes before / at and after the edit cursor, delete, Cut, Copy, paste, Duplicate notes, **Edit notes ▸** (Length ×2 and ½, dot, volume and octave up/down, tie, split, glue), Arpeggio, Slide, Grace notes, Restore original and Edit again, Recognize as arpeggio |
+| Song | Song info, Transpose, Adjust volume, Chord attenuation, Split / merge tracks, Change time signature, **Tempo ▸** (Tap tempo, Clear tempos, Change all tempos, Copy tempo to every score), Find off-beat lengths, Add track and Add score, **Fit the character limit ▸** (Distribute chords, Merge chords, Shrink MML, Split into score books) |
 | View | Piano roll/Tab, Panel below/beside, Side by side, **Editors ▸**, Vertical roll, Events, Note list, Mark stop position in MML, Click other tracks' notes to switch, MML keypad, Tab fret pad, Follow cursor, Shortcuts, **Language ▸** |
 
 A row with ▸ is a submenu. Press it to open it. On a PC it opens to the side, and hovering also opens it. On iPad or a narrow screen the same panel changes to the submenu; the ‹ row at the top goes back. With the keyboard, press ↓ on a menu button to enter, ↑↓ to choose, → (or Enter) to open and ← to close. Shortcuts work the same even when the item is in a submenu. Light keys while playing, Light selected keys and Track colors are in Settings.
+
+### Playback
+
+The gauge button next to the playback buttons in the top bar (Back to start, Play, Stop, Loop) is the **Metronome, count-in and speed** menu. Your choices are remembered in this browser (all off and 100% by default). When the speed is not 100%, it shows next to the button, like 75%.
+
+- **Metronome**: clicks on every beat while playing. The first beat of a bar is a higher click. Turning it on or off during playback takes effect at once.
+- **One-bar count-in**: when you start playing from a stop, it counts one bar before starting. Even if you start in the middle of a beat, the clicks fall on the song's beats. It does not count when you move during playback.
+- **Playback speed** (100 · 90 · 75 · 60 · 50%): the original, the MML and the background video slow down together. The original drops in pitch like tape (75% ≈ 5 semitones, 50% = one octave). The song's tempo does not change. While the tap tempo bar is open, that bar's speed is used.
+
+You can also move the play cursor with the keyboard. **Home** goes to the start of the song, **End** to the end (the end of the note that ends last), and **Ctrl+←/→** to the start of the previous / next bar (F4/F6 in the MabiIcco compatible key set). Bars are counted following time signature changes. Pressing them during playback continues playing from there, and pressing previous bar repeatedly keeps going back. In tab view the tab cursor moves too. While you type in the MML editor, Home, End and Ctrl+←→ move the text cursor.
 
 ### Track panel
 
@@ -144,6 +176,8 @@ A row with ▸ is a submenu. Press it to open it. On a PC it opens to the side, 
 ### Status bar
 
 - Selected track, characters / limit
+- **MML cursor 3:2**: bar:beat where the MML editor's text cursor is (when the editor has a cursor).
+- **Not autosaved**: appears only when autosave is not working. You can press [Try again] or [Save as .mme] (see Autosave in section 11).
 - **Checks N**: check results for the whole song. Click to expand, then use "Go there" to jump to a problem.
 - Number of sound packs and instruments
 - **Help**: a summary of piano roll and tab controls
@@ -167,6 +201,10 @@ Changes made in the piano roll, the MML editor and the tab all apply to the same
 | Loop range | Shift+drag | — |
 | Tie to the next note with & | Alt+click | — |
 
+- **Grid off while dragging**: hold **Alt** while dragging a note to turn the grid off for a moment and move by the shortest cell the game can write (1/64, or the current grid if it is finer). Alt+click is the & tie, so press Alt after you grab the note.
+- **Edge auto-scroll**: when you drag notes, draw a selection box or draw a loop range up to the edge of the screen, the view keeps scrolling even if you hold your hand still.
+- **Preview of notes that get cut**: a track plays one note at a time, so an earlier note that overlaps a placed note has its end cut, and notes that start inside it are deleted. While you draw, move or resize a note, the part that will be lost (the tail of a note to be cut, a whole note to be deleted) is shown with red hatching. After you drop it, the status bar tells you how many were cut or deleted, like "Trimmed the end of 2 overlapping note(s)". Moving with the arrow keys, pasting, duplicating and typing a length in the selected-note box of the status bar also report this. Undo reverts it.
+
 - **New note** length: "Grid" uses one grid cell; pick a length to add notes of that length regardless of the grid (triplets included)
 - **Tuplets**: pick **Tuplet…** at the bottom of the new note length list and choose "N notes in the time of a note" (2–15 notes; whole, 1/2, 1/4, 1/8, 1/16, 1/32 and their dotted notes). One note is the base number × N: 5 in a quarter = l20, 7 in a quarter = l28, 2 in a dotted quarter = l8. The tuplet becomes the new note length, and **Also set the grid** (on by default) changes the grid too (1/20 for 5 in a quarter). The game accepts only l1–l64, so shorter notes such as 5 in a 16th (l80) cannot be picked (nothing is rounded). Your tuplet is remembered in this browser
 - The grid list also gets the cell of your tuplet and a cell that fits the new note length. With 5 in a dotted quarter (l20.), 1/40 appears. Grids whose cell is shorter than 1/64 (such as 1/128) are not offered, because a note or rest of that length cannot be written for the game. To continue right after a 64., use the tab fret pad or MML text.
@@ -174,7 +212,7 @@ Changes made in the piano roll, the MML editor and the tab all apply to the same
 - **Tools**: Draw (default) · Select (only selects by tapping or dragging; unlock the padlock next to it to drag selected notes) · Eraser · Scissors (cuts a note where you tap)
 - **Layer**: draws only the Selected track, the same Score, or All tracks in the roll. Notes of other tracks appear faded; with "Click other tracks' notes to switch" on, clicking one switches to that track.
 - Clicking a note highlights its place in the MML text; double-clicking lets you type there right away.
-- Moving around: wheel (time) · Shift+wheel (pitch) · Ctrl+wheel (wider/narrower bars) · Ctrl+Shift+wheel (bigger/smaller keys) · Fit whole song button
+- Moving around: wheel (time) · Shift+wheel (pitch) · Ctrl+wheel (wider/narrower bars) · Ctrl+Shift+wheel (bigger/smaller keys) · Fit whole song button. Ctrl+wheel keeps the spot under the mouse in place, and Ctrl+Shift+wheel keeps the note under the mouse in place. The zoom buttons and menu zoom around the playhead on screen (or the cursor if there is none); if neither is on screen, around the start of the view
 - The buttons in the lower-right corner of the roll also zoom (⇆−/+ narrower/wider bars, ⇅−/+ smaller/bigger keys) and fit the whole song (in the vertical roll, at the right just above the keyboard strip). They stay faint until you hover them. Turn on **Show button names** in Settings → Labs to see each button's name above it when you hover with a mouse or a hovering pen (Apple Pencil hover, S Pen Air view) or reach it with the keyboard; on touch, long-press (a long press does not count as a press). on a very narrow screen, use smaller/bigger keys from the toolbar or the ⋯ menu
 - Turn on Settings → Display → **Note volume numbers** to show the volume above the selected track's notes, like `v12` (to the right of the note start in the vertical roll). **Changes only** writes it on notes whose volume differs from the previous note and on the first note on screen; **All notes** writes it on every note. Notes tied with `&` after the first are skipped, and overlapping numbers are skipped when crowded (zoom in to see them)
 - Turn on Settings → Display → **Show timbre zones** to draw faint accent-colored lines where the selected track's instrument switches samples (timbre) in game (o3e · o4e · o5f · o6f for piano and guitar; it differs by instrument), with every other zone shaded faintly. The keyboard on the left also gets a short line at each boundary. Where notes tied with `&` cross a boundary so the timbre jumps in game, the tie line turns red with a red dot at the start of the later note (all tracks, each judged by its own instrument). Out-of-range notes follow the zone of the pitch they fold to, and boundaries outside the range are drawn as faint dashed lines. Picking and dragging notes are not affected (off by default)
@@ -198,6 +236,8 @@ Write MML directly. Your edits show up in the piano roll and in playback. If the
 - When the same pitch is tied with `&`, the game ignores any v after the &.
 - When different pitches are tied with `&`, the note is not struck again; only the pitch changes at the join (it is not a gliding sound). BiNote calls this a slide. Removing the `&` makes them separate notes and changes how it plays.
 - On iPad, turn on **MML keypad** (View menu) to type with an MML keypad instead of the on-screen keyboard.
+- **Find and replace**: **Ctrl+F** finds, **Ctrl+H** replaces, and **F3** / **Shift+F3** go to the next / previous match. You can also search with match case, regexp or by word. Each editor holds one track, so the search stays inside the selected track's text. Pressing these outside the editor also goes to the selected track's editor. Replace all is undone with a single undo. A locked track can only be searched.
+- **Following the text cursor**: when you move the text cursor in the editor (click, arrow keys, find), the play cursor goes to that spot, and if it is on a note, that note is selected and scrolled into view in the piano roll. During playback the playing position is not changed. The status bar shows the bar:beat of the text cursor, like "MML cursor 3:2".
 
 ### Tab (guitar tablature)
 
@@ -258,6 +298,8 @@ Turn on File menu → **Connect MIDI keyboard** and connect a MIDI keyboard to u
 | Split | Scissors tool, or Alt+S at the play cursor |
 | Glue | Alt+G (makes touching notes of the same pitch one note for editing; different from tying with &) |
 | Copy / cut / paste | Ctrl+C / Ctrl+X / Ctrl+V (pastes at the play cursor) |
+| Duplicate | Ctrl+D. Places one more copy of the selected notes right after them (shifted by the span from the first start to the last end) and selects the new notes. Press again to add another copy after that. Notes you copied earlier stay on the clipboard. In tab, chords are duplicated with their track split |
+| Select all notes before / after the cursor | Shift+Home / Shift+End (piano roll). Selects all notes of the selected track that start before the edit cursor (play cursor) / at the cursor or after it. Without a cursor, the start of the first selected note is used |
 
 **Arpeggio** (Edit menu): select notes in the piano roll and open it to spread their chords out in order. There are three styles. **Spread on one track** places the chord notes one after another on the selected track (chord-track notes can be removed or kept); **Roll (keep original lengths)** keeps the original chord notes and only delays their starts in order; **Repeat across tracks** plays again every note length, cycling through the score's tracks (adding tracks within the track limit if needed). Chord notes come from notes starting together / selected notes only / a chord name (Major, Minor, 7, M7, m7, sus4, sus2, dim, aug, add9), and you pick the order (up, down, up and down, random), note length (including the triplets l3, l6, l12, l24, l48 and your tuplet, sorted by length), octave span (1–3), and repeat. **Separate length** gives the lowest note, the highest note, or both a different length. The length is the gap until the next note, so lowest 8 with note length 16 plays the bass as an 8th and then the upper notes as 16ths (spread and repeat), or waits an 8th after the bass and rolls the upper notes 16ths apart (roll). Lowest and highest mean within one pass of the order. Check the preview and apply; one undo reverts it. For notes starting together, tick the **Tracks in the chord** above the preview (the selected track is always in). From the first to the last start of the selected notes, every place where ticked tracks start notes together becomes a chord, so selecting a single note uses the whole chord at that place. A chord lasts until its latest-ending note, so a long bass note is not cut short.
 
@@ -286,7 +328,8 @@ Turn on File menu → **Connect MIDI keyboard** and connect a MIDI keyboard to u
 - **Adjust volume** (Song menu): changes the v of the selected notes (piano roll or tab), this track, this score or the whole song. **One value** sets every note to the same v, **Shift up/down** moves the current v by ±steps (stops at v0–v15 and tells you how many notes hit the limit), and **Target dB** treats v15 as 0 dB and picks the nearest v by the loudness law measured in game, dB = 40·log10(v/15) (−6 dB ≈ v11). The dialog shows how many notes change and the v range now and after; one apply is one undo step. The game ignores v after &, so a & chain changes together with its first note (selecting only a middle or last note of the chain changes the whole chain too). You can also select all notes of a track first with Select all (Ctrl+A). For this track, this score or the whole song, the **Bars** row narrows which bars change. **Selected bars only** uses the bars the loop range covers (Shift+drag on the roll, or drag the bar number row), and **Type bars** uses bars you write like `12-16, 20` (`20-` means from bar 20 to the end; numbers match the bar number row). Only sounds that start inside those bars change. Notes tied in with & from an earlier bar play at their first note's v, so they stay as they are (a chain that starts inside and continues into a later bar changes as a whole).
 - **Chord attenuation** (Song menu): counts how many notes of the same score sound together and lowers the v of notes in chords from their current v. The more notes play at the same v, the louder they are in game, so this keeps chords from sticking out above single notes. The range (selected notes, this track, this score, whole song) and the **Bars** row work like Adjust volume; notes outside the range still count as sounding together when they are in the same score. **Include overlapping notes** (default) counts not only notes that start together but also notes already ringing and notes rolled in within the **Roll width** (default 1/16). It uses the largest number of notes sounding at once from the note's start through the roll width, so every note of a rolled or smeared chord is lowered as one chord, while a fast single line has one note at a time and is not lowered. **Same start only** counts only notes starting at the same spot, like the chord attenuation of MIDI import. **Count separately** picks **Pitch gap** (upper and lower apart when the notes sounding at that moment have a gap of 8 semitones or more, default), **Track role** (melody, bass and the rest apart) or **Whole score together**. **Lower by** picks **Steps** (default 2 notes −1, 3 notes −2, 4+ notes −3, the same as MMLCS chord attenuation, editable) or **Loudness law** (following the measurement that twice the notes at the same v is 3 dB louder, the v that makes the whole chord as loud as a single note), and never goes below the **Lowest** v (default 5; notes already below it stay as they are). With **Start from** set to **One value for all**, the chosen notes are first set to that v and then lowered. The dialog shows how many notes change, counts per number of notes sounding together, how many notes were counted higher than with same start only, and the v range now and after; one apply is one undo step. A & chain counts as one note ringing to the end of the chain and changes with its first note's v (the game ignores v after &). Running it again where you already attenuated lowers the notes again, so undo first or use One value for all. Your settings are remembered in this browser.
 - **Split / merge tracks**: move selected notes to another track (or a new track), merge a score's tracks into one, or re-split them by pitch. Overlapping notes are not moved and stay where they are.
-- **Insert bar / Delete bar**: inserts or deletes one bar at the play cursor (all tracks and tempos move together).
+- **Insert bar / Delete bar**: inserts or deletes one bar at the play cursor (all tracks, tempos and time signatures move together). Inserting at the very start of the song keeps the first tempo at the start, so the inserted bar plays at that tempo. Tracks with no notes after that point (a tempo-only track, a track that keeps the score length with trailing rests, and so on) also have their source tempos (t) and trailing rests pushed or pulled. Tracks whose notes move get their MML text rewritten (comments and spacing are lost), and the length the source kept with trailing rests is kept.
+- **Song info** (top of the Song menu): enter the song's title, author and memo. They are saved together in 3MLE, MabiIcco and project files. In 3MLE files the author goes into the Source field and the memo into the Memo field; MabiIcco files get only the title and author. Those two formats use one-line fields, so line breaks become spaces. It can be undone.
 - **Track lock**: click the lock to stop a track from being edited in the roll, tab or editor. Selecting and copying still work. If a locked track is in the range of a transpose, it is moved too after you confirm. The padlock next to the Select tool in the toolbar (for dragging selected notes) is a different feature from the track lock.
 
 ### Undo
@@ -318,7 +361,7 @@ Song → Tempo → Tap tempo. Play the original (or a video) and press the **T**
 - **Resume**: type a bar number in **Bar to resume from** and press **Resume**. Playback starts one bar earlier and the taps continue from the one you press on that bar's downbeat. Tempos you already applied stay, and after applying the last tapped bar is filled in. If you move the play position or a loop jumps back while tapping, the taps so far are applied before a new run starts.
 - Tempos are integers, so they are rounded; the rounding error is carried into the next bar, so the drift does not build up over many bars.
 - **Odd taps** (Off · 10% · 20% (default) · 35%): after applying, intervals that differ from their neighbours by more than this (missed or double taps) are listed as bar buttons. Pressing one jumps there. Nothing is changed. Raise the threshold or turn it off for jazz, rubato or fast songs.
-- **Speed** (100% (default) · 85% · 75% · 60% · 50%): slow fast songs down while you tap. The original, the MML and the background video slow down together, and taps are measured in song time, so they are entered as the real-speed tempo (tapping every 2 s at 50% means 1 s in the song). Hand jitter shrinks by the same factor. The original drops in pitch like tape (75% ≈ 5 semitones, 50% = one octave), but the beats stay exactly in place. The one-bar lead-in of Resume plays at the same speed, and odd taps and snap to waveform work as usual. Changing it during playback restarts from the current spot at the new speed; closing the tap tempo bar returns to normal speed. **Taps on close** (Discard (default) · Ask · Apply) sets what happens to taps not yet applied when you close the bar.
+- **Speed** (100% (default) · 85% · 75% · 60% · 50%): slow fast songs down while you tap. The original, the MML and the background video slow down together, and taps are measured in song time, so they are entered as the real-speed tempo (tapping every 2 s at 50% means 1 s in the song). Hand jitter shrinks by the same factor. The original drops in pitch like tape (75% ≈ 5 semitones, 50% = one octave), but the beats stay exactly in place. The one-bar lead-in of Resume plays at the same speed, and odd taps and snap to waveform work as usual. Changing it during playback restarts from the current spot at the new speed; closing the tap tempo bar returns to the playback speed chosen in the menu next to the play button (see Playback in section 3). **Taps on close** (Discard (default) · Ask · Apply) sets what happens to taps not yet applied when you close the bar.
 - **Snap to waveform** (Off (default) · ±30ms · ±60ms, with the original loaded): after applying, only taps where the score has a note starting on that beat are checked for a nearby onset in the original, and you are asked whether to **Snap**. Nothing changes before you press it, and one undo reverts the snap.
 - **Bar line drag** in the original bar: **From the front** (default) changes the tempo from the previous tempo change up to the dragged bar line and shifts everything after. **Both sides only** keeps the previous and next bar lines in place and recalculates only the two bars on either side (for fixing one spot after tapping). The new tempos are shown next to the bar line while dragging.
 
@@ -329,7 +372,7 @@ Song → Tempo → Tap tempo. Play the original (or a video) and press the **T**
 - **Fold review**: the game folds notes the instrument cannot play as written (measured range) by octaves, note by note, so when only some notes in a passage fold, the melody jumps. This window compares **as is** with **moving the whole passage up or down by octaves** for each rest-separated passage, showing folds left, octave jumps, notes doubled with another track at the same pitch and & across a timbre boundary, and preselects the recommended choice. Each passage has **Go**, **Listen now**, **Listen fixed** and **Move**, and **Move chosen passages** applies them all (one Ctrl+Z). It also lists other instruments that play all the track notes as written. Nothing changes on its own. You can also open it from the fold line in Checks on the status bar.
 - **Clear all tempos**: keeps only the tempo at the start of the song. With a loop range set, only the tempos inside it are cleared.
 - **Copy tempo to every score**: writes the song tempo into the MML text of scores that lack it. (Export MML and Split into score books add tempo to every score even without this.)
-- Tempos outside the game range (t32–t255) can be used while editing; Export MML tells you how to convert them (see section 9).
+- Tempos outside the game range (t32–t255) can be used while editing; Export MML tells you how to convert them, and the **Convert keeping real time** button can convert them for you (see section 9).
 
 ---
 
@@ -378,6 +421,7 @@ Toolbar ⋯ → **Background video…** (in the piano roll). Put a falling-note 
 
 ### Useful together
 
+- **Playback speed and metronome** (menu next to the play button, see Playback in section 3): slow down fast passages while you transcribe, and match beats to the original with the metronome.
 - **Vertical roll**: matches the direction of falling-note videos. Choose Settings → Display → Roll during playback → **Scroll continuously** to get falling notes even without a video.
 - **Light keys while playing** (on by default): shows the notes being played on the keys. Turn it off in Settings → Playback.
 - **Light selected keys** (default While selected): shows the notes you press or select on the keys in their track color. **While pressing** lights them only while you hold a note or key; **While selected** keeps them lit while the notes stay selected. Change or turn it off in Settings → Playback.
@@ -404,13 +448,21 @@ Like the structure list, each score row has its track rows under it, and every t
 - If the picked scores have different tempos (scores whose own text has a different t), you choose which tempo to use, and the window keeps using it for later copies until it closes. BiNote keeps one tempo map per song, so this rarely appears.
 - Picking a whole music box or gramophone score adds the player's other tracks as silent channels, as before, so the loop length and tempo match. If a music box track ends up outside the first 3 channels because you mixed it with another score's tracks, you are told it won't sound.
 - Tracks over the character limit turn red, and the button changes to "Copy picked tracks (over limit)".
-- The output MML is rewritten to use fewer characters. The text in the editor is not changed. The trailing rest is kept to match the longest picked track.
+- The output MML is rewritten to use fewer characters. For each track, though, if the source text (with only the tempos fixed and comments and spaces removed) is shorter and has the same sound and tempo, the source is used, so the output is never longer than the source. The text in the editor is not changed. The trailing rest is kept to match the longest picked track.
 - Tracks go into the MML@ text in the order you tick them. Use ‹ › in the **Paste order** row to change it or go back to song order; the song track order does not change. Clicking the fold, error or warning marks opens Checks on the status bar.
 - If a tempo change falls in the middle of a note on every picked track, it is written at the next note boundary so no note is lost, and you are told.
 
 ### If the tempo is outside the game range
 
 If it is faster than t255, BiNote shows how to shorten the note lengths in that section and lower the tempo; if it is slower than t32, how to lengthen them and raise the tempo. The speed stays the same.
+
+Press **Convert keeping real time** on a notice row to have it done for you (the same job as MabiIcco's "tick conversion").
+
+- Only the part from that tempo up to the next tempo (to the end of the song for the last tempo) changes. The tempo is brought into range, and note lengths and time signatures are scaled by the same factor. For example, t300 becomes t150, and in that part quarter notes become eighth notes and 4/4 becomes 4/8. The speed you hear and the bar lines stay the same, and everything after the part shifts by however much it grew or shrank.
+- A single undo reverts it. After converting, the converted tempo and factor are shown at the top of the notices. If tempo × factor is not a whole number, it is rounded and you are told (the speed of that part changes very slightly).
+- If a length that cannot be written exactly in game note lengths would appear (such as half of l64), nothing is converted, and the row tells you which track, bar and beat.
+- The MML text of tracks that touch the part is rewritten, so comments and spacing are lost. If such a track's text has a syntax error, fix it first. If a locked track would change, you are asked first.
+- If the converted tempo would still be outside the game range, the button is not shown. If there are no notes after that tempo, you are told there is nothing to convert; delete the tempo or change it to a value in range.
 
 ### If there are too many characters
 
@@ -419,7 +471,7 @@ Try these in order.
 1. **Distribute chords**: Song menu → Fit the character limit → Distribute chords (also opened from an over-the-limit line in the Export MML window) moves notes from a track over the character limit (send from) into bars where tracks of the same score and instrument (receiving tracks) rest, **a span of bars at a time**. Tick the receiving tracks and **Find free spots** lists the bar spans that can move (spans where the receiving track is empty come first; where it has a few notes, those swap into the sending track). Tick spans yourself or press **Pick as much as needed**; every change shows the character counts after the move. It never cuts where a note or & chain crosses a bar line, drops no notes, and keeps the sound (checked by re-reading the game output). If you need another receiving track, **Add empty track** adds one to the same score. If the score's tracks are already full, adding a track creates one more score for the same instrument (one more person plays in game), so use Split into score books to play it alone.
 2. **Shrink MML**: rewrites the MML of every track shorter while keeping each note's pitch, start and length. Your own spaces, line breaks and comments are lost. If shrinking would drop notes, nothing is changed and you are told.
 3. **Split into score books**: cuts all tracks at the same point into several books.
-   - **Distribute chords before splitting** (on by default): before splitting, moves notes between tracks of the same instrument to even out channel lengths. If every channel then fits the limit, no split is needed; if it saves books, the split uses the moved result. The song you are editing stays as it is; "Apply to song" moves the notes in the song too (undo with Ctrl+Z). When off, only the book split runs, and a "N → M books" hint appears if moving notes would help.
+   - **Distribute chords before splitting** (on by default): before splitting, moves notes between tracks that match by the same rules as the Distribute chords window (same score and instrument, same mute, solo, volume and pan) to even out channel lengths. If the moved result would sound different in game, nothing is moved. If every channel then fits the limit, no split is needed; if it saves books, the split uses the moved result. The song you are editing stays as it is; "Apply to song" moves the notes in the song too (undo with Ctrl+Z). When off, only the book split runs, and a "N → M books" hint appears if moving notes would help.
    - **Thorough split** (off by default): at each book end, follows several more cut points near the limit to find a split with fewer books. It takes longer, so the stage and a progress bar show at the bottom while it runs. Short songs always get the exact fewest books even without this option.
    - Places where everyone rests are chosen first. If every track (including notes that fold because they are too low or high) rests for the roughly 1 second the next book starts late, nothing is lost, so the book is cut there wherever it is in the book (about a half note at t120, about one bar at t240). If there is no such place, the place that loses the least sound is chosen.
    - Octave, volume and tempo are written again at the start of each book.
@@ -448,6 +500,7 @@ See problems in the whole song in **Checks N** in the status bar.
 - **Long notes whose end is silent** because the game sample runs out (game sounds play once without looping)
 - Too many tracks for one player; tracks of the same player overlapping on the same note
 - Two notes tied with & that cross a timbre boundary
+- Octaves outside the game range (o10 and so on), and notes whose pitch cannot be written in MML (lower than o0c- or higher than o9b+; when rewritten, they are moved by octaves into range)
 
 ---
 
@@ -460,7 +513,7 @@ Choosing a .mid file with Open score opens the **Import MIDI** window.
 3. Choose the order in which notes are dropped where they overflow.
    - Middle first (keep outer, default) · Bottom first · Top first · Soft notes first · Short notes first
    - Hand to drop first (Both hands evenly · Right-hand chords first · Left-hand chords first), Protect melody
-4. **Grid** (Auto or manual) and **Keep triplets**
+4. **Grid** (Auto or manual) and **Keep triplets**. With Keep triplets on, quarter and half note triplets that cross beats are also kept as triplets instead of being chopped up, and when the grid is a 16th or finer, quintuplets in a quarter are fitted to l20. Slightly uneven regular rhythms are not turned into triplets or quintuplets. When it is off, quintuplets are not used either
 5. **Merge chords** (on by default): moves notes from moments where the chord briefly grows into a resting track of the same instrument, so they don't end up in a track of their own (see Merge chords in section 9). Runs before Fill empty channels.
 6. **Fill empty channels**: puts chord notes dropped by compression back into resting channels. If this goes over the character limit, the added notes are removed first.
 7. Check the summary at the bottom (dropped notes, notes put back, merged notes, longest channel's character count) and click **Import**.
@@ -475,10 +528,14 @@ Importing MIDI does not copy the original exactly. Notes beyond the chord count 
 |---|---|---|
 | **Project .mme** | Save project (Ctrl+S) | **Recommended for keeping your work and moving it to another device.** Keeps fractional positions, track structure and editor state (older .mmlce files also open) |
 | 3MLE .mml | Save as 3MLE (Ctrl+Alt+S) | To open in 3MLE. The default is CP949, and characters it lacks become ?, so save as UTF-8 if needed |
-| MabiIcco .mmi | Save as MabiIcco (Ctrl+Shift+S) | To open in MabiIcco. You are told about notes that do not fit its grid (96 per quarter note) |
+| MabiIcco .mmi | Save as MabiIcco (Ctrl+Shift+S) | To open in MabiIcco. You are told about notes that do not fit its grid (96 per quarter note). Opening an .mmi and saving it again keeps the song part, the song instrument, pan and track visibility, and tracks whose source you did not change keep your own notation and start position |
 | MIDI .mid | Save as MIDI | For DAWs and similar. Instruments become GM programs, and bass drum and cymbal go on the drum channel. Extra soundpack instruments written only as a number (#42.3 etc.) get the GM program of the instrument found in the loaded pack, and pitches stay as written. Notes of different pitches tied with `&` are saved as separate notes in MIDI |
 | WAV | Save as WAV | Renders the whole song with the current sound packs into an audio file (mute and solo as heard). Needs a sound pack |
 | MML@ text | Export MML | For pasting into the game |
+
+The title, author and memo you enter in Song → **Song info…** are saved in project, 3MLE and MabiIcco files (see Song info in section 5).
+
+Just opening and saving a project (.mme) does not remove content this version does not know (information added by a newer BiNote); it is written back as it was. A file saved by a newer BiNote also opens, with a notice, if it says "this version may read it". Files that do not say so are not opened; reload the page to open them with the latest BiNote. Files saved by this version also open in 1.0.0-beta.32.
 
 ### Where files are saved
 
@@ -501,11 +558,16 @@ To continue on another device, prepare the sound packs and the original and vide
 
 The song you are editing is kept in this browser automatically (latest 10). After a reload or closing the tab, open it from the start screen or from File → **Restore recent work**.
 
+- If autosave fails several times in a row, **Not autosaved** appears in the status bar. Use **Try again** to save again, or **Save as .mme** to keep it in a file. The badge goes away once an autosave succeeds. If it fails because storage is full, the badge appears right away and shows how much space this site uses and how much is left. Removing sound packs you don't use frees space. You can also see used and remaining space in Settings → Sound packs.
+- If the same work is open in another tab, it shows as **Open in another tab** in the recent work list. Restoring it opens a copy, so the two tabs do not overwrite each other. The copy asks for a file name the first time you save.
+- If an error happens while drawing part of the screen (piano roll, tab, staff or a window), the whole app does not freeze. That spot shows a notice with **Rebuild view** and **Copy diagnostics** buttons (windows and the staff also have **Close**), and the song you are editing is autosaved right away. If an unexpected error happens, BiNote autosaves right away and tells you whether it worked and why. If it keeps happening, please report it with the diagnostics (section 16).
+- Work autosaved by earlier versions still shows up and can be restored.
+
 > Autosave is **for temporary recovery only**. It can disappear if you clear browser data or space runs low. Always **save songs you want to keep as .mme**. On iPad, we recommend keeping them in the Files app.
 
 ### New versions
 
-When a new version is out, a "A new version is ready" bar appears. Click **Reload** and BiNote waits for the autosave of your current song to finish, then switches to the new version. If the autosave fails, it does not switch and tells you; in that case save as a project (.mme) and click again. For important work, saving as .mme before clicking is safer. You can also close the notice and keep working.
+When a new version is out, a "A new version is ready" bar appears. Click **Reload** and BiNote waits for the autosave of your current song to finish, then switches to the new version. If the autosave fails, it does not switch and tells you with **Not autosaved** in the status bar; in that case save as a project (.mme) and click again. For important work, saving as .mme before clicking is safer. You can also close the notice and keep working.
 
 The app checks for a new version each time it opens, and if it stays open for a long time it checks again at most once an hour when you come back to the window. To check right away, use **?** → **Check for updates** in the top bar.
 
@@ -517,7 +579,7 @@ The app checks for a new version each time it opens, and if it stays open for a 
 
 | Section | Items |
 |---|---|
-| Sound packs | Add and remove, check and change priority (list order), storage status |
+| Sound packs | Add and remove, check and change priority (list order), storage status (space this site uses and space left) |
 | Playback | Master volume, Light keys while playing, Light selected keys, MIDI keys Velocity → v, Display sync, Instrument volumes |
 | Display | Interface scale (90–150%: text, buttons, menus and dialogs together; bar numbers and event labels in the piano roll and tab view too; keys and notes use their own zoom buttons; saved on this device only), Theme (Follow system · Light · Dark), Accent color, Note look (Rounded corners · Border · Shade by v · Note names when zoomed in), Note volume numbers (Off · Changes only · All notes), Show timbre zones, Track colors (By position in score · Hue per score · Fixed per track; a color picked in the track menu stays in every mode), MML editor text and text size, Roll during playback (Turn pages · Scroll continuously), Maximum editors (the most you can pick in View → Editors, 2 up to the tracks in one score, 4 by default) |
 | Saving | Choose each time, a set folder or Downloads (Chrome and Edge on a PC), Save through the share sheet (iPad and iPhone) |
@@ -544,10 +606,11 @@ The app checks for a new version each time it opens, and if it stays open for a 
 - **Show button names** (Settings → Labs, only while Labs is on): hover with a mouse or a hovering pen, or reach an icon button with the keyboard, to see its name above it. On touch, long-press. It works on the icon buttons in the piano roll and tab toolbars and on the zoom buttons in the roll corner. Buttons near the top show the label below them, buttons near the bottom show it above. Nothing is saved to the song.
 - **Fade notice** (Settings → Labs, only while Labs is on): instruments that fade after the attack, such as guitar, piano and harp, get quiet long before the game sample ends. With this on, the checks in the status bar point out notes that keep going after they have faded 30 dB below their loudest point and are barely audible (notes whose sample ends first still get only the sample-end notice), and when you select a single note the status bar shows how much quieter it is at its end (like **end -12 dB**). One v step is about 1 dB near v15 and about 2 dB near v8, which helps when balancing long notes. The values come from game recordings. Within one zone (between timbre boundaries) higher notes fade faster, and the note just above a boundary rings long again. For example, guitar takes 2-4 seconds to fall 20 dB up to o5e, but under a second from o5f up. The song is not changed.
 - The fade notice adds two more things. The status-bar checks point out notes ringing over a second that fade to more than 12 dB below the notes the other tracks of the same score strike, with "raising v by N helps". The **Adjust volume** dialog gets **Match long notes**, which raises v per sound in the chosen range so its average loudness while ringing matches a 0.5-second note (raise only, up to 3 steps by default, notes of 0.5 s or less stay as they are, one undo). Raising v also makes the attack louder, so keep the max small and adjust by ear.
+- **Missing-note check** (Settings → Labs, only while Labs is on): flags spots where the game drops notes (often called notes being "eaten") in the status-bar checks as not yet measured. When two or more tracks of one score play very short notes (shorter than about 150 ms) back to back in the same sample zone (piano, lute and harp change zone at o3e, o4e and o5f; it differs by instrument) and move straight on (within 40 ms), count the fast notes and the notes starting at that moment in that zone in track order: the notes past five go missing. Notes of tracks without fast notes in that zone drop too; notes in other zones and percussion do not. **Fix missing notes…** on that line opens a window that delays the notes at risk by at least 40 ms at that tempo (r64. at t116). Fix one spot or all; it shows how many notes move and how many characters are added, and one undo reverts it. If you'd rather not delay, keep the fast notes and the notes at that moment in that zone to five in total, or move the important note to an earlier track or another sample zone (for example an octave up). The rule is tentative, found from recordings.
 
 At the bottom are the version info and links to the guide and **About BiNote**.
 
-The **?** menu next to Settings (⚙) in the top bar has Guide, Shortcuts, Check for updates and About BiNote. The **About BiNote** window shows the version, checks for updates and links to the source code, licenses and problem reports. You can also open this guide from Help in the status bar.
+The **?** menu next to Settings (⚙) in the top bar has Guide, Shortcuts, Check for updates and About BiNote. The **About BiNote** window shows the version, checks for updates and links to the source code, licenses and problem reports. **Copy diagnostics** copies information to attach when you report a problem (section 16). You can also open this guide from Help in the status bar.
 
 ---
 
@@ -555,7 +618,9 @@ The **?** menu next to Settings (⚙) in the top bar has Guide, Shortcuts, Check
 
 These are BiNote's default keys for the piano roll and elsewhere. You can change them in Settings → Shortcuts (Ctrl+/) or switch to the **MabiIcco compatible** key set. On Mac you can use Cmd instead of Ctrl.
 
-While typing in the MML editor, only Ctrl/Alt combinations and F keys work as shortcuts. Of those, Ctrl+A, C, X, V and Length ×2 / ½ are used for text editing, and shortcuts that change notes, tracks or events (Alt+S, G, B, M, L, P, Alt+↑↓ and so on) do not run. Saving, playback and undo still work.
+While typing in the MML editor, only Ctrl/Alt combinations and F keys work as shortcuts. Of those, Ctrl+A, C, X, V and Length ×2 / ½ are used for text editing, and Ctrl+D (select the next same text) and Ctrl+←→ (jump by word) are the editor's own actions too. Shortcuts that change notes, tracks or events (Alt+S, G, B, M, L, P, Alt+↑↓ and so on) do not run. Saving, playback, undo, find and replace still work.
+
+If you bound a key to another command yourself in the shortcut settings, that command keeps the key even when a new version makes it a new default key (for example Ctrl+D for Duplicate).
 
 | Category | Key | What it does |
 |---|---|---|
@@ -566,13 +631,19 @@ While typing in the MML editor, only Ctrl/Alt combinations and F keys work as sh
 | Playback | Space | Play / pause |
 | | F5 | Play |
 | | Esc | Stop |
+| | Home / End | Move the play cursor to the start / end of the song |
+| | Ctrl+← / Ctrl+→ | Move the play cursor to the start of the previous / next bar (F4 / F6 in MabiIcco compatible) |
 | Edit | Ctrl+Z / Ctrl+Y | Undo / Redo |
 | | Ctrl+A | Select all notes in the current track (in the tab, all tracks shown) |
+| | Shift+Home / Shift+End | Select all notes before / at and after the edit cursor (piano roll) |
 | | Ctrl+C / X / V | Copy / cut / paste |
+| | Ctrl+D | Duplicate the selected notes right after themselves |
 | | Delete, Backspace | Delete selected notes |
 | | Ctrl+] / Ctrl+[, + / - | Length ×2 / ½ (new-note length when nothing is selected) |
 | | . | Add / remove dot (new-note length when nothing is selected) |
 | | Alt+P | Transpose |
+| | Ctrl+F / Ctrl+H | Find / find and replace in the MML editor |
+| | F3 / Shift+F3 | Find next / previous |
 | Note | Shift+↑ / ↓ | Octave up / down |
 | | Alt+↑ / ↓ | Volume up / down |
 | | Alt+L | Tie or untie to the next note with & |
@@ -581,6 +652,7 @@ While typing in the MML editor, only Ctrl/Alt combinations and F keys work as sh
 | Events | Alt+B | Add or edit a tempo |
 | | Alt+M | Add a marker |
 | | T | Tap tempo (while the tap tempo bar is open) |
+| | R | Start recording / stop and insert (while the Labs MIDI keyboard recording bar is open) |
 | Track | PageUp / PageDown | Previous / next track |
 | | Alt+Shift+↑ / ↓ | Move track up / down |
 | Grid | 1 2 3 4 5 | 1/4 · 1/8 · 1/16 · 1/32 · 1/64 |
@@ -607,6 +679,7 @@ While typing in the MML editor, only Ctrl/Alt combinations and F keys work as sh
 - Safari and Chrome on iPad use the same engine (WebKit), so stored data may be cleared. **Save .mme files to the Files app.**
 - On iPad and iPhone, home screen apps and Safari tabs have separate storage, so you need to add sound packs in each, and their autosaves do not show up in the other.
 - MIDI keyboards cannot be used on iPad.
+- BiNote installed on Android appears in the **Share** menu. Share MML@ text or a score or audio file from another app, and it opens right away in BiNote (see Opening BiNote in section 1).
 
 ---
 
@@ -625,7 +698,13 @@ The preview plays with the sounds of the sound packs you added and BiNote's own 
 Try Distribute chords → Shrink MML → Split into score books, in that order (section 9).
 
 **My work disappeared.**
-Look in File → Restore recent work. On iPad and iPhone, autosaves of home screen apps and Safari tabs are not visible to each other. If the site address differs (for example a test address and the official address), storage differs too, and autosaves do not carry over. Save songs you want to keep as .mme.
+Look in File → Restore recent work. Work open in another tab shows as "Open in another tab" and opens as a copy. If **Not autosaved** shows in the status bar, autosave is not working, so save as .mme right away. On iPad and iPhone, autosaves of home screen apps and Safari tabs are not visible to each other. If the site address differs (for example a test address and the official address), storage differs too, and autosaves do not carry over. Save songs you want to keep as .mme.
+
+**Part of the screen changed to "Something went wrong while drawing this part of the screen".**
+Your song is unchanged and is autosaved right away. Press **Rebuild view**. If it keeps happening, please report it with the text copied by **Copy diagnostics** (section 16).
+
+**It says the project was saved by a newer BiNote and cannot be opened.**
+Reload the page to open it with the latest BiNote. Even a file from a newer version opens, with a notice, if it says "this version may read it" (section 11).
 
 **Characters became ? after saving as 3MLE.**
 Those characters are not in 3MLE's default encoding (CP949). Save as UTF-8 or change the name.
@@ -639,6 +718,7 @@ If some notes do not fit the MabiIcco grid (96 per quarter note), BiNote tells y
 
 Use **Report a problem or translation** at the bottom of Settings, or open an [issue](https://github.com/EarlGreyPie/BiNote/issues/new/choose) in the repository.
 
-- It helps to include the version info (at the bottom of Settings: "BiNote v… · commit …") and your device and browser.
+- Press ? → **About BiNote** → **Copy diagnostics** to copy the version, build, browser, Labs features turned on and recent errors. Paste it into your report (the diagnostics field of the bug report form). Song content is not included. If copying does not work, select the text shown in the window and copy it yourself.
+- If you cannot attach diagnostics, it helps to include the version info (at the bottom of Settings: "BiNote v… · commit …") and your device and browser.
 - If a song is needed, MML@ text or a short example is enough. **Do not attach sound pack files.**
 - If a translation is wrong or awkward, choose "translation report". Telling us the official in-game term is especially helpful.

@@ -1,22 +1,31 @@
 import type { Rat } from "./rat.js";
 import type { MadeRecord } from "./made.js";
 
+/**
+ * 이 판이 모르는 프로젝트 파일 필드 (더 새 판이 더한 것). 읽은 그대로 들고 있다가 프로젝트로 저장할 때 같은 자리에 다시 적는다.
+ * 편집기·출력기는 보지 않는다. 고친 음·트랙에도 그대로 따라가고, 새로 만든 것에는 없다
+ */
+export type Extras = Readonly<Record<string, unknown>>;
+
 /** 곡 전체 하나의 템포 지도에 들어가는 변화. 편집기 안에서는 범위 제한이 없다. */
 export interface TempoEvent {
   readonly at: Rat;
   readonly bpm: number;
+  readonly extras?: Extras;
 }
 
 export interface TimeSigEvent {
   readonly at: Rat;
   readonly beats: number;
   readonly unit: number;
+  readonly extras?: Extras;
 }
 
 export interface Marker {
   readonly id: string;
   readonly at: Rat;
   readonly label: string;
+  readonly extras?: Extras;
 }
 
 /**
@@ -45,6 +54,7 @@ export interface Player {
   readonly splitFrom?: string;
   /** 이 악보에 고른 타브 보기 튜닝(앱이 아는 이름)과 카포. 없으면 앱 기본 튜닝. 실행 취소·다시 실행을 곡과 함께 따른다 */
   readonly tab?: PlayerTab;
+  readonly extras?: Extras;
 }
 
 /** 악보 하나의 타브 튜닝 이름과 카포 (0~24) */
@@ -80,6 +90,7 @@ export interface Note {
   readonly lab?: NoteLab;
   /** 아르페지오·꾸밈음·슬라이드·트릴 창이 만들거나 바꾼 음이면 그 만든 기록 id (Song.made, 프로젝트 파일에만 저장. 출력과는 상관없다) */
   readonly made?: string;
+  readonly extras?: Extras;
 }
 
 /**
@@ -139,8 +150,17 @@ export interface Track {
    * (첫 연주자 1~3트랙, 그다음부터 한 명이 1트랙씩)
    */
   readonly instrument?: InstrumentRef;
-  /** 3MLE·마비꼬 파일의 채널 볼륨(0~127)·팬(0~127, 64 가운데). 편집기는 쓰지 않고 저장할 때 그대로 돌려준다 */
-  readonly mix?: { readonly volume?: number; readonly pan?: number };
+  /**
+   * 3MLE·마비꼬 파일의 채널 볼륨(0~127)·팬(0~127, 64 가운데)과 마비꼬 트랙 보이기(visible=false일 때만 false).
+   * 편집기는 쓰지 않고 저장할 때 그대로 돌려준다
+   */
+  readonly mix?: { readonly volume?: number; readonly pan?: number; readonly visible?: boolean };
+  /**
+   * 마비꼬 .mmi의 노래 칸(멜로디·화음1·화음2 다음 4번째 칸)에서 읽은 트랙이면 true.
+   * .mmi로 저장할 때 다시 노래 칸에 쓴다. 다른 출력·편집과는 상관없다
+   */
+  readonly mmiSong?: boolean;
+  readonly extras?: Extras;
 }
 
 export interface SourceRef {
@@ -149,6 +169,7 @@ export interface SourceRef {
   readonly fileName: string;
   /** 원곡 시작과 MML 시작의 차이(초) */
   readonly offsetSec: number;
+  readonly extras?: Extras;
 }
 
 export interface SongMeta {
@@ -157,6 +178,7 @@ export interface SongMeta {
   readonly profileId: string;
   /** 3MLE 파일의 메모. 저장할 때 그대로 돌려준다 */
   readonly memo?: string;
+  readonly extras?: Extras;
 }
 
 export interface Song {
@@ -169,6 +191,7 @@ export interface Song {
   readonly sources: readonly SourceRef[];
   /** 창으로 만든 기록 (만든 순서). 원래대로 되돌리기·다시 고치기에 쓴다 (made.ts, 프로젝트 파일에만 저장) */
   readonly made?: readonly MadeRecord[];
+  readonly extras?: Extras;
 }
 
 /** 트랙이 실제로 쓰는 악기: 트랙에 따로 정했으면 그것, 아니면 악보 악기, 둘 다 없으면 피아노 */

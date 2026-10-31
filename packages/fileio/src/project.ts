@@ -4,6 +4,7 @@ import {
   getProfile,
   rat,
   ZERO,
+  type Extras,
   type InstrumentRef,
   MADE_TOOLS,
   pruneMade,
@@ -17,6 +18,7 @@ import {
   type PlayerTab,
   type Rat,
   type Song,
+  type SongMeta,
   type SourceRef,
   type SpellingHints,
   type TempoEvent,
@@ -30,10 +32,22 @@ import { hexColor, trackColor, type FileDiagnostic } from "./common.js";
  * MMLCE 전용 프로젝트 파일 (확장자는 PROJECT_EXTENSION).
  * 호환 형식(3MLE .mml, 마비꼬 .mmi)은 정확한 분수 위치·트랙 구조·편집 화면 상태를 다 담지 못해서
  * 곡(Song)을 그대로 JSON으로 적는다. 사람이 읽고 비교할 수 있게 들여쓰고, 음은 한 줄에 하나씩 쓴다.
+ *
+ * 판 정책: 새 정보는 필드를 더하는 것으로만 넣는다 (곡은 song 안, 화면 상태는 editor 안).
+ * 이 판이 모르는 필드는 읽을 때 extras로 들고 있다가 저장할 때 그대로 다시 적는다 (옛 앱으로 열고 저장해도 사라지지 않게)
  */
 export const PROJECT_FORMAT = "mmlce";
-/** 지금 쓰는 판. 필드를 더하기만 하면 그대로 두고, 뜻이 바뀌면 올린다 */
+/**
+ * 이 앱이 쓰는 판 (파일의 version). 1.0.0-beta.32까지의 앱은 version이 1보다 크면 열지 않는다.
+ * 그래서 필드를 더하기만 하면 그대로 두고, 옛 앱이 읽으면 뜻이 틀어지게 바뀔 때만 올린다.
+ * 올리면 PROJECT_MIGRATIONS에 한 칸 더하고, test/fixtures에 그 판의 고정 샘플 파일을 더한다
+ */
 export const PROJECT_VERSION = 1;
+/**
+ * 이 앱이 쓴 파일을 열 수 있는 가장 낮은 판 (파일의 minReader). version을 올려도 그 앞 판 앱이 모르는 필드를
+ * 건너뛰고 읽어도 되면 이 값은 그대로 둔다. 그러면 minReader를 아는 앞 판 앱은 거부하지 않고 경고와 함께 연다
+ */
+export const PROJECT_MIN_READER = 1;
 /**
  * 저장할 때 붙이는 확장자. 출시 이름에 따라 바뀔 수 있어 확장자는 여기서만 정한다.
  * 바꾸면 예전 확장자는 PROJECT_EXTENSIONS에 남겨 계속 읽는다.
@@ -56,15 +70,20 @@ export interface ProjectWriteOptions {
   /** 저장한 앱 판 (예: "1.0.0-beta.1 · c51c7ba") */
   readonly app?: string;
   readonly savedAt?: Date;
+  /** 연 파일 맨 위에 있던 모르는 필드 (ProjectReadResult.extras). 그대로 다시 적는다 */
+  readonly extras?: Extras;
 }
 
-/** 프로젝트 파일 객체. 자동 보존도 같은 모양을 쓴다 */
+/** 프로젝트 파일 객체. 자동 보존도 같은 모양을 쓴다. song은 곡(Song)에서 extras를 풀어 제자리에 적은 모양 */
 export interface ProjectFile {
   readonly format: typeof PROJECT_FORMAT;
+  /** 쓴 앱의 판 */
   readonly version: number;
+  /** 이 파일을 열 수 있는 가장 낮은 판. 없으면 version과 같다고 본다 (beta.32까지는 적지 않았다) */
+  readonly minReader?: number;
   readonly app?: string;
   readonly savedAt?: string;
-  readonly song: Song;
+  readonly song: Readonly<Record<string, unknown>>;
   readonly editor?: ProjectEditor;
 }
 
@@ -72,6 +91,8 @@ export interface ProjectReadResult {
   readonly song: Song;
   readonly editor: ProjectEditor;
   readonly savedAt?: string;
+  /** 파일 맨 위의 모르는 필드 (더 새 판이 더한 것). 저장할 때 ProjectWriteOptions.extras로 돌려준다 */
+  readonly extras?: Extras;
   readonly diagnostics: FileDiagnostic[];
 }
 
@@ -87,15 +108,124 @@ export class ProjectError extends Error {
 }
 
 export function projectObject(song: Song, options: ProjectWriteOptions = {}): ProjectFile {
-  return {
+  const file: ProjectFile = {
     format: PROJECT_FORMAT,
     version: PROJECT_VERSION,
+    minReader: PROJECT_MIN_READER,
     ...(options.app ? { app: options.app } : {}),
     savedAt: (options.savedAt ?? new Date()).toISOString(),
     // 붙은 음이 없는 만든 기록은 적지 않는다
-    song: pruneMade(song),
+    song: fileSong(pruneMade(song)),
     ...(options.editor ? { editor: options.editor } : {}),
   };
+  return options.extras ? (unfold({ ...file, extras: options.extras }, FILE_KEYS) as unknown as ProjectFile) : file;
+}
+
+/**
+ * 아는 필드 이름. 모델(Song·Track·Note 등)에 필드를 더하면 여기에도 더해야 타입 검사를 지난다
+ * (빠뜨리면 그 필드를 모르는 필드로 보고 extras에 넣는다)
+ */
+function known<T>(names: Record<Exclude<keyof T, "extras">, true>): ReadonlySet<string> {
+  return new Set(Object.keys(names));
+}
+
+const FILE_KEYS = known<ProjectFile>({ format: true, version: true, minReader: true, app: true, savedAt: true, song: true, editor: true });
+const SONG_KEYS = known<Song>({ meta: true, tempo: true, timeSig: true, markers: true, players: true, tracks: true, sources: true, made: true });
+const META_KEYS = known<SongMeta>({ title: true, author: true, profileId: true, memo: true });
+const TEMPO_KEYS = known<TempoEvent>({ at: true, bpm: true });
+const TIME_SIG_KEYS = known<TimeSigEvent>({ at: true, beats: true, unit: true });
+const MADE_KEYS = known<MadeRecord>({ id: true, tool: true, options: true, trackId: true, picked: true, before: true, after: true, addedTracks: true });
+const MARKER_KEYS = known<Marker>({ id: true, at: true, label: true });
+const PLAYER_KEYS = known<Player>({ id: true, name: true, instrument: true, splitFrom: true, tab: true });
+const TRACK_KEYS = known<Track>({
+  id: true,
+  playerId: true,
+  name: true,
+  color: true,
+  colorPinned: true,
+  role: true,
+  mute: true,
+  solo: true,
+  notes: true,
+  spelling: true,
+  mml: true,
+  instrument: true,
+  mix: true,
+  mmiSong: true,
+});
+const NOTE_KEYS = known<Note>({ id: true, start: true, dur: true, pitch: true, vol: true, tie: true, tabString: true, lab: true, made: true });
+const SOURCE_KEYS = known<SourceRef>({ id: true, kind: true, fileName: true, offsetSec: true });
+const INSTRUMENT_KEYS = known<InstrumentRef>({ canonical: true, packId: true, program: true });
+const TAB_KEYS = known<PlayerTab>({ tuning: true, capo: true, strings: true });
+const TEXT_KEYS = known<NonNullable<Track["mml"]>>({ text: true, offset: true });
+const MIX_KEYS = known<NonNullable<Track["mix"]>>({ volume: true, pan: true, visible: true });
+const SPELLING_KEYS = known<SpellingHints>({ preferRelativeOctave: true, defaultLength: true });
+/** NoteLab은 갈래마다 필드가 달라 모든 갈래의 필드를 함께 적는다 */
+const LAB_KEYS: ReadonlySet<string> = new Set(["kind", "vol", "type", "pitch", "string", "fret"]);
+
+/** 아는 필드 안에 든 객체와 그 객체의 아는 필드 이름 (그 안의 모르는 필드도 남기려고) */
+type Inner = Readonly<Record<string, ReadonlySet<string>>>;
+const PLAYER_INNER: Inner = { instrument: INSTRUMENT_KEYS, tab: TAB_KEYS };
+const TRACK_INNER: Inner = { mml: TEXT_KEYS, instrument: INSTRUMENT_KEYS, mix: MIX_KEYS, spelling: SPELLING_KEYS };
+const NOTE_INNER: Inner = { lab: LAB_KEYS };
+
+/**
+ * 아는 필드 안 객체(악기·타브·원문 등)의 모르는 필드는 모델에 자리가 없어서, 부모 extras의 이 칸에 객체 이름별로 들고 있다가
+ * 저장할 때 그 객체에 다시 적는다. 파일에는 이 이름으로 적지 않는다
+ */
+const INNER_MARK = "\u0000inner";
+
+/** 파일 객체에서 아는 필드를 뺀 나머지 (없으면 undefined). __proto__ 같은 이름도 그냥 필드로 담는다 */
+function extrasOf(raw: Obj, names: ReadonlySet<string>, inner: Inner = {}): Extras | undefined {
+  const rest = Object.entries(raw).filter(([k]) => !names.has(k) && k !== INNER_MARK);
+  const kept = Object.entries(inner).flatMap(([k, keys]) => {
+    const v = raw[k];
+    const extras = isObject(v) ? extrasOf(v, keys) : undefined;
+    return extras ? [[k, extras] as const] : [];
+  });
+  if (kept.length > 0) rest.push([INNER_MARK, Object.fromEntries(kept)]);
+  return rest.length > 0 ? Object.fromEntries(rest) : undefined;
+}
+
+function withExtras(raw: Obj, names: ReadonlySet<string>, inner?: Inner): { extras?: Extras } {
+  const extras = extrasOf(raw, names, inner);
+  return extras ? { extras } : {};
+}
+
+/** 모델 객체를 파일 모양으로: extras를 떼어 그 필드를 맨 뒤에 다시 적는다. 아는 필드 이름은 적지 않는다(아는 값을 덮지 않게) */
+function unfold(obj: object, names: ReadonlySet<string>): Obj {
+  if (!Object.hasOwn(obj, "extras")) return obj as Obj;
+  const { extras, ...rest } = obj as Obj & { extras?: Extras };
+  if (!extras) return rest;
+  const out: Obj = { ...rest, ...Object.fromEntries(Object.entries(extras).filter(([k]) => !names.has(k) && k !== INNER_MARK && !Object.hasOwn(rest, k))) };
+  // 안쪽 객체의 모르는 필드는 그 객체가 지금도 있을 때만 다시 적는다 (앱이 그 객체를 버렸으면 함께 버린다)
+  const inner = extras[INNER_MARK];
+  if (isObject(inner))
+    for (const [k, more] of Object.entries(inner)) {
+      const v = out[k];
+      if (isObject(v) && isObject(more)) out[k] = { ...v, ...Object.fromEntries(Object.entries(more).filter(([m]) => !Object.hasOwn(v, m))) };
+    }
+  return out;
+}
+
+/** 곡을 파일의 song 모양으로 (모르는 필드를 제자리에) */
+function fileSong(song: Song): Obj {
+  const note = (n: Note) => unfold(n, NOTE_KEYS);
+  const groups = (list: readonly MadeNotes[]) => list.map((g) => ({ ...g, notes: g.notes.map(note) }));
+  return unfold(
+    {
+      ...song,
+      meta: unfold(song.meta, META_KEYS),
+      tempo: song.tempo.map((e) => unfold(e, TEMPO_KEYS)),
+      timeSig: song.timeSig.map((e) => unfold(e, TIME_SIG_KEYS)),
+      markers: song.markers.map((m) => unfold(m, MARKER_KEYS)),
+      players: song.players.map((p) => unfold(p, PLAYER_KEYS)),
+      tracks: song.tracks.map((t) => unfold({ ...t, notes: t.notes.map(note) }, TRACK_KEYS)),
+      sources: song.sources.map((s) => unfold(s, SOURCE_KEYS)),
+      ...(song.made ? { made: song.made.map((r) => unfold({ ...r, before: groups(r.before), after: groups(r.after) }, MADE_KEYS)) } : {}),
+    },
+    SONG_KEYS,
+  );
 }
 
 const NOTES_MARK = "\u0000notes:";
@@ -183,16 +313,51 @@ export function projectFromObject(raw: unknown): ProjectReadResult {
   if (!isObject(raw) || raw.format !== PROJECT_FORMAT) throw new ProjectError("project-format");
   const version = raw.version;
   if (typeof version !== "number" || !Number.isInteger(version) || version < 1) throw new ProjectError("project-format");
-  if (version > PROJECT_VERSION) throw new ProjectError("project-newer", { version });
-  if (!isObject(raw.song)) throw new ProjectError("project-broken");
   const diagnostics: FileDiagnostic[] = [];
-  const song = readSong(raw.song, diagnostics);
+  let file = raw;
+  if (version > PROJECT_VERSION) {
+    // 더 새 앱이 쓴 파일. 그 앱이 이 판도 읽을 수 있다고 적었을 때만(minReader) 열고, 모르는 필드는 extras로 들고 있는다.
+    // minReader가 없으면(옛 앱이 쓴 파일 모양) version까지 알아야 연다고 본다
+    const minReader = raw.minReader;
+    if (!Number.isInteger(minReader) || (minReader as number) < 1 || (minReader as number) > PROJECT_VERSION) throw new ProjectError("project-newer", { version });
+    warn(diagnostics, "project-newer-open", "", { version });
+  } else file = migrateProject(raw, version);
+  if (!isObject(file.song)) throw new ProjectError("project-broken");
+  const song = readSong(file.song, diagnostics);
   return {
     song,
-    editor: isObject(raw.editor) ? raw.editor : {},
-    ...(typeof raw.savedAt === "string" ? { savedAt: raw.savedAt } : {}),
+    editor: isObject(file.editor) ? file.editor : {},
+    ...(typeof file.savedAt === "string" ? { savedAt: file.savedAt } : {}),
+    ...withExtras(file, FILE_KEYS),
     diagnostics,
   };
+}
+
+/** 판 하나 올리기: 판 v 파일 객체를 받아 판 v + 1 모양으로 (version도 고쳐 적는다) */
+export type ProjectMigration = (raw: Readonly<Record<string, unknown>>) => Record<string, unknown>;
+
+/**
+ * 판 올림 사슬. PROJECT_MIGRATIONS[v - 1]이 판 v → v + 1이다. PROJECT_VERSION을 올릴 때 한 칸씩 더한다
+ * (길이는 늘 PROJECT_VERSION - 1. 시험이 본다). 지금은 판 1뿐이라 비어 있다.
+ * 주의: 앞 판 앱은 더 새 판 파일을 열어 저장할 때 모르는 필드는 남기고 version은 자기 판으로 적는다.
+ * 그래서 옛 판 파일에도 그 뒤 판의 필드가 이미 있을 수 있다. 올림은 있는 필드를 덮어쓰지 말고 없을 때만 채운다
+ */
+export const PROJECT_MIGRATIONS: readonly ProjectMigration[] = [];
+
+/** 옛 판 파일 객체를 to 판 모양으로 한 판씩 차례로 올린다. steps는 시험에서 바꿔 끼운다 */
+export function migrateProject(
+  raw: Readonly<Record<string, unknown>>,
+  from: number,
+  to: number = PROJECT_VERSION,
+  steps: readonly ProjectMigration[] = PROJECT_MIGRATIONS,
+): Record<string, unknown> {
+  let out = raw as Record<string, unknown>;
+  for (let v = from; v < to; v++) {
+    const step = steps[v - 1];
+    if (!step) throw new Error(`판 ${v} → ${v + 1} 올림이 없습니다`);
+    out = step(out);
+  }
+  return out;
 }
 
 type Obj = Record<string, unknown>;
@@ -248,13 +413,16 @@ function readSong(raw: Obj, diagnostics: FileDiagnostic[]): Song {
     author: str(metaRaw.author),
     profileId,
     ...(typeof metaRaw.memo === "string" ? { memo: metaRaw.memo } : {}),
+    ...withExtras(metaRaw, META_KEYS),
   };
 
+  // 템포 자리는 음수도 받는다: .mmi의 음수 startDelta 트랙 맨 앞에 적힌 t는 곡 처음보다 앞에 놓인다 (readMmi가 이렇게 만든다).
+  // 버리면 저장했다 열 때 그 빠르기가 사라져 곡이 기본 빠르기로 바뀐다
   const tempo: TempoEvent[] = [];
   for (const e of list(raw.tempo)) {
     const at = isObject(e) ? readRat(e.at) : undefined;
     const bpm = isObject(e) ? e.bpm : undefined;
-    if (at && cmp(at, ZERO) >= 0 && typeof bpm === "number" && Number.isFinite(bpm) && bpm > 0) tempo.push({ at, bpm });
+    if (at && typeof bpm === "number" && Number.isFinite(bpm) && bpm > 0) tempo.push({ at, bpm, ...withExtras(e as Obj, TEMPO_KEYS) });
     else warn(diagnostics, "project-dropped", "tempo");
   }
   tempo.sort((a, b) => cmp(a.at, b.at));
@@ -265,7 +433,7 @@ function readSong(raw: Obj, diagnostics: FileDiagnostic[]): Song {
     const beats = isObject(e) ? e.beats : undefined;
     const unit = isObject(e) ? e.unit : undefined;
     if (at && cmp(at, ZERO) >= 0 && Number.isInteger(beats) && Number.isInteger(unit) && (beats as number) >= 1 && (unit as number) >= 1)
-      timeSig.push({ at, beats: beats as number, unit: unit as number });
+      timeSig.push({ at, beats: beats as number, unit: unit as number, ...withExtras(e as Obj, TIME_SIG_KEYS) });
     else warn(diagnostics, "project-dropped", "timeSig");
   }
   timeSig.sort((a, b) => cmp(a.at, b.at));
@@ -273,7 +441,7 @@ function readSong(raw: Obj, diagnostics: FileDiagnostic[]): Song {
   const markers: Marker[] = [];
   for (const [i, e] of list(raw.markers).entries()) {
     const at = isObject(e) ? readRat(e.at) : undefined;
-    if (isObject(e) && at && cmp(at, ZERO) >= 0) markers.push({ id: str(e.id, `m${i + 1}`) || `m${i + 1}`, at, label: str(e.label) });
+    if (isObject(e) && at && cmp(at, ZERO) >= 0) markers.push({ id: str(e.id, `m${i + 1}`) || `m${i + 1}`, at, label: str(e.label), ...withExtras(e, MARKER_KEYS) });
     else warn(diagnostics, "project-dropped", "markers");
   }
 
@@ -295,6 +463,7 @@ function readSong(raw: Obj, diagnostics: FileDiagnostic[]): Song {
       instrument: readInstrument(p.instrument) ?? { canonical: "piano" },
       ...(splitFrom ? { splitFrom } : {}),
       ...(tab ? { tab } : {}),
+      ...withExtras(p, PLAYER_KEYS, PLAYER_INNER),
     });
   }
 
@@ -342,18 +511,20 @@ function readSong(raw: Obj, diagnostics: FileDiagnostic[]): Song {
       ...readTrackText(tr.mml),
       ...(readInstrument(tr.instrument) ? { instrument: readInstrument(tr.instrument)! } : {}),
       ...readMix(tr.mix),
+      ...(tr.mmiSong === true ? { mmiSong: true } : {}),
+      ...withExtras(tr, TRACK_KEYS, TRACK_INNER),
     });
   }
 
   const sources: SourceRef[] = [];
   for (const [i, s] of list(raw.sources).entries()) {
     if (isObject(s) && (s.kind === "audio" || s.kind === "midi") && typeof s.offsetSec === "number" && Number.isFinite(s.offsetSec))
-      sources.push({ id: str(s.id, `s${i + 1}`) || `s${i + 1}`, kind: s.kind, fileName: str(s.fileName), offsetSec: s.offsetSec });
+      sources.push({ id: str(s.id, `s${i + 1}`) || `s${i + 1}`, kind: s.kind, fileName: str(s.fileName), offsetSec: s.offsetSec, ...withExtras(s, SOURCE_KEYS) });
     else warn(diagnostics, "project-dropped", "sources");
   }
 
   const made = readMade(raw.made, profile.volume);
-  return pruneMade({ meta, tempo, timeSig, markers, players, tracks, sources, ...(made.length > 0 ? { made } : {}) });
+  return pruneMade({ meta, tempo, timeSig, markers, players, tracks, sources, ...(made.length > 0 ? { made } : {}), ...withExtras(raw, SONG_KEYS) });
 }
 
 /**
@@ -391,6 +562,7 @@ function readMade(raw: unknown, volume: { readonly min: number; readonly max: nu
       before,
       after,
       ...(added.length > 0 ? { addedTracks: added } : {}),
+      ...withExtras(r, MADE_KEYS),
     });
   }
   return out;
@@ -412,6 +584,8 @@ function readNotes(
   const notes: Note[] = [];
   let bad = 0;
   let clamped = 0;
+  // 시작이 음수인 음도 받는다: .mmi의 음수 startDelta로 곡 처음보다 앞당겨진 음이고 (readMmi가 이렇게 만든다),
+  // writeMmi가 startDelta로 되돌려 쓴다. 버리면 저장·자동 보존을 거칠 때 음이 사라진다
   for (const n of list(raw)) {
     const start = isObject(n) ? readRat(n.start) : undefined;
     const dur = isObject(n) ? readRat(n.dur) : undefined;
@@ -421,7 +595,6 @@ function readNotes(
       !isObject(n) ||
       !start ||
       !dur ||
-      cmp(start, ZERO) < 0 ||
       cmp(dur, ZERO) <= 0 ||
       !Number.isInteger(pitch) ||
       (pitch as number) < 0 ||
@@ -450,6 +623,7 @@ function readNotes(
       ...(tabString ? { tabString } : {}),
       ...(lab ? { lab } : {}),
       ...(made ? { made } : {}),
+      ...withExtras(n, NOTE_KEYS, NOTE_INNER),
     });
   }
   // 한 트랙은 한 번에 한 음: 시작 순으로 두고 앞 음과 겹치는 음은 뺀다
@@ -493,13 +667,19 @@ function readSpelling(v: unknown): SpellingHints {
 
 function readTrackText(v: unknown): { mml?: NonNullable<Track["mml"]> } {
   if (!isObject(v) || typeof v.text !== "string") return {};
+  // 원문 시작 자리(offset)는 음수도 받는다. 음수 startDelta로 당겨진 원문이라 음과 같이 남겨야 어긋나지 않는다
   const offset = readRat(v.offset);
-  return { mml: offset && cmp(offset, ZERO) >= 0 ? { text: v.text, offset } : { text: v.text } };
+  return { mml: offset ? { text: v.text, offset } : { text: v.text } };
 }
 
 function readMix(v: unknown): { mix?: NonNullable<Track["mix"]> } {
   if (!isObject(v)) return {};
   const ok = (x: unknown): x is number => typeof x === "number" && Number.isInteger(x) && x >= 0 && x <= 127;
-  const mix = { ...(ok(v.volume) ? { volume: v.volume } : {}), ...(ok(v.pan) ? { pan: v.pan } : {}) };
+  const mix = {
+    ...(ok(v.volume) ? { volume: v.volume } : {}),
+    ...(ok(v.pan) ? { pan: v.pan } : {}),
+    // 마비꼬 트랙 보이기는 숨긴 트랙(false)만 적는다
+    ...(v.visible === false ? { visible: false } : {}),
+  };
   return Object.keys(mix).length > 0 ? { mix } : {};
 }

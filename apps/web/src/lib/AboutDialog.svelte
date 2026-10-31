@@ -1,11 +1,12 @@
 <script lang="ts">
   import { i18n, t } from "./i18n.svelte";
+  import DiagCopy from "./DiagCopy.svelte";
   import Icon from "./Icon.svelte";
   import { CHANGELOG_URL, guideUrl, REPO_URL } from "./links";
   import { applyUpdate, checkForUpdate, pwa } from "./pwa.svelte";
 
   /**
-   * BiNote 정보 창: 아이콘·이름·버전, 업데이트 확인, 링크(가이드북·소스·라이선스·신고).
+   * BiNote 정보 창: 아이콘·이름·버전, 업데이트 확인, 링크(가이드북·소스·라이선스·신고), 진단 정보 복사.
    * 업데이트 확인은 지금 새 판이 있는지 바로 물어보고, 있으면 받아 둔다. 바꾸기는 새로고침 단추로
    */
   interface Props {
@@ -93,6 +94,10 @@
     <a href="./licenses/third-party.txt" target="_blank" rel="noopener">{t("ui.aboutLicenses")}</a>
     <a href={`${REPO_URL}/issues/new/choose`} target="_blank" rel="noopener">{t("ui.aboutReport")}</a>
   </p>
+  <!-- 신고할 때 붙여 넣을 판·브라우저·최근 오류 (문제 신고 양식에 칸이 있다) -->
+  <div class="diag">
+    <DiagCopy />
+  </div>
   <p class="muted small center">{t("ui.aboutCredit")}</p>
   <p class="muted small center">{t("ui.aboutUnofficial")}</p>
 </dialog>
@@ -174,6 +179,10 @@
     color: var(--accent);
   }
   .center {
+    text-align: center;
+  }
+  .diag {
+    margin-top: 8px;
     text-align: center;
   }
 </style>

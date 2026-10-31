@@ -1,7 +1,7 @@
-import { add, cmp, defaultLengthLimit, gameLengths, sub, ZERO, type LengthLimit, type Rat } from "@mmlce/core";
+import { add, cmp, defaultLengthLimit, gameLengths, MOBILE_PROFILE, sub, ZERO, type LengthLimit, type Rat } from "@mmlce/core";
 import { continues, mergeTies, sameSound } from "./compare.js";
 import { parseMml } from "./parser.js";
-import { printMml, splitDuration, type PrintableNote, type PrintOptions, type PrintResult } from "./printer.js";
+import { mmlPitchRange, printMml, splitDuration, type PrintableNote, type PrintOptions, type PrintResult } from "./printer.js";
 
 /**
  * 글자 수를 줄이는 출력기 (설계 6장).
@@ -45,7 +45,7 @@ interface Element {
   readonly pitch: number;
   /** 템포 때문에 나뉜 같은 음의 뒷부분. "&"로 시작하고 옥타브·l을 바꾸지 않는다 */
   readonly cont: boolean;
-  /** &와 음 사이에는 l을 끼우지 않는다 (게임에서 확인 전) */
+  /** &와 음 사이에는 l을 끼우지 않는다 (게임에서 확인 전, 프로필 pending lengthAfterTie) */
   readonly noSwitch: boolean;
   /** 뒤에 붙는 고정 글자 (다음 음과 잇는 &) */
   readonly suffix: string;
@@ -55,7 +55,7 @@ interface Element {
 export interface OptimizeOptions extends PrintOptions {
   /** l8에서 c. 처럼 숫자 없이 점만 쓰는 표기 (기본 켬, 사용자 곡에서 쓰이는 표기) */
   readonly bareDots?: boolean;
-  /** 옥타브 경계 음을 b+ / c- 로 써서 옥타브 바꾸기를 줄이기 (기본 켬) */
+  /** 옥타브 경계 음을 b+ / c- 로 써서 옥타브 바꾸기를 줄이기 (기본 켬). 게임이 옥타브를 넘겨 읽는지는 실측 전 (프로필 pending octaveCrossingAccidental) */
   readonly enharmonic?: boolean;
 }
 
@@ -66,6 +66,9 @@ function optimizeText(
 ): string | undefined {
   const maxDots = lengths.dots;
   const notes = mergeTies(input);
+  // 쓸 수 없는 높이가 있으면 단순 출력기가 옥타브를 옮겨 쓰고 알린다
+  const writable = mmlPitchRange(options.octaves ?? MOBILE_PROFILE.octave);
+  if (notes.some((n) => n.pitch < writable.low || n.pitch > writable.high)) return undefined;
   const tempo = [...(options.tempo ?? [])].sort((a, b) => cmp(a.at, b.at));
   const table = pieces(lengths);
   const elements: Element[] = [];
@@ -246,12 +249,15 @@ function solve(elements: readonly Element[], options: OptimizeOptions, maxDots: 
   };
 
   const start = options.octave ?? 4;
+  // 옥타브 상태는 o로 쓸 수 있는 범위 안에서만 둔다. 범위 끝 음(o0c-, o9b+)은 경계 이름으로 쓴다 (o-1·o10을 쓰지 않게)
+  const range = options.octaves ?? MOBILE_PROFILE.octave;
+  const inRange = (o: number) => o >= range.min && o <= range.max;
   let low = start;
   let high = start;
   for (const e of elements) {
     if (e.kind !== "note") continue;
-    low = Math.min(low, octaveOf(e.pitch) - 1);
-    high = Math.max(high, octaveOf(e.pitch) + 1);
+    low = Math.min(low, Math.max(range.min, octaveOf(e.pitch) - 1));
+    high = Math.max(high, Math.min(range.max, octaveOf(e.pitch) + 1));
   }
   const octaves = high - low + 1;
   const size = octaves * count;
@@ -298,9 +304,9 @@ function solve(elements: readonly Element[], options: OptimizeOptions, maxDots: 
     else if (e.cont) targets = [];
     else {
       const natural = octaveOf(e.pitch);
-      targets = [natural];
-      if (enharmonic && nameIn(e.pitch, natural - 1)) targets.push(natural - 1);
-      if (enharmonic && nameIn(e.pitch, natural + 1)) targets.push(natural + 1);
+      // 제 옥타브를 쓸 수 없는 범위 끝 음은 enharmonic을 꺼도 경계 이름으로 쓴다
+      const other = enharmonic || !inRange(natural);
+      targets = [natural, ...(other ? [natural - 1, natural + 1] : [])].filter((o) => inRange(o) && nameIn(e.pitch, o) !== undefined);
     }
 
     if (targets.length === 0) {

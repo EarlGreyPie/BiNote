@@ -64,3 +64,46 @@ describe("쉼표 앞의 &", () => {
     expect(sameSound(parseMml(text).notes, notes)).toBe(true);
   });
 });
+
+describe("옥타브 범위 끝 음 (o-1을 쓰지 않는다)", () => {
+  const pitches = (text: string) => parseMml(text).notes.map((x) => x.pitch);
+
+  it("pitch 11은 o0c-, 132는 o9b+로 쓰고 다시 읽으면 같은 음", () => {
+    for (const text of ["o0c-4", "o0<b4", "o9b+4", "o9>c4", "o4c o0c- o4c", "o0c<b", "o0c-o9b+"]) {
+      const before = pitches(text);
+      const printed = printMml(parseMml(text).notes);
+      expect(printed.text).not.toMatch(/o-|o1\d/);
+      expect(printed.diagnostics).toEqual([]);
+      const back = parseMml(printed.text);
+      expect(back.diagnostics).toEqual([]);
+      expect(back.notes.map((x) => x.pitch)).toEqual(before);
+    }
+    expect(printMml(parseMml("o0c-").notes).text).toBe("o0c-");
+    expect(printMml(parseMml("o9b+").notes).text).toBe("o9b+");
+  });
+
+  it("상대 표기 o0c<b도 그대로 pitch 12·11로 읽고, 다시 써도 같다", () => {
+    expect(pitches("o0c<b")).toEqual([12, 11]);
+    expect(pitches(roundTrip("o0c<b"))).toEqual([12, 11]);
+  });
+
+  it("그래도 쓸 수 없는 높이(0~10, 133 이상)는 옥타브를 옮겨 쓰고 알린다", () => {
+    const notes: PrintableNote[] = [
+      { start: rat(0), dur: rat(1, 4), pitch: 0, vol: 8, tie: "none" },
+      { start: rat(1, 4), dur: rat(1, 4), pitch: 133, vol: 8, tie: "none" },
+    ];
+    const printed = printMml(notes);
+    expect(printed.text).not.toMatch(/o-|o1\d/);
+    expect(parseMml(printed.text).diagnostics).toEqual([]);
+    expect(parseMml(printed.text).notes.map((x) => x.pitch)).toEqual([12, 121]);
+    expect(printed.diagnostics.map((d) => [d.code, d.params])).toEqual([
+      ["pitch-unwritable", { min: 0, max: 9 }],
+      ["pitch-unwritable", { min: 0, max: 9 }],
+    ]);
+  });
+
+  it("옥타브 범위는 프로필 값을 따른다", () => {
+    const notes: PrintableNote[] = [{ start: rat(0), dur: rat(1, 4), pitch: 23, vol: 8, tie: "none" }];
+    expect(printMml(notes, { octaves: { min: 1, max: 9 } }).text).toBe("o1c-");
+  });
+});

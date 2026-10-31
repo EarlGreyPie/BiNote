@@ -1,0 +1,196 @@
+{
+  "format": "mmlce",
+  "version": 1,
+  "app": "1.0.0-beta.32 · 22da91e",
+  "savedAt": "2026-10-20T09:00:00.000Z",
+  "song": {
+    "meta": {
+      "title": "판 고정 샘플",
+      "author": "EarlGreyPie",
+      "profileId": "mobile",
+      "memo": "beta.32가 저장한 모양"
+    },
+    "tempo": [
+      {
+        "at": {
+          "n": -1,
+          "d": 8
+        },
+        "bpm": 100
+      },
+      {
+        "at": {
+          "n": 0,
+          "d": 1
+        },
+        "bpm": 120
+      },
+      {
+        "at": {
+          "n": 3,
+          "d": 2
+        },
+        "bpm": 96
+      }
+    ],
+    "timeSig": [
+      {
+        "at": {
+          "n": 0,
+          "d": 1
+        },
+        "beats": 3,
+        "unit": 4
+      }
+    ],
+    "markers": [
+      {
+        "id": "m1",
+        "at": {
+          "n": 1,
+          "d": 7
+        },
+        "label": "A"
+      }
+    ],
+    "players": [
+      {
+        "id": "p1",
+        "name": "피아노 1",
+        "instrument": {
+          "canonical": "piano",
+          "packId": "Mabinogi.dls",
+          "program": 0
+        }
+      },
+      {
+        "id": "p2",
+        "name": "류트 1",
+        "instrument": {
+          "canonical": "lute",
+          "program": 0
+        },
+        "splitFrom": "p1",
+        "tab": {
+          "tuning": "custom",
+          "capo": 2,
+          "strings": [
+            64,
+            59,
+            55,
+            50,
+            45,
+            38
+          ]
+        }
+      }
+    ],
+    "tracks": [
+      {
+        "id": "t1",
+        "playerId": "p1",
+        "name": "멜로디",
+        "color": "#123456",
+        "colorPinned": true,
+        "role": "melody",
+        "mute": false,
+        "solo": true,
+        "notes": [
+          {"id":"n0","start":{"n":-1,"d":8},"dur":{"n":1,"d":8},"pitch":59,"vol":10,"tie":"none"},
+          {"id":"n1","start":{"n":0,"d":1},"dur":{"n":1,"d":7},"pitch":60,"vol":12,"tie":"next"},
+          {"id":"n2","start":{"n":1,"d":7},"dur":{"n":1,"d":37},"pitch":60,"vol":12,"tie":"none","made":"mk1"},
+          {"id":"n3","start":{"n":1,"d":2},"dur":{"n":1,"d":4},"pitch":64,"vol":13,"tie":"none","lab":{"kind":"ghost","vol":9}}
+        ],
+        "spelling": {
+          "preferRelativeOctave": true,
+          "defaultLength": 8
+        },
+        "mml": {
+          "text": "t120l7cdl37e&e",
+          "offset": {
+            "n": -1,
+            "d": 8
+          }
+        },
+        "mix": {
+          "volume": 100,
+          "pan": 30
+        }
+      },
+      {
+        "id": "t2",
+        "playerId": "p2",
+        "name": "",
+        "color": "#ff7a59",
+        "role": "bass",
+        "mute": true,
+        "solo": false,
+        "notes": [
+          {"id":"b1","start":{"n":0,"d":1},"dur":{"n":1,"d":1},"pitch":40,"vol":8,"tie":"none","tabString":6},
+          {"id":"b2","start":{"n":1,"d":1},"dur":{"n":1,"d":2},"pitch":52,"vol":8,"tie":"none","tabString":5,"lab":{"kind":"harmonic","type":"natural","pitch":45,"vol":8,"string":5,"fret":12}}
+        ],
+        "spelling": {},
+        "instrument": {
+          "canonical": "harp"
+        }
+      }
+    ],
+    "sources": [
+      {
+        "id": "s1",
+        "kind": "audio",
+        "fileName": "원곡.mp3",
+        "offsetSec": 0.25
+      },
+      {
+        "id": "s2",
+        "kind": "midi",
+        "fileName": "원곡.mid",
+        "offsetSec": -1.5
+      }
+    ],
+    "made": [
+      {
+        "id": "mk1",
+        "tool": "grace",
+        "options": {
+          "kind": "acciaccatura",
+          "length": 32
+        },
+        "trackId": "t1",
+        "picked": [
+          "n2"
+        ],
+        "before": [
+          {
+            "trackId": "t1",
+            "notes": [
+              {"id":"n2","start":{"n":1,"d":7},"dur":{"n":1,"d":37},"pitch":62,"vol":12,"tie":"none"}
+            ]
+          }
+        ],
+        "after": [
+          {
+            "trackId": "t1",
+            "notes": [
+              {"id":"n2","start":{"n":1,"d":7},"dur":{"n":1,"d":37},"pitch":60,"vol":12,"tie":"none"}
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "editor": {
+    "activeTrackId": "t1",
+    "division": 16,
+    "noteLength": "8",
+    "viewMode": "tab",
+    "tuning": "standard",
+    "capo": 0,
+    "trackView": {
+      "t2": {
+        "hidden": true
+      }
+    }
+  }
+}

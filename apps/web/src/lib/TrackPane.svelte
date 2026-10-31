@@ -48,6 +48,8 @@
     onundo: () => void;
     onredo: () => void;
     ongodiag: (trackId: string, from: number, to: number) => void;
+    /** 편집기 글 커서를 옮겼다 (그 트랙과 글 자리) */
+    oncursor?: ((trackId: string, pos: number) => void) | undefined;
     /** 편집기 여러 개: 아래 편집기들에 연 트랙 (칸 순서대로, 비면 편집기 하나) */
     extraTrackIds?: readonly string[];
     /** 아래 편집기 트랙의 지금 울리는 음 글 자리 */
@@ -60,7 +62,7 @@
     hold?: boolean;
   }
 
-  let { song, groups, tracks, colors, activeTrackId, fileName, charLimit, exportChars, dock, portrait, trackInstrument, trackInstrumentLabel, trackPack, packLabels, actions, reveal, playing, follow = false, moreItems, onedit, onundo, onredo, ongodiag, extraTrackIds = [], playingOf, oncloseextra, top, hold = false }: Props = $props();
+  let { song, groups, tracks, colors, activeTrackId, fileName, charLimit, exportChars, dock, portrait, trackInstrument, trackInstrumentLabel, trackPack, packLabels, actions, reveal, playing, follow = false, moreItems, onedit, onundo, onredo, ongodiag, oncursor, extraTrackIds = [], playingOf, oncloseextra, top, hold = false }: Props = $props();
 
   let portraitView = $state<"structure" | "mml">("structure");
   // 세로 화면에서 롤의 음을 두 번 눌러(또는 검사로) 글 자리로 가라고 하면 편집기 쪽을 보여 준다
@@ -134,6 +136,7 @@
             {onundo}
             {onredo}
             ongodiag={(from, to) => ongodiag(active.track.id, from, to)}
+            oncursor={oncursor ? (pos) => oncursor(active.track.id, pos) : undefined}
             onrename={(name) => actions.renameTrack(active.track.id, name)}
             locked={actions.viewOf(active.track.id).locked === true}
             onlock={(on) => actions.view(active.track.id, { locked: on })}
@@ -165,6 +168,7 @@
               {onundo}
               {onredo}
               ongodiag={(from, to) => ongodiag(extra.track.id, from, to)}
+              oncursor={oncursor ? (pos) => oncursor(extra.track.id, pos) : undefined}
               onrename={(name) => actions.renameTrack(extra.track.id, name)}
               locked={actions.viewOf(extra.track.id).locked === true}
               onlock={(on) => actions.view(extra.track.id, { locked: on })}

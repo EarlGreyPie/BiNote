@@ -1,5 +1,5 @@
 import { add, cmp, sub, ZERO, type Rat } from "./rat.js";
-import type { Note, Song } from "./model.js";
+import type { Extras, Note, Song } from "./model.js";
 
 /**
  * 만든 기록: 아르페지오·꾸밈음·슬라이드·트릴 창으로 적용한 결과를 나중에 원래대로 되돌리거나, 옛 설정으로 창을 다시 열어 고치려고 남긴다.
@@ -32,6 +32,7 @@ export interface MadeRecord {
   readonly after: readonly MadeNotes[];
   /** 이 기록이 새로 더한 트랙. 되돌린 뒤 비면 지운다 */
   readonly addedTracks?: readonly string[];
+  readonly extras?: Extras;
 }
 
 /** 기록을 남길 때 창이 넘기는 것 */

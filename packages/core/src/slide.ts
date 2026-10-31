@@ -1,6 +1,6 @@
 import { add, cmp, div, mul, rat, sub, ZERO, type Rat } from "./rat.js";
 import type { Note, Song } from "./model.js";
-import { chainSampleEnd, crossesTimbre, foldPitch, soundingRangeOf, TIE_BEND_LIMIT, type GameProfile } from "./profile.js";
+import { chainSampleEnd, crossesTimbre, foldPitch, soundingRangeOf, type GameProfile } from "./profile.js";
 import { roomBefore } from "./grace.js";
 import { gameLengths, shortestLength, type LengthLimit } from "./note-length.js";
 import { replaceNotes, tieChains } from "./note-edit.js";
@@ -192,7 +192,7 @@ export function planSlide(song: Song, trackId: string, picked: readonly Note[], 
     return want;
   };
   /** 사슬 첫 음(접은 높이) 기준으로 높이 차 한도 안인지 */
-  const withinBend = (head: number, pitches: readonly number[]) => pitches.every((p) => Math.abs(fold(p) - fold(head)) <= TIE_BEND_LIMIT);
+  const withinBend = (head: number, pitches: readonly number[]) => pitches.every((p) => Math.abs(fold(p) - fold(head)) <= profile.tieBendLimit);
   const pitchAt = (from: number, d: number, sign: number, i: number, parts: number) => from + sign * Math.round((i * d) / parts);
   /** 사이 음에 넣을 타브 줄 */
   const tabOf = (n: Note) => {

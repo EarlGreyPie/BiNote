@@ -6,6 +6,9 @@ const CACHE = "mmlce-dev";
 const PRECACHE = [];
 const VERSION = "dev";
 const NOTES = "";
+// 폰 공유 시트로 받은 것을 잠시 담는 캐시와 그 약속. 앱 쪽(src/lib/shareInbox.ts)과 이름이 같아야 한다
+const SHARE_CACHE = "mmlce-share";
+const SHARE_QUERY = "share-target";
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -33,23 +36,59 @@ self.addEventListener("activate", (event) => {
         // 서버에서 없어졌어도 여기서 찾는다(아래 fetch). 남은 옛 캐시는 다음 판으로 바뀔 때 정리한다
         const windows = await self.clients.matchAll({ type: "window" });
         if (windows.length > 1) return;
-        await Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)));
+        // 공유받은 것은 앱이 꺼내 가며 지운다
+        await Promise.all(keys.filter((k) => k !== CACHE && k !== SHARE_CACHE).map((k) => caches.delete(k)));
       })
       .then(() => self.clients.claim()),
   );
 });
 
 // 담아 둔 것은 지금 판 캐시에서 먼저 찾는다. 시작 페이지처럼 여러 판에 같은 주소로 든 파일은 caches.match가
-// 먼저 만든 옛 캐시에서 꺼내 옛 판이 열릴 수 있다. 옛 캐시는 지금 판에 없는 파일(옛 탭이 부르는 옛 판 파일)을 찾을 때만 쓴다
+// 먼저 만든 옛 캐시에서 꺼내 옛 판이 열릴 수 있다. 옛 캐시는 지금 판에 없는 파일(옛 탭이 부르는 옛 판 파일)을 찾을 때만 쓴다.
+// 화면 열기는 주소의 ?뒤를 보지 않는다: 공유받은 뒤 여는 ./?share-target도 연결 없이 담아 둔 ./로 열린다
 function fromCache(request) {
+  const options = request.mode === "navigate" ? { ignoreSearch: true } : undefined;
   return caches
     .open(CACHE)
-    .then((cache) => cache.match(request))
-    .then((cached) => cached ?? caches.match(request));
+    .then((cache) => cache.match(request, options))
+    .then((cached) => cached ?? caches.match(request, options));
+}
+
+/**
+ * 공유 시트로 받은 글·파일(manifest의 share_target, POST ./share-target)을 캐시에 넣고 앱을 ./?share-target으로 연다.
+ * 한 건마다 글이면 X-Share-Kind: text, 파일이면 X-Share-Name에 이름을 적는다. 읽다 실패해도 앱은 연다
+ */
+async function receiveShare(request) {
+  const scope = self.registration.scope;
+  try {
+    const form = await request.formData();
+    await caches.delete(SHARE_CACHE);
+    const cache = await caches.open(SHARE_CACHE);
+    let n = 0;
+    const key = () => new URL(`${SHARE_QUERY}/${n++}`, scope).href;
+    for (const field of ["text", "title", "url"]) {
+      const value = form.get(field);
+      if (typeof value === "string" && value.trim())
+        await cache.put(key(), new Response(value, { headers: { "Content-Type": "text/plain; charset=utf-8", "X-Share-Kind": "text" } }));
+    }
+    for (const file of form.getAll("files")) {
+      if (typeof file === "string") continue;
+      const headers = { "X-Share-Kind": "file", "X-Share-Name": encodeURIComponent(file.name ?? "") };
+      if (file.type) headers["Content-Type"] = file.type;
+      await cache.put(key(), new Response(file, { headers }));
+    }
+  } catch {
+    // 받은 것을 못 읽었다. 앱만 연다
+  }
+  return Response.redirect(new URL(`./?${SHARE_QUERY}`, scope).href, 303);
 }
 
 self.addEventListener("fetch", (event) => {
   const request = event.request;
+  if (request.method === "POST" && new URL(request.url).href === new URL(SHARE_QUERY, self.registration.scope).href) {
+    event.respondWith(receiveShare(request));
+    return;
+  }
   if (request.method !== "GET" || new URL(request.url).origin !== self.location.origin) return;
   // 새 버전을 먼저 받아 보고, 안 되면 담아 둔 것
   event.respondWith(

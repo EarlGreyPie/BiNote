@@ -67,8 +67,36 @@ export interface GameProfile {
    * 같은 연주자 화음을 함께 되풀이할 때(chord)
    */
   readonly ornamentRepeatLower: { readonly single: number; readonly chord: number };
-  /** 아직 인게임 실측으로 확인하지 못한 항목. 값은 임시 기본값이다 */
-  readonly pending: readonly PendingKey[];
+  /**
+   * &로 이은 다른 음을 다시 치지 않고 높이만 옮기는 최대 거리(반음). 더 멀면 새로 친다고 본다.
+   * 재생(벤드)·악보 진단·트릴·꾸밈음·미끄러짐 창이 모두 이 값을 쓴다
+   */
+  readonly tieBendLimit: number;
+  /**
+   * 연주 누락음 위험 (실험실): 같은 악보에서 같은 샘플 구간 Z 안에 maxNoteMs보다 짧은 음을 minRun개 이상 쉼 없이(음 사이 틈 gapMs 미만)
+   * 친 트랙이 minTracks개 이상이고, 그 연속이 같은 순간(착지 시각 차 gapMs 이내) gapMs보다 짧은 틈으로 다음 음(착지 음)에 넘어갈 때,
+   * 구간 Z의 그 빠른 음과 그 순간 구간 Z에서 시작하는 음(빠른 음이 없던 트랙 음 포함)을 시각·악보 트랙 순으로 세어 maxStarts개를 넘는 음이
+   * 게임에서 빠진다. 구간은 음색 경계(timbreBoundaries)로 나눈다. 이 규칙이 없는 게임이면 null. 고치기는 빠질 음을 gapMs 이상 늦춘다 (pending fastRunDrop)
+   */
+  readonly fastRunDrop: FastRunDropRule | null;
+  /**
+   * 아직 인게임 실측으로 확인하지 못한 항목. 그 항목에 걸린 값·동작은 임시 가정이다.
+   * 검사기·창은 isPending·pendingItem으로 읽는다 (실측하면 목록에서 지우고 주석에 잰 날과 결과를 적는다)
+   */
+  readonly pending: readonly PendingItem[];
+}
+
+export interface FastRunDropRule {
+  /** 같은 순간 이렇게 움직이는 트랙이 이만큼 이상이어야 한다 (한 트랙 안에서 되풀이하는 음은 빠지지 않았다) */
+  readonly minTracks: number;
+  /** 같은 구간의 빠른 음과 그 순간 시작하는 음을 차례로 세어 이만큼까지는 나고, 넘는 음부터 빠진다 */
+  readonly maxStarts: number;
+  /** 이보다 짧은(ms) 음을 빠른 음으로 본다 */
+  readonly maxNoteMs: number;
+  /** 빠른 음이 이만큼 이상 잇달아야 한다 */
+  readonly minRun: number;
+  /** 음 사이 틈이 이보다 짧으면(ms) 쉼 없이 이어진 것으로 본다. 같은 순간도 착지 시각 차가 이 안이면 같다고 본다 */
+  readonly gapMs: number;
 }
 
 export interface SampleZone {
@@ -94,11 +122,38 @@ export interface PitchRange {
   readonly high: number;
 }
 
+/** 실측 전 항목 이름. 실측을 마친 항목은 여기서도 지운다 (남겨 두면 검사기가 아직 모르는 것으로 읽는다) */
 export type PendingKey =
-  | "volumeCurve"
-  | "soundingRangeInstruments"
   | "playerChannelSeparation"
-  | "sampleDecay";
+  | "fourthTrackSound"
+  | "mobileInstrumentPrograms"
+  | "sampleDecay"
+  | "tieBendLimit"
+  | "trillVolumePattern"
+  | "tempoChannelScope"
+  | "lengthAfterTie"
+  | "octaveCrossingAccidental"
+  | "nCommand"
+  | "fastRunDrop";
+
+/**
+ * 실측 전 항목이 걸린 곳.
+ * - sound: 게임에서 나는 소리 (재생·소리 경고)
+ * - syntax: 게임이 MML 글을 읽는 방법 (해석·출력)
+ * - instrument: 악기 목록·번호
+ */
+export type PendingScope = "sound" | "syntax" | "instrument";
+
+export interface PendingItem {
+  readonly key: PendingKey;
+  readonly scope: PendingScope;
+  /** 이 악기(canonical)에만 걸리면 그 목록. 없으면 모든 악기 */
+  readonly instruments?: readonly string[];
+  /** 무엇을 아직 모르는지, 지금은 어떻게 가정하는지 */
+  readonly note: string;
+  /** 실측 전으로 적은 날 (YYYY-MM-DD) */
+  readonly since: string;
+}
 
 /**
  * 인게임 실측(2026-08-23, MMLCS): 피아노·류트·기타 v1~v15 녹음 45점이
@@ -120,7 +175,7 @@ const E_BOUNDARIES = [52, 64, 77];
  * - 화음(c·e·g, 3화음 악기 9종): 같은 v에서 3음 화음은 단음 c보다 류트 4.3·만돌린 5.4·하모니카 4.1·플루트 4.7·
  *   바이올린 4.3·샬루모 4.7dB 커서 음 에너지의 단순 합(4.8dB)과 맞는다 → 2배마다 3dB.
  *   피아노 2.5·하프 2.7·포크 기타 7.0dB은 음마다 샘플 크기가 달라서다 (피아노 o4e~o5e는 다른 음보다 4~5dB 작다).
- *   1화음 악기(그냥 "피아노")는 첫 트랙만 소리 나고, 3화음 악기는 4트랙 악보에서도 ChannelCount 3 (4번째 트랙이 나는지는 미확인).
+ *   1화음 악기(그냥 "피아노")는 첫 트랙만 소리 나고, 3화음 악기는 4트랙 악보에서도 ChannelCount 3 (4번째 트랙이 나는지는 미확인, pending fourthTrackSound).
  * - 악보책: 2초짜리 악보가 3.01초마다 반복(14회, ±20ms) → 지연 1010ms. 악보 하나 반복은 틈 없음.
  * - 옥타브: o0~o9 모두 오류 없음(o0c도 소리 남). 범위 밖 음은 옥타브째 접혀 범위 안에서 난다.
  *   보유 악기 33종을 흰건반으로 훑음(경계 ±1반음): 피아노·류트·하프·기타 o1e~o7e, 만돌린 o1f~, 플루트·샬루모 o2f~,
@@ -138,6 +193,11 @@ const E_BOUNDARIES = [52, 64, 77];
  *   고양이 하모니카는 샘플이 0.4~0.7초로 아주 짧다. 오르골(하우징 가구로 직접 재생해 녹음)은 o1e~o7e, 샘플 1.8~5초.
  *   샬루모는 o2f·o2f+가 같은 샘플이라 맨 아래 구간이 o2f+(42) 샘플이다 (6초 녹음, 2026-10-22). 축음기 o4f·o5g 경계도 이날 녹음으로 확인.
  *   오르골 맨 위 구간은 o6f(89)부터 (녹음 다시 확인, 2026-10-22). 처음 o6f+(90)로 넣어 1.97초는 o6f+ 값이라 o6f 기준 2.09초로 옮김.
+ *   플루트 가운데 구간은 o5d+(75)부터 (2026-10-31): 반음씩 친 음계에서 배음 모양이 o5d → o5d+에서만 튀고, 6초 녹음은
+ *   o5d 1.51초(아래 구간 식과 맞음)·o5d+ 5.71초·o5e 5.39초. 처음 o5e(76)로 넣었던 것을 옮기고, 감쇠 시각은 o5e 값을 2^(1/12)배 해 o5d+ 기준으로 옮김.
+ *   바이올린 맨 위 구간은 o5c+(73)부터 (2026-10-31, 반음씩 친 음계): 배음 모양이 o5c → o5c+에서만 12.7dB 튄다.
+ *   처음 o5d(74)로 넣었던 것을 옮기고, 샘플 길이·감쇠 시각은 o5d 값을 2^(1/12)배 해 o5c+ 기준으로 옮김.
+ *   반음 녹음으로 아직 확인하지 않은 경계: 실로폰·오르골 66·80, 샬루모 56·70·82, 플루트 88.
  * - 음색 경계 위 e를 붙이면 한 번만 치고 이어진다 (튐 없음).
  * - 축음기(하우징 가구, 2026-10-16 직접 재생해 녹음): 오르골처럼 악보 하나에 3트랙. o1e~o7e(28~100), 범위 밖은 옥타브째 접힌다.
  *   줄지 않는 지속음인데 샘플이 끝나면 끊긴다(4.5~5.3초). 구간 경계 51|52·88|89는 반음씩 친 녹음의 음색 변화로,
@@ -173,8 +233,8 @@ export const MOBILE_PROFILE: GameProfile = {
     harp: [{ from: 40, seconds: 5.26 }, { from: 52, seconds: 5.23 }, { from: 64, seconds: 5.02 }, { from: 77, seconds: 4.33 }, { from: 89, seconds: 4.4 }],
     "folk-guitar": [{ from: 40, seconds: 5.26 }, { from: 52, seconds: 5.26 }, { from: 64, seconds: 5.27 }, { from: 77, seconds: 4.44 }, { from: 89, seconds: 4.67 }],
     xylophone: [{ from: 28, seconds: 5.26 }, { from: 52, seconds: 2.66 }, { from: 66, seconds: 2.26 }, { from: 80, seconds: 2.08 }],
-    flute: [{ from: 52, seconds: 5.35 }, { from: 76, seconds: 5.39 }, { from: 88, seconds: 5.37 }],
-    violin: [{ from: 50, seconds: 5.49 }, { from: 60, seconds: 4.58 }, { from: 66, seconds: 4.9 }, { from: 74, seconds: 4.45 }],
+    flute: [{ from: 52, seconds: 5.35 }, { from: 75, seconds: 5.71 }, { from: 88, seconds: 5.37 }],
+    violin: [{ from: 50, seconds: 5.49 }, { from: 60, seconds: 4.58 }, { from: 66, seconds: 4.9 }, { from: 73, seconds: 4.71 }],
     chalumeau: [{ from: 42, seconds: 5.67 }, { from: 56, seconds: 5.1 }, { from: 70, seconds: 4.57 }, { from: 82, seconds: 4.56 }],
     harmonica: [{ from: 40, seconds: 5.25 }, { from: 52, seconds: 5.28 }, { from: 64, seconds: 5.27 }, { from: 77, seconds: 4.97 }, { from: 89, seconds: 4.99 }],
     "music-box": [{ from: 28, seconds: 5.05 }, { from: 52, seconds: 2.24 }, { from: 66, seconds: 2.05 }, { from: 80, seconds: 1.79 }, { from: 89, seconds: 2.09 }],
@@ -200,7 +260,7 @@ export const MOBILE_PROFILE: GameProfile = {
     ],
     flute: [
       { from: 52, peakAt: 0.23, startDb: -16.44, db6: 5.06, db12: 5.2, db20: 5.26, db40: null },
-      { from: 76, peakAt: 0.19, startDb: -6.65, db6: 5.34, db12: 5.34, db20: 5.36, db40: null },
+      { from: 75, peakAt: 0.2, startDb: -6.65, db6: 5.66, db12: 5.66, db20: 5.68, db40: null },
       { from: 88, peakAt: 0.11, startDb: -4.38, db6: 5.34, db12: 5.34, db20: 5.36, db40: 5.36 },
     ],
     chalumeau: [
@@ -220,7 +280,7 @@ export const MOBILE_PROFILE: GameProfile = {
       { from: 50, peakAt: 0.73, startDb: -12.51, db6: 5.24, db12: 5.36, db20: 5.4, db40: 5.48 },
       { from: 60, peakAt: 0.59, startDb: -14.33, db6: 4.42, db12: 4.5, db20: 4.54, db40: null },
       { from: 66, peakAt: 0.65, startDb: -9.53, db6: 4.7, db12: 4.78, db20: 4.8, db40: 4.88 },
-      { from: 74, peakAt: 0.61, startDb: -8.63, db6: 4.44, db12: 4.46, db20: null, db40: null },
+      { from: 73, peakAt: 0.65, startDb: -8.63, db6: 4.7, db12: 4.73, db20: null, db40: null },
     ],
     harp: [
       { from: 40, peakAt: 0.03, startDb: -1.61, db6: 1.14, db12: 3.58, db20: 4.34, db40: 5.02 },
@@ -273,7 +333,106 @@ export const MOBILE_PROFILE: GameProfile = {
   // 같은 실측: 한 음을 l64로 되풀이하면 한 음보다 약 7dB, 세 음 화음을 l32로 되풀이하면 그냥 화음보다 약 10dB 커지고 줄지 않는다.
   // 다 맞추면 너무 작아져(같은 v로 쳐도 음마다 4~9dB 흔들림) 권장값은 그 절반쯤
   ornamentRepeatLower: { single: 3, chord: 5 },
-  pending: ["playerChannelSeparation"],
+  // c&>c(12반음)·c&g까지는 다시 치지 않음을 확인했다(2026-10-14). 24는 재생의 벤드 범위에 맞춘 가정 (pending tieBendLimit)
+  tieBendLimit: 24,
+  // 음씹힘 재현 실험(2026-10-31, 모바일, 피아노·류트, 아리아 한 곡에서 잘라 낸 판들. dev docs/NOTE_DROP_RESEARCH.md 6.6절):
+  // t116 24분음표(86ms)·16분음표(129ms) 둘 뒤 화음은 빠지고 t60 24분음표(167ms)는 나옴 → 경계 150ms.
+  // 트랙 3개는 빠지고 2개는 나옴, 짧은 음 하나는 나옴, 착지 음 앞 r64(t116 32ms)는 나옴.
+  // 같은 날 이어진 시험: 꾸밈음(o3e~o4d+ 구간)은 그대로 두고 착지 화음만 다른 구간(o4a+·o5d+·o5f)으로 옮기면 나오고, 같은 구간
+  // (o4c+·o4d+·o3g+)이면 빠짐. 꾸밈음만 한 옥타브 위(o4e~ 구간)로 옮기면 그 구간의 착지 음 E4만 빠지고 C4·G3은 나옴.
+  // 볼륨은 상관없었다 → 빠른 음 연속과 같은 샘플 구간의 착지 음만 빠진다 (pending fastRunDrop)
+  // 이어서 잰 것(같은 날): 트랙 2개 × 빠른 음 3개(합 6)도 빠지고, 트랙 2개 × 2개(합 4)는 나온다 → 트랙 수보다 같은 구간의 빠른 음
+  // 합이 기준이다. 계속 울리던 같은 구간 음을 빼도, 화면 30·60fps에서도 똑같이 빠졌다.
+  // 세 번째 시험(같은 날): 합 5(트랙 2개 × 3·2개, 트랙 3개 × 2·2·1개)도 빠짐 → 기준 5, 빠른 음 하나뿐인 트랙도 합에 든다.
+  // 꾸밈음 없이 쉼표 뒤 같은 순간 친 같은 구간 음(트랙 5의 G3)도 함께 빠짐 → 착지 음만이 아니라 그 순간 그 구간에서 시작하는 음이 모두 빠진다.
+  // 아리아 62마디(o4e~o5d+ 구간 꾸밈음 6개 → 화음 C5·E5·G4)는 예측대로 셋 다 빠짐. 실로폰은 구간(o3e~o4f)대로 피아노에선 살던 E4까지 빠짐,
+  // 바이올린은 구간이 갈려 빠지지 않음(예측대로). 플루트는 한 구간인데도 빠지지 않음(계속 울리는 악기는 다를 수 있어 아직 판단 보류).
+  // 62마디 착지 음을 r64(t114 33ms) 늦추면 C5·E5는 살고 G4는 여전히 빠짐, r48(44ms)·r32(66ms)는 셋 다 남 → 틈 기준을 40ms로 올림
+  // (t116 r64 32ms는 38마디에서 살았지만 아슬아슬해 위험으로 본다).
+  // 네 번째 시험(같은 날): 합 4(트랙 2개 × 2개, 6트랙 판)는 트랙 1의 C4는 살고 트랙 5의 G3은 빠짐 → 빠른 음과 그 순간 시작하는 음을
+  // 트랙 순으로 세어 5개까지 나고 6번째부터 빠진다(합 4 + C4 = 5 남, + G3 = 6 빠짐. 트랙 2개뿐인 판의 합 4 + C4 = 5도 남았다).
+  // 두 옥타브 올린 A판: 바이올린(o5c+ 이상 한 구간)은 셋 다 빠지고, 플루트는 o6e 경계 아래 C6·G5만 빠지고 E6은 남음 → 계속 울리는 악기도 같다.
+  // 낮은 A판과 플루트 경계 판(o3d~o3f+ 꾸밈음 6개 뒤 G3~E4)에서 플루트 o5d 아래는 빠지지 않았다. 그 음역은 샘플 하나(o5d 1.51초가
+  // 샘플 길이 식과 맞음)라 경계 때문은 아니다. 까닭은 아직 모른다 (dev docs/NOTE_DROP_RESEARCH.md 6.6.6절).
+  // 큰북은 트랙 셋 × 빠른 음 2개 뒤 착지도 났다 → 타악기는 세지 않는다 (검사기 fastRunMoments)
+  fastRunDrop: { minTracks: 2, maxStarts: 5, maxNoteMs: 150, minRun: 1, gapMs: 40 },
+  // 실측으로 확인한 볼륨 곡선·악기별 음역·트레몰로 빠르기는 넣지 않는다 (위 주석에 잰 날과 결과)
+  pending: [
+    {
+      key: "playerChannelSeparation",
+      scope: "sound",
+      note: "연주자(악보)마다 소리 채널이 따로인지. 여러 연주자가 같은 악기로 같은 음을 함께 쳐도 서로 끊지 않는다고 본다",
+      since: "2026-10-31",
+    },
+    {
+      key: "fourthTrackSound",
+      scope: "sound",
+      note: "3화음 악기로 4트랙 이상인 악보를 칠 때 4번째 트랙부터 소리가 나는지 (ChannelCount는 3). 지금은 나는 것으로 본다",
+      since: "2026-10-14",
+    },
+    {
+      key: "mobileInstrumentPrograms",
+      scope: "instrument",
+      instruments: ["folk-guitar", "harmonica", "cat-harmonica", "gramophone"],
+      note: "모바일 전용 악기의 게임 안 악기 번호. 사운드팩마다 번호가 달라 이름으로만 찾는다",
+      since: "2026-10-31",
+    },
+    {
+      key: "sampleDecay",
+      scope: "sound",
+      instruments: ["cat-harmonica", "bass-drum", "cymbal"],
+      note: "소리 줄어듦(감쇠). 고양이 하모니카는 샘플이 0.5초로 짧고 타악기는 2초 녹음뿐이라 넣지 않았다. 줄지 않는다고 본다",
+      since: "2026-10-27",
+    },
+    {
+      key: "tieBendLimit",
+      scope: "sound",
+      note: "&로 이은 다른 음을 다시 치지 않는 최대 높이 차. 12반음까지 확인했고, 그보다 먼 음은 24반음까지 같다고 본다",
+      since: "2026-10-31",
+    },
+    {
+      key: "trillVolumePattern",
+      scope: "sound",
+      note: "트릴·트레몰로 창의 v 모양(번갈아·첫 음 세게·점점 크게 등)이 게임에서 어떻게 들리는지",
+      since: "2026-10-31",
+    },
+    {
+      key: "tempoChannelScope",
+      scope: "syntax",
+      note: "악보 안 어느 채널에 쓴 t든 그 악보 모든 채널에 걸리는지. 지금은 그렇다고 보고 템포 자리를 고른다",
+      since: "2026-10-31",
+    },
+    {
+      key: "lengthAfterTie",
+      scope: "syntax",
+      note: "& 뒤에 l 같은 명령이 끼어도(c&l8c) 두 음이 이어지는지. 지금은 이어진다고 읽고, 출력기는 &와 음 사이에 l을 쓰지 않는다",
+      since: "2026-10-31",
+    },
+    {
+      key: "octaveCrossingAccidental",
+      scope: "syntax",
+      note: "b+·c-가 옥타브를 넘어 위 c·아래 b로 나는지. 지금은 넘는다고 읽고, 글자 수 줄이기도 옥타브 경계 음을 b+·c-로 쓴다(끄는 옵션 있음)",
+      since: "2026-10-31",
+    },
+    {
+      key: "nCommand",
+      scope: "syntax",
+      note: "n 명령이 같은 높이 음표와 소리(볼륨·음색)가 같은지. 같은지 몰라 출력기는 n을 새로 쓰지 않는다",
+      since: "2026-10-31",
+    },
+    {
+      key: "fastRunDrop",
+      scope: "sound",
+      note:
+        "같은 악보에서 같은 샘플 구간에 150ms보다 짧은 음을 쉼 없이 친 트랙이 2개 이상이고 같은 순간 40ms보다 짧은 틈으로 넘어가면, " +
+        "그 구간의 빠른 음과 그 순간 시작하는 음(다른 트랙 음 포함)을 트랙 순으로 세어 5개를 넘는 음이 빠지는지와 그 기준값. " +
+        "피아노·류트·실로폰·바이올린·플루트로 확인했다. 틈 40ms는 33ms에서 하나가 빠지고 44ms에서 모두 난 데서 잡은 여유값이다. " +
+        "플루트 o5d 아래는 빠른 음 6개 뒤에도 빠지지 않았다(샘플 하나인 음역이라 경계 때문은 아니고 까닭은 모름). 지금은 그대로 알린다. 빠른 음 자체가 빠지는지는 재지 않았다. " +
+        "타악기는 큰북으로 재 보니 빠지지 않아 세지 않는다(심벌즈는 판정 못 함). 같은 높이를 여러 트랙이 잇달아 칠 때는 재지 않았다. " +
+        "구간 경계를 재지 않은 악기(타악기 등)는 전체를 한 구간으로 본다",
+      since: "2026-10-31",
+    },
+  ],
 };
 
 export const PROFILES: Readonly<Record<string, GameProfile>> = {
@@ -330,8 +489,28 @@ export function crossesTimbre(profile: GameProfile, instrument: string | undefin
   return timbreBoundaries(profile, instrument).some((x) => lo < x && x <= hi);
 }
 
-/** 다른 음 붙임을 다시 치지 않고 높이만 옮기는 최대 거리(반음). 더 멀면 새로 친다 (재생의 벤드 범위) */
-export const TIE_BEND_LIMIT = 24;
+/** 이 항목이 아직 실측 전인지. instrument를 주면 그 악기에 걸리는지까지 본다 (악기 목록이 없는 항목은 모든 악기) */
+export function isPending(profile: GameProfile, key: PendingKey, instrument?: string): boolean {
+  return pendingItem(profile, key, instrument) !== undefined;
+}
+
+/** 실측 전 항목의 설명 (창·검사기 안내에 쓴다). 실측했거나 그 악기에 걸리지 않으면 undefined */
+export function pendingItem(profile: GameProfile, key: PendingKey, instrument?: string): PendingItem | undefined {
+  const item = profile.pending.find((p) => p.key === key);
+  if (!item) return undefined;
+  if (instrument !== undefined && item.instruments && !item.instruments.includes(instrument)) return undefined;
+  return item;
+}
+
+/** 이 곳(scope)에 걸린 실측 전 항목 */
+export function pendingIn(profile: GameProfile, scope: PendingScope): PendingItem[] {
+  return profile.pending.filter((p) => p.scope === scope);
+}
+
+/** v를 한 번에 낮출 수 있는 최대 단계 (v 범위 전체). 실험실·트릴 창의 단계 입력 상한 */
+export function volumeStepMax(profile: GameProfile): number {
+  return profile.volume.max - profile.volume.min;
+}
 
 /**
  * 붙임 사슬(첫 음부터 &로 이은 음들)의 소리가 샘플 끝에 닿아 끊기는 시각(초).

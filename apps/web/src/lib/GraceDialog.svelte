@@ -171,7 +171,7 @@
     {#if s.tied + s.short + s.unwritable + s.locked + s.range > 0}
       <p class="muted">{t("ui.graceSkipped", { tied: s.tied, short: s.short + s.unwritable, locked: s.locked, range: s.range })}</p>
     {/if}
-    {#if s.bend > 0}<p class="warn">{t("ui.slideBend", { n: s.bend })}</p>{/if}
+    {#if s.bend > 0}<p class="warn">{t("ui.slideBend", { n: s.bend, limit: profile.tieBendLimit })}</p>{/if}
   {/if}
   <footer>
     <span class="spacer"></span>

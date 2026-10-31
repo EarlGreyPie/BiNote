@@ -1,5 +1,6 @@
-import { add, cmp, meterGrid, sub, trackInstrument, ZERO, type Command, type GameProfile, type Note, type Rat, type Song, type Track, type TimeSigEvent } from "@mmlce/core";
-import { chordsPerScore, scoreChunks } from "./clipboard.js";
+import { add, cmp, meterGrid, sub, ZERO, type Command, type GameProfile, type Note, type Rat, type Song, type Track, type TimeSigEvent } from "@mmlce/core";
+import { chordsPerScore } from "./clipboard.js";
+import { soundGroups } from "./distribute.js";
 import { compactResult, restoreSong } from "./edit.js";
 import { trackEnd } from "./score-end.js";
 import { gameTimeline } from "./game-timeline.js";
@@ -43,21 +44,6 @@ export interface SpreadCandidate {
   readonly trackId: string;
   /** 없으면 받을 수 있다 */
   readonly block?: SpreadBlock;
-}
-
-/**
- * 트랙마다 "같은 소리 묶음" 이름: 게임 악보 + 연주자 + 실제 악기 + 끄기·솔로·채널 볼륨·팬.
- * 같은 이름의 트랙끼리는 음을 주고받아도 게임 소리가 같다 (gameTimeline이 묶는 단위와 같다)
- */
-export function soundGroups(song: Song, profile: GameProfile): Map<string, string> {
-  const scoreOf = new Map<string, number>();
-  scoreChunks(song, chordsPerScore(song, profile)).forEach((c, i) => c.trackIds.forEach((id) => scoreOf.set(id, i)));
-  return new Map(
-    song.tracks.map((t) => {
-      const inst = trackInstrument(song, t);
-      return [t.id, `${scoreOf.get(t.id) ?? -1}|${t.playerId}|${inst.canonical}|${inst.program ?? ""}|${t.mute}|${t.solo}|${t.mix?.volume ?? ""}|${t.mix?.pan ?? ""}`];
-    }),
-  );
 }
 
 /** 보내는 트랙과 같은 연주자의 다른 트랙마다, 받을 수 있는지와 까닭 */

@@ -123,8 +123,71 @@ export function replaceNotes(
 ): Note[] {
   let out: Note[] = notes.filter((n) => !changes.has(n.id));
   const placed = [...changes.values()].filter((n): n is Note => n !== null).sort((a, b) => cmp(a.start, b.start));
+  // 넣는 음이 남은 음·서로와 겹치지 않으면 하나씩 넣어도 자르거나 지울 음이 없으므로 뒤에 붙이기만 한다 (결과가 같다).
+  // 넣는 음이 많을 때 음마다 트랙 전체를 훑지 않게 (트릴·꾸밈음처럼 한 트랙에 수천 음을 넣는 경우)
+  if (placed.length > 1 && fitsApart(out, placed, changes)) return tidy([...out, ...placed], notes, explicitVol);
   for (const n of placed) out = placeRaw(out, n);
   return tidy(out, notes, explicitVol);
+}
+
+/**
+ * replaceNotes에서 넣는 음(시작 순)을 하나씩 placeRaw로 넣을 때 남은 음(rest)이나 먼저 넣은 음을 하나도 자르거나 지우지 않는지.
+ * 바뀐 음이 제 id 칸에 들어 있고 길이가 0보다 길 때만 본다 (아니면 false: 하나씩 넣는다)
+ */
+function fitsApart(rest: readonly Note[], placed: readonly Note[], changes: ReadonlyMap<string, Note | null>): boolean {
+  for (const [id, n] of changes) if (n && (n.id !== id || n.dur.n <= 0)) return false;
+  // 넣는 음끼리: 앞에 넣은 음 끝 가운데 가장 늦은 것이 이 음 시작을 넘으면 placeRaw가 그 음을 자른다
+  let reach: Rat | undefined;
+  for (const p of placed) {
+    if (reach && cmp(reach, p.start) > 0) return false;
+    if (!reach || cmp(end(p), reach) > 0) reach = end(p);
+  }
+  // 남은 음: 시작 순으로 놓고 끝의 앞쪽 최댓값을 두면, 넣는 음 끝보다 먼저 시작하는 음 가운데 그 음 시작보다 늦게 끝나는 음이 있는지 바로 안다
+  const sorted = [...rest].sort((a, b) => cmp(a.start, b.start));
+  const reachUpTo: Rat[] = [];
+  for (const n of sorted) {
+    const last = reachUpTo[reachUpTo.length - 1];
+    reachUpTo.push(last && cmp(last, end(n)) >= 0 ? last : end(n));
+  }
+  for (const p of placed) {
+    const to = end(p);
+    let lo = 0;
+    let hi = sorted.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (cmp(sorted[mid]!.start, to) < 0) lo = mid + 1;
+      else hi = mid;
+    }
+    if (lo > 0 && cmp(reachUpTo[lo - 1]!, p.start) > 0) return false;
+  }
+  return true;
+}
+
+/** 음을 넣거나 옮길 때 손해 보는 다른 음. cut: 끝이 잘릴 음 id → 남는 길이, removed: 지워질 음 id */
+export interface PlaceLoss {
+  readonly cut: ReadonlyMap<string, Rat>;
+  readonly removed: ReadonlySet<string>;
+}
+
+/**
+ * replaceNotes(notes, changes)를 하면 changes에 없는 음 가운데 무엇이 잘리고 지워지는지.
+ * 끄는 동안 먹힐 음을 미리 보여 주고, 놓은 뒤 몇 개가 잘렸는지 알릴 때 쓴다. 규칙은 replaceNotes(placeRaw)와 똑같다
+ */
+export function placeLoss(notes: readonly Note[], changes: ReadonlyMap<string, Note | null>): PlaceLoss {
+  const cut = new Map<string, Rat>();
+  const removed = new Set<string>();
+  const placed = [...changes.values()].filter((n): n is Note => n !== null).sort((a, b) => cmp(a.start, b.start));
+  if (placed.length === 0) return { cut, removed };
+  let out: Note[] = notes.filter((n) => !changes.has(n.id));
+  for (const n of placed) out = placeRaw(out, n);
+  const left = new Map(out.map((n) => [n.id, n]));
+  for (const n of notes) {
+    if (changes.has(n.id)) continue;
+    const after = left.get(n.id);
+    if (!after) removed.add(n.id);
+    else if (cmp(after.dur, n.dur) < 0) cut.set(n.id, after.dur);
+  }
+  return { cut, removed };
 }
 
 /** 음 높이를 반음 단위로 옮긴다 (음정 변환). MIDI 범위(0~127)를 벗어나는 음이 하나라도 있으면 undefined */
@@ -168,6 +231,84 @@ export function scaleNotesIn(notes: readonly Note[], picked: readonly Note[], fa
     return cmp(b.start, n.start) !== 0 || cmp(b.dur, n.dur) !== 0;
   });
   return changed ? out : undefined;
+}
+
+/**
+ * 한 트랙 음을 시작 순으로 놓고 id·자리로 바로 찾게 한 것. 트릴·꾸밈음처럼 고른 음마다 앞 음·& 사슬을 보는 도구가
+ * 음마다 트랙 전체를 다시 정렬하고 처음부터 훑지 않도록 트랙마다 한 번 만들어 쓴다. 트랙 음이 바뀌면 새로 만든다
+ */
+export interface TrackIndex {
+  /** 시작 순 (시작이 같으면 원래 순서) */
+  readonly sorted: readonly Note[];
+  /** id 음의 sorted 안 자리 (같은 id가 여럿이면 앞의 것). 없으면 -1 */
+  indexOf(id: string): number;
+  /** id 음 (원래 순서에서 처음 나오는 것) */
+  get(id: string): Note | undefined;
+  /** 시작이 at인 음들 (시작 순) */
+  startingAt(at: Rat): Note[];
+  /** n 바로 앞 음: n보다 먼저 시작하는 마지막 음 */
+  before(n: Note): Note | undefined;
+  /** 바로 앞 음이 &로 이어 주는 음인지 (새로 치지 않는 음) */
+  isHeld(n: Note): boolean;
+}
+
+export function trackIndex(notes: readonly Note[]): TrackIndex {
+  const sorted = [...notes].sort((a, b) => cmp(a.start, b.start));
+  const at = new Map<string, number>();
+  sorted.forEach((n, i) => {
+    if (!at.has(n.id)) at.set(n.id, i);
+  });
+  const byId = new Map<string, Note>();
+  for (const n of notes) if (!byId.has(n.id)) byId.set(n.id, n);
+  /** 시작이 pos 이상인 첫 음 자리 */
+  const firstFrom = (pos: Rat) => {
+    let lo = 0;
+    let hi = sorted.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (cmp(sorted[mid]!.start, pos) < 0) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  };
+  const before = (n: Note) => {
+    // 앞에서부터 훑어 n 자신이나 n 시작 이후 음을 만나기 직전 음과 같다 (n이 시작보다 앞자리에 놓였으면 그 앞)
+    const i = at.get(n.id);
+    const stop = Math.min(firstFrom(n.start), i ?? Infinity);
+    return stop > 0 ? sorted[stop - 1] : undefined;
+  };
+  return {
+    sorted,
+    indexOf: (id) => at.get(id) ?? -1,
+    get: (id) => byId.get(id),
+    startingAt: (pos) => {
+      const out: Note[] = [];
+      for (let i = firstFrom(pos); i < sorted.length && cmp(sorted[i]!.start, pos) === 0; i++) out.push(sorted[i]!);
+      return out;
+    },
+    before,
+    isHeld: (n) => {
+      const prev = before(n);
+      return !!prev && prev.tie === "next" && cmp(end(prev), n.start) === 0;
+    },
+  };
+}
+
+/**
+ * 트랙 음이 깔끔한지: 시작이 모두 다르고, 길이가 0보다 길고, 앞 음 끝이 뒤 음 시작을 넘지 않고, id가 겹치지 않는다.
+ * 이런 트랙은 서로 떨어진 자리의 바꿈을 replaceNotes 한 번에 모아 넣어도 하나씩 넣은 것과 결과가 같다
+ */
+export function isCleanTrack(notes: readonly Note[]): boolean {
+  const sorted = [...notes].sort((a, b) => cmp(a.start, b.start));
+  const ids = new Set<string>();
+  for (let i = 0; i < sorted.length; i++) {
+    const n = sorted[i]!;
+    if (n.dur.n <= 0 || ids.has(n.id)) return false;
+    ids.add(n.id);
+    const next = sorted[i + 1];
+    if (next && (cmp(next.start, n.start) <= 0 || cmp(end(n), next.start) > 0)) return false;
+  }
+  return true;
 }
 
 /** 복사한 음 묶음: 첫 음 시작을 0으로 옮긴 음들과 원래 시작 위치 */

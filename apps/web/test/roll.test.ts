@@ -34,6 +34,13 @@ import {
   laneValueAt,
   laneValueToScreen,
   LANE_GUTTER,
+  ROLL_ZOOM,
+  clampKeyZoom,
+  clampTimeZoom,
+  fromScreen,
+  zoomAnchor,
+  zoomKeysAt,
+  zoomTimeAt,
 } from "../src/lib/roll";
 
 const apply = (m: number[], x: number, y: number) => [m[0]! * x + m[2]! * y + m[4]!, m[1]! * x + m[3]! * y + m[5]!];
@@ -354,5 +361,72 @@ describe("길이 고르기 목록을 게임 음길이 한도로 거르기", () =
 
   it("진단 문구에 한도가 들어간다", () => {
     expect(describeDiagnostic("ko", { code: "unrepresentable-length", params: { min: 1, max: 64 } })).toContain("1~64");
+  });
+});
+
+describe("롤 확대·축소 (점검 S09)", () => {
+  const base: RollView = { orientation: "horizontal", width: 844, height: 400, start: 2, pxPerWhole: 160, edgePitch: 84, pxPerKey: 12, keyboard: 44 };
+
+  it("전체 보기로 한도 끝까지 줄인 뒤 축소해도 확대로 튀지 않는다", () => {
+    // 긴 곡: 전체 보기가 최소값까지 줄인 상태에서 축소 단추(1/1.25)·Ctrl+휠(0.85)
+    const fitted = clampTimeZoom(800 / 400);
+    expect(fitted).toBe(ROLL_ZOOM.time.min);
+    expect(zoomTimeAt(0, fitted, 1 / 1.25).pxPerWhole).toBe(fitted);
+    expect(zoomTimeAt(0, fitted, 0.85).pxPerWhole).toBe(fitted);
+    // 한도 위에서는 그대로 줄어든다
+    expect(zoomTimeAt(0, 10, 1 / 1.25).pxPerWhole).toBeCloseTo(8);
+  });
+
+  it("한도 밖 값에서 시작해도 축소는 늘지 않고 확대는 줄지 않는다", () => {
+    expect(zoomTimeAt(0, 3, 0.85).pxPerWhole).toBe(3);
+    expect(zoomTimeAt(0, 3, 1.18).pxPerWhole).toBe(ROLL_ZOOM.time.min);
+    expect(zoomTimeAt(0, 2500, 1.18).pxPerWhole).toBe(2500);
+    expect(zoomKeysAt("horizontal", 84, 2.5, 0.85, 0).pxPerKey).toBe(2.5);
+    expect(zoomKeysAt("horizontal", 84, 50, 1.18, 0).pxPerKey).toBe(50);
+  });
+
+  it("음 축도 전체 보기 최소값(3)에서 축소하면 그대로다", () => {
+    expect(clampKeyZoom(1)).toBe(ROLL_ZOOM.key.min);
+    expect(zoomKeysAt("horizontal", 84, 3, 1 / 1.25, 100).pxPerKey).toBe(3);
+    expect(zoomKeysAt("vertical", 40, 3, 0.85, 100).pxPerKey).toBe(3);
+    expect(zoomKeysAt("horizontal", 84, 4, 1 / 1.25, 0).pxPerKey).toBe(3);
+  });
+
+  it("기준점의 곡 위치가 화면에서 같은 자리에 머문다", () => {
+    for (const orientation of ["horizontal", "vertical"] as const) {
+      const v: RollView = { ...base, orientation };
+      const [x, y] = orientation === "horizontal" ? [500, 100] : [200, 150];
+      const anchor = fromScreen(v, x, y).time!;
+      for (const factor of [1.18, 0.85, 1.25, 1 / 1.25]) {
+        const next = zoomTimeAt(v.start, v.pxPerWhole, factor, anchor);
+        expect(fromScreen({ ...v, ...next }, x, y).time).toBeCloseTo(anchor, 9);
+      }
+    }
+  });
+
+  it("기준점이 없으면 예전처럼 화면 시작이 기준이고, 시작은 0 앞으로 가지 않는다", () => {
+    expect(zoomTimeAt(2, 160, 1.25)).toEqual({ start: 2, pxPerWhole: 200 });
+    // 화면 시작 가까이를 기준으로 크게 축소하면 0에서 멈춘다
+    expect(zoomTimeAt(0.1, 160, 0.5, 0.2).start).toBe(0);
+  });
+
+  it("음 축은 기준 자리의 음이 반 칸 안에서 머문다", () => {
+    for (const orientation of ["horizontal", "vertical"] as const) {
+      const v: RollView = { ...base, orientation, edgePitch: orientation === "horizontal" ? 84 : 40 };
+      const along = 150;
+      const before = screenToPitch(v, along);
+      for (const factor of [1.18, 0.85]) {
+        const next = zoomKeysAt(orientation, v.edgePitch, v.pxPerKey, factor, along);
+        expect(Math.abs(screenToPitch({ ...v, ...next }, along) - before)).toBeLessThanOrEqual(0.5 + 1e-9);
+      }
+    }
+  });
+
+  it("단추 확대는 보이는 재생선, 없으면 보이는 커서를 기준으로 한다", () => {
+    expect(zoomAnchor([2, 6], 3, 5)).toBe(3);
+    expect(zoomAnchor([2, 6], 10, 5)).toBe(5);
+    expect(zoomAnchor([2, 6], undefined, 2)).toBe(2);
+    expect(zoomAnchor([2, 6], 1, 7)).toBeUndefined();
+    expect(zoomAnchor([2, 6])).toBeUndefined();
   });
 });

@@ -4,7 +4,8 @@
   import { i18n, instrumentName, LOCALE_LABELS, setLocale, t } from "./i18n.svelte";
   import { guideUrl, REPO_URL } from "./links";
   import { MASTER_MAX } from "./engine";
-  import { pwa } from "./pwa.svelte";
+  import { checkSpace, pwa } from "./pwa.svelte";
+  import { formatBytes, freeBytes } from "./storageSpace";
   import { setTabTint, tabTint } from "./tabTint.svelte";
   import { fretPadPrefs, setLengthPadTriplets, setPadAdvanceDir, type PadAdvanceDir } from "./fretPadPrefs.svelte";
   import { setTabEventFont, tabEventPrefs } from "./tabEventPrefs.svelte";
@@ -133,6 +134,11 @@
   $effect(() => {
     dialog.showModal();
   });
+  // 사운드팩 칸을 열 때마다 쓰는 공간을 다시 읽는다. 팩을 넣고 빼도 바뀌므로 그때도 읽는다
+  $effect(() => {
+    void [packs, stored];
+    if (section === "packs") void checkSpace();
+  });
 
   const SECTIONS: readonly Section[] = ["packs", "playback", "display", "chords", "save", "labs", "language", "keys"];
   /** 언어 칸은 글자를 못 읽는 언어로 바뀌어도 찾을 수 있게 영어 "Language"를 늘 같이 적는다 */
@@ -164,6 +170,7 @@
         <button class="primary" onclick={onaddpack}>{t("ui.addPack")}…</button>
         <p class="muted help">{t("ui.packOrderHelp")}</p>
         <p class="muted help">{t(pwa.storage === "persisted" ? "ui.storagePersisted" : "ui.storageBestEffort")}</p>
+        {#if pwa.space}<p class="muted help">{t("ui.storageSpace", { used: formatBytes(pwa.space.usage), free: formatBytes(freeBytes(pwa.space)) })}</p>{/if}
       {:else if section === "playback"}
         <label class="row" title={t("ui.masterVolume")}>
           <span>{t("ui.masterVolume")}</span>

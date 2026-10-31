@@ -94,6 +94,70 @@ export function visiblePitch(v: RollView): [number, number] {
   return v.orientation === "horizontal" ? [v.edgePitch - count + 1, v.edgePitch] : [v.edgePitch, v.edgePitch + count - 1];
 }
 
+/**
+ * 롤 확대 한도. 시간 축은 온음표 하나의 px, 음 축은 건반 한 칸의 px.
+ * 단추·휠·핀치·전체 보기·영상 속도 맞추기가 모두 이 값을 쓴다 (길마다 다르면 '전체 보기' 뒤 축소가 오히려 확대가 된다)
+ */
+export const ROLL_ZOOM = {
+  time: { min: 5, max: 2000 },
+  key: { min: 3, max: 40 },
+} as const;
+
+/** 시간 축 확대를 한도 안으로 */
+export function clampTimeZoom(pxPerWhole: number): number {
+  return Math.min(ROLL_ZOOM.time.max, Math.max(ROLL_ZOOM.time.min, pxPerWhole));
+}
+
+/** 건반 칸 크기를 한도 안으로 (정수 px) */
+export function clampKeyZoom(pxPerKey: number): number {
+  return Math.min(ROLL_ZOOM.key.max, Math.max(ROLL_ZOOM.key.min, Math.round(pxPerKey)));
+}
+
+/** factor > 1이면 줄지 않게, factor < 1이면 늘지 않게 (한도 밖에서 시작해도 반대로 튀지 않는다) */
+function oneWay(now: number, next: number, factor: number): number {
+  if (factor > 1) return Math.max(now, next);
+  if (factor < 1) return Math.min(now, next);
+  return now;
+}
+
+/**
+ * 시간 축 확대·축소. anchor(곡 위치, 온음표 단위)가 화면에서 같은 자리에 머물게 start를 다시 정한다.
+ * anchor가 없으면 화면 시작(start)이 기준이다. factor > 1이면 확대
+ */
+export function zoomTimeAt(start: number, pxPerWhole: number, factor: number, anchor?: number): { start: number; pxPerWhole: number } {
+  const next = oneWay(pxPerWhole, clampTimeZoom(pxPerWhole * factor), factor);
+  if (anchor === undefined) return { start, pxPerWhole: next };
+  const along = (anchor - start) * pxPerWhole;
+  return { start: Math.max(0, anchor - along / next), pxPerWhole: next };
+}
+
+/**
+ * 음 축 확대·축소. along(음 축 화면 좌표, 가로 롤 y·세로 롤 x)에 있던 음이 그 자리에 머물게 기준 음을 다시 정한다.
+ * 기준 음은 정수로 맞추므로 반 칸까지는 밀릴 수 있다. factor > 1이면 확대
+ */
+export function zoomKeysAt(
+  orientation: Orientation,
+  edgePitch: number,
+  pxPerKey: number,
+  factor: number,
+  along: number,
+): { edgePitch: number; pxPerKey: number } {
+  const next = oneWay(pxPerKey, clampKeyZoom(pxPerKey * factor), factor);
+  const edge = orientation === "horizontal" ? edgePitch - along / pxPerKey + along / next : edgePitch + along / pxPerKey - along / next;
+  return { edgePitch: Math.min(127, Math.max(0, Math.round(edge))), pxPerKey: next };
+}
+
+/**
+ * 단추·메뉴로 시간 축을 확대할 때 기준이 될 곡 위치: 화면에 보이는 재생선, 없으면 커서.
+ * 둘 다 화면 밖이면 undefined (예전처럼 화면 시작이 기준)
+ */
+export function zoomAnchor(visible: readonly [number, number], playhead?: number, cursor?: number): number | undefined {
+  const shown = (t: number | undefined): t is number => t !== undefined && t >= visible[0] && t <= visible[1];
+  if (shown(playhead)) return playhead;
+  if (shown(cursor)) return cursor;
+  return undefined;
+}
+
 /** 격자(온음표의 1/division)에 맞춰 내린 위치 */
 export function snapDown(time: number, division: number): Rat {
   return rat(Math.max(0, Math.floor(time * division + 1e-9)), division);

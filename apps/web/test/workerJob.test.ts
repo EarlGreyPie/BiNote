@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { emptySong, MOBILE_PROFILE, type Song } from "@mmlce/core";
 import { parseTrackText, planBooks, splitSong, type BookPlan, type BookProgress } from "@mmlce/mml";
 import { planSplit, splitJob, type SplitRequest } from "../src/lib/jobs";
-import { WorkerJob, type JobReply, type JobRequest } from "../src/lib/workerJob";
+import { ErrorLog } from "../src/lib/diagnostics";
+import { serveJob, WorkerJob, type JobReply, type JobRequest, type WorkerScope } from "../src/lib/workerJob";
 type SplitReply = JobReply<BookPlan, BookProgress>;
 
 const profile = { ...MOBILE_PROFILE, charLimitPerScore: 40 };
@@ -140,3 +141,92 @@ describe("WorkerJob 정리", () => {
   });
 });
 
+
+/** 받은 요청에 오류로 답하는 워커 (계산 중 예외가 난 것처럼) */
+class ErrorWorker {
+  onmessage: ((e: MessageEvent<JobReply<number>>) => void) | null = null;
+  onerror: ((e: ErrorEvent) => void) | null = null;
+  constructor(private readonly how: "reply" | "event") {}
+  postMessage({ id }: JobRequest<number>) {
+    setTimeout(() => {
+      if (this.how === "reply") this.onmessage?.({ data: { id, error: "RangeError: too long" } } as MessageEvent<JobReply<number>>);
+      else this.onerror?.({ preventDefault() {}, message: "SyntaxError: bad module" } as ErrorEvent);
+    }, 0);
+  }
+  terminate() {}
+}
+
+describe("WorkerJob 실패 까닭", () => {
+  it("워커 오류 뒤 화면 쪽 계산도 실패하면 두 까닭을 함께 남긴다", async () => {
+    const runner = new WorkerJob<number, number>(
+      () => new ErrorWorker("reply") as unknown as Worker,
+      () => {
+        throw new TypeError("no samples");
+      },
+    );
+    expect(await runner.run(1)).toBeUndefined();
+    expect(runner.lastError).toBe("worker: RangeError: too long / TypeError: no samples");
+  });
+
+  it("워커 파일을 못 읽은 오류도 남기고, 화면 쪽 계산이 되면 까닭을 지운다", async () => {
+    const failing = new WorkerJob<number, number>(
+      () => new ErrorWorker("event") as unknown as Worker,
+      () => {
+        throw new Error("boom");
+      },
+    );
+    expect(await failing.run(1)).toBeUndefined();
+    expect(failing.lastError).toBe("worker: SyntaxError: bad module / Error: boom");
+    const rescued = new WorkerJob<number, number>(() => new ErrorWorker("reply") as unknown as Worker, (n) => n * 2);
+    expect(await rescued.run(3)).toBe(6);
+    expect(rescued.lastError).toBeUndefined();
+  });
+
+  it("다음 요청을 시작하거나 취소하면 까닭을 지운다", async () => {
+    let fail = true;
+    const runner = new WorkerJob<number, number>(undefined, (n) => {
+      if (fail) throw new Error("once");
+      return n;
+    });
+    expect(await runner.run(1)).toBeUndefined();
+    expect(runner.lastError).toBe("Error: once");
+    fail = false;
+    const running = runner.run(2);
+    expect(runner.lastError).toBeUndefined();
+    runner.cancel();
+    expect(await running).toBeUndefined();
+    expect(runner.lastError).toBeUndefined();
+  });
+
+  it("화면 쪽 계산이 대신 해내도 워커가 실패한 까닭은 최근 오류에 남는다", async () => {
+    const log = new ErrorLog();
+    const replied = new WorkerJob<number, number>(() => new ErrorWorker("reply") as unknown as Worker, (n) => n * 2, { name: "wav", log });
+    expect(await replied.run(3)).toBe(6);
+    expect(replied.lastError).toBeUndefined();
+    const started = new WorkerJob<number, number>(() => new ErrorWorker("event") as unknown as Worker, (n) => n, { name: "split", log });
+    expect(await started.run(1)).toBe(1);
+    const unmade = new WorkerJob<number, number>(
+      () => {
+        throw new TypeError("module workers unsupported");
+      },
+      (n) => n,
+      { name: "transcribe", log },
+    );
+    expect(await unmade.run(5)).toBe(5);
+    expect(log.list().map((e) => `${e.where} ${e.message}`)).toEqual([
+      "worker:wav RangeError: too long",
+      "worker:split SyntaxError: bad module",
+      "worker:transcribe TypeError: module workers unsupported",
+    ]);
+  });
+
+  it("워커 안의 예외는 이름과 내용을 담아 답한다", async () => {
+    const sent: unknown[] = [];
+    const scope: WorkerScope = { onmessage: null, postMessage: (m) => sent.push(m) };
+    serveJob<number, number>(scope, () => {
+      throw new RangeError("too long");
+    });
+    await scope.onmessage!({ data: { id: 7, request: 1 } } as MessageEvent);
+    expect(sent).toEqual([{ id: 7, error: "RangeError: too long" }]);
+  });
+});

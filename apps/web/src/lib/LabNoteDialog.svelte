@@ -1,6 +1,6 @@
 <script lang="ts">
   import { optimizeMml } from "@mmlce/mml";
-  import { LAB_STEP_MAX, planGhost, planHarmonic, planLabClear, type GameProfile, type HarmonicType, type LabResult, type Note, type Song } from "@mmlce/core";
+  import { planGhost, planHarmonic, planLabClear, volumeStepMax, type GameProfile, type HarmonicType, type LabResult, type Note, type Song } from "@mmlce/core";
   import { t } from "./i18n.svelte";
   import { loadStored, parseJson, saveStored } from "./persist";
   import { parseLabChoice, LAB_CHOICE_KEY, type LabChoice } from "./labOptions";
@@ -87,7 +87,9 @@
     onapply(clear, t("ui.labClear"));
     dialog.close();
   }
-  const clampStep = (v: number, min: number) => (Number.isFinite(v) ? Math.max(min, Math.min(LAB_STEP_MAX, Math.round(v))) : min);
+  // 단계 입력 상한은 곡 프로필의 v 범위 전체
+  const stepMax = $derived(volumeStepMax(profile));
+  const clampStep = (v: number, min: number) => (Number.isFinite(v) ? Math.max(min, Math.min(stepMax, Math.round(v))) : min);
 </script>
 
 <dialog bind:this={dialog} {onclose}>
@@ -96,7 +98,7 @@
     {#if kind === "ghost"}
       <span>{t("ui.labGhostSteps")}</span>
       <span class="row">
-        <input type="number" min="1" max={LAB_STEP_MAX} value={choice.ghostSteps} onchange={(e) => set({ ghostSteps: clampStep(e.currentTarget.valueAsNumber, 1) })} />
+        <input type="number" min="1" max={stepMax} value={choice.ghostSteps} onchange={(e) => set({ ghostSteps: clampStep(e.currentTarget.valueAsNumber, 1) })} />
         <small class="muted">{t("ui.labGhostStepsHint")}</small>
       </span>
     {:else}
@@ -113,7 +115,7 @@
       </span>
       <span>{t("ui.labHarmonicQuieter")}</span>
       <span class="row">
-        <input type="number" min="0" max={LAB_STEP_MAX} value={choice.harmonicQuieter} onchange={(e) => set({ harmonicQuieter: clampStep(e.currentTarget.valueAsNumber, 0) })} />
+        <input type="number" min="0" max={stepMax} value={choice.harmonicQuieter} onchange={(e) => set({ harmonicQuieter: clampStep(e.currentTarget.valueAsNumber, 0) })} />
         <small class="muted">{t("ui.labHarmonicQuieterHint")}</small>
       </span>
       {#if !positionOf}<span></span><small class="muted">{t("ui.labNaturalTabOnly")}</small>{/if}

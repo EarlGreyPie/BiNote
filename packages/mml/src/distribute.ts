@@ -1,11 +1,12 @@
 import { add, cmp, eq, trackInstrument, type GameProfile, type Note, type Rat, type Song, type TempoEvent, type Track } from "@mmlce/core";
-import { chordsPerScore } from "./clipboard.js";
+import { chordsPerScore, scoreChunks } from "./clipboard.js";
 import { optimizeMml } from "./optimizer.js";
 import { placeTempoByScore } from "./tempo-placement.js";
 
 /**
  * 화음 분산 (설계 8장). 같은 연주자 안에서 글자 수가 넘치는 채널의 음 묶음을
- * 그 시간에 비어 있는 다른 채널로 옮긴다. 같은 악기 안에서 옮기므로 소리는 같다.
+ * 그 시간에 비어 있는 다른 채널로 옮긴다. 같은 소리 묶음(soundGroups) 안에서 옮기므로 소리는 같다.
+ * 곡에 적용할 때는 settleDistributed(edit.ts)가 게임 출력을 다시 읽어 소리가 그대로인지 한 번 더 본다.
  *
  * 묶음 = 넘치는 채널에서 받는 채널이 쉬는 동안 이어지는 음들(&로 이어진 음은 함께).
  * 넘친 글자 수에 가장 가까운 묶음부터 옮겨 보고, 받는 채널이 넘치면 되돌린다.
@@ -40,13 +41,14 @@ export function distributeChords(song: Song, profile: GameProfile, options: Dist
   const lengthOf = (k: number) => optimizeMml(tracks[k]!.notes, { tempo: placed[k] ?? [] }).text.length;
   let sizes = start.sizes;
 
-  // 같은 악보 안에서도 트랙마다 악기가 다를 수 있으니, 실제 악기가 같은 트랙끼리만 옮긴다 (소리가 바뀌지 않게)
+  // 같은 소리 묶음(같은 악보·실제 악기·끄기·솔로·채널 볼륨·팬) 트랙끼리만 옮긴다 (화음 분산 창과 같은 기준).
+  // 같은 연주자라도 악보가 다르면(오르골 3+3 등) 다른 악기가 치고, 끈 트랙이나 볼륨이 다른 트랙으로 가면 소리가 바뀐다
+  const sound = soundGroups(song, profile);
   const groups = new Map<string, number[]>();
   tracks.forEach((t, k) => {
     // 잠근 트랙은 옮기는 데 쓰지 않는다 (보내는 쪽도 받는 쪽도)
     if (options.locked?.has(t.id)) return;
-    const inst = trackInstrument(song, t);
-    const key = `${t.playerId}|${inst.canonical}|${inst.program ?? ""}`;
+    const key = sound.get(t.id)!;
     groups.set(key, [...(groups.get(key) ?? []), k]);
   });
   for (const mine of groups.values()) {
@@ -108,6 +110,21 @@ export function distributeChords(song: Song, profile: GameProfile, options: Dist
     moved,
     over: out.filter((_, k) => sizes[k]! > limit).map((t) => t.id),
   };
+}
+
+/**
+ * 트랙마다 "같은 소리 묶음" 이름: 게임 악보 + 연주자 + 실제 악기 + 끄기·솔로·채널 볼륨·팬.
+ * 같은 이름의 트랙끼리는 음을 주고받아도 게임 소리가 같다 (gameTimeline이 묶는 단위와 같다)
+ */
+export function soundGroups(song: Song, profile: GameProfile): Map<string, string> {
+  const scoreOf = new Map<string, number>();
+  scoreChunks(song, chordsPerScore(song, profile)).forEach((c, i) => c.trackIds.forEach((id) => scoreOf.set(id, i)));
+  return new Map(
+    song.tracks.map((t) => {
+      const inst = trackInstrument(song, t);
+      return [t.id, `${scoreOf.get(t.id) ?? -1}|${t.playerId}|${inst.canonical}|${inst.program ?? ""}|${t.mute}|${t.solo}|${t.mix?.volume ?? ""}|${t.mix?.pan ?? ""}`];
+    }),
+  );
 }
 
 interface DistributeBase {

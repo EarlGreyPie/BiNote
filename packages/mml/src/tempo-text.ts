@@ -1,5 +1,7 @@
-import { add, cmp, getProfile, normalizeTempo, PROFILES, sub, ZERO, type Rat, type Song, type TempoEvent, type TrackText } from "@mmlce/core";
+import { add, cmp, getProfile, normalizeTempo, PROFILES, sub, ZERO, type GameProfile, type Rat, type Song, type TempoEvent, type TrackText } from "@mmlce/core";
+import { sameSound } from "./compare.js";
 import { parseMml, type ParseResult } from "./parser.js";
+import type { PrintableNote } from "./printer.js";
 import { chordsPerScore } from "./clipboard.js";
 import { scoreEnd, tempoBefore } from "./score-end.js";
 import { scoreTrackIds } from "./tempo-placement.js";
@@ -57,6 +59,69 @@ export function surgicalSource(source: TrackText): { parsed: ParseResult; tokens
   const parsed = parseMml(source.text);
   if (parsed.diagnostics.some((d) => d.level === "error")) return undefined;
   return { parsed, tokens: tempoTokens(source, parsed) };
+}
+
+/** 주석(닫히지 않은 주석은 끝까지)·빈칸·줄바꿈을 벗기고 작은 글자로 (파서가 건너뛰는 것과 같은 규칙) */
+function withoutBlanks(text: string): string {
+  let out = "";
+  for (let i = 0; i < text.length; ) {
+    const ch = text[i]!;
+    if (ch === "/" && text[i + 1] === "*") {
+      const close = text.indexOf("*/", i + 2);
+      if (close < 0) break;
+      i = close + 2;
+      continue;
+    }
+    if (ch !== " " && ch !== "\t" && ch !== "\r" && ch !== "\n") out += ch;
+    i++;
+  }
+  return out.toLowerCase();
+}
+
+/**
+ * 원문을 게임에 넣을 글로 줄인다: 원문의 t를 모두 지우고 tempo(곡 위치)를 그 자리 음·쉼표 앞에 다시 적은 뒤,
+ * 주석·빈칸·줄바꿈을 벗긴다. 사용자가 쓴 표기는 그대로라 출력기 글보다 짧을 때가 있다.
+ * 원문에 offset이 있거나, 경고·오류가 있거나, 프로필 범위 밖 값(길이·점·옥타브·볼륨)이 있거나,
+ * 템포를 끼울 음 경계가 없으면 undefined. 소리가 같은지는 고르는 쪽(shortestWriting)이 다시 읽어 본다
+ */
+export function gameSource(source: TrackText, tempo: readonly TempoEvent[], profile: GameProfile): string | undefined {
+  if (source.offset && cmp(source.offset, ZERO) !== 0) return undefined;
+  const parsed = parseMml(source.text);
+  if (parsed.diagnostics.length > 0) return undefined;
+  const inRange = parsed.values.every((v) => {
+    if (v.kind === "tempo") return true;
+    const range =
+      v.kind === "length" ? profile.length : v.kind === "dots" ? { min: 0, max: profile.length.dots } : v.kind === "octave" ? profile.octave : profile.volume;
+    return v.value >= range.min && v.value <= range.max;
+  });
+  if (!inRange) return undefined;
+  // 같은 글 자리에 끼울 t는 한 글로 묶는다 (따로 끼우면 순서가 뒤집힌다)
+  const inserts = new Map<number, string>();
+  for (const e of normalizeTempo(tempo)) {
+    const at = tempoInsertOffset(source.text, parsed, e.at);
+    if (at === undefined) return undefined;
+    inserts.set(at, (inserts.get(at) ?? "") + `t${e.bpm}`);
+  }
+  const edits = [
+    ...tempoTokens(source, parsed).map((t) => ({ span: t.span, text: "" })),
+    ...[...inserts].map(([at, text]) => ({ span: [at, at] as const, text })),
+  ];
+  return withoutBlanks(spliceText(source.text, edits));
+}
+
+/**
+ * 후보 글 가운데 다시 읽은 음이 notes와 같고 들리는 템포가 tempo와 같은 가장 짧은 글 (길이가 같으면 앞 후보).
+ * 맞는 글이 없으면 undefined. 게임 출력·글자 수 줄이기가 원문보다 길게 쓰지 않으려고 쓴다
+ */
+export function shortestWriting(notes: readonly PrintableNote[], tempo: readonly TempoEvent[], candidates: readonly (string | undefined)[]): string | undefined {
+  const expected = audibleTempo(tempo);
+  let best: string | undefined;
+  for (const text of candidates) {
+    if (text === undefined || (best !== undefined && text.length >= best.length)) continue;
+    const parsed = parseMml(text);
+    if (sameSound(parsed.notes, notes) && sameTempo(audibleTempo(parsed.tempo), expected)) best = text;
+  }
+  return best;
 }
 
 /** 원문 안 위치로 (offset 앞이면 undefined) */

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { emptySong, eq, MOBILE_PROFILE, rat, type Player, type Song, type Track } from "@mmlce/core";
-import { gameCharCounts, gamePaste, orderPasted, gameScores, parseMml, parseTrackText, pasteTempoChoices, splitSong } from "../src/index.js";
+import { gameCharCounts, gamePaste, optimizeMml, orderPasted, gameScores, parseMml, parseTrackText, pasteTempoChoices, shortestWriting, splitSong } from "../src/index.js";
 
 const piano: Player = { id: "p1", name: "피아노", instrument: { canonical: "piano" } };
 const flute: Player = { id: "p2", name: "플루트", instrument: { canonical: "flute" } };
@@ -64,6 +64,59 @@ describe("gameScores 시작을 미룬 원문", () => {
     const s = song([{ ...a, notes: a.notes.map((n) => ({ ...n, start: rat(1) })) }], []);
     const text = gameScores(s, 6)[0]!.texts[0]!.text;
     expect(parseTrackText("a", { text }).notes[0]!.start).toEqual(rat(1));
+  });
+});
+
+describe("gameScores 원문과 출력기 글 가운데 짧은 쪽 (점검 S12)", () => {
+  const withText = (id: string, text: string): Track => ({ ...track(id, "p1", text), mml: { text } });
+
+  it("출력기 글이 원문보다 길면 원문을 그대로 쓴다", () => {
+    const a = withText("a", "l8cn24cn24cn24cn24");
+    // 출력기는 n을 쓰지 않아 원문보다 길다
+    expect(optimizeMml(a.notes).text.length).toBeGreaterThan(a.mml!.text.length);
+    const text = gameScores(song([a], [{ at: rat(0), bpm: 120 }]), 6)[0]!.texts[0]!.text;
+    expect(text).toBe("l8cn24cn24cn24cn24");
+  });
+
+  it("원문의 주석·빈칸은 벗기고 t는 곡 템포로 다시 적는다", () => {
+    // 원문 t90은 곡 템포(150, 4분 뒤 90)와 다르다: 지도가 진짜 값
+    const a = withText("a", "t90 l8 /* 앞 */ cn24cn24\ncn24cn24");
+    const text = gameScores(song([a], [{ at: rat(0), bpm: 150 }, { at: rat(1, 4), bpm: 90 }]), 6)[0]!.texts[0]!.text;
+    expect(text).toBe("l8t150cn24t90cn24cn24cn24");
+    expect(tempoOf([text])).toEqual(["0/1:150", "1/4:90"]);
+  });
+
+  it("템포를 넣지 않는 붙여넣기는 원문 t를 지운 글을 쓴다", () => {
+    const a = withText("a", "t90l8cn24cn24cn24cn24");
+    const r = gamePaste(song([a], [{ at: rat(0), bpm: 90 }]), ["a"], 6, 6, { tempo: false });
+    expect(r.text).toBe("MML@l8cn24cn24cn24cn24;");
+    expect(r.asIs).toEqual([]);
+  });
+
+  it("경고가 있는 원문은 쓰지 않고 출력기 글을 쓴다", () => {
+    const a = withText("a", "l8cn24cn24 x");
+    const text = gameScores(song([a], [{ at: rat(0), bpm: 120 }]), 6)[0]!.texts[0]!.text;
+    expect(text).not.toContain("x");
+    expect(text).not.toContain("n");
+    expect(parseTrackText("a", { text }).notes.map((n) => n.pitch)).toEqual(a.notes.map((n) => n.pitch));
+  });
+
+  it("출력기가 촘촘한 템포를 겹쳐 써서 템포가 조금 어긋나도 화면의 글로 돌아가 템포를 모두 잃지 않는다 (점검 S12 재점검)", () => {
+    // 1/128 간격 템포 넷: 트랙 a에 맡긴 102·103은 64분보다 가까워 출력기가 한 자리에 겹쳐 쓴다
+    const tempo = [100, 101, 102, 103].map((bpm, k) => ({ at: rat(32 + k, 128), bpm }));
+    const s = song([withText("a", "c4"), withText("b", "e1")], tempo);
+    const score = gameScores(s, 6)[0]!;
+    expect(score.asIs).toEqual([]);
+    expect(tempoOf(score.texts.map((x) => x.text))).toContain("1/4:100");
+    expect(score.texts.flatMap((x) => parseMml(x.text).tempo).some((e) => e.bpm === 103)).toBe(true);
+    expect(gamePaste(s, ["a", "b"], 6, 6, { tempo: true }).asIs).toEqual([]);
+  });
+
+  it("다시 읽은 템포가 맞지 않는 글은 고르지 않는다 (음만 같아서는 안 된다)", () => {
+    const notes = parseTrackText("a", { text: "c4" }).notes;
+    expect(shortestWriting(notes, [{ at: rat(0), bpm: 150 }], ["c4", "t150c4"])).toBe("t150c4");
+    expect(shortestWriting(notes, [], ["t150c4", "c4"])).toBe("c4");
+    expect(shortestWriting(notes, [{ at: rat(0), bpm: 150 }], ["t120c4", "d4"])).toBeUndefined();
   });
 });
 

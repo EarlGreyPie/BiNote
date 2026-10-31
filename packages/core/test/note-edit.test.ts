@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyVolumes, voiceRanks, clipLayers, clipNotes, clipOverlaps, rampVolumes, volumeBars, glueNotes, noteAt, noteBefore, pasteClip, placeNote, rat, scaleNotes, scaleNotesIn, removeNotes, splitNote, replaceNotes, toggleTie, transposeNotes, updateNote, type Note } from "../src/index.js";
+import { applyVolumes, isCleanTrack, trackIndex, voiceRanks, clipLayers, clipNotes, clipOverlaps, rampVolumes, volumeBars, glueNotes, noteAt, noteBefore, pasteClip, placeNote, rat, scaleNotes, scaleNotesIn, removeNotes, splitNote, replaceNotes, toggleTie, transposeNotes, updateNote, type Note, placeLoss } from "../src/index.js";
 
 const note = (id: string, start: number, dur: number, pitch = 60, tie: Note["tie"] = "none"): Note => ({
   id,
@@ -80,6 +80,88 @@ describe("여러 음 한꺼번에 바꾸기", () => {
   it("함께 옮긴 음이 남은 음과 겹치면 남은 음을 정리한다", () => {
     const changes = new Map<string, Note | null>([["a", { ...base[0]!, start: rat(3, 8) }]]);
     expect(shape(replaceNotes(base, changes))).toEqual(["b:1/4+1/8", "a:3/8+1/4"]);
+  });
+
+  it("placeLoss는 replaceNotes가 자르고 지울 다른 음을 미리 알려 준다", () => {
+    // a를 3/8로 옮기면(3/8~5/8) b는 1/8만 남고 그 안에서 시작하는 c는 지워진다 (위 시험과 같은 자리)
+    const moved = placeLoss(base, new Map([["a", { ...base[0]!, start: rat(3, 8) }]]));
+    expect([...moved.cut]).toEqual([["b", rat(1, 8)]]);
+    expect([...moved.removed]).toEqual(["c"]);
+    // 새 음 x(1/8~5/8)를 넣으면 a는 잘리고, 그 안에서 시작하는 b·c는 지워진다
+    const placed = placeLoss(base, new Map([["x", note("x", 1, 4)]]));
+    expect([...placed.cut]).toEqual([["a", rat(1, 8)]]);
+    expect([...placed.removed].sort()).toEqual(["b", "c"]);
+    expect(shape(replaceNotes(base, new Map([["x", note("x", 1, 4)]])))).toEqual(["a:0/1+1/8", "x:1/8+1/2"]);
+  });
+
+  it("placeLoss: 함께 옮기는 음끼리, 지우기만 하는 것은 손해로 치지 않는다", () => {
+    const together = new Map(base.map((n) => [n.id, { ...n, start: rat(n.start.n * 8 / n.start.d + 2, 8) }] as const));
+    const loss = placeLoss(base, together);
+    expect(loss.cut.size + loss.removed.size).toBe(0);
+    const erase = placeLoss(base, new Map([["a", null]]));
+    expect(erase.cut.size + erase.removed.size).toBe(0);
+  });
+});
+
+describe("많은 음 한꺼번에 넣기·트랙 색인 (점검 S35)", () => {
+  it("겹치지 않는 음을 많이 넣으면 뒤에 붙이기만 해도 하나씩 넣은 것과 같다 (&·지운 음 포함)", () => {
+    const base = [note("a", 0, 2, 60, "next"), note("b", 2, 2), note("c", 6, 2, 60, "next"), note("d", 10, 2)];
+    // b를 나눠 넣고(앞 a의 &는 첫 조각으로 이어진다), c의 & 뒤(8/8)에 새 음을 붙이고, d는 지운다
+    const changes = new Map<string, Note | null>([
+      ["b", null],
+      ["b1", note("b1", 2, 1)],
+      ["b2", note("b2", 3, 1)],
+      ["e", note("e", 8, 1)],
+      ["d", null],
+    ]);
+    expect(shape(replaceNotes(base, changes))).toEqual(["a:0/1+1/4&", "b1:1/4+1/8", "b2:3/8+1/8", "c:3/4+1/4&", "e:1/1+1/8"]);
+  });
+
+  it("넣는 음이 남은 음이나 서로와 겹치면 예전처럼 자르고 지운다", () => {
+    const base = [note("a", 0, 4), note("b", 4, 4)];
+    const changes = new Map<string, Note | null>([
+      ["x", note("x", 2, 1)],
+      ["y", note("y", 3, 2)],
+    ]);
+    // x가 a 꼬리를 자르고, y 안에서 시작하는 b는 지운다
+    expect(shape(replaceNotes(base, changes))).toEqual(["a:0/1+1/4", "x:1/4+1/8", "y:3/8+1/4"]);
+    // 넣는 음끼리 겹치면 뒤에 넣는 음이 앞 음을 자른다
+    const inside = new Map<string, Note | null>([["x", note("x", 1, 4)], ["y", note("y", 2, 1)]]);
+    expect(shape(replaceNotes([], inside))).toEqual(["x:1/8+1/8", "y:1/4+1/8"]);
+  });
+
+  it("음 수천 개를 한 번에 넣어도 금방 끝난다", () => {
+    const base = Array.from({ length: 2000 }, (_, i) => note(`n${i}`, i * 2, 2));
+    const changes = new Map<string, Note | null>();
+    for (const n of base) {
+      changes.set(n.id, null);
+      for (let j = 0; j < 8; j++) changes.set(`${n.id}-${j}`, { ...n, id: `${n.id}-${j}`, start: rat(n.start.n * 32 + j * n.start.d, n.start.d * 32), dur: rat(1, 32) });
+    }
+    const t = performance.now();
+    expect(replaceNotes(base, changes)).toHaveLength(16000);
+    expect(performance.now() - t).toBeLessThan(2000);
+  });
+
+  it("트랙 색인: 시작 순, 앞 음, &로 이어 받는 음, 같은 때 시작하는 음", () => {
+    const notes = [note("c", 4, 2), note("a", 0, 2, 60, "next"), note("b", 2, 1), note("d", 6, 2)];
+    const index = trackIndex(notes);
+    expect(index.sorted.map((n) => n.id)).toEqual(["a", "b", "c", "d"]);
+    expect(index.indexOf("c")).toBe(2);
+    expect(index.indexOf("z")).toBe(-1);
+    expect(index.get("d")).toBe(notes[3]);
+    expect(index.before(notes[0]!)?.id).toBe("b");
+    expect(index.before(notes[1]!)).toBeUndefined();
+    expect(index.isHeld(notes[2]!)).toBe(true);
+    expect(index.isHeld(notes[0]!)).toBe(false);
+    expect(index.startingAt(rat(1, 2)).map((n) => n.id)).toEqual(["c"]);
+    expect(index.startingAt(rat(1, 16))).toEqual([]);
+  });
+
+  it("깔끔한 트랙: 시작이 다르고 겹치지 않고 id가 하나씩", () => {
+    expect(isCleanTrack([note("b", 2, 2), note("a", 0, 2)])).toBe(true);
+    expect(isCleanTrack([note("a", 0, 3), note("b", 2, 2)])).toBe(false);
+    expect(isCleanTrack([note("a", 0, 2), note("b", 0, 2, 64)])).toBe(false);
+    expect(isCleanTrack([note("a", 0, 2), note("a", 2, 2)])).toBe(false);
   });
 });
 

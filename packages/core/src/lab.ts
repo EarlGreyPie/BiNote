@@ -1,6 +1,6 @@
 import { add, cmp, toFloat, type Rat } from "./rat.js";
 import type { Note, NoteLab, Song } from "./model.js";
-import type { GameProfile } from "./profile.js";
+import { MOBILE_PROFILE, volumeStepMax, type GameProfile } from "./profile.js";
 
 /**
  * 실험실 입력 (설정 → 실험실을 켰을 때만 메뉴가 보인다). 결과는 늘 보통 MML(v·음 높이)이라 게임과 다른 앱은 그대로 읽는다.
@@ -10,8 +10,11 @@ import type { GameProfile } from "./profile.js";
  * 결과만 계산하고 곡은 바꾸지 않는다
  */
 
-/** 한 번에 줄일 수 있는 단계 상한 (v 범위 전체) */
-export const LAB_STEP_MAX = 15;
+/**
+ * 한 번에 줄일 수 있는 단계 상한 (v 범위 전체). 곡 프로필이 닿지 않는 설정 읽기에서만 쓰고,
+ * 창은 volumeStepMax(곡 프로필)를 쓴다
+ */
+export const LAB_STEP_MAX = volumeStepMax(MOBILE_PROFILE);
 
 /** 자연 하모닉스를 낼 수 있는 프렛 → 개방현보다 높은 반음 수 */
 export const NATURAL_HARMONICS: ReadonlyMap<number, number> = new Map([

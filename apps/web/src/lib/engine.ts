@@ -534,8 +534,8 @@ export class Engine {
   /** 재생을 시작하고, 사운드팩에서 찾지 못한 악기를 돌려준다 */
   /** loop: 반복할 길이(초). 주면 시작 자리부터 그 길이를 끊김 없이 되풀이한다. rate: 재생 속도 (원곡도 같은 속도로).
    * offset: from에서 이만큼(곡 초) 뒤부터 소리를 낸다 (반복 구간 가운데서 이어 재생).
-   * record: MIDI 건반 녹음. leadIn초(오디오 시간) 예비박을 두고 시작하며, 곡이 끝나도 정지할 때까지 멈추지 않는다 */
-  async play(song: Song, from?: Rat, loop?: number, rate = 1, offset = 0, record?: { leadIn: number }): Promise<Unresolved[]> {
+   * lead: 예비박. leadIn초(오디오 시간)를 비우고 시작한다. endless면(MIDI 건반 녹음) 곡이 끝나도 정지할 때까지 멈추지 않는다 */
+  async play(song: Song, from?: Rat, loop?: number, rate = 1, offset = 0, lead?: { leadIn: number; endless?: boolean }): Promise<Unresolved[]> {
     const request = ++this.playRequest;
     await this.live();
     const context = this.context!;
@@ -567,13 +567,15 @@ export class Engine {
     });
     if (!ready) return last;
     const { patches, unresolved } = ready;
-    const schedule = record ? { ...ready.schedule, duration: Infinity } : ready.schedule;
+    const schedule = lead?.endless ? { ...ready.schedule, duration: Infinity } : ready.schedule;
     this.playingPatches = patches;
-    const delay = record ? (cold ? COLD_START_DELAY : START_DELAY) + Math.max(0, record.leadIn) : cold ? COLD_START_DELAY : undefined;
-    // 앞 재생이 여기서 멈춘다: 그 순간 들리던 자리를 알린다 (녹음)
+    const delay = lead ? (cold ? COLD_START_DELAY : START_DELAY) + Math.max(0, lead.leadIn) : cold ? COLD_START_DELAY : undefined;
+    // 앞 재생이 여기서 멈춘다: 그 순간 들리던 자리를 알린다 (녹음). 앞 재생에 예약해 둔 딸깍도 끈다
     this.noticeStopping();
+    this.stopClicks();
     this.player!.start(schedule, patches, { ...(loop ? { loop } : {}), ...(delay !== undefined ? { delay } : {}), ...(rate !== 1 ? { rate } : {}), ...(offset > 0 ? { offset } : {}) });
     this.fromSeconds = from ? positionToSeconds(song.tempo, from) : 0;
+    this.runOrigin = this.player!.startTime ?? 0;
     this.startReference();
     return unresolved;
   }
@@ -689,6 +691,8 @@ export class Engine {
 
   /** 예약해 둔 메트로놈 소리 */
   private clicks = new Set<OscillatorNode>();
+  /** 이번 재생의 첫 회차가 시작 자리에서 소리 나기 시작한 오디오 시각 (반복해도 그대로. 메트로놈 시계가 쓴다) */
+  private runOrigin = 0;
 
   /**
    * 메트로놈 딸깍 하나를 곡 시각(초)에 예약한다 (녹음). 곡 소리와 같은 오디오 시계로 맞춘다.
@@ -696,10 +700,35 @@ export class Engine {
    */
   click(songSeconds: number, accent: boolean): void {
     const start = this.player?.startTime;
+    if (start === undefined || !this.player) return;
+    this.clickAt(start + (songSeconds - this.fromSeconds) / this.player.speed, accent);
+  }
+
+  /**
+   * 일반 재생의 메트로놈 시계. 시각은 이번 재생 시작 자리부터 흐른 곡 초이고, 반복해도 계속 는다
+   * (반복 구간 2회차의 첫 박 = 구간 길이). 예비박 동안은 음수
+   */
+  readonly runClock = {
+    heard: (): number | undefined => {
+      const context = this.context;
+      if (!context || !this.player?.playing) return undefined;
+      return (context.currentTime - this.outputLag - this.runOrigin) * this.player.speed;
+    },
+    click: (elapsed: number, accent: boolean): void => {
+      if (!this.player?.playing) return;
+      this.clickAt(this.runOrigin + elapsed / this.player.speed, accent);
+    },
+  };
+
+  /** 메트로놈을 끌 때: 예약해 두고 아직 안 난 딸깍을 끈다 (곡 소리는 그대로) */
+  clearClicks(): void {
+    this.stopClicks();
+  }
+
+  /** 오디오 시각 at에 딸깍 하나 */
+  private clickAt(at: number, accent: boolean): void {
     const context = this.context;
-    if (start === undefined || !context || !this.player) return;
-    const at = start + (songSeconds - this.fromSeconds) / this.player.speed;
-    if (at < context.currentTime) return;
+    if (!context || at < context.currentTime) return;
     const osc = context.createOscillator();
     const gain = context.createGain();
     osc.type = "square";

@@ -35,7 +35,32 @@ export const ZERO: Rat = Object.freeze({ n: 0, d: 1 });
 
 export function add(a: Rat, b: Rat): Rat {
   const g = gcd(a.d, b.d);
-  return rat(checked(a.n * (b.d / g) + b.n * (a.d / g)), checked((a.d / g) * b.d));
+  // 두 곱을 따로 본다: 곱 하나가 넘쳐 반올림된 뒤 비슷한 크기끼리 빼면, 합은 안전 범위 안이어도 틀린 값이 된다
+  const left = a.n * (b.d / g);
+  const right = b.n * (a.d / g);
+  const d = (a.d / g) * b.d;
+  if (Number.isSafeInteger(left) && Number.isSafeInteger(right) && Number.isSafeInteger(left + right) && Number.isSafeInteger(d)) {
+    return rat(left + right, d);
+  }
+  // 중간 곱만 넘치고 약분하면 들어오는 경우가 있어 BigInt로 정확히 다시 센다. 약분해도 넘치면 그대로 멈춘다
+  const bn = BigInt(a.n) * BigInt(b.d / g) + BigInt(b.n) * BigInt(a.d / g);
+  const bd = BigInt(a.d / g) * BigInt(b.d);
+  const bg = bigGcd(bn, bd);
+  return rat(fromBig(bn / bg), fromBig(bd / bg));
+}
+
+function bigGcd(a: bigint, b: bigint): bigint {
+  if (a < 0n) a = -a;
+  while (b !== 0n) [a, b] = [b, a % b];
+  return a === 0n ? 1n : a;
+}
+
+function fromBig(x: bigint): number {
+  const n = Number(x);
+  if (!Number.isSafeInteger(n) || BigInt(n) !== x) {
+    throw new RangeError(`분수 값이 안전한 정수 범위를 넘었습니다: ${x}`);
+  }
+  return n;
 }
 
 export function sub(a: Rat, b: Rat): Rat {
@@ -53,9 +78,19 @@ export function div(a: Rat, b: Rat): Rat {
   return mul(a, { n: b.d, d: b.n });
 }
 
+/**
+ * 두 분수의 크기 비교 (-1, 0, 1). 비교는 새 분수를 만들지 않으므로 분모가 아무리 커도 예외를 던지지 않는다.
+ * 교차곱이 안전한 정수 범위를 넘으면 BigInt로 비교한다 (위치를 격자와 견줄 때 앱이 멈추지 않게)
+ */
 export function cmp(a: Rat, b: Rat): number {
-  const diff = sub(a, b).n;
-  return diff < 0 ? -1 : diff > 0 ? 1 : 0;
+  if (a.d === b.d) return a.n < b.n ? -1 : a.n > b.n ? 1 : 0;
+  const g = gcd(a.d, b.d);
+  const left = a.n * (b.d / g);
+  const right = b.n * (a.d / g);
+  if (Number.isSafeInteger(left) && Number.isSafeInteger(right)) return left < right ? -1 : left > right ? 1 : 0;
+  const bl = BigInt(a.n) * BigInt(b.d / g);
+  const br = BigInt(b.n) * BigInt(a.d / g);
+  return bl < br ? -1 : bl > br ? 1 : 0;
 }
 
 export function eq(a: Rat, b: Rat): boolean {

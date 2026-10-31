@@ -94,6 +94,27 @@ describe("compactSong", () => {
   });
 });
 
+describe("compactSong 원문보다 길게 쓰지 않기 (점검 S12)", () => {
+  const one = (text: string) => {
+    const track = { id: "a", playerId: "p", name: "a", color: "#000", role: "free" as const, mute: false, solo: false, notes: parseTrackText("a", { text }).notes, spelling: {}, mml: { text } };
+    return { ...emptySong({ title: "", author: "", profileId: "mobile" }), tracks: [track], tempo: parseTrackText("a", { text }).tempo };
+  };
+
+  it("출력기 글이 원문보다 길면 주석·빈칸만 벗긴 원문을 쓴다", () => {
+    const song = one("t120 /* 머리 */ l8 cn24cn24\ncn24cn24");
+    const r = compactResult(song);
+    expect(r.kept).toBeUndefined();
+    expect(r.song.tracks[0]!.mml!.text).toBe("l8t120cn24cn24cn24cn24");
+    expect(mergeTies(r.song.tracks[0]!.notes)).toEqual(mergeTies(song.tracks[0]!.notes).map((n) => expect.objectContaining({ start: n.start, dur: n.dur, pitch: n.pitch })));
+    expect(parseTrackText("a", r.song.tracks[0]!.mml!).tempo).toEqual(song.tempo);
+  });
+
+  it("출력기 글이 더 짧으면 지금처럼 출력기 글을 쓴다", () => {
+    const song = one("c8 c8 c8 c8 c8 c8");
+    expect(compactResult(song).song.tracks[0]!.mml!.text).toBe("l8cccccc");
+  });
+});
+
 describe("compactSong 음 보존", () => {
   it("출력기가 쓸 수 없는 길이가 있으면 음을 잃지 않게 곡을 그대로 둔다", () => {
     // 1/96 길이 셋 (출력기가 표기하지 못함)

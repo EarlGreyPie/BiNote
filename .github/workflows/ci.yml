@@ -18,3 +18,16 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - run: pnpm build
+      # 화면 연기 시험 (점검 S40): 위에서 만든 dist를 vite preview로 띄워 Chromium으로 돈다
+      - name: Playwright Chromium 설치
+        working-directory: apps/web
+        run: pnpm exec playwright install --with-deps chromium
+      - name: 화면 연기 시험 (e2e)
+        run: pnpm --filter @mmlce/web e2e
+      - name: 실패한 시험 기록 올리기
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-results
+          path: apps/web/test-results/
+          retention-days: 7

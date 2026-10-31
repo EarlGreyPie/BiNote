@@ -18,7 +18,7 @@ export interface GridNote {
 export interface QuantizeOptions {
   /** 격자 음길이(16 = 16분음표). "auto"면 곡에서 추정한다 */
   readonly grid?: number | "auto";
-  /** 박마다 셋잇단 격자가 더 맞으면 그 박은 셋잇단으로 맞춘다 */
+  /** 박마다 셋잇단 격자가 더 맞으면 그 박은 셋잇단으로 맞춘다. 4분·2분 셋잇단과 4분 5잇단도 이 설정을 따른다 */
   readonly triplets?: boolean;
   /** 이 시간(ms) 안에 시작한 음은 한 화음으로 보고 같은 자리에 맞춘다 */
   readonly chordMs?: number;
@@ -44,6 +44,8 @@ export interface QuantizeResult {
   readonly grid: number;
   /** 셋잇단으로 맞춘 박 수 */
   readonly tripletBeats: number;
+  /** 4분 5잇단(1/20 칸)으로 맞춘 박 수 */
+  readonly quintupletBeats: number;
   /** 시작이 달랐는데 칸에 맞추며 같은 자리의 같은 음이 되어 하나로 합쳐진 음 수 */
   readonly merged: number;
   /** 셋잇단으로 골랐지만 셋잇단 자리에 친 음이 분명하지 않은 박 (박 번호 = 4분음표 순번) */
@@ -51,7 +53,7 @@ export interface QuantizeResult {
 }
 
 /**
- * 박자 맞추기 (설계 11장 1단계). 화음 묶기 → 박마다 정규/셋잇단 격자 고르기 → 시작·끝 맞추기 →
+ * 박자 맞추기 (설계 11장 1단계). 화음 묶기 → 박마다 정규/셋잇단/5잇단 격자 고르기 → 시작·끝 맞추기 →
  * 같은 음 겹침 정리. 길이는 최소 격자 하나.
  */
 export function quantize(
@@ -82,7 +84,7 @@ export function prepareQuantize(
   const chordSeconds = (options.chordMs ?? 80) / 1000;
   const triplets = options.triplets ?? true;
   const all = parts.flatMap((p) => p.notes.map((n) => ({ n, part: p.id })));
-  if (all.length === 0) return { grid: 16, suspect: [], place: () => ({ notes: [], grid: 16, tripletBeats: 0, merged: 0, suspect: [] }) };
+  if (all.length === 0) return { grid: 16, suspect: [], place: () => ({ notes: [], grid: 16, tripletBeats: 0, quintupletBeats: 0, merged: 0, suspect: [] }) };
 
   const secondsPerWhole = (at: number) => 240 / bpmAt(tempo, at);
   // 격자는 묶기 전의 음 시작으로 추정한다
@@ -119,10 +121,9 @@ export function prepareQuantize(
 
   const place = (straight?: ReadonlySet<number>, window?: readonly [number, number]): QuantizeResult => {
     const beatChoice = new Map(mainChoice);
-    for (const beat of suspect) if (straight?.has(beat)) beatChoice.set(beat, false);
+    for (const beat of suspect) if (straight?.has(beat)) beatChoice.delete(beat);
     const snap = (x: number): Rat => {
-      const beat = Math.floor(x * 4 + 1e-9);
-      const step = beatChoice.get(beat) ? (grid * 3) / 2 : grid;
+      const step = beatChoice.get(Math.floor(x * 4 + 1e-9)) ?? grid;
       return rat(Math.round(x * step), step);
     };
 
@@ -173,7 +174,8 @@ export function prepareQuantize(
     return {
       notes: tidy(out.map(({ note }) => ({ start: note.start, dur: sub(note.end, note.start), pitch: note.pitch, velocity: note.velocity, part: note.part }))),
       grid,
-      tripletBeats: [...beatChoice.values()].filter(Boolean).length,
+      tripletBeats: [...beatChoice.values()].filter((step) => step === (grid * 3) / 2).length,
+      quintupletBeats: [...beatChoice.values()].filter((step) => step === QUINTUPLET).length,
       merged,
       suspect,
     };
@@ -187,9 +189,12 @@ function guessGrid(onsets: readonly number[], triplets: boolean, secondsPerWhole
   let bestFit = -1;
   for (const grid of GRID_CHOICES) {
     const choice = chooseBeats(onsets, grid, triplets);
+    // 4분 격자의 셋잇단 칸(1/6)에는 박 경계(1/4·3/4)가 없다. 그래서 셋잇단 박에서 끝나는 정규 음(다른 파트의 4분음표 등)이
+    // 1/6이나 1/3으로 밀린다. 셋잇단 박이 있어야 맞는 곡이면 셋잇단 칸(1/12)에 박 경계가 있는 8분 격자부터 본다
+    if (grid === 4 && choice.size > 0) continue;
     let fit = 0;
     for (const x of onsets) {
-      const step = choice.get(Math.floor(x * 4 + 1e-9)) ? (grid * 3) / 2 : grid;
+      const step = choice.get(Math.floor(x * 4 + 1e-9)) ?? grid;
       const error = Math.abs(x - Math.round(x * step) / step) * secondsPerWhole(x);
       if (error <= FIT_SECONDS) fit++;
     }
@@ -203,23 +208,58 @@ function guessGrid(onsets: readonly number[], triplets: boolean, secondsPerWhole
   return best;
 }
 
-/** 박(4분음표)마다 셋잇단 격자를 쓸지. 셋잇단 오차가 정규 오차의 절반보다 작을 때만 */
-function chooseBeats(onsets: readonly number[], grid: number, triplets: boolean): Map<number, boolean> {
-  const out = new Map<number, boolean>();
+/**
+ * 4분 5잇단 칸 (16분음표 5개를 4개 자리에, 1/20). 16분보다 굵은 격자에서는 쓰지 않는다
+ * (8분 격자에서는 흔들린 16분음표가 5잇단 칸에 더 잘 맞아 보일 수 있다)
+ */
+const QUINTUPLET = 20;
+/** 5잇단으로 보려면 한 박에 이만큼 시작이 있어야 한다 (점음표 리듬 두세 음이 우연히 5잇단 칸에 맞는 일을 막으려고) */
+const QUINTUPLET_MIN_ONSETS = 4;
+
+/** 박마다 쓸 칸 수 (온음표를 몇 칸으로 나누나). 없으면 정규 격자 */
+type BeatSteps = Map<number, number>;
+
+/**
+ * 박(4분음표)마다 정규·셋잇단·5잇단 가운데 어느 칸을 쓸지.
+ * 셋잇단: 박 안의 셋잇단 오차가 정규 오차의 절반보다 작을 때. 시작이 하나뿐인 박은 박을 넘는 셋잇단(4분·2분 셋잇단)일 때만
+ * 셋잇단으로 본다. 그 시작이 8분 셋잇단 자리(박의 1/3·2/3)에 있고, 이웃 박과 묶은 2박 창에 그런 시작이 둘 이상 있으며,
+ * 창의 어느 시작도 정규 칸에 더 가깝지 않고, 창 전체의 셋잇단 오차가 정규 오차의 절반보다 작아야 한다.
+ * 흔들린 정규 음 하나를 셋잇단으로 잘못 보지 않게 하려고 창으로 본다.
+ * 5잇단: 16분이나 그보다 잘게 나눈 격자에서, 시작이 넷 이상인 박의 5잇단 오차가 정규·셋잇단 오차 가운데 작은 쪽의 절반보다 작을 때
+ */
+function chooseBeats(onsets: readonly number[], grid: number, triplets: boolean): BeatSteps {
+  const out: BeatSteps = new Map();
   if (!triplets) return out;
   const tri = (grid * 3) / 2;
-  const errors = new Map<number, [number, number, number]>();
+  // 박을 넘는 셋잇단 자리를 가리는 굵은 셋잇단 칸 (8분 셋잇단, 4분 격자면 4분 셋잇단)
+  const coarse = Math.min(tri, 12);
+  const off = (x: number, step: number) => Math.abs(x - Math.round(x * step) / step);
+  const beats = new Map<number, number[]>();
   for (const x of onsets) {
     const beat = Math.floor(x * 4 + 1e-9);
-    const e = errors.get(beat) ?? [0, 0, 0];
-    e[0] += Math.abs(x - Math.round(x * grid) / grid);
-    e[1] += Math.abs(x - Math.round(x * tri) / tri);
-    e[2]++;
-    errors.set(beat, e);
+    const list = beats.get(beat);
+    if (list) list.push(x);
+    else beats.set(beat, [x]);
   }
-  for (const [beat, [bin, t, count]] of errors) {
-    // 박의 첫 음 하나만 있는 박은 어느 쪽이든 같으므로 정규로 둔다
-    out.set(beat, count >= 2 && t < bin * 0.5);
+  const sum = (list: readonly number[], step: number) => list.reduce((s, x) => s + off(x, step), 0);
+  for (const [beat, list] of beats) {
+    const bin = sum(list, grid);
+    const t = sum(list, tri);
+    // 박의 첫 음 하나만 있는 박은 어느 쪽이든 같으므로 정규로 둔다 (박을 넘는 셋잇단은 아래에서 따로 본다)
+    if (list.length >= 2 && t < bin * 0.5) out.set(beat, tri);
+    if (grid >= 16 && list.length >= QUINTUPLET_MIN_ONSETS && sum(list, QUINTUPLET) < Math.min(bin, t) * 0.5) out.set(beat, QUINTUPLET);
+  }
+  // 박을 넘는 셋잇단: 시작이 하나뿐인 박을 이웃 박과 묶은 2박 창에서 본다
+  const across = (x: number) => off(x, coarse) < off(x, grid) * 0.5;
+  for (const [beat, list] of beats) {
+    if (list.length !== 1 || out.has(beat) || !across(list[0]!)) continue;
+    for (const other of [beat - 1, beat + 1]) {
+      const window = [...list, ...(beats.get(other) ?? [])];
+      if (window.filter(across).length >= 2 && window.every((x) => off(x, tri) <= off(x, grid)) && sum(window, tri) < sum(window, grid) * 0.5) {
+        out.set(beat, tri);
+        break;
+      }
+    }
   }
   return out;
 }
@@ -231,7 +271,7 @@ function chooseBeats(onsets: readonly number[], grid: number, triplets: boolean)
  * "분명하다" = 정규 칸과 16분 셋잇단 칸(1/24)을 함께 쓰면 정규 칸만 쓸 때보다 오차가 4분의 1 아래로 준다.
  * 이 박을 정규 칸으로 맞출지는 음을 잃지 않는지 최종 결과로 따져야 하므로 여기서는 후보만 고른다 (midiToSong)
  */
-function suspectTriplets(choice: ReadonlyMap<number, boolean>, onsets: readonly number[], grid: number): number[] {
+function suspectTriplets(choice: ReadonlyMap<number, number>, onsets: readonly number[], grid: number): number[] {
   const coarse = (Math.min(grid, 16) * 3) / 2;
   const off = (x: number, step: number) => Math.abs(x - Math.round(x * step) / step);
   const errors = new Map<number, [number, number]>();
@@ -243,9 +283,9 @@ function suspectTriplets(choice: ReadonlyMap<number, boolean>, onsets: readonly 
     errors.set(beat, e);
   }
   const out: number[] = [];
-  for (const [beat, triplet] of choice) {
+  for (const [beat, step] of choice) {
     const [bin, mixed] = errors.get(beat)!;
-    if (triplet && mixed >= bin * 0.25) out.push(beat);
+    if (step === (grid * 3) / 2 && mixed >= bin * 0.25) out.push(beat);
   }
   return out.sort((a, b) => a - b);
 }

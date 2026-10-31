@@ -1,0 +1,113 @@
+{
+  "format": "mmlce",
+  "version": 2,
+  "minReader": 1,
+  "app": "9.9.9 · future",
+  "savedAt": "2027-01-01T00:00:00.000Z",
+  "song": {
+    "meta": {
+      "title": "앞 판 샘플",
+      "author": "EarlGreyPie",
+      "profileId": "mobile",
+      "key": "Am"
+    },
+    "tempo": [
+      {
+        "at": {
+          "n": 0,
+          "d": 1
+        },
+        "bpm": 120
+      }
+    ],
+    "timeSig": [],
+    "markers": [
+      {
+        "id": "m1",
+        "at": {
+          "n": 1,
+          "d": 3
+        },
+        "label": "후렴",
+        "color": "#ff0000"
+      }
+    ],
+    "players": [
+      {
+        "id": "p1",
+        "name": "류트",
+        "instrument": {
+          "canonical": "lute"
+        },
+        "hand": "left"
+      }
+    ],
+    "tracks": [
+      {
+        "id": "t1",
+        "playerId": "p1",
+        "name": "멜로디",
+        "color": "#4f8cff",
+        "role": "melody",
+        "mute": false,
+        "solo": false,
+        "notes": [
+          {"id":"n1","start":{"n":0,"d":1},"dur":{"n":1,"d":3},"pitch":60,"vol":12,"tie":"none","bend":{"cents":50},"__proto__":{"polluted":true}},
+          {"id":"n2","start":{"n":1,"d":3},"dur":{"n":1,"d":6},"pitch":62,"vol":12,"tie":"none","made":"mk1"}
+        ],
+        "spelling": {},
+        "lyrics": ["가", "나"]
+      }
+    ],
+    "sources": [
+      {
+        "id": "s1",
+        "kind": "audio",
+        "fileName": "원곡.mp3",
+        "offsetSec": 0,
+        "gainDb": -3
+      }
+    ],
+    "made": [
+      {
+        "id": "mk1",
+        "tool": "grace",
+        "options": null,
+        "picked": ["n2"],
+        "before": [
+          {
+            "trackId": "t1",
+            "notes": [
+              {"id":"n2","start":{"n":1,"d":3},"dur":{"n":1,"d":6},"pitch":64,"vol":12,"tie":"none","bend":{"cents":-20}}
+            ]
+          }
+        ],
+        "after": [
+          {
+            "trackId": "t1",
+            "notes": [
+              {"id":"n2","start":{"n":1,"d":3},"dur":{"n":1,"d":6},"pitch":62,"vol":12,"tie":"none"}
+            ]
+          }
+        ]
+      }
+    ],
+    "chords": [
+      {
+        "at": {
+          "n": 0,
+          "d": 1
+        },
+        "name": "Am"
+      }
+    ]
+  },
+  "editor": {
+    "activeTrackId": "t1",
+    "division": 16,
+    "zoom": 2
+  },
+  "share": {
+    "id": "abc"
+  }
+}

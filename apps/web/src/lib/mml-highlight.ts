@@ -73,4 +73,12 @@ export const mmlTheme = EditorView.theme({
   ".mml-tempo": { color: "var(--ev-tempo)", fontWeight: "600" },
   ".mml-tie": { color: "#8fa9d6" },
   ".mml-comment": { color: "var(--muted)", fontStyle: "italic" },
+  // 찾기·바꾸기 칸: CodeMirror 기본은 밝은 회색이라 앱 테마 색을 쓴다
+  ".cm-panels": { background: "var(--panel)", color: "var(--text)" },
+  ".cm-panels-top": { borderBottom: "1px solid var(--line)" },
+  ".cm-textfield": { background: "var(--bg)", color: "var(--text)", border: "1px solid var(--line)", borderRadius: "4px" },
+  ".cm-button": { backgroundImage: "none", background: "var(--bg)", color: "var(--text)", border: "1px solid var(--line)", borderRadius: "4px" },
+  ".cm-search label": { color: "var(--muted)" },
+  ".cm-searchMatch": { background: "color-mix(in srgb, #f2b705 25%, transparent)", outline: "1px solid color-mix(in srgb, #f2b705 60%, transparent)" },
+  ".cm-searchMatch-selected": { background: "color-mix(in srgb, var(--accent) 35%, transparent)" },
 });

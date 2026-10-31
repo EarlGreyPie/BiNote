@@ -1,8 +1,8 @@
 import { add, cmp, div, mul, rat, sub, type Rat } from "./rat.js";
 import type { Note, Song } from "./model.js";
-import { foldPitch, soundingRangeOf, TIE_BEND_LIMIT, type GameProfile } from "./profile.js";
+import { foldPitch, MOBILE_PROFILE, soundingRangeOf, volumeStepMax, type GameProfile } from "./profile.js";
 import { shortestLength } from "./note-length.js";
-import { replaceNotes } from "./note-edit.js";
+import { isCleanTrack, replaceNotes, trackIndex, type TrackIndex } from "./note-edit.js";
 
 /**
  * 트릴·트레몰로: 고른 음 하나를 같은 길이의 짧은 음 여러 개로 바꾼다. MML에 트릴 기호가 없으므로 음을 실제로 나눠 쓴다.
@@ -15,7 +15,7 @@ import { replaceNotes } from "./note-edit.js";
 export type TrillKind = "trill" | "tremolo";
 
 /**
- * 나눈 음의 v 모양 (본음 v 기준, 깊이만큼 낮춘 v와 섞는다). 게임에서 어떻게 들리는지는 아직 실측 전이다.
+ * 나눈 음의 v 모양 (본음 v 기준, 깊이만큼 낮춘 v와 섞는다). 게임에서 어떻게 들리는지는 아직 실측 전이다 (pending trillVolumePattern).
  * - same: 모두 본음 v
  * - alternate: 하나 건너 낮게 (번갈아)
  * - accentFirst: 첫 음만 본음 v, 나머지는 낮게
@@ -89,8 +89,11 @@ export interface TrillResult {
   readonly skipped: TrillSkipped;
 }
 
-/** v 깊이·전체 낮추기 입력 상한 */
-export const TRILL_VOLUME_DEPTH_LIMIT = 15;
+/**
+ * v 깊이·전체 낮추기 입력 상한 (v 범위 전체). 곡 프로필이 닿지 않는 설정 읽기에서만 쓰고,
+ * 창은 volumeStepMax(곡 프로필)를 쓴다
+ */
+export const TRILL_VOLUME_DEPTH_LIMIT = volumeStepMax(MOBILE_PROFILE);
 
 /**
  * 나눈 음 하나하나의 v. starts: 음마다 시작 자리 (박마다 세게에 쓴다). 결과는 프로필 v 범위 안으로 자른다
@@ -131,22 +134,6 @@ export function trillVolumes(
 export const TRILL_OFFSET_LIMIT = 12;
 
 const end = (n: { start: Rat; dur: Rat }) => add(n.start, n.dur);
-
-/** 시작 순으로 놓은 트랙 음에서 n 바로 앞 음 */
-function before(sorted: readonly Note[], n: Note): Note | undefined {
-  let prev: Note | undefined;
-  for (const x of sorted) {
-    if (x.id === n.id || cmp(x.start, n.start) >= 0) break;
-    prev = x;
-  }
-  return prev;
-}
-
-/** 바로 앞 음이 &로 이어 주는 음인지 (새로 치지 않는 음) */
-function isHeld(sorted: readonly Note[], n: Note): boolean {
-  const prev = before(sorted, n);
-  return !!prev && prev.tie === "next" && cmp(end(prev), n.start) === 0;
-}
 
 /** 고른 음 → 나눌 본음 (트랙과 함께). 트릴은 같은 연주자·같은 시작인 고른 음 가운데 가장 높은 음만. 시작 순 */
 function targetsOf(song: Song, picked: readonly Note[], kind: TrillKind): { trackId: string; note: Note }[] {
@@ -214,15 +201,24 @@ export function planTrill(song: Song, picked: readonly Note[], options: TrillOpt
   const keyOf = (tg: { trackId: string; note: Note }) => `${playerOf.get(tg.trackId)}|${tg.note.start.n}/${tg.note.start.d}`;
   const together = new Map<string, number>();
   const ready: { tg: (typeof targets)[number]; run: () => void }[] = [];
+  // 고를 음을 정하는 동안 트랙은 바뀌지 않으므로 트랙마다 한 번만 정렬·색인한다
+  const indexes = new Map<string, TrackIndex>();
+  const indexOf = (trackId: string) => {
+    let index = indexes.get(trackId);
+    if (!index) indexes.set(trackId, (index = trackIndex(tracks.get(trackId) ?? [])));
+    return index;
+  };
   for (const tg of targets) {
     if (options.locked?.has(tg.trackId)) {
       skipped.locked++;
       continue;
     }
-    const own = [...(tracks.get(tg.trackId) ?? [])].sort((a, b) => cmp(a.start, b.start));
-    const main = own.find((n) => n.id === tg.note.id);
+    const index = indexOf(tg.trackId);
+    const own = index.sorted;
+    const at = index.indexOf(tg.note.id);
+    const main = own[at];
     if (!main) continue;
-    if (isHeld(own, main)) {
+    if (index.isHeld(main)) {
       skipped.tied++;
       continue;
     }
@@ -247,7 +243,7 @@ export function planTrill(song: Song, picked: readonly Note[], options: TrillOpt
     }
     // 끊어 치기: 나눈 음마다 그 음 길이의 앞 절반만 소리, 나머지는 쉼표. 둘 다 게임 최단 이상이고 정확히 써져야 한다.
     // 트랙의 마지막 음이면 마지막 조각은 끊지 않는다 (끝 쉼표는 남지 않아 곡 끝·되풀이 길이가 짧아지므로)
-    const lastOfTrack = !own.some((n) => cmp(n.start, main.start) > 0);
+    const lastOfTrack = cmp(own.at(-1)!.start, main.start) <= 0;
     const cut = (i: number) => staccato && !(lastOfTrack && i === plan.pieces.length - 1);
     const soundOf = (p: { dur: Rat }) => mul(p.dur, rat(1, 2));
     if (
@@ -264,10 +260,10 @@ export function planTrill(song: Song, picked: readonly Note[], options: TrillOpt
     // & 사슬: 트릴 음을 모두 이을 때, 또는 본음이 뒤 음에 &로 이어질 때 그 사슬의 높이 차를 재생처럼 접어 잰다
     if (tie || main.tie === "next") {
       const chain = tie ? plan.pieces.map((p) => p.pitch) : [plan.pieces.at(-1)!.pitch];
-      let at = own.findIndex((n) => n.id === main.id);
-      if (main.tie === "next") while (own[at]?.tie === "next" && own[at + 1] && cmp(end(own[at]!), own[at + 1]!.start) === 0) chain.push(own[++at]!.pitch);
+      let i = at;
+      if (main.tie === "next") while (own[i]?.tie === "next" && own[i + 1] && cmp(end(own[i]!), own[i + 1]!.start) === 0) chain.push(own[++i]!.pitch);
       const head = foldPitch(chain[0]!, range);
-      if (chain.some((p) => Math.abs(foldPitch(p, range) - head) > TIE_BEND_LIMIT)) {
+      if (chain.some((p) => Math.abs(foldPitch(p, range) - head) > profile.tieBendLimit)) {
         skipped.bend++;
         continue;
       }
@@ -305,8 +301,11 @@ export function planTrill(song: Song, picked: readonly Note[], options: TrillOpt
           };
           return n;
         });
-        const changes = new Map<string, Note | null>([[main.id, null], ...notes.map((n) => [n.id, n] as const)]);
-        tracks.set(tg.trackId, replaceNotes(tracks.get(tg.trackId) ?? [], changes, new Set(notes.map((n) => n.id))));
+        const changes = pending.get(tg.trackId) ?? new Map<string, Note | null>();
+        changes.set(main.id, null);
+        for (const n of notes) changes.set(n.id, n);
+        if (batch) pending.set(tg.trackId, changes);
+        else tracks.set(tg.trackId, replaceNotes(tracks.get(tg.trackId) ?? [], changes, new Set(notes.map((n) => n.id))));
         touched.add(tg.trackId);
         ids.push(...notes.map((n) => n.id));
         made++;
@@ -315,7 +314,15 @@ export function planTrill(song: Song, picked: readonly Note[], options: TrillOpt
     });
   }
   for (const { tg } of ready) together.set(keyOf(tg), (together.get(keyOf(tg)) ?? 0) + 1);
+  // 깔끔한 트랙(음이 겹치지 않음)은 본음마다 제자리에서만 바뀌므로 바꿈을 모아 트랙마다 replaceNotes를 한 번만 부른다
+  // (본음마다 트랙 전체를 다시 정리하면 음 수의 제곱으로 느려진다). 겹친 음이 있는 트랙은 예전처럼 하나씩 넣는다
+  const pending = new Map<string, Map<string, Note | null>>();
+  const batch = song.tracks.every((t) => isCleanTrack(t.notes));
   for (const { run } of ready) run();
+  for (const [trackId, changes] of pending) {
+    const placed = [...changes].filter(([, n]) => n !== null).map(([id]) => id);
+    tracks.set(trackId, replaceNotes(tracks.get(trackId) ?? [], changes, new Set(placed)));
+  }
   const changes = song.tracks.filter((t) => touched.has(t.id)).map((t) => ({ trackId: t.id, notes: tracks.get(t.id)! }));
   return { changes, made, pieces, ids, skipped };
 }
