@@ -197,7 +197,8 @@ const E_BOUNDARIES = [52, 64, 77];
  *   o5d 1.51초(아래 구간 식과 맞음)·o5d+ 5.71초·o5e 5.39초. 처음 o5e(76)로 넣었던 것을 옮기고, 감쇠 시각은 o5e 값을 2^(1/12)배 해 o5d+ 기준으로 옮김.
  *   바이올린 맨 위 구간은 o5c+(73)부터 (2026-10-31, 반음씩 친 음계): 배음 모양이 o5c → o5c+에서만 12.7dB 튄다.
  *   처음 o5d(74)로 넣었던 것을 옮기고, 샘플 길이·감쇠 시각은 o5d 값을 2^(1/12)배 해 o5c+ 기준으로 옮김.
- *   반음 녹음으로 아직 확인하지 않은 경계: 실로폰·오르골 66·80, 샬루모 56·70·82, 플루트 88.
+ *   2026-10-31 반음 음계·6초 녹음으로 재확인: 플루트 맨 위 o6d+(87), 샬루모 o3g(55)·o4a(69)(o5a+ 82는 그대로),
+ *   실로폰·오르골 o4f(65)·o5g(79), 고양이 하모니카 o5g(79)·o5b(83). 모두 처음 넣은 값보다 한 반음 아래가 구간 첫 음이다.
  * - 음색 경계 위 e를 붙이면 한 번만 치고 이어진다 (튐 없음).
  * - 축음기(하우징 가구, 2026-10-16 직접 재생해 녹음): 오르골처럼 악보 하나에 3트랙. o1e~o7e(28~100), 범위 밖은 옥타브째 접힌다.
  *   줄지 않는 지속음인데 샘플이 끝나면 끊긴다(4.5~5.3초). 구간 경계 51|52·88|89는 반음씩 친 녹음의 음색 변화로,
@@ -226,20 +227,21 @@ export const MOBILE_PROFILE: GameProfile = {
   scoreBookGapMs: 1010,
   sampleBoundaries: { piano: E_BOUNDARIES, lute: E_BOUNDARIES, harp: E_BOUNDARIES },
   percussionPitch: 60,
+  // 플루트 맨 위·샬루모·실로폰·오르골·고양이 하모니카 경계: 2026-10-31 반음 음계·6초 녹음으로 재확인 (한 반음 아래로 옮김)
   sampleSeconds: {
     piano: [{ from: 40, seconds: 5.31 }, { from: 52, seconds: 5.3 }, { from: 64, seconds: 5.29 }, { from: 77, seconds: 5.04 }, { from: 89, seconds: 4.99 }],
     lute: [{ from: 38, seconds: 5.8 }, { from: 52, seconds: 4.8 }, { from: 64, seconds: 5.24 }, { from: 77, seconds: 4.86 }],
     mandolin: [{ from: 38, seconds: 5.67 }, { from: 52, seconds: 5.13 }, { from: 64, seconds: 4.98 }, { from: 77, seconds: 4.94 }],
     harp: [{ from: 40, seconds: 5.26 }, { from: 52, seconds: 5.23 }, { from: 64, seconds: 5.02 }, { from: 77, seconds: 4.33 }, { from: 89, seconds: 4.4 }],
     "folk-guitar": [{ from: 40, seconds: 5.26 }, { from: 52, seconds: 5.26 }, { from: 64, seconds: 5.27 }, { from: 77, seconds: 4.44 }, { from: 89, seconds: 4.67 }],
-    xylophone: [{ from: 28, seconds: 5.26 }, { from: 52, seconds: 2.66 }, { from: 66, seconds: 2.26 }, { from: 80, seconds: 2.08 }],
-    flute: [{ from: 52, seconds: 5.35 }, { from: 75, seconds: 5.71 }, { from: 88, seconds: 5.37 }],
+    xylophone: [{ from: 28, seconds: 5.26 }, { from: 52, seconds: 2.66 }, { from: 65, seconds: 2.39 }, { from: 79, seconds: 2.2 }],
+    flute: [{ from: 52, seconds: 5.35 }, { from: 75, seconds: 5.71 }, { from: 87, seconds: 5.69 }],
     violin: [{ from: 50, seconds: 5.49 }, { from: 60, seconds: 4.58 }, { from: 66, seconds: 4.9 }, { from: 73, seconds: 4.71 }],
-    chalumeau: [{ from: 42, seconds: 5.67 }, { from: 56, seconds: 5.1 }, { from: 70, seconds: 4.57 }, { from: 82, seconds: 4.56 }],
+    chalumeau: [{ from: 42, seconds: 5.67 }, { from: 55, seconds: 5.4 }, { from: 69, seconds: 4.84 }, { from: 82, seconds: 4.56 }],
     harmonica: [{ from: 40, seconds: 5.25 }, { from: 52, seconds: 5.28 }, { from: 64, seconds: 5.27 }, { from: 77, seconds: 4.97 }, { from: 89, seconds: 4.99 }],
-    "music-box": [{ from: 28, seconds: 5.05 }, { from: 52, seconds: 2.24 }, { from: 66, seconds: 2.05 }, { from: 80, seconds: 1.79 }, { from: 89, seconds: 2.09 }],
+    "music-box": [{ from: 28, seconds: 5.05 }, { from: 52, seconds: 2.24 }, { from: 65, seconds: 2.17 }, { from: 79, seconds: 1.9 }, { from: 89, seconds: 2.09 }],
     gramophone: [{ from: 40, seconds: 5.33 }, { from: 52, seconds: 5.33 }, { from: 65, seconds: 5.02 }, { from: 79, seconds: 4.47 }, { from: 89, seconds: 5.02 }],
-    "cat-harmonica": [{ from: 28, seconds: 0.47 }, { from: 32, seconds: 0.74 }, { from: 44, seconds: 0.73 }, { from: 56, seconds: 0.72 }, { from: 68, seconds: 0.74 }, { from: 80, seconds: 0.47 }, { from: 84, seconds: 0.49 }],
+    "cat-harmonica": [{ from: 28, seconds: 0.47 }, { from: 32, seconds: 0.74 }, { from: 44, seconds: 0.73 }, { from: 56, seconds: 0.72 }, { from: 68, seconds: 0.74 }, { from: 79, seconds: 0.42 }, { from: 83, seconds: 0.42 }],
   },
   // BINOTE DLS Pack v0.3 샘플(= 게임 6초 녹음을 구간마다 한 음씩 자른 것)을 20ms RMS로 잼 (2026-10-27). 구간 첫 음 기준으로 옮김.
   // 같은 날 게임 녹음 약 380음(구간 첫 음이 아닌 음)과 견줌: 끝나는 때 중앙값 0.001초, 12·20·40dB 시각은 거의 ±5% 안 →
@@ -261,12 +263,12 @@ export const MOBILE_PROFILE: GameProfile = {
     flute: [
       { from: 52, peakAt: 0.23, startDb: -16.44, db6: 5.06, db12: 5.2, db20: 5.26, db40: null },
       { from: 75, peakAt: 0.2, startDb: -6.65, db6: 5.66, db12: 5.66, db20: 5.68, db40: null },
-      { from: 88, peakAt: 0.11, startDb: -4.38, db6: 5.34, db12: 5.34, db20: 5.36, db40: 5.36 },
+      { from: 87, peakAt: 0.12, startDb: -4.38, db6: 5.66, db12: 5.66, db20: 5.68, db40: 5.68 },
     ],
     chalumeau: [
       { from: 42, peakAt: 0.21, startDb: -4.91, db6: 5.6, db12: 5.6, db20: 5.62, db40: null },
-      { from: 56, peakAt: 0.35, startDb: -2.32, db6: 5.0, db12: 5.02, db20: 5.04, db40: 5.06 },
-      { from: 70, peakAt: 0.05, startDb: -1.49, db6: 4.04, db12: 4.5, db20: null, db40: null },
+      { from: 55, peakAt: 0.37, startDb: -2.32, db6: 5.3, db12: 5.32, db20: 5.34, db40: 5.36 },
+      { from: 69, peakAt: 0.05, startDb: -1.49, db6: 4.28, db12: 4.77, db20: null, db40: null },
       { from: 82, peakAt: 0.09, startDb: -1.08, db6: 4.26, db12: 4.5, db20: 4.52, db40: null },
     ],
     piano: [
@@ -292,8 +294,8 @@ export const MOBILE_PROFILE: GameProfile = {
     "music-box": [
       { from: 28, peakAt: 0.05, startDb: -3.54, db6: 0.18, db12: 1.2, db20: 3.7, db40: 4.2 },
       { from: 52, peakAt: 0.01, startDb: -2.96, db6: 0.02, db12: 0.6, db20: 1.4, db40: 2.06 },
-      { from: 66, peakAt: 0.01, startDb: -0.58, db6: 0.58, db12: 0.94, db20: 1.4, db40: 1.84 },
-      { from: 80, peakAt: 0.01, startDb: -0.45, db6: 0.32, db12: 0.98, db20: 1.5, db40: 1.7 },
+      { from: 65, peakAt: 0.01, startDb: -0.58, db6: 0.61, db12: 1.0, db20: 1.48, db40: 1.95 },
+      { from: 79, peakAt: 0.01, startDb: -0.45, db6: 0.34, db12: 1.04, db20: 1.59, db40: 1.8 },
       { from: 89, peakAt: 0.01, startDb: -2.27, db6: 0.04, db12: 0.13, db20: 0.59, db40: 1.93 },
     ],
     "folk-guitar": [
@@ -320,8 +322,8 @@ export const MOBILE_PROFILE: GameProfile = {
     xylophone: [
       { from: 28, peakAt: 0.13, startDb: -5.7, db6: 1.54, db12: 2.32, db20: 3.28, db40: 4.8 },
       { from: 52, peakAt: 0.03, startDb: -1.0, db6: 0.9, db12: 1.3, db20: 1.76, db40: 2.48 },
-      { from: 66, peakAt: 0.19, startDb: -1.82, db6: 0.56, db12: 0.84, db20: 1.18, db40: 1.9 },
-      { from: 80, peakAt: 0.01, startDb: -0.59, db6: 0.4, db12: 0.72, db20: 1.1, db40: 1.8 },
+      { from: 65, peakAt: 0.2, startDb: -1.82, db6: 0.59, db12: 0.89, db20: 1.25, db40: 2.01 },
+      { from: 79, peakAt: 0.01, startDb: -0.59, db6: 0.42, db12: 0.76, db20: 1.17, db40: 1.91 },
     ],
   },
   chordAttenuation: { perDoublingDb: 3 },

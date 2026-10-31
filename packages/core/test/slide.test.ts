@@ -262,3 +262,19 @@ describe("여러 줄 (화음)", () => {
     expect(r.notes!.map((x) => x.tabString)).toEqual([3, undefined]);
   });
 });
+
+describe("2026-10-31 재확인한 음색 경계에서 끊기", () => {
+  const cases: [string, number][] = [
+    ["flute", 87], ["chalumeau", 55], ["chalumeau", 69], ["xylophone", 65], ["xylophone", 79],
+    ["music-box", 65], ["music-box", 79], ["cat-harmonica", 79], ["cat-harmonica", 83],
+  ];
+  it.each(cases)("%s %i: 경계 아래 음까지는 이어지고, 경계를 넘는 사이 음에서만 끊긴다", (instrument, b) => {
+    expect(timbreBoundaries(MOBILE_PROFILE, instrument)).toContain(b);
+    expect(crossesTimbre(MOBILE_PROFILE, instrument, b - 1, b)).toBe(true);
+    expect(crossesTimbre(MOBILE_PROFILE, instrument, b, b + 1)).toBe(false);
+    const across = run(pair(b - 2, b + 1), ["a", "b"], { breakAtZones: true, instrument });
+    expect(across.zoneBreaks).toBe(1);
+    const below = run(pair(b - 4, b - 1), ["a", "b"], { breakAtZones: true, instrument });
+    expect([below.zoneBreaks, below.zoneCrossings]).toEqual([0, 0]);
+  });
+});

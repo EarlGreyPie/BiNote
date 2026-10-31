@@ -31,7 +31,7 @@ describe("음색 구간 줄", () => {
     const catRows = zoneRows(cat, catRange, 12, 119);
     const outside = [...catRows].filter(([, r]) => r.edge && !r.inside).map(([p]) => p);
     expect(outside).toContain(69);
-    expect(outside).toContain(68);
+    expect(outside).toContain(67); // 67→79(o5g)로 접혀 맨 위에서 둘째 구간: 2026-10-31 재확인 경계
     for (const p of outside) expect(p - 1 < catRange.low || p > catRange.high).toBe(true);
   });
 
@@ -48,11 +48,11 @@ describe("음색 구간 줄", () => {
   });
 
   it("오르골 맨 위 경계는 o6f(89)", () => {
-    expect(timbreBoundaries(MOBILE_PROFILE, "music-box")).toEqual([52, 66, 80, 89]);
+    expect(timbreBoundaries(MOBILE_PROFILE, "music-box")).toEqual([52, 65, 79, 89]);
   });
 
-  it("샬루모는 o2f·o2f+가 같은 구간 (맨 아래 경계 o3g+)", () => {
-    expect(timbreBoundaries(MOBILE_PROFILE, "chalumeau")).toEqual([56, 70, 82]);
+  it("샬루모는 o2f·o2f+가 같은 구간 (맨 아래 경계 o3g)", () => {
+    expect(timbreBoundaries(MOBILE_PROFILE, "chalumeau")).toEqual([55, 69, 82]);
   });
 
   it("경계가 없는 악기는 그리지 않는다", () => {

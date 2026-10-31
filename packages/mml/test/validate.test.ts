@@ -84,6 +84,22 @@ describe("곡 검사", () => {
     expect(out.map((d) => [d.code, d.noteId])).toEqual([["tie-across-boundary", "t1.1"]]);
   });
 
+  it("2026-10-31 재확인한 경계: 경계 바로 아래 음 → 경계 음의 &만 경고", () => {
+    const NAMES = ["c", "c+", "d", "d+", "e", "f", "f+", "g", "g+", "a", "a+", "b"];
+    const mml = (m: number) => `o${Math.floor(m / 12) - 1}${NAMES[m % 12]}`;
+    const cases: [string, number][] = [
+      ["flute", 87], ["chalumeau", 55], ["chalumeau", 69], ["xylophone", 65], ["xylophone", 79],
+      ["music-box", 65], ["music-box", 79], ["cat-harmonica", 79], ["cat-harmonica", 83],
+    ];
+    for (const [canonical, b] of cases) {
+      const ties = (text: string) =>
+        validateSong(song([{ ...track("t1", text), instrument: { canonical } }]), MOBILE_PROFILE).filter((d) => d.code === "tie-across-boundary").length;
+      expect(ties(`${mml(b - 1)}&${mml(b)}`), `${canonical} ${b}`).toBe(1);
+      expect(ties(`${mml(b)}&${mml(b + 1)}`), `${canonical} ${b}`).toBe(0);
+      expect(ties(`${mml(b - 2)}&${mml(b - 1)}`), `${canonical} ${b}`).toBe(0);
+    }
+  });
+
   it("악기 범위 밖 음은 접혀 나는 높이를 알려 준다 (정보)", () => {
     const fold = (text: string, players?: Player[], playerId?: string) =>
       validateSong(song([track("t1", text, playerId)], players), MOBILE_PROFILE)
