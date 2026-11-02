@@ -1,4 +1,4 @@
-import { cmp, DEFAULT_BPM, defaultLengthLimit, isGameLength, mul, normalizeTempo, rat, toFloat, type LengthLimit, type Rat, type TempoEvent } from "@mmlce/core";
+import { cmp, DEFAULT_BPM, keyShort, defaultLengthLimit, isGameLength, mul, normalizeTempo, rat, toFloat, type LengthLimit, type Rat, type TempoEvent } from "@mmlce/core";
 
 /**
  * 피아노롤 좌표 계산. 가로는 시간이 오른쪽으로 흐르고 건반이 왼쪽,
@@ -232,10 +232,105 @@ export interface BackgroundVideo {
   readonly fill?: boolean;
   /** 잰 영상 속 음이 떨어지는 속도 (원본 영상 px/초). 있으면 롤 가로 확대를 이 속도에 맞춘다 (matchRollZoom) */
   readonly speed?: number;
+  /**
+   * 영상 속 건반 모양 (videoKeyEdges). 없으면 "even": 1.0.0-beta.37 전에 저장한 맞춤값이 그대로 맞게.
+   * 새로 연 영상은 "piano" (VIDEO_DEFAULTS)
+   */
+  readonly keyShape?: KeyShape;
+}
+
+/**
+ * 영상 속 건반 모양. piano: 실제 피아노처럼 흰건반이 모두 같은 폭 (떨어지는 음 영상 대부분),
+ * even: 반음마다 같은 폭 (영상 가로를 끝 건반 사이에 고르게 편다)
+ */
+export type KeyShape = "piano" | "even";
+
+/** 곡을 재생하며 영상을 따라가게 할 때 이만큼(초) 넘게 어긋나면 영상을 옮긴다 */
+export const VIDEO_SYNC_SLACK = 0.15;
+
+/**
+ * 곡 재생 중 배경 영상을 맞추는 한 걸음. current = 영상의 지금 시각, want = 곡 시간 + 어긋남(초), paused = 영상이 멈춰 있는지.
+ * want < 0(어긋남이 음수라 영상이 아직 시작 전)이면 첫 장면(0초)에 멈춰 기다린다: 0으로 되감으며 재생하면
+ * 0.15초마다 다시 0으로 돌아가 첫 장면이 끊기며 되풀이된다. 멈춰 있다가 재생을 시작할 때는 want에 바로 맞춘다
+ * (그러지 않으면 0초에서 출발해 최대 0.15초 어긋난 채 돈다). seek가 있으면 그 시각으로 옮긴다
+ */
+export function videoSyncStep(current: number, want: number, paused: boolean): { seek?: number; play: boolean } {
+  if (want < 0) return current > 1e-3 ? { seek: 0, play: false } : { play: false };
+  const slack = paused ? 1e-3 : VIDEO_SYNC_SLACK;
+  return Math.abs(current - want) > slack ? { seek: want, play: true } : { play: true };
 }
 
 /** 88건반 떨어지는 음 영상에 흔한 값 */
-export const VIDEO_DEFAULTS = { fit: true, low: 21, high: 108, keyLine: 0.85, stretch: 1, fill: true } as const;
+export const VIDEO_DEFAULTS = { fit: true, low: 21, high: 108, keyLine: 0.85, stretch: 1, fill: true, keyShape: "piano" } as const;
+
+/** 흰건반 순서 (C = 0 … B = 6, 검은건반은 -1). 한 옥타브에 흰건반 7개 */
+const WHITE_ORDER = [0, -1, 1, -1, 2, 3, -1, 4, -1, 5, -1, 6];
+
+/** 흰건반 p의 왼쪽 끝 자리 (흰건반 폭 단위, C-1의 왼쪽 끝 = 0) */
+function whiteLeft(p: number): number {
+  return 7 * Math.floor(p / 12) + WHITE_ORDER[((p % 12) + 12) % 12]!;
+}
+
+/**
+ * 피아노 모양 건반 띠의 자리(흰건반 폭 단위)를 음 높이 좌표로 옮기는 직선.
+ * 흰건반 7개 = 반음 12개이고, 한 옥타브 12건반의 가운데(흰건반은 칸 가운데, 검은건반은 두 흰건반 사이)가
+ * 제 음의 칸 가운데(p + 0.5)에 가장 가깝게(제곱 오차 최소) 오도록 -1/14만큼 민다.
+ * 영상을 롤에 까는 CSS 행렬은 직선만 되므로 이 직선이 가장 잘 맞는 배치다 (어긋남이 가장 큰 건반도 0.43반음)
+ */
+function pianoPitch(x: number): number {
+  return (x * 12) / 7 - 1 / 14;
+}
+
+/**
+ * 피아노 모양 건반 띠에서 건반 p(정수)가 차지하는 음 높이 좌표 [왼쪽 끝, 오른쪽 끝].
+ * 검은건반은 두 흰건반 경계를 가운데로 흰건반 7/12 폭(음 높이로 꼭 1칸)이라고 본다
+ */
+function pianoKeySpan(p: number): readonly [number, number] {
+  if (isBlackKey(p)) {
+    const c = pianoPitch(whiteLeft(p - 1) + 1);
+    return [c - 0.5, c + 0.5];
+  }
+  const x = whiteLeft(p);
+  return [pianoPitch(x), pianoPitch(x + 1)];
+}
+
+/** 끝 건반 값(손잡이로 끌면 소수)의 한쪽 끝 좌표. 소수는 이웃한 두 건반 사이를 곧게 잇는다 (늘 커지는 쪽이라 되돌릴 수 있다) */
+function pianoEdge(end: "low" | "high", key: number): number {
+  const side = end === "low" ? 0 : 1;
+  const n = Math.floor(key);
+  const f = key - n;
+  const a = pianoKeySpan(n)[side];
+  return f === 0 ? a : a + (pianoKeySpan(n + 1)[side] - a) * f;
+}
+
+/**
+ * 영상 왼쪽 끝과 오른쪽 끝이 오는 음 높이 좌표 (음 p의 칸은 [p, p+1)).
+ * even: 왼쪽 끝 = low, 오른쪽 끝 = high + 1 (반음마다 같은 폭).
+ * piano: 끝 건반의 바깥 끝을 피아노 모양(흰건반 같은 폭)으로 잡는다. A0 ~ C8이면 약 20.5 ~ 109.64 (폭 = 흰건반 52개 × 12/7).
+ * 영상을 까는 행렬·화면 채우기·속도·롤 맞추기·손잡이가 모두 이 값을 쓴다
+ */
+export function videoKeyEdges(video: Pick<BackgroundVideo, "low" | "high" | "keyShape">): { left: number; right: number } {
+  if (video.keyShape !== "piano") return { left: video.low, right: video.high + 1 };
+  return { left: pianoEdge("low", video.low), right: pianoEdge("high", video.high) };
+}
+
+/** 영상 끝(왼쪽 = low, 오른쪽 = high)을 음 높이 좌표 edge에 두는 끝 건반 값. videoKeyEdges의 반대 (손잡이 끌기) */
+export function videoEndAt(shape: KeyShape | undefined, end: "low" | "high", edge: number): number {
+  if (shape !== "piano") return end === "low" ? edge : edge - 1;
+  // 건반 하나 끝 좌표는 제 음에서 1칸 안쪽이라 가까운 정수부터 찾는다
+  let n = Math.floor(edge) - (end === "low" ? 0 : 1);
+  while (pianoEdge(end, n) > edge) n--;
+  while (pianoEdge(end, n + 1) <= edge) n++;
+  const a = pianoEdge(end, n);
+  const b = pianoEdge(end, n + 1);
+  return n + (edge - a) / (b - a);
+}
+
+/** 영상 가로 전체가 덮는 음 높이 칸 수 (videoKeyEdges의 폭) */
+function videoKeySpan(video: Pick<BackgroundVideo, "low" | "high" | "keyShape">, min = 1): number {
+  const { left, right } = videoKeyEdges(video);
+  return Math.max(min, right - left);
+}
 
 /** 시간 늘이기(stretch)로 쓸 수 있는 범위 */
 export const STRETCH_MIN = 0.1;
@@ -246,8 +341,8 @@ export const STRETCH_MAX = 10;
  * (가로 롤: 건반 띠 오른쪽 끝 ~ 롤 오른쪽 끝, 세로 롤: 건반 띠 위 ~ 롤 위 끝)를 덮게 하는 stretch.
  * 영상의 건반 쪽 끝은 그대로 건반 선에 붙고 위쪽만 늘어난다. STRETCH_MIN ~ STRETCH_MAX로 자른다
  */
-export function fillStretch(v: RollView, video: Pick<BackgroundVideo, "low" | "high" | "keyLine">, videoWidth: number, videoHeight: number): number {
-  const keys = Math.max(1, video.high + 1 - video.low);
+export function fillStretch(v: RollView, video: Pick<BackgroundVideo, "low" | "high" | "keyLine" | "keyShape">, videoWidth: number, videoHeight: number): number {
+  const keys = videoKeySpan(video);
   const along = (keys * v.pxPerKey) / Math.max(1, videoWidth);
   const above = video.keyLine * videoHeight * along;
   if (!(above > 0)) return STRETCH_MAX;
@@ -255,8 +350,8 @@ export function fillStretch(v: RollView, video: Pick<BackgroundVideo, "low" | "h
 }
 
 /** 영상 원본 px → 롤 화면 px의 시간 축 배율 (videoMatrix의 time) */
-export function videoTimeScale(v: RollView, video: Pick<BackgroundVideo, "low" | "high" | "stretch">, videoWidth: number): number {
-  const keys = Math.max(1, video.high + 1 - video.low);
+export function videoTimeScale(v: Pick<RollView, "pxPerKey">, video: Pick<BackgroundVideo, "low" | "high" | "stretch" | "keyShape">, videoWidth: number): number {
+  const keys = videoKeySpan(video);
   return ((keys * v.pxPerKey) / Math.max(1, videoWidth)) * video.stretch;
 }
 
@@ -266,6 +361,20 @@ export function videoTimeScale(v: RollView, video: Pick<BackgroundVideo, "low" |
  */
 export function matchRollZoom(screenPxPerSec: number, bpm: number): number {
   return (screenPxPerSec * 240) / Math.max(1e-6, bpm);
+}
+
+/**
+ * 속도 맞추기의 롤 가로 확대: 잰 영상 속도(원본 px/초) × 시간 축 배율을 bpm의 롤 px/초로 (롤 확대 범위로 자른다).
+ * 영상이 없거나 속도를 재지 않았으면 undefined (롤 확대는 사용자가 정한 그대로)
+ */
+export function videoSpeedZoom(
+  v: Pick<RollView, "pxPerKey">,
+  video: Pick<BackgroundVideo, "low" | "high" | "stretch" | "keyShape" | "speed">,
+  videoWidth: number,
+  bpm: number,
+): number | undefined {
+  if (!video.speed) return undefined;
+  return clampTimeZoom(matchRollZoom(video.speed * videoTimeScale(v, video, videoWidth), bpm));
 }
 
 /** 곡 위치(온음표 단위)의 템포 (bpm) */
@@ -289,19 +398,20 @@ export function tempoChanges(tempo: readonly TempoEvent[]): boolean {
  */
 export function videoMatrix(
   v: RollView,
-  video: Pick<BackgroundVideo, "low" | "high" | "keyLine" | "stretch">,
+  video: Pick<BackgroundVideo, "low" | "high" | "keyLine" | "stretch" | "keyShape">,
   videoWidth: number,
   videoHeight: number,
 ): [number, number, number, number, number, number] {
-  const keys = Math.max(1, video.high + 1 - video.low);
+  const { left } = videoKeyEdges(video);
+  const keys = videoKeySpan(video);
   const along = (keys * v.pxPerKey) / videoWidth;
   const time = along * video.stretch;
   const line = video.keyLine * videoHeight * time;
   if (v.orientation === "vertical") {
-    return [along, 0, 0, time, (video.low - v.edgePitch) * v.pxPerKey, v.height - v.keyboard - line];
+    return [along, 0, 0, time, (left - v.edgePitch) * v.pxPerKey, v.height - v.keyboard - line];
   }
   // 가로: 영상 세로(시간)가 화면 가로로, 영상 가로(음)가 화면 세로로 간다. 높은 음이 위
-  return [0, -along, -time, 0, v.keyboard + line, (v.edgePitch - video.low + 1) * v.pxPerKey];
+  return [0, -along, -time, 0, v.keyboard + line, (v.edgePitch + 1 - left) * v.pxPerKey];
 }
 
 /** 음 높이 좌표(칸 경계, 음 p의 칸은 [p, p+1))를 음 축 화면 좌표로 (세로 롤 x, 가로 롤 y) */
@@ -331,9 +441,11 @@ export function clampPitchView(v: RollView, low: number, high: number): { pxPerK
 }
 
 /** 영상 건반 범위(low ~ high)가 음 축을 꽉 채우게 하는 칸 크기와 기준 음 */
-export function fitVideoKeys(v: RollView, video: Pick<BackgroundVideo, "low" | "high">): { pxPerKey: number; edgePitch: number } {
-  const low = Math.floor(video.low);
-  const high = Math.ceil(video.high + 1) - 1;
+export function fitVideoKeys(v: RollView, video: Pick<BackgroundVideo, "low" | "high" | "keyShape">): { pxPerKey: number; edgePitch: number } {
+  // 영상 양 끝이 걸친 칸까지 (피아노 모양이면 끝 건반 바깥 반 칸쯤이 더 든다)
+  const { left, right } = videoKeyEdges(video);
+  const low = Math.floor(left + 1e-9);
+  const high = Math.ceil(right - 1e-9) - 1;
   const pxPerKey = axes(v).pitch / Math.max(1, high - low + 1);
   return { pxPerKey, edgePitch: v.orientation === "horizontal" ? high : low };
 }
@@ -344,12 +456,12 @@ export function fitVideoKeys(v: RollView, video: Pick<BackgroundVideo, "low" | "
  */
 export function dragKeyLine(
   v: RollView,
-  video: Pick<BackgroundVideo, "low" | "high" | "keyLine" | "stretch">,
+  video: Pick<BackgroundVideo, "low" | "high" | "keyLine" | "stretch" | "keyShape">,
   videoWidth: number,
   videoHeight: number,
   away: number,
 ): number {
-  const keys = Math.max(1e-3, video.high + 1 - video.low);
+  const keys = videoKeySpan(video, 1e-3);
   const time = ((keys * v.pxPerKey) / videoWidth) * video.stretch;
   return Math.min(1, Math.max(0, video.keyLine + away / (videoHeight * time)));
 }
@@ -468,7 +580,7 @@ export function stepNoteLength(now: Rat, factor: 2 | 0.5, limit: LengthLimit = d
 }
 
 /** 이벤트 줄 라벨 종류 */
-export type EventKind = "tempo" | "meter" | "marker";
+export type EventKind = "tempo" | "meter" | "marker" | "key";
 
 /** 이벤트 줄에 그리고 누르는 라벨 하나 (화면 좌표) */
 export interface EventLabel {
@@ -537,7 +649,12 @@ export function eventsBottom(v: RollView): number {
  */
 export function eventLabels(
   v: RollView,
-  events: { readonly tempo: readonly { at: Rat; bpm: number }[]; readonly timeSig: readonly { at: Rat; beats: number; unit: number }[]; readonly markers: readonly { id: string; at: Rat; label: string }[] },
+  events: {
+    readonly tempo: readonly { at: Rat; bpm: number }[];
+    readonly timeSig: readonly { at: Rat; beats: number; unit: number }[];
+    readonly markers: readonly { id: string; at: Rat; label: string }[];
+    readonly keys?: readonly { at: Rat; fifths: number }[] | undefined;
+  },
 ): EventLabel[] {
   // 글자 폭은 크기에 비례 (11px에서 한 글자 6px)
   const size = eventRowSize(v);
@@ -556,6 +673,7 @@ export function eventLabels(
     ...shownTempo(events.tempo).map((e) => place("tempo", e.at, `t${e.bpm}`, undefined, e.implicit)),
     ...events.timeSig.map((e) => place("meter", e.at, `${e.beats}/${e.unit}`)),
     ...events.markers.map((e) => place("marker", e.at, e.label, e.id)),
+    ...(events.keys ?? []).map((e) => place("key", e.at, keyShort(e.fifths))),
   ];
   // 같은 칸에서 앞 라벨과 겹치면 밀어 쓴다 (같은 자리의 박자와 마커 등): 가로 롤은 오른쪽으로, 세로 롤은 아래로 한 칸씩.
   // 그릴 때도 이 자리(x·y)를 쓰고, 바뀌는 자리 점선만 원래 시간 자리에 긋는다

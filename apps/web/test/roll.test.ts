@@ -13,6 +13,15 @@ import {
   pitchToScreen,
   screenToPitch,
   videoMatrix,
+  videoEndAt,
+  videoKeyEdges,
+  videoSpeedZoom,
+  videoSyncStep,
+  VIDEO_SYNC_SLACK,
+  videoTimeScale,
+  fillStretch,
+  isBlackKey,
+  VIDEO_DEFAULTS,
   whiteKeyEdges,
   type RollView,
   noteNear,
@@ -140,6 +149,121 @@ describe("영상 건반 맞춤", () => {
     const after = videoMatrix(v, { ...video, keyLine }, 240, 100);
     // 영상의 같은 점이 화면에서 24px 위로
     expect(after[5] - before[5]).toBeCloseTo(-24);
+  });
+});
+
+describe("영상 건반 모양: 피아노(흰건반 같은 폭)", () => {
+  /**
+   * 실제 피아노처럼 그린 88건반 영상(A0 ~ C8, 흰건반 52개)에서 건반 p 막대의 가운데 x (흰건반 폭 = w px).
+   * 흰건반은 제 칸 가운데, 검은건반은 두 흰건반 경계
+   */
+  const w = 20;
+  function barCentre(p: number): number {
+    let whites = 0;
+    for (let q = 21; q < p; q++) if (!isBlackKey(q)) whites++;
+    return isBlackKey(p) ? whites * w : (whites + 0.5) * w;
+  }
+  const width = 52 * w;
+  const v: RollView = { orientation: "vertical", width: 1040, height: 600, start: 0, pxPerWhole: 100, edgePitch: 21, pxPerKey: 12, keyboard: 40 };
+  const piano = { low: 21, high: 108, keyLine: 0.85, stretch: 1, keyShape: "piano" as const };
+  /** 영상 x를 롤에 깔았을 때 그 자리의 음 높이 좌표 */
+  const pitchOf = (video: typeof piano | Omit<typeof piano, "keyShape">, x: number, view: RollView = v) => {
+    const m = videoMatrix(view, video, width, 400);
+    const [sx, sy] = apply(m, x, 300);
+    return screenToPitch(view, view.orientation === "vertical" ? sx! : sy!);
+  };
+
+  it("A0 ~ C8 양 끝은 음 높이 좌표 약 20.5 ~ 109.64 (폭 = 흰건반 52개 × 12/7)", () => {
+    const e = videoKeyEdges(piano);
+    expect(e.left).toBeCloseTo(20.5, 9);
+    expect(e.right).toBeCloseTo(20.5 + (52 * 12) / 7, 9);
+    expect(e.right).toBeCloseTo(109.643, 3);
+  });
+
+  it("88건반 모든 막대 가운데가 제 칸에 들어간다 (세로·가로 롤). 어긋남이 가장 큰 건반도 0.43반음", () => {
+    let worst = 0;
+    for (const view of [v, { ...v, orientation: "horizontal" as const, edgePitch: 108, height: 1040 }]) {
+      for (let p = 21; p <= 108; p++) {
+        const at = pitchOf(piano, barCentre(p), view);
+        expect(Math.floor(at), `건반 ${p}`).toBe(p);
+        worst = Math.max(worst, Math.abs(at - (p + 0.5)));
+      }
+    }
+    expect(worst).toBeLessThan(0.43);
+  });
+
+  it("반음 같은 폭(옛 맞춤값)은 그대로: 같은 영상이면 B4를 비롯한 20여 건반이 옆 칸에 들어간다", () => {
+    const even = { low: 21, high: 108, keyLine: 0.85, stretch: 1 };
+    expect(videoKeyEdges(even)).toEqual({ left: 21, right: 109 });
+    expect(videoKeyEdges({ ...even, keyShape: "even" })).toEqual({ left: 21, right: 109 });
+    // 영상 가로를 21 ~ 109에 고르게 편다 (예전 행렬과 같다)
+    expect(videoMatrix(v, even, width, 400)).toEqual([(88 * 12) / width, 0, 0, ((88 * 12) / width) * 1, 0, 600 - 40 - 0.85 * 400 * ((88 * 12) / width)]);
+    const off: number[] = [];
+    for (let p = 21; p <= 108; p++) if (Math.floor(pitchOf(even, barCentre(p))) !== p) off.push(p);
+    expect(off.length).toBeGreaterThan(20);
+    expect(off).toContain(71);
+  });
+
+  it("새 영상 기본값은 피아노 모양", () => {
+    expect(VIDEO_DEFAULTS.keyShape).toBe("piano");
+  });
+
+  it("검은건반 끝: 바깥 끝은 두 흰건반 경계에서 반 칸 바깥, 끝 건반을 바꾸면 영상 끝도 같은 쪽으로 움직인다", () => {
+    // C#4 ~ A#4: 왼쪽 끝은 C4·D4 경계 - 0.5, 오른쪽 끝은 A4·B4 경계 + 0.5
+    const e = videoKeyEdges({ low: 61, high: 70, keyShape: "piano" });
+    const c4 = videoKeyEdges({ low: 60, high: 60, keyShape: "piano" });
+    const b4 = videoKeyEdges({ low: 71, high: 71, keyShape: "piano" });
+    expect(e.left).toBeCloseTo(c4.right - 0.5, 9);
+    expect(e.right).toBeCloseTo(b4.left + 0.5, 9);
+    let last = -Infinity;
+    for (let p = 20; p <= 110; p++) {
+      const l = videoKeyEdges({ low: p, high: p, keyShape: "piano" });
+      expect(l.left).toBeGreaterThan(last);
+      expect(l.left).toBeLessThan(p + 0.5);
+      expect(l.right).toBeGreaterThan(p + 0.5);
+      last = l.left;
+    }
+  });
+
+  it("손잡이: 끝 좌표 ↔ 끝 건반 값이 서로 되돌려진다 (소수 끝 건반 포함)", () => {
+    for (const low of [21, 21.3, 60.75, 61, 30.5]) {
+      const left = videoKeyEdges({ low, high: low + 10, keyShape: "piano" }).left;
+      expect(videoEndAt("piano", "low", left)).toBeCloseTo(low, 9);
+    }
+    for (const high of [108, 107.2, 70, 70.5]) {
+      const right = videoKeyEdges({ low: 21, high, keyShape: "piano" }).right;
+      expect(videoEndAt("piano", "high", right)).toBeCloseTo(high, 9);
+    }
+    expect(videoEndAt(undefined, "low", 20.25)).toBe(20.25);
+    expect(videoEndAt("even", "high", 109.5)).toBe(108.5);
+  });
+
+  it("롤 맞추기·화면 채우기·시간 축 배율이 행렬과 같은 폭을 쓴다", () => {
+    // 피아노 모양 A0 ~ C8은 양 끝 반 칸쯤 바깥까지 (20 ~ 109)
+    expect(fitVideoKeys(v, piano)).toEqual({ pxPerKey: 1040 / 90, edgePitch: 20 });
+    expect(fitVideoKeys({ ...v, orientation: "horizontal", height: 1040 }, piano)).toEqual({ pxPerKey: 1040 / 90, edgePitch: 109 });
+    const m = videoMatrix(v, piano, width, 400);
+    expect(videoTimeScale(v, piano, width)).toBeCloseTo(m[3], 12);
+    const fill = { ...piano, stretch: fillStretch(v, piano, width, 400) };
+    const mf = videoMatrix(v, fill, width, 400);
+    // 화면 채우기: 영상 위 끝(y = 0)이 롤 위 끝에 온다
+    expect(apply(mf, 0, 0)[1]).toBeCloseTo(0, 6);
+    // 건반 윗선 끌기도 같은 배율
+    const keyLine = dragKeyLine(v, piano, width, 400, 24);
+    expect(videoMatrix(v, { ...piano, keyLine }, width, 400)[5] - m[5]).toBeCloseTo(-24, 9);
+  });
+});
+
+describe("속도 맞추기 롤 확대는 템포를 따른다", () => {
+  const video = { low: 21, high: 108, stretch: 1, speed: 200 };
+  it("템포가 반으로 줄면 롤 가로 확대가 두 배 (영상과 격자가 다시 맞는다)", () => {
+    const at120 = videoSpeedZoom({ pxPerKey: 10 }, video, 880, 120)!;
+    const at60 = videoSpeedZoom({ pxPerKey: 10 }, video, 880, 60)!;
+    expect(at120).toBeCloseTo((200 * 1 * 240) / 120, 9);
+    expect(at60).toBeCloseTo(at120 * 2, 9);
+  });
+  it("속도를 재지 않았으면 확대를 정하지 않는다 (사용자가 정한 확대 그대로)", () => {
+    expect(videoSpeedZoom({ pxPerKey: 10 }, { low: 21, high: 108, stretch: 1 }, 880, 120)).toBeUndefined();
   });
 });
 
@@ -428,5 +552,22 @@ describe("롤 확대·축소 (점검 S09)", () => {
     expect(zoomAnchor([2, 6], undefined, 2)).toBe(2);
     expect(zoomAnchor([2, 6], 1, 7)).toBeUndefined();
     expect(zoomAnchor([2, 6])).toBeUndefined();
+  });
+});
+
+describe("videoSyncStep", () => {
+  it("영상 시작 전(want < 0)이면 0초로 옮겨 멈춰 기다린다 (재생하지 않는다)", () => {
+    expect(videoSyncStep(0.2, -1.5, false)).toEqual({ seek: 0, play: false });
+    // 이미 0초에 있으면 다시 옮기지 않는다 (되감기 되풀이가 없다)
+    expect(videoSyncStep(0, -1.5, true)).toEqual({ play: false });
+    expect(videoSyncStep(0, -0.01, true)).toEqual({ play: false });
+  });
+  it("기다리다 want가 0을 넘으면 그 자리로 바로 맞춰 재생한다", () => {
+    expect(videoSyncStep(0, 0.08, true)).toEqual({ seek: 0.08, play: true });
+    expect(videoSyncStep(0.08, 0.08, true)).toEqual({ play: true });
+  });
+  it("재생 중이면 조금 어긋난 것은 두고, 많이 어긋나면 옮긴다", () => {
+    expect(videoSyncStep(1, 1 + VIDEO_SYNC_SLACK / 2, false)).toEqual({ play: true });
+    expect(videoSyncStep(1, 1.5, false)).toEqual({ seek: 1.5, play: true });
   });
 });

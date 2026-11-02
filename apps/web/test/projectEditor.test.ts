@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { emptySong, type Song } from "@mmlce/core";
 import { readProject, writeProject } from "@mmlce/fileio";
-import { editorStateKey, keptFields, parseEditorState, projectWriteOptions, withTrackView } from "../src/lib/projectEditor";
+import { editorStateKey, keepOpenMedia, keptFields, keptFit, parseEditorState, projectWriteOptions, videoFitOf, withTrackView, withVideoFit } from "../src/lib/projectEditor";
 
 const song: Song = {
   ...emptySong({ title: "", author: "", profileId: "mobile" }),
@@ -111,6 +111,19 @@ describe("영상 화면 채우기·잰 속도 (지시서 26)", () => {
   });
 });
 
+describe("영상 건반 모양 (피아노 모양 끝 건반)", () => {
+  const song = emptySong({ title: "", author: "", profileId: "mobile" });
+  const video = { name: "v.mp4", opacity: 0.5, offset: 0, fit: true, low: 21, high: 108, keyLine: 0.85, stretch: 2 };
+  it("피아노 모양은 저장하고 다시 열면 그대로 읽는다", () => {
+    const saved = writeProject(song, projectWriteOptions({ video: { ...video, keyShape: "piano" } }, {}, "test"));
+    expect(parseEditorState(readProject(saved).editor, song).video).toEqual({ ...video, keyShape: "piano" });
+  });
+  it("적지 않은 옛 파일과 모르는 값은 반음 같은 폭(칸 없음)으로 읽어 그때 맞춘 끝 건반이 그대로 맞는다", () => {
+    expect(parseEditorState({ video }, song).video?.keyShape).toBeUndefined();
+    expect(parseEditorState({ video: { ...video, keyShape: "round" } }, song).video?.keyShape).toBeUndefined();
+  });
+});
+
 describe("연 프로젝트의 모르는 칸 다시 적기 (점검 S32)", () => {
   it("화면 상태의 모르는 칸과 맨 위 모르는 필드만 골라 둔다", () => {
     const kept = keptFields({ editor: { activeTrackId: "t1", division: 16, zoom: 2, trackView: {} }, extras: { share: { id: "abc" } } });
@@ -128,5 +141,76 @@ describe("연 프로젝트의 모르는 칸 다시 적기 (점검 S32)", () => {
     expect(again.editor).toEqual({ zoom: 2, activeTrackId: "t1", division: 32 });
     expect(again.share).toEqual({ id: "abc" });
     expect(again.app).toBe("test");
+  });
+});
+
+describe("videoFitOf", () => {
+  const base = { opacity: 0.5, offset: -2, fit: true, low: 21, high: 108, keyLine: 0.85, stretch: 1.2 };
+  it("연 영상의 맞춤값을 이름과 함께 적는다 (어긋남 포함)", () => {
+    expect(videoFitOf("v.mp4", { ...base, fill: false, speed: 120, keyShape: "piano" })).toEqual({
+      name: "v.mp4",
+      ...base,
+      fill: false,
+      speed: 120,
+      keyShape: "piano",
+    });
+  });
+  it("기본값(채우기 켬·속도 없음·반음 같은 폭)은 적지 않는다", () => {
+    const fit = videoFitOf("v.mp4", { ...base, fill: true, keyShape: "even" });
+    expect(fit).toEqual({ name: "v.mp4", ...base });
+    expect("fill" in fit || "speed" in fit || "keyShape" in fit).toBe(false);
+  });
+});
+
+describe("keepOpenMedia", () => {
+  it("곡을 열 때 열린 원곡·영상은 닫는다 (새 곡에 적힌 것이 없거나 다른 파일)", () => {
+    expect(keepOpenMedia("a.mp3", undefined)).toBe(false);
+    expect(keepOpenMedia("a.mp3", { name: "b.mp3" })).toBe(false);
+  });
+  it("새 곡에 같은 파일의 맞춤값이 적혀 있으면 둔다", () => {
+    expect(keepOpenMedia("a.mp3", { name: "a.mp3" })).toBe(true);
+  });
+  it("열린 원곡을 받아 적어 만든 곡이면 둔다", () => {
+    expect(keepOpenMedia("a.mp3", undefined, true)).toBe(true);
+  });
+  it("열린 것이 없으면 둘 것도 없다", () => {
+    expect(keepOpenMedia(undefined, { name: "a.mp3" }, true)).toBe(false);
+  });
+});
+
+describe("keptFit", () => {
+  const fit = (name: string, offset: number) => videoFitOf(name, { opacity: 0.5, offset, fit: true, low: 21, high: 108, keyLine: 0.85, stretch: 1 });
+  const project = fit("b.mp4", 3);
+  it("남긴 값이 없거나 같은 파일이면 방금까지 쓰던 값을 남긴다", () => {
+    const live = fit("b.mp4", 1);
+    expect(keptFit(undefined, live)).toBe(live);
+    expect(keptFit(project, live)).toBe(live);
+  });
+  it("다른 파일을 열었다 빼도 곡에 적힌 원래 파일의 맞춤값은 지킨다", () => {
+    expect(keptFit(project, fit("a.mp4", 1))).toBe(project);
+  });
+  it("열린 것이 없으면 남긴 값 그대로", () => {
+    expect(keptFit(project, undefined)).toBe(project);
+    expect(keptFit(undefined, undefined)).toBeUndefined();
+  });
+  it("원곡 맞춤값에도 같은 규칙", () => {
+    const saved = { name: "song.mp3", offsetMs: 120, volume: 0.8 };
+    expect(keptFit(saved, { name: "wrong.mp3", offsetMs: 0, volume: 0.8 })).toBe(saved);
+    expect(keptFit(saved, { name: "song.mp3", offsetMs: 300, volume: 0.5 })).toEqual({ name: "song.mp3", offsetMs: 300, volume: 0.5 });
+  });
+});
+
+describe("withVideoFit", () => {
+  const open = { url: "blob:x", sound: true, handles: true, opacity: 0.5, offset: 0, fit: true, low: 21, high: 108, keyLine: 0.85, stretch: 1, fill: false, speed: 80, keyShape: "piano" as const };
+  it("곡에 적힌 맞춤값을 씌우고 파일·소리·손잡이는 둔다", () => {
+    const fit = videoFitOf("v.mp4", { opacity: 0.7, offset: -1.5, fit: true, low: 20.5, high: 108.6, keyLine: 0.8, stretch: 1.3, speed: 120, keyShape: "piano" });
+    expect(withVideoFit(open, fit)).toEqual({ url: "blob:x", sound: true, handles: true, opacity: 0.7, offset: -1.5, fit: true, low: 20.5, high: 108.6, keyLine: 0.8, stretch: 1.3, speed: 120, keyShape: "piano" });
+  });
+  it("적히지 않은 값(채우기 켬·속도 없음·반음 같은 폭)은 열린 영상의 값을 남기지 않는다", () => {
+    const fit = videoFitOf("v.mp4", { opacity: 0.5, offset: 2, fit: false, low: 21, high: 108, keyLine: 0.85, stretch: 1 });
+    const next = withVideoFit(open, fit);
+    expect("fill" in next || "speed" in next || "keyShape" in next).toBe(false);
+    expect(next.offset).toBe(2);
+    expect(next.fit).toBe(false);
   });
 });

@@ -36,6 +36,8 @@ export const COMMANDS = [
   "edit.findPrev",
   "edit.transpose",
   "edit.volume",
+  "edit.keyLock",
+  "edit.keyFit",
   "note.delete",
   "note.octaveUp",
   "note.octaveDown",
@@ -106,6 +108,8 @@ const COMMON: Bindings = {
   "edit.findNext": ["F3"],
   "edit.findPrev": ["Shift+F3"],
   "edit.transpose": ["Alt+P"],
+  // 피아노롤 조표 맞춤 입력 켜기·끄기 (임시표를 잠깐 찍을 때)
+  "edit.keyLock": ["Alt+K"],
   "note.octaveUp": ["Shift+Up"],
   "note.octaveDown": ["Shift+Down"],
   "note.volumeUp": ["Alt+Up"],

@@ -40,6 +40,45 @@ function keyValues(lines: readonly string[]): Map<string, string> {
   return map;
 }
 
+/** 길이·값 숫자를 받는 명령: 음(a~g, 뒤에 +#-)·쉼표·l·o·v·t·n */
+const VALUE_COMMAND = /[a-gnrlovt]/i;
+
+/**
+ * 3MLE는 명령과 숫자 사이의 빈칸·줄바꿈을 건너뛰고 읽는다 (`f 4` = `f4`, `l\n12` = `l12`).
+ * 우리 파서는 떨어진 숫자를 모르는 글자로 보고 버려서, 그 음이 l 길이로 짧아지고 뒤가 모두 앞당겨졌다.
+ * 3MLE 파일을 읽을 때 그런 빈칸을 지워 원문과 음 자리가 3MLE와 같게 한다. 주석 안은 건드리지 않는다.
+ * 숫자를 이미 쓴 뒤의 빈칸(`c4 8`, `c4 .`)은 그대로 둔다
+ */
+export function joinSpacedValues(text: string): { text: string; joined: number } {
+  let out = "";
+  let joined = 0;
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] === "/" && text[i + 1] === "*") {
+      const close = text.indexOf("*/", i + 2);
+      const end = close < 0 ? text.length : close + 2;
+      out += text.slice(i, end);
+      i = end;
+      continue;
+    }
+    const ch = text[i]!;
+    out += ch;
+    i++;
+    if (!VALUE_COMMAND.test(ch)) continue;
+    // 음 이름 뒤 반음 기호는 명령의 일부
+    if (/[a-g]/i.test(ch)) {
+      while (i < text.length && /[+#-]/.test(text[i]!)) out += text[i++];
+    }
+    let j = i;
+    while (j < text.length && /\s/.test(text[j]!)) j++;
+    if (j > i && j < text.length && /[0-9]/.test(text[j]!)) {
+      joined++;
+      i = j;
+    }
+  }
+  return { text: out, joined };
+}
+
 export interface ReadResult {
   readonly song: Song;
   readonly diagnostics: FileDiagnostic[];
@@ -70,6 +109,12 @@ export function read3mle(text: string, options: Read3mleOptions = {}): ReadResul
   }
 
   const diagnostics: FileDiagnostic[] = [];
+  for (const [num, body] of bodies) {
+    const fixed = joinSpacedValues(body);
+    if (fixed.joined === 0) continue;
+    bodies.set(num, fixed.text);
+    diagnostics.push({ level: "info", code: "spaced-value-joined", params: { count: fixed.joined }, span: [0, 0], where: props.get(num)?.get("Name") || `Channel${num}` });
+  }
   const players: Player[] = [];
   const tracks: Track[] = [];
   const tempo: ChannelTempo[] = [];

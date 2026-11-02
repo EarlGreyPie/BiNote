@@ -1,3 +1,4 @@
+import { BASIC_SCRIPTOR_ON } from "./basicScriptor";
 import { loadStored, saveStored } from "./persist";
 
 /**
@@ -23,7 +24,7 @@ export interface LabFeature {
   readonly id: LabFeatureId;
   /** 메뉴·설정에 쓰는 이름과 설명 문구 키 */
   readonly label: "ui.labGhost" | "ui.labHarmonic" | "ui.labReverb" | "ui.labMidiRecord" | "ui.tempoRamp" | "ui.labVideoBars" | "ui.labArpFold" | "ui.labLoudness" | "ui.labStaff" | "ui.labMusicXml" | "ui.labTranscribe" | "ui.labNoteDrop";
-  readonly help: "ui.labGhostHelp" | "ui.labHarmonicHelp" | "ui.labReverbHelp" | "ui.labMidiRecordHelp" | "ui.tempoRampHelp" | "ui.labVideoBarsHelp" | "ui.labArpFoldHelp" | "ui.labLoudnessHelp" | "ui.labStaffHelp" | "ui.labMusicXmlHelp" | "ui.labTranscribeHelp" | "ui.labNoteDropHelp";
+  readonly help: "ui.labTranscribeHelpScriptor" | "ui.labGhostHelp" | "ui.labHarmonicHelp" | "ui.labReverbHelp" | "ui.labMidiRecordHelp" | "ui.tempoRampHelp" | "ui.labVideoBarsHelp" | "ui.labArpFoldHelp" | "ui.labLoudnessHelp" | "ui.labStaffHelp" | "ui.labMusicXmlHelp" | "ui.labTranscribeHelp" | "ui.labNoteDropHelp";
 }
 
 /** 실험실 기능 목록 (메뉴와 설정 설명이 이 순서를 따른다) */
@@ -42,8 +43,8 @@ export const LAB_FEATURES: readonly LabFeature[] = [
   { id: "staff", label: "ui.labStaff", help: "ui.labStaffHelp" },
   // 실험실 메뉴에 가져오기·내보내기 두 항목 (가져오기는 MIDI 가져오기 창을 같이 쓴다)
   { id: "musicXml", label: "ui.labMusicXml", help: "ui.labMusicXmlHelp" },
-  // 곡 없이도 쓴다: 받아 적은 음은 MIDI 불러오기 창으로 새 곡이 된다 (PC는 Basic Scriptor, 모든 기기는 브라우저 안 basic-pitch)
-  { id: "transcribe", label: "ui.labTranscribe", help: "ui.labTranscribeHelp" },
+  // 곡 없이도 쓴다: 받아 적은 음은 MIDI 불러오기 창으로 새 곡이 된다 (모든 기기는 브라우저 안 basic-pitch, BASIC_SCRIPTOR_ON이면 PC는 Basic Scriptor도)
+  { id: "transcribe", label: "ui.labTranscribe", help: BASIC_SCRIPTOR_ON ? "ui.labTranscribeHelpScriptor" : "ui.labTranscribeHelp" },
   // 메뉴 항목 없이 곡 검사에 연주 누락음 위험(fast-run-drop)이 더해지고, 그 줄의 고치기 창으로 고친다 (기준은 GameProfile.fastRunDrop, 실측 전)
   { id: "noteDrop", label: "ui.labNoteDrop", help: "ui.labNoteDropHelp" },
 ];

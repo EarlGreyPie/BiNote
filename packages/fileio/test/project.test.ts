@@ -225,3 +225,15 @@ describe("writeProject / readProject", () => {
     expect(back.diagnostics.map((d) => d.code)).toEqual(["project-unknown-profile"]);
   });
 });
+
+describe("조표 저장", () => {
+  it("조표를 저장했다 그대로 읽고, 틀린 값은 뺀다", async () => {
+    const { newSong } = await import("@mmlce/mml");
+    const { rat } = await import("@mmlce/core");
+    const song = { ...newSong({ playerName: "p", trackName: "t" }), keys: [{ at: rat(0), fifths: 3 }, { at: rat(5, 2), fifths: -2 }] };
+    expect(readProject(writeProject(song)).song.keys).toEqual(song.keys);
+    const raw = JSON.parse(writeProject(song));
+    raw.song.keys.push({ at: { n: 1, d: 1 }, fifths: 9 });
+    expect(readProject(JSON.stringify(raw)).song.keys).toEqual(song.keys);
+  });
+});

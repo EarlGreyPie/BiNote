@@ -10,11 +10,13 @@
     check: (bars: readonly BarRange[]) => DeleteBarsCheck;
     /** 원곡 대조 위치를 어떻게 맞출지. 원곡이 없으면 undefined */
     referencePlan?: ((bars: readonly BarRange[]) => ReferenceShiftPlan | undefined) | undefined;
+    /** 배경 영상 위치를 어떻게 맞출지 (원곡과 같은 규칙). 영상이 없으면 undefined */
+    videoPlan?: ((bars: readonly BarRange[]) => ReferenceShiftPlan | undefined) | undefined;
     onapply: (bars: readonly BarRange[]) => void;
     onclose: () => void;
   }
 
-  let { loopBars, check, referencePlan, onapply, onclose }: Props = $props();
+  let { loopBars, check, referencePlan, videoPlan, onapply, onclose }: Props = $props();
 
   let dialog: HTMLDialogElement;
   // 마디: 선택 마디(반복 구간) / 적은 마디. 볼륨 창과 같은 고르기지만 "모든 마디"는 없다
@@ -28,6 +30,9 @@
   const reference = $derived(referencePlan?.(bars));
   /** 원곡 어긋남에 더할 ms (앱이 실제로 더하는 값과 같게 정수로) */
   const shiftMs = $derived(reference ? Math.round(reference.shiftSec * 1000) : 0);
+  const video = $derived(videoPlan?.(bars));
+  /** 배경 영상 어긋남에 더할 ms (앱과 같게 정수로) */
+  const videoShiftMs = $derived(video ? Math.round(video.shiftSec * 1000) : 0);
 
   $effect(() => {
     dialog.showModal();
@@ -84,6 +89,12 @@
     {/if}
     {#if reference?.brokenBar !== undefined}
       <p class="warn">{t("ui.deleteBarsReferenceOff", { bar: reference.brokenBar })}</p>
+    {/if}
+    {#if videoShiftMs > 0}
+      <p class="muted">{t("ui.deleteBarsVideoShift", { seconds: videoShiftMs / 1000 })}</p>
+    {/if}
+    {#if video?.brokenBar !== undefined}
+      <p class="warn">{t("ui.deleteBarsVideoOff", { bar: video.brokenBar })}</p>
     {/if}
   {:else if bars.length > 0}
     <p class="muted">{t("ui.deleteBarsNone")}</p>

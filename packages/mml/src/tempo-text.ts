@@ -79,6 +79,17 @@ function withoutBlanks(text: string): string {
 }
 
 /**
+ * 화면 글을 그대로 게임에 넣을 때(출력기로 쓸 수 없는 트랙) 게임이 막는 것을 벗긴다: 주석·빈칸·줄바꿈과
+ * 파서가 건너뛴 모르는 글자. 게임은 `c 4`처럼 빈칸이 든 글을 "사용할 수 없는 악보"로 막는다 (실측 2026-11-02).
+ * 모르는 글자는 빈칸을 벗기면 앞 명령에 붙어 뜻이 바뀌므로(`f 4` → `f4`) 편집기가 읽은 대로 함께 지운다
+ */
+export function gameReadyText(text: string): string {
+  const skipped = parseMml(text).diagnostics.filter((d) => d.code === "unknown-char").map((d) => d.span);
+  const edits = skipped.map(([from, to]) => ({ span: [from, to] as const, text: "" }));
+  return withoutBlanks(edits.length > 0 ? spliceText(text, edits) : text);
+}
+
+/**
  * 원문을 게임에 넣을 글로 줄인다: 원문의 t를 모두 지우고 tempo(곡 위치)를 그 자리 음·쉼표 앞에 다시 적은 뒤,
  * 주석·빈칸·줄바꿈을 벗긴다. 사용자가 쓴 표기는 그대로라 출력기 글보다 짧을 때가 있다.
  * 원문에 offset이 있거나, 경고·오류가 있거나, 프로필 범위 밖 값(길이·점·옥타브·볼륨)이 있거나,

@@ -5,6 +5,12 @@
  * - 짝 맞추기: Basic Scriptor 창에 뜬 짝 번호를 넣으면 토큰을 받는다. 토큰은 메모리에만 두어 BiNote를 다시 켜면 다시 맞춘다
  */
 
+/**
+ * Basic Scriptor 연결을 보일지. Basic Scriptor 프로그램이 아직 완성 전이라 rc 전에 꺼 두었다 (2026-11-02).
+ * 끄면 받아 적기 창에 Basic Scriptor (PC) 쪽이 나오지 않고 브라우저 안 basic-pitch만 쓴다. 연결 코드(이 파일)와 문구(…Scriptor 키)는 그대로 남아 있어, 완성되면 true로 바꾸기만 하면 된다
+ */
+export const BASIC_SCRIPTOR_ON = false;
+
 export const BASIC_SCRIPTOR_API = 1;
 export const DEFAULT_BASIC_SCRIPTOR_PORT = 47811;
 const PORT_KEY = "mmlce.basicScriptor.port";

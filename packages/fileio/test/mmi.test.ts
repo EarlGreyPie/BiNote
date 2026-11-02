@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { rat } from "@mmlce/core";
-import { readMmi, readProject, writeMmi, writeProject } from "../src/index.js";
+import { mmiLayout, readMmi, readProject, writeMmi, writeProject } from "../src/index.js";
 
 const SAMPLE = [
   "[mml-score]",
@@ -287,5 +287,52 @@ describe("writeMmi 노래 칸만 쓴 mml-track (점검 S07 재점검)", () => {
     const a = readMmi("[mml-score]\nmml-track=MML@c4,,;\nname=A\nprogram=0\npanpot=\n").song;
     expect(a.tracks[0]!.mix).toBeUndefined();
     expect(writeMmi(a).text).toContain("panpot=64\n");
+  });
+});
+
+describe("writeMmi 트랙 고르기", () => {
+  const FOUR = [
+    "[mml-score]",
+    "tempo=0T120",
+    "mml-track=MML@t120c4,e4,g4;",
+    "name=A",
+    "program=21",
+    "mml-track=MML@c1,,,d1;",
+    "name=B",
+    "program=0",
+    "songProgram=5",
+  ].join("\n");
+
+  it("고른 트랙만 쓰고, 묶는 모양은 고른 트랙으로 다시 정한다 (mmiLayout과 같다)", () => {
+    const a = readMmi(FOUR).song;
+    const ids = a.tracks.map((t) => t.id);
+    expect(mmiLayout(a).map((e) => [e.name, e.parts.length, !!e.song])).toEqual([
+      ["A", 3, false],
+      ["B", 1, true],
+    ]);
+    // A의 화음1을 빼면 화음2가 화음1 칸으로 당겨진다
+    const picked = [ids[0]!, ids[2]!, ids[3]!];
+    const { text } = writeMmi(a, { trackIds: picked });
+    const back = readMmi(text).song;
+    expect(back.tracks.map((t) => t.notes.map((n) => n.pitch))).toEqual([[60], [67], [60]]);
+    expect(mmiLayout(a, picked).map((e) => [e.name, e.parts.length, !!e.song])).toEqual([
+      ["A", 2, false],
+      ["B", 1, false],
+    ]);
+  });
+
+  it("연주자 트랙을 모두 빼도 그 노래 트랙은 그 연주자 이름의 빈 mml-track 노래 칸으로 간다", () => {
+    const a = readMmi(FOUR).song;
+    const songTrack = a.tracks.find((t) => t.mmiSong)!;
+    const { text } = writeMmi(a, { trackIds: [songTrack.id] });
+    expect(text.match(/^mml-track=.*$/gm)).toEqual(["mml-track=MML@,,,t120d1;"]);
+    expect(text).toContain("name=B\n");
+  });
+
+  it("옥타브째 옮긴 음 알림은 트랙마다 한 번", () => {
+    const a = readMmi("[mml-score]\nmml-track=MML@o0c<c<c<c;\nname=A\nprogram=21\n").song;
+    const lowered = { ...a, tracks: a.tracks.map(({ mml: _mml, ...t }) => ({ ...t, notes: t.notes.map((n) => ({ ...n, pitch: 5 })) })) };
+    const { diagnostics } = writeMmi(lowered);
+    expect(diagnostics.filter((d) => d.code === "pitch-unwritable")).toHaveLength(1);
   });
 });

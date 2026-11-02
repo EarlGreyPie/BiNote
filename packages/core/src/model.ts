@@ -21,6 +21,13 @@ export interface TimeSigEvent {
   readonly extras?: Extras;
 }
 
+/** 조표 바뀜 (그 자리부터 곡 끝이나 다음 조표까지). fifths = 올림표 개수, 내림표면 음수 (-7~7). 피아노롤 조표 맞춤 입력에만 쓰고 출력과는 상관없다 */
+export interface KeyEvent {
+  readonly at: Rat;
+  readonly fifths: number;
+  readonly extras?: Extras;
+}
+
 export interface Marker {
   readonly id: string;
   readonly at: Rat;
@@ -191,6 +198,8 @@ export interface Song {
   readonly tempo: readonly TempoEvent[];
   readonly timeSig: readonly TimeSigEvent[];
   readonly markers: readonly Marker[];
+  /** 조표 (위치 순, 프로젝트 파일에만 저장). 없으면 곡 전체 다장조 */
+  readonly keys?: readonly KeyEvent[];
   readonly players: readonly Player[];
   readonly tracks: readonly Track[];
   readonly sources: readonly SourceRef[];

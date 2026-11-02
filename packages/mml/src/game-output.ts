@@ -6,7 +6,7 @@ import { optimizeMml } from "./optimizer.js";
 import { parseMml } from "./parser.js";
 import { placeTempo, placeTempoByScore, type TempoMove } from "./tempo-placement.js";
 import { bpmBefore, padScore, scoreEnd, tempoBefore } from "./score-end.js";
-import { audibleTempo, gameSource, sameTempo, shortestWriting, spliceText, surgicalSource, tempoTokens } from "./tempo-text.js";
+import { audibleTempo, gameReadyText, gameSource, sameTempo, shortestWriting, spliceText, surgicalSource, tempoTokens } from "./tempo-text.js";
 
 /** 트랙마다 게임에 넣을 글. 트랙은 고치면 새 객체가 되므로, 같은 트랙·같은 템포 자리면 다시 쓰지 않는다 */
 const rewriteCache = new WeakMap<Track, { key: string; text: string | undefined }>();
@@ -79,7 +79,7 @@ export function gameScores(
   for (const id of chunks.flatMap((c) => c.trackIds)) {
     const t = song.tracks.find((x) => x.id === id)!;
     const text = rewritten(t, placed.get(t.id) ?? [], profile);
-    written.set(id, text !== undefined ? { text, asIs: false } : { text: trackSource(song, t).text, asIs: true });
+    written.set(id, text !== undefined ? { text, asIs: false } : { text: gameReadyText(trackSource(song, t).text), asIs: true });
   }
   // 다시 쓴 글이 원문 끝 쉼표를 잃어 악보가 짧아지지 않게 악보 길이를 지킨다 (score-end.ts)
   for (const chunk of chunks) {
@@ -184,7 +184,7 @@ export function gamePaste(
     if (text !== undefined) written.set(t.id, text);
     else {
       const source = trackSource(song, t);
-      written.set(t.id, options.tempo ? source.text : withoutTempo(source));
+      written.set(t.id, gameReadyText(options.tempo ? source.text : withoutTempo(source)));
       asIs.push(t.id);
     }
   });

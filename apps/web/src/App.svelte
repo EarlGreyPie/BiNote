@@ -24,6 +24,11 @@
     headsInBars,
     type BarRange,
     meterAt,
+    keyAt,
+    keyStartAt,
+    fitNotesToKey,
+    barAt,
+    inBars,
     meterGrid,
     measureStart,
     ZERO,
@@ -83,6 +88,7 @@
     checkDeleteBars,
     barSpans,
     referenceShiftForDelete,
+    referenceShiftForInsert,
     type ReferenceShiftPlan,
     distributeSong,
     insertTime,
@@ -107,6 +113,9 @@
     setMarker,
     moveMarker,
     removeMarker,
+    setKeyAt,
+    removeKeyAt,
+    moveKey,
     setTempoAt,
     removeTempoAt,
     moveTempo,
@@ -200,7 +209,7 @@
   import { scanVideo } from "./lib/videoScan";
   import { MidiKeys } from "./lib/midiKeys.svelte";
   import { loadStored, parseJson, saveStored } from "./lib/persist";
-  import { flushSync, untrack } from "svelte";
+  import { flushSync, tick, untrack } from "svelte";
   import { speedPickAllows } from "./lib/videoSpeed";
   import { clock } from "./lib/time";
   import { forgetPack, loadPacks, savePack, savePackOrder } from "./lib/packStore";
@@ -215,7 +224,7 @@
   import { forgetWork, listWorks, loadWork, newWorkId, saveWork, type WorkSaveResult, type WorkSummary } from "./lib/workStore";
   import { WorkLocks } from "./lib/workLock";
   import { formatBytes, freeBytes } from "./lib/storageSpace";
-  import { editorStateKey, keptFields, parseEditorState, projectWriteOptions, withTrackView, type EditorState, type KeptFields, type ReferenceFit, type TrackViewState, type VideoFit } from "./lib/projectEditor";
+  import { editorStateKey, keptFields, parseEditorState, projectWriteOptions, withTrackView, type EditorState, type KeptFields, type ReferenceFit, type TrackViewState, type VideoFit, keepOpenMedia, keptFit, videoFitOf, withVideoFit } from "./lib/projectEditor";
   import RecoverList from "./lib/RecoverList.svelte";
   import RecoverDialog from "./lib/RecoverDialog.svelte";
   import NoteInfo from "./lib/NoteInfo.svelte";
@@ -227,6 +236,7 @@
   import MmlKeyPad from "./lib/MmlKeyPad.svelte";
   import MasterVolume from "./lib/MasterVolume.svelte";
   import AddScoreDialog from "./lib/AddScoreDialog.svelte";
+  import MmiExportDialog from "./lib/MmiExportDialog.svelte";
   import SongInfoDialog from "./lib/SongInfoDialog.svelte";
   import { setSongInfo, songInfoOf, type SongInfo } from "./lib/songInfo";
   import HelpPopover from "./lib/HelpPopover.svelte";
@@ -252,9 +262,10 @@
   import VoiceDialog, { parseVoicePrefs, VOICE_STORAGE, type VoiceMode, type VoiceOptions, type VoicePreview } from "./lib/VoiceDialog.svelte";
   import RetuneDialog, { type RetuneCheck } from "./lib/RetuneDialog.svelte";
   import { retuneCommand, retuneKeepingTab } from "./lib/retune";
-  import { shiftMs, stepHistory, withReferenceShift } from "./lib/referenceShift";
+  import { shiftMs, shiftVideoOffset, stepHistory, withReferenceShift } from "./lib/referenceShift";
   import TransposeDialog, { type TransposeCheck, type TransposeScope } from "./lib/TransposeDialog.svelte";
   import VolumeDialog, { type VolumeCheck } from "./lib/VolumeDialog.svelte";
+  import KeyFitDialog, { type KeyFitCheck } from "./lib/KeyFitDialog.svelte";
   import DeleteBarsDialog from "./lib/DeleteBarsDialog.svelte";
   import ChordAttenuationDialog, { type ChordAttCheck } from "./lib/ChordAttenuationDialog.svelte";
   import { attenuationOptions, loadChordAttPrefs, saveChordAttPrefs, type ChordAttPrefs } from "./lib/chordAttPrefs";
@@ -295,7 +306,7 @@
   import PasteDialog from "./lib/PasteDialog.svelte";
   import MidiDialog from "./lib/MidiDialog.svelte";
   import TranscribeDialog from "./lib/TranscribeDialog.svelte";
-  import { pcEnvironmentNow } from "./lib/basicScriptor";
+  import { BASIC_SCRIPTOR_ON, pcEnvironmentNow } from "./lib/basicScriptor";
   import { analyzeMidi, decodeXml, isZip, looksLikeMusicXml, readMusicXml, readMxl, readSmf, songToMusicXml, songToSmf, writeSmf, type MidiAnalysis, type MusicXmlReport } from "@mmlce/midi";
   import {
     allowedWhileTyping,
@@ -439,6 +450,8 @@
   /** 곡 정보 창 (제목·지은이·메모) */
   let songInfoOpen = $state(false);
   let addScoreOpen = $state(false);
+  /** 마비꼬로 저장 창 (내보낼 트랙 고르기) */
+  let mmiExportOpen = $state(false);
   let tuningName = $state<TuningName>("standard");
   let capo = $state(0);
   let unplayable = $state(0);
@@ -469,10 +482,74 @@
   });
   /** 영상 속도 재기 결과 한 줄 */
   let speedNote = $state("");
+  /** 배경 영상 길이(초). 롤이 영상을 읽으면 안다 (마디 편집 때 영상이 끝난 뒤인지 본다) */
+  let videoDuration = $state<number | undefined>(undefined);
+  /** 열자마자 속도를 한 번 재 볼 영상 (url). 한 번 재 보면 지운다 (롤을 다시 만들어도 또 재지 않게) */
+  let autoSpeed: string | undefined;
+  /** 롤이 읽으면 영상 건반에 한 번 맞출 영상 (url). 읽고 나면 지운다 (보기를 바꿔 롤을 다시 만들면 기억한 확대를 지킨다) */
+  let fitOnLoad = $state<string | undefined>(undefined);
+  /** 자동 속도 재기가 도는 중 (속도 맞추기·직접 재기 단추를 막는다) */
+  let measuringSpeed = $state(false);
+  /** 도는 자동 속도 재기 (끝나기를 기다릴 때. 끝나면 measuringSpeed도 이미 false) */
+  let speedRun: Promise<boolean | undefined> | undefined;
+  /** 자동 속도 재기 한 번. 이미 도는 중이면 겹쳐 돌리지 않고 undefined */
+  function measureSpeedOnce(at?: number): Promise<boolean | undefined> {
+    const r = roll;
+    if (measuringSpeed || !r) return Promise.resolve(undefined);
+    measuringSpeed = true;
+    const run = (async () => {
+      try {
+        return await r.measureVideoSpeed(at);
+      } finally {
+        measuringSpeed = false;
+        speedRun = undefined;
+      }
+    })();
+    speedRun = run;
+    return run;
+  }
+  /**
+   * 롤이 영상을 읽었을 때: 길이를 적고, 새로 연 영상이면 속도 자동 재기를 한 번 해 본다
+   * (건반 맞춤이 켜져 있고 속도가 없고 직접 재는 중이 아닐 때만). 못 재면 직접 재기로 넘어가지 않고 안내만 보인다
+   */
+  async function onVideoReady(info: { duration: number }) {
+    videoDuration = Number.isFinite(info.duration) && info.duration > 0 ? info.duration : undefined;
+    const url = video?.url;
+    if (url && fitOnLoad === url) fitOnLoad = undefined;
+    if (!url || autoSpeed !== url) return;
+    autoSpeed = undefined;
+    // 앞 영상을 재던 중에 이 영상으로 바꿨으면 그 재기는 곧 그만둔다(영상이 바뀐 것을 보고). 끝나기를 기다렸다가 이 영상을 잰다
+    if (speedRun) await speedRun;
+    if (video?.url !== url) return;
+    // 곡 재생 중이면 재지 않고 조용히 넘어간다 (영상을 옮겨 잴 수 없다. 못 쟀다는 안내는 오해를 부른다)
+    if (!video.fit || video.speed || picking || playing || measuringSpeed) return;
+    speedNote = t("ui.videoSpeedMeasuring");
+    // 첫 장면은 음이 없는 제목 화면이 많아 조금 들어간 자리에서 잰다 (재고 나면 원래 장면으로 돌아온다)
+    const at = videoDuration ? Math.min(videoDuration * 0.2, 20) : undefined;
+    // 방금 한 롤 맞춤이 화면에 반영된 뒤에 잰다
+    await tick();
+    const ok = await measureSpeedOnce(at);
+    // 다른 영상으로 바꿨거나 직접 재기가 시작됐으면 안내를 덮어쓰지 않는다
+    if (video?.url !== url || picking) return;
+    // 재생을 시작해 그만뒀으면 "재는 중" 안내만 지운다 (못 쟀다는 안내는 오해를 부른다)
+    if (ok === undefined) {
+      if (speedNote === t("ui.videoSpeedMeasuring")) speedNote = "";
+      return;
+    }
+    speedNote = ok && video.speed ? t("ui.videoSpeedDone", { speed: Math.round(video.speed) }) : t("ui.videoSpeedAutoFailed");
+  }
   /** 속도 맞추기: 자동으로 재고, 못 재면 직접 재기로 넘어간다 */
   async function matchVideoSpeed() {
+    if (measuringSpeed) return;
+    const url = video?.url;
     speedNote = t("ui.videoSpeedMeasuring");
-    const ok = (await roll?.measureVideoSpeed()) ?? false;
+    const ok = await measureSpeedOnce();
+    // 재는 사이에 다른 영상으로 바꿨거나 재생을 시작해 그만뒀으면 직접 재기로 넘어가지 않는다
+    if (video?.url !== url) return;
+    if (ok === undefined) {
+      speedNote = "";
+      return;
+    }
     if (ok && video?.speed) speedNote = t("ui.videoSpeedDone", { speed: Math.round(video.speed) });
     else {
       speedNote = t("ui.videoSpeedAutoFailed");
@@ -501,7 +578,11 @@
    * 가져오기 창 (MIDI, 실험실이 켜져 있으면 MusicXML도). musicXml: MusicXML에서 읽었을 때 건너뛴 것·지은 프로그램.
    * alignReference: 원곡을 받아 적은 것이라, 불러온 뒤 원곡 어긋남을 0으로 맞춘다 (MIDI 0초 = 원곡 0초)
    */
-  let midi = $state.raw<{ analysis: MidiAnalysis; name: string; musicXml?: MusicXmlReport; alignReference?: boolean } | undefined>(undefined);
+  /** withReference: 이 MIDI·MusicXML 파일과 함께 끌어다 놓아 연 원곡 이름. 가져오기를 마쳐도 그 원곡은 새 곡 것이라 둔다 */
+  let midi = $state.raw<
+    | { analysis: MidiAnalysis; name: string; musicXml?: MusicXmlReport; alignReference?: boolean; fromReference?: boolean; withReference?: string }
+    | undefined
+  >(undefined);
   let musicXmlInput: HTMLInputElement;
 
   function setKeymap(next: KeymapSettings) {
@@ -526,11 +607,14 @@
       return;
     }
     if (video) URL.revokeObjectURL(video.url);
-    // 프로젝트에 맞춰 둔 같은 이름 영상이면 그 맞춤값을 쓴다
-    const saved = savedFits.video?.name === file.name ? savedFits.video : undefined;
+    // 바꾸기 전 영상의 지금 맞춤값 (영상 빼기와 같이 곡에 남겨, 마디 편집 실행 취소가 그 영상의 어긋남을 맞게 옮기게 한다)
+    const old = video && videoName ? videoFitOf(videoName, video) : undefined;
+    // 같은 영상을 다시 열면 방금까지 쓰던 맞춤값을, 곡에 남긴(프로젝트에 적힌) 같은 이름 영상이면 그 맞춤값을 쓴다
+    const saved = old?.name === file.name ? old : savedFits.video?.name === file.name ? savedFits.video : undefined;
+    savedFits = { ...savedFits, video: keptFit(savedFits.video, old) };
     // 맞춤 설정은 영상을 바꿔도 이어 쓴다 (같은 채널 영상을 여러 개 찍을 때)
     const keep: VideoFit | typeof VIDEO_DEFAULTS | Omit<VideoFit, "name" | "opacity" | "offset"> =
-      saved ?? (video ? { fit: video.fit, low: video.low, high: video.high, keyLine: video.keyLine, stretch: video.stretch, ...(video.fill === false ? { fill: false } : {}), ...(video.speed ? { speed: video.speed } : {}) } : VIDEO_DEFAULTS);
+      saved ?? (video ? { fit: video.fit, low: video.low, high: video.high, keyLine: video.keyLine, stretch: video.stretch, ...(video.fill === false ? { fill: false } : {}), ...(video.speed ? { speed: video.speed } : {}), ...(video.keyShape === "piano" ? { keyShape: "piano" as const } : {}) } : VIDEO_DEFAULTS);
     video = {
       url: URL.createObjectURL(file),
       opacity: saved?.opacity ?? video?.opacity ?? 0.5,
@@ -543,8 +627,14 @@
       stretch: keep.stretch,
       ...("fill" in keep && keep.fill === false ? { fill: false } : {}),
       ...("speed" in keep && keep.speed ? { speed: keep.speed } : {}),
+      // 건반 모양: 저장된 맞춤값에 없으면 반음 같은 폭 (그때 맞춘 끝 건반이 그대로 맞게), 새 영상은 피아노 모양
+      ...("keyShape" in keep && keep.keyShape === "piano" ? { keyShape: "piano" as const } : {}),
     };
     videoName = file.name;
+    videoDuration = undefined;
+    // 프로젝트에 맞춰 둔 영상은 그 맞춤 그대로 둔다: 열자마자 속도를 재 보는 것은 맞춤값이 없을 때만
+    autoSpeed = saved ? undefined : video.url;
+    fitOnLoad = video.url;
     speedNote = "";
   }
 
@@ -622,6 +712,29 @@
     if (savedFits.reference?.name === name) savedFits = { ...savedFits, reference: { ...savedFits.reference, offsetMs: savedFits.reference.offsetMs + ms } };
   }
 
+  /**
+   * 배경 영상 어긋남을 ms만큼 옮긴다 (마디 편집과 그 실행 취소·다시 실행). 원곡처럼 같은 이름 영상만 옮기고,
+   * 프로젝트에 적힌 같은 영상의 맞춤값도 함께 옮겨 나중에 그 영상을 다시 열어도 맞게 한다
+   */
+  function moveVideo(ms: number, name: string | undefined) {
+    if (ms === 0 || name === undefined) return;
+    if (video && videoName === name) video = { ...video, offset: shiftVideoOffset(video.offset, ms) };
+    if (savedFits.video?.name === name) savedFits = { ...savedFits, video: { ...savedFits.video, offset: shiftVideoOffset(savedFits.video.offset, ms) } };
+  }
+
+  /** 마디 편집이 옮길 배경 영상: 연 영상, 없으면 프로젝트에 적힌 맞춤값 (둘 다 없으면 undefined) */
+  function videoTarget(): { name: string; offset: number; duration: number | undefined } | undefined {
+    if (video && videoName) return { name: videoName, offset: video.offset, duration: videoDuration };
+    const v = savedFits.video;
+    return v ? { name: v.name, offset: v.offset, duration: undefined } : undefined;
+  }
+
+  /** 마디 편집 때 원곡 대조 위치와 배경 영상 위치를 어떻게 맞출지 (없는 쪽은 undefined) */
+  interface BarEditPlan {
+    readonly reference?: ReferenceShiftPlan | undefined;
+    readonly video?: ReferenceShiftPlan | undefined;
+  }
+
   /** 곡에서 spans 구간을 지울 때 원곡 대조 위치를 어떻게 맞출지. 원곡(맞춤값)이 없으면 undefined */
   function deleteReferencePlan(target: Song, spans: readonly (readonly [Rat, Rat])[]): ReferenceShiftPlan | undefined {
     const offsetMs = reference?.offsetMs ?? savedFits.reference?.offsetMs;
@@ -629,18 +742,52 @@
     return referenceShiftForDelete(target, spans, offsetMs / 1000, reference?.duration);
   }
 
+  /** 곡에서 spans 구간을 지울 때 배경 영상 위치를 어떻게 맞출지 (원곡과 같은 규칙). 영상(맞춤값)이 없으면 undefined */
+  function deleteVideoPlan(target: Song, spans: readonly (readonly [Rat, Rat])[]): ReferenceShiftPlan | undefined {
+    const v = videoTarget();
+    if (!v || spans.length === 0) return undefined;
+    return referenceShiftForDelete(target, spans, v.offset, v.duration);
+  }
+
+  function deletePlan(target: Song, spans: readonly (readonly [Rat, Rat])[]): BarEditPlan {
+    return { reference: deleteReferencePlan(target, spans), video: deleteVideoPlan(target, spans) };
+  }
+
+  /** at에 length만큼 마디를 넣을 때 원곡·배경 영상 위치를 어떻게 맞출지 */
+  function insertPlan(target: Song, at: Rat, length: Rat): BarEditPlan {
+    const offsetMs = reference?.offsetMs ?? savedFits.reference?.offsetMs;
+    const v = videoTarget();
+    return {
+      reference: offsetMs === undefined ? undefined : referenceShiftForInsert(target, at, length, offsetMs / 1000, reference?.duration),
+      video: v ? referenceShiftForInsert(target, at, length, v.offset, v.duration) : undefined,
+    };
+  }
+
+  /** 어긋남 하나로 맞출 수 없는 쪽을 알리는 글 (원곡·영상 차례). 모두 맞췄으면 빈 글 */
+  function barEditOffNotice(kind: "insert" | "delete", plan: BarEditPlan): string {
+    const out: string[] = [];
+    const r = plan.reference?.brokenBar;
+    const v = plan.video?.brokenBar;
+    if (r !== undefined) out.push(t(kind === "insert" ? "ui.insertBarReferenceOff" : "ui.deleteBarsReferenceOff", { bar: r }));
+    if (v !== undefined) out.push(t(kind === "insert" ? "ui.insertBarVideoOff" : "ui.deleteBarsVideoOff", { bar: v }));
+    return out.join(" ");
+  }
+
   /**
-   * 마디를 지우는 명령을 실행 취소 한 칸으로 넣는다. 지운 구간이 원곡보다 앞(또는 곡 처음)이면 원곡 대조 위치도
-   * 지운 만큼 옮기고, 그 옮김을 명령에 붙여 실행 취소·다시 실행이 함께 되돌린다. 곡이 바뀌어 기록에 넣었으면 true
+   * 마디를 지우거나 넣는 명령을 실행 취소 한 칸으로 넣는다. 고친 자리가 원곡·배경 영상보다 앞(또는 곡 처음)이면
+   * 그 위치도 지운(넣은) 만큼 옮기고, 그 옮김을 명령에 붙여 실행 취소·다시 실행이 함께 되돌린다. 곡이 바뀌어 기록에 넣었으면 true
    */
-  function commitDelete(command: Command, plan: ReferenceShiftPlan | undefined): boolean {
-    const ms = plan ? shiftMs(plan.shiftSec) : 0;
+  function commitBarEdit(command: Command, plan: BarEditPlan): boolean {
+    const ms = plan.reference ? shiftMs(plan.reference.shiftSec) : 0;
+    const videoMs = plan.video ? shiftMs(plan.video.shiftSec) : 0;
     const was = history?.song;
     const name = reference?.name ?? savedFits.reference?.name;
-    const next = commit(withReferenceShift(command, ms, name));
+    const vName = videoTarget()?.name;
+    const next = commit(withReferenceShift(command, ms, name, { ms: videoMs, name: vName }));
     // 거절했거나 바뀐 것이 없으면(기록에 안 들어감) 어긋남도 그대로 둔다
     if (!next || next === was) return false;
     moveReference(ms, name);
+    moveVideo(videoMs, vName);
     return true;
   }
 
@@ -652,7 +799,12 @@
 
   function removeReference() {
     // 지금 맞춘 어긋남·크기를 프로젝트 맞춤값에 남겨, 같은 원곡을 다시 불러오면 그대로 쓰고 마디 지우기 실행 취소도 맞게 옮긴다
-    if (reference) savedFits = { ...savedFits, reference: { name: reference.name, offsetMs: reference.offsetMs, volume: reference.volume } };
+    // (곡에 다른 원곡의 맞춤값이 적혀 있으면 그것을 지킨다: 잘못 불러온 원곡을 뺐을 때)
+    if (reference) savedFits = { ...savedFits, reference: keptFit(savedFits.reference, { name: reference.name, offsetMs: reference.offsetMs, volume: reference.volume }) };
+    closeReference();
+  }
+  /** 원곡을 닫는다 (맞춤값은 남기지 않는다. 곡을 바꿀 때는 앞 곡 것이라 새 곡에 남기지 않는다) */
+  function closeReference() {
     engine.clearReference();
     reference = undefined;
     referenceFile = undefined;
@@ -663,9 +815,19 @@
   }
 
   function removeVideo() {
+    // 원곡 빼기와 같이 지금 맞춤값을 남겨, 같은 영상을 다시 열면 그대로 쓰고 마디 편집 실행 취소도 맞게 옮긴다
+    // (곡에 다른 영상의 맞춤값이 적혀 있으면 그것을 지킨다: 잘못 고른 영상을 뺐을 때)
+    if (video && videoName) savedFits = { ...savedFits, video: keptFit(savedFits.video, videoFitOf(videoName, video)) };
+    closeVideo();
+  }
+  /** 배경 영상을 닫는다 (맞춤값은 남기지 않는다. 곡을 바꿀 때는 앞 곡 것이라 새 곡에 남기지 않는다) */
+  function closeVideo() {
     if (video) URL.revokeObjectURL(video.url);
     video = undefined;
     videoName = "";
+    videoDuration = undefined;
+    autoSpeed = undefined;
+    fitOnLoad = undefined;
     videoPlay = false;
   }
   /** 타브에서 화음 음을 넣다가 트랙을 더할 수 있는 한도 (악기별 게임 한도, 오르골·축음기 3) */
@@ -1211,6 +1373,7 @@
     const step = stepHistory(history, "undo");
     sync(step.song, true);
     moveReference(step.referenceShiftMs, step.referenceName);
+    moveVideo(step.videoShiftMs, step.videoName);
   }
 
   function redo() {
@@ -1218,6 +1381,7 @@
     const step = stepHistory(history, "redo");
     sync(step.song, true);
     moveReference(step.referenceShiftMs, step.referenceName);
+    moveVideo(step.videoShiftMs, step.videoName);
   }
 
   async function onOpen(event: Event) {
@@ -1259,10 +1423,11 @@
     }
     try {
       const result = await openScore(file);
-      openSong(result.song, file.name, handle);
-      if (result.editor) {
+      const state = result.editor ? parseEditorState(result.editor, result.song) : undefined;
+      openSong(result.song, file.name, handle, { recorded: state });
+      if (result.editor && state) {
         kept = keptFields(result);
-        applyEditor(parseEditorState(result.editor, result.song));
+        applyEditor(state);
         notices = [...result.diagnostics, ...fitNotices()];
       } else offerOffgrid(result.song);
     } catch (e) {
@@ -1300,13 +1465,20 @@
     const scores = [...SCORE_EXTENSIONS, ".musicxml", ".mxl", ...(labs.on ? [".xml"] : [])].join(",");
     const plan = planIncoming(items, (i) => i.file, { scores, packs: PACK_FILES });
     error = "";
+    const before = midi;
     if (plan.score) {
       const { file, handle } = plan.score;
       // 열기 메뉴처럼 프로젝트 파일만 기억해 다음 저장에서 그 파일에 쓴다
       if (!(history?.canUndo && !savedAsProject()) || confirm(t("ui.dropOpenConfirm", { name: file.name })))
         await openPicked(file, handle && isProjectFileName(file.name) ? handle : undefined);
     }
-    if (plan.reference) await loadReferenceFile(plan.reference.file);
+    if (plan.reference) {
+      await loadReferenceFile(plan.reference.file);
+      // 함께 놓은 MIDI·MusicXML은 가져오기 창만 열렸다. 가져오기를 마치면 곡이 바뀌어도 이 원곡은 새 곡 것이라 남긴다
+      const pending = midi;
+      if (pending && pending !== before && reference?.name === plan.reference.file.name)
+        midi = { ...pending, withReference: reference.name };
+    }
     if (plan.packs.length > 0) {
       void requestPersistentStorage();
       await addPackFiles(plan.packs.map((i) => i.file));
@@ -1418,6 +1590,11 @@
       setReferenceOffset(state.reference.offsetMs);
       setReferenceVolume(state.reference.volume);
     }
+    // 같은 배경 영상이 열려 있어도 맞춤값을 바로 쓴다 (새로 만든 롤이 영상을 읽으면 건반에 맞춘다)
+    if (state.video && video && videoName === state.video.name) {
+      video = withVideoFit(video, state.video);
+      fitOnLoad = video.url;
+    }
   }
 
   /** 다시 불러오면 맞춤값을 이어 쓸 원곡·영상 알림 */
@@ -1437,7 +1614,7 @@
       : savedFits.reference;
     const vid: VideoFit | undefined =
       video && videoName
-        ? { name: videoName, opacity: video.opacity, offset: video.offset, fit: video.fit, low: video.low, high: video.high, keyLine: video.keyLine, stretch: video.stretch, ...(video.fill === false ? { fill: false } : {}), ...(video.speed ? { speed: video.speed } : {}) }
+        ? videoFitOf(videoName, video)
         : savedFits.video;
     return {
       ...(activeTrackId ? { activeTrackId } : {}),
@@ -1801,7 +1978,8 @@
       const result = projectFromObject(JSON.parse(record.project));
       // 다른 탭이 이 작업을 이어 쓰고 있으면 사본(새 작업)으로 연다. 같은 기록을 두 탭이 서로 덮어쓰지 않게
       const mine = await workLocks.claim(id);
-      openSong(result.song, record.fileName);
+      const state = parseEditorState(result.editor, result.song);
+      openSong(result.song, record.fileName, undefined, { recorded: state });
       kept = keptFields(result);
       // 되살린 작업을 이어 고치면 같은 기록을 덮어쓴다
       if (mine) workId = id;
@@ -1815,7 +1993,7 @@
         projectFile = restored.file;
         nameUnsure = restored.unsure;
       }
-      applyEditor(parseEditorState(result.editor, result.song));
+      applyEditor(state);
       notices = [...result.diagnostics, ...fitNotices()];
       recoverOpen = false;
       if (!mine) flash(t("ui.recoverAsCopy"));
@@ -1834,7 +2012,18 @@
   }
 
   /** 곡을 연다. file: 다시 쓸 수 있는 프로젝트 파일 (없으면 앞 곡의 파일을 버린다) */
-  function openSong(next: Song, name: string, file?: FileSystemFileHandle) {
+  /**
+   * 곡을 열 때 열려 있던 원곡·배경 영상을 둘지 정하는 근거. recorded: 새 곡(프로젝트·지난 작업)에 적힌 원곡·영상 맞춤값.
+   * sameSource: 열린 원곡을 받아 적어 만든 곡이라 원곡·영상을 그대로 쓴다.
+   * withReference: 새 곡과 함께 들어온 원곡 이름 (그 원곡만 두고 영상은 닫는다)
+   */
+  interface OpenMedia {
+    readonly recorded?: Pick<EditorState, "reference" | "video"> | undefined;
+    readonly sameSource?: boolean;
+    readonly withReference?: string | undefined;
+  }
+
+  function openSong(next: Song, name: string, file?: FileSystemFileHandle, media: OpenMedia = {}) {
     // 녹음 중이면 앞 곡에 넣고 끝낸다 (준비 중이면 취소). 남겨 두면 정지 감지가 새 곡에 넣는다
     endRecording();
     // 앞 곡에서 찍다 만 탭은 버린다. 남겨 두면 정지 감지가 새 곡 템포를 바꾼다
@@ -1857,6 +2046,11 @@
     kept = {};
     setProjectFile(file, file ? name : undefined);
     savedFits = {};
+    // 앞 곡의 원곡·배경 영상은 닫는다. 새 곡에 같은 파일의 맞춤값이 적혀 있으면 두고 applyEditor가 그 맞춤값을 씌운다.
+    // 열린 원곡을 받아 적어 만든 곡이면 그대로 둔다
+    const recordedReference = media.recorded?.reference ?? (media.withReference !== undefined ? { name: media.withReference } : undefined);
+    if (!keepOpenMedia(reference?.name, recordedReference, media.sameSource)) closeReference();
+    if (!keepOpenMedia(video ? videoName : undefined, media.recorded?.video, media.sameSource)) closeVideo();
     trackView = {};
     // 새 곡은 기본 튜닝으로 시작한다. 프로젝트 파일이면 applyEditor가 적힌 튜닝으로 다시 잡는다
     tuningName = "standard";
@@ -1973,7 +2167,7 @@
   /** 이 자리에서 받은 MML@ 글로 붙여넣기 창을 열어도 되는지 (붙여넣기·글 끌어다 놓기가 함께 쓴다). 편집 칸과 열린 창 위는 아니다 */
   function canTakeMmlText(target: EventTarget | null): boolean {
     if (picking) return false;
-    if (showKeymap || paste || midi || settings || meterOpen || songInfoOpen || tupletOpen || eventEdit || addScoreOpen) return false;
+    if (showKeymap || paste || midi || settings || meterOpen || songInfoOpen || tupletOpen || eventEdit || addScoreOpen || mmiExportOpen) return false;
     return !(target as HTMLElement | null)?.closest?.(TYPING);
   }
 
@@ -2430,6 +2624,7 @@
       tempo: { bpm: tempoHere, here: song.tempo.some((x) => cmp(x.at, e.at) === 0) },
       meter: { beats: meter.beats, unit: meter.unit, here: song.timeSig.some((x) => cmp(x.at, e.at) === 0) },
       marker: { text: markerHere?.label ?? "", here: !!markerHere },
+      keySig: { fifths: keyAt(song.keys, e.at), here: (song.keys ?? []).some((x) => cmp(x.at, e.at) === 0) },
       markerId: markerHere?.id,
       atStart: cmp(e.at, rat(0)) === 0,
     };
@@ -2447,6 +2642,8 @@
     if (changes.marker === null) {
       if (info.markerId) commands.push(removeMarker(info.markerId, t("ui.markerDelete")));
     } else if (changes.marker !== undefined) commands.push(setMarker(info.markerId, e.at, changes.marker, t("ui.markerLabel")));
+    if (changes.key === null) commands.push(removeKeyAt(e.at, t("ui.keyDelete")));
+    else if (changes.key !== undefined) commands.push(setKeyAt(e.at, changes.key, t("ui.keyLabel")));
     if (commands.length === 1) commit(commands[0]!);
     else if (commands.length > 1) {
       // 박자 명령은 그 앞 박자 지도를 보고 만들었으므로, 차례로 적용한 결과를 한 명령으로 넣는다
@@ -2458,6 +2655,7 @@
     if (!history) return;
     if (label.kind === "tempo") runIfChanged(moveTempo(label.at, to, t("ui.tempoMove")));
     else if (label.kind === "marker" && label.id) runIfChanged(moveMarker(label.id, to, t("ui.markerMove")));
+    else if (label.kind === "key") runIfChanged(moveKey(label.at, to, t("ui.keyMove")));
   }
 
   // 원곡에 템포 맞추기: 템포를 짐작하지 않고 사람이 정한 자리를 곡 템포로 옮긴다
@@ -2921,6 +3119,7 @@
     if (e.kind === "tempo") runIfChanged(removeTempoAt(e.at, t("ui.tempoDelete")));
     else if (e.kind === "marker" && e.id) runIfChanged(removeMarker(e.id, t("ui.markerDelete")));
     else if (e.kind === "meter" && cmp(e.at, rat(0)) > 0) runIfChanged(removeMeter(e.at, t("ui.meterDelete")));
+    else if (e.kind === "key") runIfChanged(removeKeyAt(e.at, t("ui.keyDelete")));
     return true;
   }
 
@@ -3066,13 +3265,12 @@
     const at = editCursor();
     if (!history || !at) return;
     const bar = meterGrid(meterAt(history.song.timeSig, at)).measure;
-    if (kind === "insert") {
-      commit(insertTime(at, bar, t("ui.insertBar")));
-      return;
-    }
-    const plan = deleteReferencePlan(history.song, [[at, add(at, bar)]]);
-    // 원곡이 울리는 가운데를 뺐으면 그 자리부터 원곡과 어긋난다고 알린다
-    if (commitDelete(deleteTime(at, bar, t("ui.deleteBar")), plan) && plan?.brokenBar !== undefined) flash(t("ui.deleteBarsReferenceOff", { bar: plan.brokenBar }));
+    // 원곡·배경 영상보다 앞(또는 곡 처음)이면 그 위치도 함께 옮긴다.
+    // 원곡·영상이 울리는 가운데를 넣거나 뺐으면 그 자리부터 어긋난다고 알린다
+    const plan = kind === "insert" ? insertPlan(history.song, at, bar) : deletePlan(history.song, [[at, add(at, bar)]]);
+    const command = kind === "insert" ? insertTime(at, bar, t("ui.insertBar")) : deleteTime(at, bar, t("ui.deleteBar"));
+    const notice = barEditOffNotice(kind, plan);
+    if (commitBarEdit(command, plan) && notice) flash(notice);
   }
 
   /** 고른 마디 지우기 창 (곡 메뉴). 볼륨 창처럼 반복 구간이나 적은 마디로 고르고, 모든 트랙에서 지운 뒤 뒤를 당긴다 */
@@ -3086,7 +3284,7 @@
     if (after === before) return;
     const locked = lockedNames(changedTrackIds(before, after));
     if (locked && !confirm(t("ui.deleteBarsLocked", { names: locked }))) return;
-    commitDelete(replaceSong(label, after), deleteReferencePlan(before, barSpans(before, bars)));
+    commitBarEdit(replaceSong(label, after), deletePlan(before, barSpans(before, bars)));
   }
 
   /** 일시정지: 지금 재생 자리를 커서로 두고 멈춘다. 다시 재생하면 그 자리부터 */
@@ -3268,6 +3466,19 @@
     selectMove = on;
     saveStored(SELECT_MOVE_KEY, on ? "1" : "0");
   }
+  // 조표 맞춤 입력: 피아노롤에서 새로 찍고 옮기는 음을 곡의 조표에 맞춘다 (기억, 기본 끔)
+  const KEY_LOCK_KEY = "mmlce.keyLock";
+  let keyLock = $state(loadStored(KEY_LOCK_KEY, (raw) => raw === "1"));
+  function setKeyLock(on: boolean) {
+    keyLock = on;
+    saveStored(KEY_LOCK_KEY, on ? "1" : "0");
+  }
+  // 도구줄 조표 칸: 박자 칸과 같은 자리(재생 커서)의 조표. 고치면 그 조표가 시작한 자리(없으면 곡 처음)의 값을 바꾼다
+  const keyHere = $derived(song ? keyAt(song.keys, meterPos) : 0);
+  function changeKeyHere(fifths: number) {
+    if (!history || !song) return;
+    runIfChanged(setKeyAt(keyStartAt(song.keys, meterPos), fifths, t("ui.keyLabel")));
+  }
   // 재생 중 피아노롤 건반에 불 켜기 (기억)
   const LIGHT_KEYS_KEY = "mmlce.lightKeys";
   // 기본은 켬 (끈 적이 있으면 "0"이 남는다)
@@ -3409,7 +3620,7 @@
       label: t("ui.menuSaveOther"),
       items: [
         { label: t("ui.save3mle"), hint: keyOf("file.save3mle"), disabled: !song, run: () => save3mle() },
-        { label: t("ui.saveMmi"), hint: keyOf("file.saveMmi"), disabled: !song, run: saveMmi },
+        { label: `${t("ui.saveMmi")}…`, hint: keyOf("file.saveMmi"), disabled: !song, run: saveMmi },
         { label: t("ui.saveMidi"), title: t("ui.saveMidiHelp"), disabled: !song, run: saveMidi },
         { label: t("ui.saveWav"), title: packs.length === 0 ? t("ui.wavNeedPack") : t("ui.saveWavHelp"), disabled: !song || packs.length === 0 || wavProgress !== undefined, run: saveWav },
       ],
@@ -3793,9 +4004,9 @@
   $effect(() => {
     if (!labs.on && loudnessOpen) loudnessOpen = false;
   });
-  // 실험실 음원에서 받아 적기: PC는 Basic Scriptor(로컬 서버), 모든 기기는 브라우저 안 basic-pitch. 결과는 MIDI 불러오기 창으로
+  // 실험실 음원에서 받아 적기: 모든 기기는 브라우저 안 basic-pitch, BASIC_SCRIPTOR_ON이면 PC는 Basic Scriptor(로컬 서버)도. 결과는 MIDI 불러오기 창으로
   let transcribeOpen = $state(false);
-  const pcEnvironment = pcEnvironmentNow();
+  const pcEnvironment = BASIC_SCRIPTOR_ON && pcEnvironmentNow();
   function openTranscribe() {
     // 영상 속도를 재는 중에는 곡을 바꾸는 입구를 닫는다 (받아 적기 결과는 새 곡을 연다)
     if (labs.on && !picking) transcribeOpen = true;
@@ -3862,7 +4073,7 @@
     { separator: true },
     { label: t("ui.musicXmlImport") + "…", title: t("ui.musicXmlImportHelp"), disabled: picking, run: () => musicXmlInput.click() },
     { label: t("ui.musicXmlExport"), title: t("ui.musicXmlExportHelp"), disabled: !song, run: saveMusicXml },
-    { label: t("ui.labTranscribe") + "…", title: t("ui.labTranscribeHelp"), disabled: picking, run: openTranscribe },
+    { label: t("ui.labTranscribe") + "…", title: t(BASIC_SCRIPTOR_ON ? "ui.labTranscribeHelpScriptor" : "ui.labTranscribeHelp"), disabled: picking, run: openTranscribe },
     { label: t("ui.labStaff"), title: t("ui.labStaffHelp"), checked: staffOn, disabled: !song, run: toggleStaff },
   ]);
 
@@ -3912,6 +4123,7 @@
     { separator: true },
     { label: t("ui.transpose") + "…", hint: keyOf("edit.transpose"), disabled: !song, run: () => run("edit.transpose") },
     { label: t("ui.volumeBulk") + "…", title: t("ui.volumeBulkHelp"), hint: keyOf("edit.volume"), disabled: !song, run: () => run("edit.volume") },
+    { label: t("ui.keyFit") + "…", title: t("ui.keyFitHelp"), hint: keyOf("edit.keyFit"), disabled: !song, run: () => run("edit.keyFit") },
     { label: t("ui.chordAtt") + "…", title: t("ui.chordAttHelp"), disabled: !song, run: openChordAtt },
     { label: t("ui.voiceMenu"), title: t("ui.voiceHelp"), disabled: !song || !activeTrackId, run: openVoice },
     { label: t("ui.meterChange"), title: t("ui.meterHelp"), disabled: !song, run: () => (meterOpen = true) },
@@ -4089,6 +4301,44 @@
       return [{ trackId: track.id, notes: track.notes.map((n) => (picked.has(n.id) ? byId.get(n.id)! : n)) }];
     });
     if (changes.length > 0) commit(setTracksNotes(changes, label));
+  }
+
+  // 조표에 맞추기: 고른 음·고른 마디(트랙·악보·곡) 안의 조 밖 음만 그 자리 조표대로 맞춘다. 실행 취소 한 칸
+  let keyFitOpen = $state<{ scope: TransposeScope } | undefined>(undefined);
+  function openKeyFit() {
+    if (!song) return;
+    const picked = editor?.selection().length ?? 0;
+    keyFitOpen = { scope: picked > 0 ? "selection" : activeTrackId ? "track" : "song" };
+  }
+  /** 범위에 드는 트랙과 그 안에서 맞출 음 id. 마디 범위는 그 마디 안에서 시작하는 음 (맞출 음이 없는 트랙은 뺀다) */
+  function keyFitTargets(scope: TransposeScope, bars?: readonly BarRange[]): { track: Track; picked: ReadonlySet<string> }[] {
+    if (!song) return [];
+    const timeSig = song.timeSig;
+    return transposeTargets(scope)
+      .map(({ track, notes }) => ({ track, picked: new Set((bars ? notes.filter((n) => inBars(bars, barAt(timeSig, n.start))) : notes).map((n) => n.id)) }))
+      .filter((x) => x.picked.size > 0);
+  }
+  function checkKeyFit(scope: TransposeScope, bars?: readonly BarRange[]): KeyFitCheck {
+    let count = 0;
+    let changed = 0;
+    for (const { track, picked } of keyFitTargets(scope, bars)) {
+      count += picked.size;
+      changed += fitNotesToKey(track.notes, song?.keys, picked).changed;
+    }
+    return { count, changed };
+  }
+  function applyKeyFit(scope: TransposeScope, bars?: readonly BarRange[]) {
+    if (!history) return;
+    const keys = history.song.keys;
+    const targets = keyFitTargets(scope, bars);
+    const changes = targets.flatMap(({ track, picked }) => {
+      const r = fitNotesToKey(track.notes, keys, picked);
+      return r.changed > 0 ? [{ trackId: track.id, notes: r.notes }] : [];
+    });
+    if (changes.length === 0) return;
+    const locked = lockedNames(changes.map((c) => c.trackId));
+    if (locked && !confirm(t("ui.keyFitLockedConfirm", { names: locked }))) return;
+    commit(setTracksNotes(changes, t("ui.keyFit")));
   }
 
   // 볼륨 일괄 조정: 고른 음(피아노롤·타브)·트랙·악보·곡 전체의 v를 한 값으로 / ±N / 목표 dB로. 실행 취소 한 칸
@@ -4518,8 +4768,12 @@
   }
 
   function saveMmi() {
+    if (song) mmiExportOpen = true;
+  }
+
+  function writeMmiFile(trackIds: string[]) {
     if (!song) return;
-    const result = writeMmi(song);
+    const result = writeMmi(song, { trackIds });
     void store(new TextEncoder().encode(result.text), `${baseName()}.mmi`);
     notices = result.diagnostics;
     offerUtf8 = false;
@@ -4718,6 +4972,13 @@
       case "edit.volume":
         openVolume();
         return !!song;
+      case "edit.keyFit":
+        openKeyFit();
+        return !!song;
+      case "edit.keyLock":
+        if (viewMode !== "roll") return false;
+        setKeyLock(!keyLock);
+        return true;
       case "edit.find":
         return searchEditor("find", activeTrackId);
       case "edit.replace":
@@ -4761,7 +5022,7 @@
   function onKeydown(event: KeyboardEvent) {
     // 편집기가 이미 처리한 키(편집기 안 실행 취소 등)는 건드리지 않는다
     if (picking && !event.defaultPrevented) return pickingKey(event);
-    if (event.defaultPrevented || showKeymap || paste || midi || transposing || arpeggio || slide || grace || trill || labDialog || reverbDialog || voicing || settings || meterOpen || songInfoOpen || eventEdit || addScoreOpen || recoverOpen || outputOpen || optimizing || spreadOpen || mergeOpen || event.isComposing) return;
+    if (event.defaultPrevented || showKeymap || paste || midi || transposing || arpeggio || slide || grace || trill || labDialog || reverbDialog || voicing || settings || meterOpen || songInfoOpen || eventEdit || addScoreOpen || mmiExportOpen || recoverOpen || outputOpen || optimizing || spreadOpen || mergeOpen || event.isComposing) return;
     // 위 목록에 없는 대화 상자라도 열려 있으면 뒤의 곡에 단축키를 보내지 않는다
     if (document.querySelector("dialog[open]")) return;
     const target = event.target as HTMLElement | null;
@@ -4797,7 +5058,7 @@
     if (TEXT_COMMANDS.has(command) && target?.closest?.(TYPING)) return;
     if (EDITOR_KEY_COMMANDS.has(command) && target?.closest?.(TEXT_INPUT)) return;
     // 글 입력 칸에 초점이 있으면 음·이벤트·트랙을 바꾸는 단축키(Alt+S·G·B·M·L·P, Alt+↑↓ 등)는 넘기지 않는다. 저장·재생·실행 취소는 그대로
-    if (target?.closest?.(TEXT_INPUT) && /^(note|event|track)\.|^edit\.(transpose|volume)$/.test(command)) return;
+    if (target?.closest?.(TEXT_INPUT) && /^(note|event|track)\.|^edit\.(transpose|volume|keyFit|keyLock)$/.test(command)) return;
     // 입력 직후 Ctrl+S 같은 단축키가 아직 반영 안 된 글을 놓치지 않게 먼저 반영한다
     flushAllEditors();
     if (run(command)) event.preventDefault();
@@ -5002,7 +5263,12 @@
         return;
       }
       const align = midi?.alignReference;
-      openSong(next, midi?.name.replace(/\.(midi?|musicxml|mxl|xml)$/i, ".mml") ?? "");
+      // 열린 원곡을 받아 적은 곡이면 원곡·영상을 그대로 두고 견준다. MIDI·MusicXML 파일에서 가져온 곡은 다른 곡이라 닫는다.
+      // 다만 그 파일과 함께 놓은 원곡은 새 곡 것이라 둔다
+      openSong(next, midi?.name.replace(/\.(midi?|musicxml|mxl|xml)$/i, ".mml") ?? "", undefined, {
+        sameSource: !!midi?.fromReference,
+        withReference: midi?.withReference,
+      });
       if (align) setReferenceOffset(0);
     }}
     onclose={() => (midi = undefined)}
@@ -5014,7 +5280,7 @@
     timing={transcribeTiming}
     pc={pcEnvironment}
     onresult={(analysis, name, info) => {
-      if (!picking) midi = { analysis, name, alignReference: info.fromReference && !info.retimed };
+      if (!picking) midi = { analysis, name, alignReference: info.fromReference && !info.retimed, fromReference: info.fromReference };
     }}
     onclose={() => (transcribeOpen = false)}
   />
@@ -5182,6 +5448,20 @@
     onclose={() => (madeRestoreOpen = undefined)}
   />
 {/if}
+{#if keyFitOpen && song}
+  <KeyFitDialog
+    scopes={[
+      ...((editor?.selection().length ?? 0) > 0 ? [{ id: "selection" as const, label: t("ui.scopeSelection", { count: editor?.selection().length ?? 0 }) }] : []),
+      ...(activeTrackId ? [{ id: "track" as const, label: t("ui.scopeTrack") }, { id: "score" as const, label: t("ui.scopeScore") }] : []),
+      { id: "song", label: t("ui.scopeSong") },
+    ]}
+    initialScope={keyFitOpen.scope}
+    loopBars={loop ? barsOfRange(song.timeSig, asRat(loop[0]), asRat(loop[1])) : undefined}
+    check={checkKeyFit}
+    onapply={applyKeyFit}
+    onclose={() => (keyFitOpen = undefined)}
+  />
+{/if}
 {#if volumeOpen}
   <VolumeDialog
     scopes={[
@@ -5204,6 +5484,7 @@
     loopBars={loop ? barsOfRange(song.timeSig, asRat(loop[0]), asRat(loop[1])) : undefined}
     check={(bars) => checkDeleteBars(song!, bars)}
     referencePlan={(bars) => deleteReferencePlan(song!, barSpans(song!, bars))}
+    videoPlan={(bars) => deleteVideoPlan(song!, barSpans(song!, bars))}
     onapply={applyDeleteBars}
     onclose={() => (deleteBarsOpen = false)}
   />
@@ -5315,6 +5596,7 @@
     tempo={eventInfo.tempo}
     meter={eventInfo.meter}
     marker={eventInfo.marker}
+    keySig={eventInfo.keySig}
     atStart={eventInfo.atStart}
     onapply={applyEvent}
     onclose={() => (eventEdit = undefined)}
@@ -5373,6 +5655,9 @@
 {#if addScoreOpen}
   <AddScoreDialog initial="piano" onadd={addNewPlayer} onclose={() => (addScoreOpen = false)} />
 {/if}
+{#if mmiExportOpen && song}
+  <MmiExportDialog {song} onsave={writeMmiFile} onclose={() => (mmiExportOpen = false)} />
+{/if}
 </ViewGuard>
 
 <div class="app">
@@ -5429,6 +5714,10 @@
       onselectmove={setSelectMove}
       meter={meterHere}
       onmeter={changeMeter}
+      {keyLock}
+      onkeylock={setKeyLock}
+      keyFifths={keyHere}
+      onkeyfifths={changeKeyHere}
       {division}
       {divisions}
       ondivision={(d) => (division = d)}
@@ -5560,11 +5849,16 @@
         onremove={removeVideo}
         onfitroll={() => roll?.fitVideo()}
         onmatchspeed={matchVideoSpeed}
-        onpickspeed={() => ((speedNote = ""), roll?.startSpeedPick())}
+        onpickspeed={() => {
+          if (measuringSpeed) return;
+          speedNote = "";
+          roll?.startSpeedPick();
+        }}
         onpickforward={() => roll?.speedPickForward()}
         onpickcancel={() => roll?.cancelSpeedPick()}
         {speedStep}
         {speedNote}
+        measuring={measuringSpeed}
         tempoChanges={!!song && tempoChanges(song.tempo)}
       />
     {/if}
@@ -5630,6 +5924,8 @@
           bind:video
           bind:videoPlay
           bind:speedStep
+          fitOnLoad={!!video && fitOnLoad === video.url}
+          onvideoready={onVideoReady}
           onspeedpicked={(speed) => (speedNote = speed ? t("ui.videoSpeedDone", { speed: Math.round(speed) }) : t("ui.videoSpeedBad"))}
           {pitchRange}
           look={appearance.note}
@@ -5650,6 +5946,7 @@
           volume={inputVolume}
           onvolume={nudgeVolume}
           {lightKeys}
+          {keyLock}
           {canonicalOf}
           memory={viewMemory}
           work={viewGen}

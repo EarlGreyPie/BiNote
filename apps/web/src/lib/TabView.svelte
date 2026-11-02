@@ -39,6 +39,7 @@
   import { firstVisibleCell, followPlayhead, followStart, PLAYHEAD_FOLLOW_HOLD_MS, revealRowScroll, revealStart } from "./tabFollow";
   import { arrowGoesToApp, editPicked, gluePicked, notesInRange, placeLayers, pruneSelection, scalePicked, selectionRange, tiePicked, type TrackChanges } from "./tabSelect";
   import { noteClipboard } from "./noteClipboard.svelte";
+  import { rulerTicks, tabCellAt } from "./tabGrid";
 
   interface Props {
     song: Song;
@@ -432,6 +433,8 @@
   let bandHover = $state<TabEventRow | undefined>(undefined);
   /** 마디 번호 줄 위인지 (누르는 곳 안내) */
   let rulerHover = $state(false);
+  /** 마우스를 올린 지판 칸: 누르면 커서가 놓일 칸·줄 (옅은 점선 네모로 미리 보인다. 마우스만) */
+  let hoverCell = $state.raw<{ at: Rat; string: number } | undefined>(undefined);
   /** 마디 번호 줄을 누르고 끄는 중: [누른 자리, 지금 자리] (격자에 맞춘 시간) */
   let marking = $state.raw<[number, number] | undefined>(undefined);
   const rulerTime = (px: number) => toFloat(snapNearest(Math.max(0, start + (px - LEFT) / pxPerWhole), division));
@@ -509,7 +512,11 @@
       const row = onevent && px >= LEFT && !rulerHover ? eventRowAt(px, py) : undefined;
       eventHover = row !== undefined ? tabEventAt(eventSpots, px, row) : undefined;
       bandHover = eventHover ? undefined : row;
-    }
+      // 지판 칸 위면 누를 칸 미리보기 (누르기와 같은 tabCellAt). 끄는 중·변속 줄·파형 띠·마디 번호 줄 위에서는 숨긴다
+      const fret = px >= LEFT && !rulerHover && !waveHover && row === undefined && !marking && !waveDrag && !dragSelect && e.buttons === 0;
+      const cell = fret ? tabCellAt(start + (px - LEFT) / pxPerWhole, py, TOP, gap, tuning.strings.length, division) : undefined;
+      if (cell?.string !== hoverCell?.string || (cell && hoverCell && cmp(cell.at, hoverCell.at) !== 0) || !cell !== !hoverCell) hoverCell = cell;
+    } else if (hoverCell) hoverCell = undefined;
     const f = pinch.move(e, point(e));
     const s = pinchStart;
     if (!f || !s) return;
@@ -602,9 +609,8 @@
       canvas.setPointerCapture(e.pointerId);
       return;
     }
-    const time = start + (px - LEFT) / pxPerWhole;
-    const string = Math.min(tuning.strings.length, Math.max(1, Math.round((py - TOP) / gap) + 1));
-    const at = rat(Math.max(0, Math.floor(time * division + 1e-9)), division);
+    // 칸 미리보기(onpointermove)와 같은 계산
+    const { at, string } = tabCellAt(start + (px - LEFT) / pxPerWhole, py, TOP, gap, tuning.strings.length, division);
     // Shift+누르기: 커서(없으면 누른 자리)에서 누른 자리까지 고르고, 끌면 범위를 넓힌다. 숫자판 고르기를 켰으면 Shift 없이도
     const extend = (e.shiftKey && e.pointerType === "mouse") || selecting;
     if (extend) {
@@ -1088,7 +1094,14 @@
     if (!g) return;
     g.setTransform(ratio, 0, 0, ratio, 0, 0);
     // 그 연주자 트랙만 옅은 선으로 같이 보인다 (타브에 나오는 트랙과 같게)
-    drawVolumeLane(g, { view: laneView, song: { ...song, tracks: song.tracks.filter((t) => t.playerId === player || laneTracks.some((l) => l.id === t.id)) }, activeId: activeTrackId, selected: new Set(), colors, range: volumeRange, css }, { ...lane.draw(laneList), label: t("ui.laneName") });
+    drawVolumeLane(g, { view: laneView, song: { ...song, tracks: song.tracks.filter((t) => t.playerId === player || laneTracks.some((l) => l.id === t.id)) }, activeId: activeTrackId, selected: new Set(), colors, range: volumeRange, css }, { ...lane.draw(laneList), label: t("ui.laneName"), beatLines: true });
+    // 타브 커서 칸: 위 지판과 같은 세로 띠 (음량 막대와 커서 자리를 맞춰 보게)
+    if (cursor) {
+      g.fillStyle = css("--accent");
+      g.globalAlpha = 0.14;
+      g.fillRect(LEFT + (toFloat(cursor.at) - start) * pxPerWhole, 0, pxPerWhole / division, laneHeight);
+      g.globalAlpha = 1;
+    }
     if (playhead !== undefined) {
       g.fillStyle = css("--accent");
       g.fillRect(LEFT + (playhead - start) * pxPerWhole, 0, 2, laneHeight);
@@ -1165,6 +1178,32 @@
       g.fillRect(x(gl.at), 4, 1, y(tuning.strings.length) - 4);
       g.fillStyle = css("--muted");
       g.fillText(String(gl.bar), x(gl.at) + 3, RULER - (TAB_RULER - TAB_RULER_BASELINE));
+    }
+    // 박·격자 칸 눈금: 마디 번호 줄 아래쪽에만 (타브 줄 위에는 선을 긋지 않아 타브 모양은 그대로). 박은 길게, 칸은 짧게
+    g.fillStyle = css("--muted");
+    for (const tick of rulerTicks(song.timeSig, division, start, end, pxPerWhole)) {
+      const len = tick.kind === "beat" ? 6 : 3;
+      g.globalAlpha = tick.kind === "beat" ? 0.9 : 0.6;
+      g.fillRect(x(tick.at), RULER - 1 - len, 1, len);
+    }
+    g.globalAlpha = 1;
+    // 커서 칸 세로 띠: 커서가 있는 격자 한 칸을 모든 줄에 옅게 (아래 음량 띠에도 같은 띠). 마디 번호 줄에는 조금 진하게
+    const cellW = pxPerWhole / division;
+    if (cursor) {
+      const a = x(toFloat(cursor.at));
+      g.fillStyle = css("--accent");
+      g.globalAlpha = 0.1;
+      g.fillRect(a, TOP - fontPx, cellW, y(tuning.strings.length) - TOP + fontPx * 2);
+      g.globalAlpha = 0.45;
+      g.fillRect(a, RULER - 4, cellW, 3);
+      g.globalAlpha = 1;
+    }
+    // 마우스를 올린 칸도 마디 번호 줄에 옅게 (박 눈금과 맞춰 보게)
+    if (hoverCell) {
+      g.fillStyle = css("--accent");
+      g.globalAlpha = 0.25;
+      g.fillRect(x(toFloat(hoverCell.at)), RULER - 4, cellW, 3);
+      g.globalAlpha = 1;
     }
     if (waveShown && wave) {
       drawWaveStrip(g, {
@@ -1396,6 +1435,20 @@
       g.lineWidth = 2;
       g.strokeRect(left, y(cursor.string) - fontPx * 0.7, Math.max((cx - left) * 2, fontPx * 1.2), fontPx * 1.4);
     }
+    // 누를 칸 미리보기: 커서와 같은 모양의 옅은 점선 네모 (커서와 같은 칸이면 그리지 않는다)
+    if (hoverCell && !(cursor && cursor.string === hoverCell.string && cmp(cursor.at, hoverCell.at) === 0)) {
+      g.font = `${fontPx}px "D2Coding", ui-monospace, Consolas, monospace`;
+      const at = x(toFloat(hoverCell.at));
+      const cx = fretCenter(at, g.measureText("0").width);
+      const left = fretBoxLeft(at);
+      g.strokeStyle = css("--accent");
+      g.lineWidth = 1.5;
+      g.globalAlpha = 0.6;
+      g.setLineDash([3, 2]);
+      g.strokeRect(left, y(hoverCell.string) - fontPx * 0.7, Math.max((cx - left) * 2, fontPx * 1.2), fontPx * 1.4);
+      g.setLineDash([]);
+      g.globalAlpha = 1;
+    }
 
     if (playhead !== undefined) {
       g.fillStyle = css("--accent");
@@ -1414,7 +1467,7 @@
       class:wave-hover={waveHover || !!waveDrag}
       title={rulerHover ? t("ui.tabRulerHelp") : eventHover ? (eventHover.kind === "marker" ? t("ui.tabMarkerEdit", { name: markerName(eventHover) }) : t(eventHover.kind === "tempo" ? "ui.tabTempoEdit" : "ui.tabMeterEdit")) : bandHover !== undefined ? t(bandHover === 0 ? "ui.tabTempoAdd" : "ui.tabMarkerAdd") : undefined}
       {ondblclick}
-      onpointerleave={() => ((eventHover = undefined), (bandHover = undefined), (rulerHover = false), (waveHover = false))} style:width="{width}px" style:height="{height}px" {onpointerdown} {onpointermove} {onpointerup} onpointercancel={onpointerup}></canvas>
+      onpointerleave={() => ((eventHover = undefined), (bandHover = undefined), (rulerHover = false), (waveHover = false), (hoverCell = undefined))} style:width="{width}px" style:height="{height}px" {onpointerdown} {onpointermove} {onpointerup} onpointercancel={onpointerup}></canvas>
   </div>
   {#if laneHeight > 0 && !padOpen}
     <!-- 높이 손잡이: 위로 끌면 레인이 커진다 (얇은 띠에서 끌어도 크게 펼쳐진다) -->

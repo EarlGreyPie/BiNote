@@ -1,7 +1,7 @@
 import { defaultLengthLimit, type Extras, type Song } from "@mmlce/core";
 import type { ProjectEditor, ProjectWriteOptions } from "@mmlce/fileio";
 import { isTuningName, type ScoreTuning, type TuningName } from "./tunings";
-import { NOTE_LENGTHS, type NoteLength } from "./roll";
+import { NOTE_LENGTHS, type BackgroundVideo, type NoteLength } from "./roll";
 import { isGameLengthName, isGridDivision } from "./tuplet";
 
 /**
@@ -27,6 +27,66 @@ export interface VideoFit {
   readonly fill?: boolean;
   /** 잰 영상 속 음이 떨어지는 속도 (원본 영상 px/초) */
   readonly speed?: number;
+  /** 영상 속 건반 모양. 없으면 반음 같은 폭 ("even", 1.0.0-beta.37 전 파일). 피아노 모양만 적는다 */
+  readonly keyShape?: "piano";
+}
+
+/**
+ * 연 배경 영상의 지금 맞춤값 (프로젝트 저장, 영상을 빼거나 바꿀 때 남겨 두기). 기본값과 같은 것(채우기 켬·속도 없음·
+ * 반음 같은 폭)은 적지 않는다
+ */
+export function videoFitOf(name: string, video: Omit<BackgroundVideo, "url" | "sound" | "handles">): VideoFit {
+  return {
+    name,
+    opacity: video.opacity,
+    offset: video.offset,
+    fit: video.fit,
+    low: video.low,
+    high: video.high,
+    keyLine: video.keyLine,
+    stretch: video.stretch,
+    ...(video.fill === false ? { fill: false } : {}),
+    ...(video.speed ? { speed: video.speed } : {}),
+    ...(video.keyShape === "piano" ? { keyShape: "piano" as const } : {}),
+  };
+}
+
+/**
+ * 곡을 열 때 열려 있던 원곡이나 배경 영상(open, 파일 이름)을 그대로 둘지.
+ * 새 곡에 같은 이름 파일의 맞춤값이 적혀 있으면(recorded) 두고 그 맞춤값을 쓴다. 원곡을 받아 적어 만든 곡처럼
+ * 같은 음원에서 나온 곡(sameSource)도 둔다. 그 밖에는 앞 곡의 것이라 닫는다 (새 곡에 남으면 엉뚱한 원곡·영상과 견주게 된다)
+ */
+export function keepOpenMedia(open: string | undefined, recorded: { readonly name: string } | undefined, sameSource = false): boolean {
+  if (open === undefined) return false;
+  return sameSource || recorded?.name === open;
+}
+
+/**
+ * 원곡·영상을 빼거나 다른 파일로 바꿀 때 곡에 남길 맞춤값(프로젝트에 적힐 값).
+ * 남긴 값이 없거나 같은 파일 것이면 방금까지 쓰던 값(live)으로 바꾼다 (같은 파일을 다시 열면 그대로 쓰고, 마디 편집 실행 취소도 맞게 옮긴다).
+ * 다른 파일의 남긴 값은 지킨다: 잘못 고른 파일을 뺐다고 곡에 적힌 원래 파일의 맞춤값이 사라지지 않게
+ */
+export function keptFit<T extends { readonly name: string }>(recorded: T | undefined, live: T | undefined): T | undefined {
+  if (!live) return recorded;
+  return !recorded || recorded.name === live.name ? live : recorded;
+}
+
+/** 열린 배경 영상에 곡에 적힌 맞춤값을 씌운다 (같은 영상이 열린 채 그 곡을 열 때). 파일·소리·손잡이는 그대로 */
+export function withVideoFit<V extends BackgroundVideo>(video: V, fit: VideoFit): V {
+  const { fill: _fill, speed: _speed, keyShape: _keyShape, ...rest } = video;
+  return {
+    ...rest,
+    opacity: fit.opacity,
+    offset: fit.offset,
+    fit: fit.fit,
+    low: fit.low,
+    high: fit.high,
+    keyLine: fit.keyLine,
+    stretch: fit.stretch,
+    ...(fit.fill === false ? { fill: false } : {}),
+    ...(fit.speed ? { speed: fit.speed } : {}),
+    ...(fit.keyShape === "piano" ? { keyShape: "piano" as const } : {}),
+  } as V;
 }
 
 /** 트랙 보기 상태: 롤에서 숨김(눈), 편집 막기(잠금). 실행 취소 기록 밖이다 */
@@ -140,6 +200,7 @@ export function parseEditorState(raw: ProjectEditor, song: Song): EditorState {
       stretch: v.stretch,
       ...(v.fill === false ? { fill: false } : {}),
       ...(finite(v.speed) && v.speed > 0 ? { speed: v.speed } : {}),
+      ...(v.keyShape === "piano" ? { keyShape: "piano" as const } : {}),
     };
   if (isObject(raw.trackView)) {
     const views: Record<string, TrackViewState> = {};

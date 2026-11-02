@@ -1,6 +1,6 @@
 <script lang="ts">
   import { t } from "./i18n.svelte";
-  import type { BackgroundVideo } from "./roll";
+  import type { BackgroundVideo, KeyShape } from "./roll";
 
   /** 배경 영상 설정 줄 두 개: 비침·어긋남·소리·영상만 재생, 영상 건반을 롤 건반에 맞추기 */
   interface Props {
@@ -16,6 +16,8 @@
     onpickspeed: () => void;
     onpickforward: () => void;
     onpickcancel: () => void;
+    /** 자동 속도 재기가 도는 중 (속도 맞추기·직접 재기 단추를 막는다) */
+    measuring?: boolean;
     /** 직접 재기 단계 (PianoRoll speedStep) */
     speedStep: 0 | 1 | 2 | 3;
     /** 속도 재기 결과·안내 한 줄 */
@@ -24,7 +26,7 @@
     tempoChanges: boolean;
   }
 
-  let { video = $bindable(), playing = $bindable(), onremove, onfitroll, onmatchspeed, onpickspeed, onpickforward, onpickcancel, speedStep, speedNote, tempoChanges }: Props = $props();
+  let { video = $bindable(), playing = $bindable(), onremove, onfitroll, onmatchspeed, onpickspeed, onpickforward, onpickcancel, measuring = false, speedStep, speedNote, tempoChanges }: Props = $props();
   /** 화면 채우기 (없으면 켬) */
   const fill = $derived(video.fill !== false);
 
@@ -36,6 +38,12 @@
   /** 끝 건반을 고르면 롤도 그 범위로 다시 맞춘다 (손잡이로 끌어 소수가 된 값은 가까운 건반으로 보인다) */
   function setEnd(end: "low" | "high", pitch: number) {
     video = { ...video, [end]: pitch };
+    onfitroll();
+  }
+
+  /** 건반 모양을 바꾸면 같은 끝 건반으로 영상 폭이 달라지므로 롤도 다시 맞춘다 (없으면 반음 같은 폭) */
+  function setKeyShape(keyShape: KeyShape) {
+    video = { ...video, keyShape };
     onfitroll();
   }
 
@@ -67,6 +75,13 @@
         {#each PITCHES as p (p)}<option value={p} disabled={p <= video.low}>{pitchLabel(p)}</option>{/each}
       </select>
     </label>
+    <label title={t("ui.videoKeyShapeHint")}>
+      {t("ui.videoKeyShape")}
+      <select value={video.keyShape ?? "even"} onchange={(e) => setKeyShape(e.currentTarget.value === "piano" ? "piano" : "even")}>
+        <option value="piano">{t("ui.videoKeyShapePiano")}</option>
+        <option value="even">{t("ui.videoKeyShapeEven")}</option>
+      </select>
+    </label>
     <label title={t("ui.videoHandlesHint")}><input type="checkbox" checked={!!video.handles} onchange={(e) => (video = { ...video, handles: e.currentTarget.checked })} /> {t("ui.videoHandles")}</label>
     <button class="small" onclick={onfitroll} title={t("ui.videoFitRollHint")}>{t("ui.videoFitRoll")}</button>
     <label>{t("ui.videoKeyLine")} <input type="range" min="0" max="1" step="0.005" bind:value={video.keyLine} /></label>
@@ -85,8 +100,8 @@
 {#if video.fit}
   <div class="video-bar">
     {#if speedStep === 0}
-      <button class="small" onclick={onmatchspeed} title={t("ui.videoSpeedHint")}>{t("ui.videoSpeed")}</button>
-      <button class="small" onclick={onpickspeed} title={t("ui.videoSpeedPickHint")}>{t("ui.videoSpeedPick")}</button>
+      <button class="small" onclick={onmatchspeed} disabled={measuring} title={t("ui.videoSpeedHint")}>{t("ui.videoSpeed")}</button>
+      <button class="small" onclick={onpickspeed} disabled={measuring} title={t("ui.videoSpeedPickHint")}>{t("ui.videoSpeedPick")}</button>
     {:else}
       <span class="note">{t(speedStep === 1 ? "ui.videoSpeedStep1" : speedStep === 2 ? "ui.videoSpeedStep2" : "ui.videoSpeedStep3")}</span>
       {#if speedStep === 2}<button class="small" onclick={onpickforward}>{t("ui.videoSpeedForward")}</button>{/if}

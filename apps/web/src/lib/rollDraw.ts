@@ -12,11 +12,13 @@ import {
   crossesTimbre,
   foldPitch,
   gridLines,
+  inKey,
   MOBILE_PROFILE,
   PROFILES,
   soundingRangeOf,
   timbreBoundaries,
   toFloat,
+  type KeyEvent,
   type Note,
   type PlaceLoss,
   type Rat,
@@ -104,6 +106,8 @@ export interface RollDrawOptions {
   readonly volumeLabels?: VolumeLabelMode | undefined;
   /** 음색 경계 표시 (설정 → 화면). 고르는 트랙 악기의 경계선·구간 바탕, 경계를 넘는 & 선을 경고 색으로 */
   readonly timbreZones?: boolean | undefined;
+  /** 조표 맞춤 입력을 켰으면 조표 (조 밖 줄을 어둡게 칠한다). 끄면 undefined */
+  readonly keyLock?: readonly KeyEvent[] | undefined;
   /** CSS 변수 값 (테마 색) */
   readonly css: (name: string) => string;
 }
@@ -204,6 +208,23 @@ export function drawRoll(canvas: HTMLCanvasElement, o: RollDrawOptions): void {
       if (horizontal) g.fillRect(r.x, r.y + r.h - 1, r.w, 1);
       else g.fillRect(r.x, r.y, 1, r.h);
     }
+  }
+
+  // 조표 맞춤: 조표 구간마다 조 밖 줄을 어둡게 (곡 중간 조바꿈은 그 자리부터)
+  if (o.keyLock) {
+    const marks = [...o.keyLock].sort((a, b) => cmp(a.at, b.at));
+    const starts = [{ at: 0, fifths: 0 }, ...marks.map((k) => ({ at: toFloat(k.at), fifths: k.fifths }))];
+    g.fillStyle = o.css("--roll-off-key");
+    starts.forEach((k, i) => {
+      const a = Math.max(from, k.at);
+      const b = Math.min(to, starts[i + 1]?.at ?? Infinity);
+      if (b <= a) return;
+      for (let p = low; p <= high; p++) {
+        if (inKey(p, k.fifths)) continue;
+        const r = noteRect(v, a, b - a, p);
+        g.fillRect(r.x, r.y, r.w, r.h);
+      }
+    });
   }
 
   // 음색 경계: 고르는 트랙 악기의 샘플 구간을 한 칸 건너 옅게 칠하고, 바뀌는 자리에 강조색 선을 긋는다 (음보다 아래).
@@ -598,7 +619,7 @@ export function drawRoll(canvas: HTMLCanvasElement, o: RollDrawOptions): void {
     }
   }
   if (o.showEvents) {
-    const colorOf = { tempo: o.css("--ev-tempo"), meter: o.css("--ev-meter"), marker: o.css("--ev-marker") };
+    const colorOf = { tempo: o.css("--ev-tempo"), meter: o.css("--ev-meter"), marker: o.css("--ev-marker"), key: o.css("--ev-key") };
     const dragged = o.eventDrag?.label;
     const labels = eventLabels(v, s).filter((l) => {
       const at = toFloat(l.at);

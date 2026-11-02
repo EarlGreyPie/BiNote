@@ -680,3 +680,23 @@ describe("슬라이드 결과를 글로 쓰기", () => {
     expect(h.undo()).toEqual(s);
   });
 });
+
+describe("조표 명령", () => {
+  it("넣기·고치기·옮기기·지우기, 앞과 같은 조표는 적지 않는다", async () => {
+    const { setKeyAt, removeKeyAt, moveKey } = await import("../src/index.js");
+    let s = fresh();
+    s = setKeyAt(rat(0), 0).apply(s);
+    expect(s.keys).toBeUndefined();
+    s = setKeyAt(rat(0), 2).apply(s);
+    s = setKeyAt(rat(4), -1).apply(s);
+    expect(s.keys?.map((k) => [k.at.n, k.fifths])).toEqual([[0, 2], [4, -1]]);
+    s = setKeyAt(rat(4), 2).apply(s);
+    expect(s.keys?.map((k) => k.fifths)).toEqual([2]);
+    s = setKeyAt(rat(4), 3).apply(s);
+    s = moveKey(rat(4), rat(6)).apply(s);
+    expect(s.keys?.map((k) => k.at.n)).toEqual([0, 6]);
+    s = removeKeyAt(rat(6)).apply(s);
+    s = removeKeyAt(rat(0)).apply(s);
+    expect(s.keys).toBeUndefined();
+  });
+});

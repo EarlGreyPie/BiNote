@@ -106,3 +106,27 @@ test("새로고침 뒤 지난 작업에서 고치던 곡을 되살린다", async
   // 되살린 곡도 실행 취소 기록은 새로 시작한다
   await expect(page.getByRole("button", { name: "실행 취소" })).toBeDisabled();
 });
+
+test("마비꼬로 저장 창에서 뺀 트랙은 .mmi에 들어가지 않는다", async ({ page }, testInfo) => {
+  const errors = watchErrors(page);
+  await openApp(page);
+  await pasteAsNewSong(page, SAMPLE_MML);
+  await expect(trackTabs(page)).toHaveCount(2);
+  await menu(page, "파일", /다른 형식으로 저장/);
+  await page.getByRole("menuitem", { name: /마비꼬로 저장/ }).click();
+  const dialog = page.locator("dialog[open]").filter({ hasText: "마비꼬(.mmi)로 저장" });
+  await expect(dialog).toBeVisible();
+  // 미리보기: 피아노 트랙 둘이 마비꼬 트랙 하나(멜로디·화음1)로 묶인다
+  await expect(dialog.getByText("마비꼬 트랙 1개로 저장")).toBeVisible();
+  await dialog.locator("fieldset input[type=checkbox]").nth(1).uncheck();
+  await page.screenshot({ path: testInfo.outputPath("mmi-dialog.png") });
+  const download = page.waitForEvent("download");
+  await dialog.getByRole("button", { name: "마비꼬로 저장" }).click();
+  const file = await download;
+  expect(file.suggestedFilename()).toMatch(/\.mmi$/);
+  const path = testInfo.outputPath("saved.mmi");
+  await file.saveAs(path);
+  const text = readFileSync(path, "utf8");
+  expect(text.match(/^mml-track=.*$/gm)).toEqual(["mml-track=MML@t120l8cdefgab>c,,;"]);
+  expect(errors).toEqual([]);
+});

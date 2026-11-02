@@ -13,8 +13,11 @@
   --ev-tempo: #7b45d6;
   --ev-meter: #2f8a5f;
   --ev-marker: #a47c12;
+  --ev-key: #1f7fa8;
   /* 피아노롤·타브 격자와 다른 트랙 진하기 (캔버스가 읽는다, rollDraw.ts rollTone) */
   --roll-black-row: rgba(127, 127, 127, 0.1);
+  /* 조표 맞춤 입력을 켰을 때 조 밖 줄 (검은건반 줄 위에 덧칠한다) */
+  --roll-off-key: rgba(127, 127, 127, 0.16);
   --roll-sub-line: rgba(127, 127, 127, 0.12);
   --roll-unit-line: rgba(127, 127, 127, 0.18);
   --roll-beat-line: rgba(127, 127, 127, 0.32);
@@ -52,6 +55,7 @@
     --ev-tempo: #c5a8ff;
     --ev-meter: #8fd1ad;
     --ev-marker: #e2c374;
+    --ev-key: #8fcbe6;
     color-scheme: dark;
   }
 }
@@ -67,12 +71,14 @@
   --ev-tempo: #c5a8ff;
   --ev-meter: #8fd1ad;
   --ev-marker: #e2c374;
+  --ev-key: #8fcbe6;
   color-scheme: dark;
 }
 
 /* 차분하게 보기: 격자는 확대했을 때만 옅게, 마디선만 또렷하게, 고르지 않은 트랙은 흐린 그림자로 */
 :root[data-calm] {
   --roll-black-row: rgba(127, 127, 127, 0.05);
+  --roll-off-key: rgba(127, 127, 127, 0.1);
   --roll-sub-line: rgba(127, 127, 127, 0.06);
   --roll-unit-line: rgba(127, 127, 127, 0.08);
   --roll-beat-line: rgba(127, 127, 127, 0.16);

@@ -1,6 +1,10 @@
 <script lang="ts">
   import {
     add,
+    keyAt as keyFifthsAt,
+    dragInKey,
+    snapToKey,
+    stepInKey,
     scaleNotesIn,
     gridLines,
     MOBILE_PROFILE,
@@ -58,8 +62,11 @@
     clampPitchView,
     dragKeyLine,
     fillStretch,
-    matchRollZoom,
+    videoEndAt,
+    videoKeyEdges,
+    videoSpeedZoom,
     fitVideoKeys,
+    videoSyncStep,
     fromScreen,
     keyAt,
     pitchToScreen,
@@ -135,6 +142,13 @@
     speedStep?: 0 | 1 | 2 | 3;
     /** 직접 재기가 끝났을 때: 잰 속도(원본 영상 px/초), 두 점이 맞지 않으면 undefined */
     onspeedpicked?: ((speed: number | undefined) => void) | undefined;
+    /**
+     * 영상을 읽었을 때 롤을 영상 건반에 맞출지 (건반 맞춤이 켜져 있을 때). 새로 연 영상만 true:
+     * 보기를 바꿔 롤을 다시 만들 때는 기억해 둔 확대·자리를 지킨다
+     */
+    fitOnLoad?: boolean;
+    /** 영상을 읽어 크기를 알았을 때 (롤 맞춤 뒤). duration = 영상 길이(초) */
+    onvideoready?: ((info: { duration: number }) => void) | undefined;
     /** 원곡 파형 (마디 줄 아래 띠). offset = 원곡 어긋남(초, 원곡이 늦으면 양수) */
     wave?: { readonly peaks: Peaks; readonly offset: number } | undefined;
     /** 음 모양 */
@@ -163,6 +177,11 @@
     onvolume?: (delta: number) => void;
     /** 재생 중 울리는 건반에 불 켜기 */
     lightKeys?: boolean;
+    /**
+     * 조표 맞춤 입력 (곡의 조표를 따른다). 켜면 새로 찍는 음은 조표대로 올림·내림을 붙이고(snapToKey),
+     * 끌거나 ↑↓로 옮기는 음은 조 안 음계로 움직이며, 조 밖 줄을 어둡게 칠한다. 이미 있는 음은 건드리지 않는다
+     */
+    keyLock?: boolean;
     /** 번호로만 아는 악기의 실제 악기 (올린 팩이 바뀌면 새 함수를 넘겨 다시 그린다) */
     canonicalOf?: CanonicalOf | undefined;
     /** 보기를 바꾸기 전에 보던 자리와 지난번 롤 확대 (만들 때 한 번만 읽는다) */
@@ -209,7 +228,7 @@
     onlanetoggle?: ((trackId: string) => void) | undefined;
   }
 
-  let { cursor, loop, oncursor, onloop, song: fullSong, ghost = [], activeTrackId, orientation, division, playhead, onnotes, onselecttrack, onpicknote, ontrim, onpreview, onseek, showEvents = false, video = $bindable(), videoPlay = $bindable(false), speedStep = $bindable(0), onspeedpicked, pitchRange = [12, 119], wave, look, themeKey = "", seconds, rate = 1, colors, tool = "pen", onreverb, noteDur, volume, onvolume, lightKeys = false, canonicalOf, memory, onmemory, work, visibleTrackIds, selectMove = false, locked, pickOthers = true, onevent, oneventmove, onalignbar, bardragtext, onwaveoffset, pickedEvent, onpickevent, ontempowheel, laneTrackIds, melodyIds, onvolumes, onclearlane, onlanetoggle }: Props =
+  let { cursor, loop, oncursor, onloop, song: fullSong, ghost = [], activeTrackId, orientation, division, playhead, onnotes, onselecttrack, onpicknote, ontrim, onpreview, onseek, showEvents = false, video = $bindable(), videoPlay = $bindable(false), speedStep = $bindable(0), onspeedpicked, fitOnLoad = false, onvideoready, pitchRange = [12, 119], wave, look, themeKey = "", seconds, rate = 1, colors, tool = "pen", onreverb, noteDur, volume, onvolume, lightKeys = false, keyLock = false, canonicalOf, memory, onmemory, work, visibleTrackIds, selectMove = false, locked, pickOthers = true, onevent, oneventmove, onalignbar, bardragtext, onwaveoffset, pickedEvent, onpickevent, ontempowheel, laneTrackIds, melodyIds, onvolumes, onclearlane, onlanetoggle }: Props =
     $props();
 
   /** 레이어: 고른 트랙이 든 보기만 그리고 다루는 곡 (나머지 트랙은 롤에서 보이지도 눌리지도 않는다) */
@@ -234,12 +253,18 @@
       // 곡을 느리게 재생하면 영상도 같은 속도로 (안 그러면 0.15초마다 되감겨 끊긴다)
       if (el.playbackRate !== rate) el.playbackRate = rate;
       const want = seconds + video.offset;
-      if (Math.abs(el.currentTime - want) > 0.15) el.currentTime = Math.max(0, want);
-      if (el.paused) void el.play().catch(() => {});
+      // 영상 시작 전(어긋남이 음수라 want < 0)이면 첫 장면에 멈춰 기다린다 (0으로 되감으며 재생하면 첫 0.15초가 끊겨 되풀이된다)
+      const step = videoSyncStep(el.currentTime, want, el.paused);
+      if (step.seek !== undefined) el.currentTime = step.seek;
+      if (!step.play) {
+        if (!el.paused) el.pause();
+      } else if (el.paused) void el.play().catch(() => {});
     } else if (videoPlay) {
       if (el.playbackRate !== 1) el.playbackRate = 1;
       if (el.paused) void el.play().catch(() => (videoPlay = false));
     } else {
+      // 속도를 재는 동안에는 재기가 영상을 옮긴다 (여기서 화면 시작 장면으로 되돌리면 엉뚱한 두 프레임을 견준다)
+      if (measuring) return;
       if (!el.paused) el.pause();
       const at = positionToSeconds(song.tempo, rat(Math.round(start * 960), 960)) + video.offset;
       if (Math.abs(el.currentTime - at) > 0.05) el.currentTime = Math.max(0, at);
@@ -388,12 +413,14 @@
   }
 
   /**
-   * 영상을 처음 읽었을 때 세로 롤이고 건반 맞춤이 켜져 있으면 롤을 영상 건반에 맞춘다
-   * (가로 롤은 음 축이 짧아 88건반을 다 넣으면 칸이 너무 작다. 롤 맞추기 단추로는 맞출 수 있다)
+   * 새로 연 영상을 읽었을 때(fitOnLoad) 건반 맞춤이 켜져 있으면 롤을 영상 건반에 맞춘다 (세로·가로 롤 모두. 가로 롤은 칸이 작아지지만
+   * 맞추지 않으면 영상이 롤 밖으로 크게 넘친다). 그다음 앱에 영상 길이를 알린다 (속도 자동 재기·마디 편집 어긋남)
    */
   function onVideoLoaded(el: HTMLVideoElement) {
     videoSize = [el.videoWidth, el.videoHeight];
-    if (video?.fit && orientation === "vertical") fitVideo();
+    // 새로 연 영상일 때만 맞춘다 (타브에 갔다 돌아와 롤을 다시 만들면 기억해 둔 확대·자리를 그대로 둔다)
+    if (video?.fit && fitOnLoad) fitVideo();
+    onvideoready?.({ duration: el.duration });
   }
 
   // 맞춤 손잡이: 왼쪽·오른쪽 끝은 그 끝 건반 자리를, 건반 윗선 막대는 영상 전체를 (음 축·시간 축으로) 옮긴다
@@ -403,8 +430,9 @@
     | undefined;
   const handles = $derived.by(() => {
     if (!video?.fit || !video.handles || !videoSize) return undefined;
-    const a = pitchToScreen(view, video.low);
-    const b = pitchToScreen(view, video.high + 1);
+    const edges = videoKeyEdges(video);
+    const a = pitchToScreen(view, edges.left);
+    const b = pitchToScreen(view, edges.right);
     return { low: a, high: b, from: Math.min(a, b), to: Math.max(a, b) };
   });
 
@@ -425,12 +453,16 @@
     // 음 축으로 끈 거리(음 단위, 높은 음 쪽이 +)
     const dp = (vertical ? dx : -dy) / pxPerKey;
     const v0 = d.video;
-    if (d.kind === "low") video = { ...video, low: Math.min(v0.low + dp, v0.high + 0.5) };
-    else if (d.kind === "high") video = { ...video, high: Math.max(v0.high + dp, v0.low - 0.5) };
+    // 손잡이는 영상 끝(videoKeyEdges)에 있으므로 끝 좌표를 끈 만큼 옮기고 끝 건반 값으로 되돌린다 (피아노 모양이면 직선이 아니다)
+    const e0 = videoKeyEdges(v0);
+    const lowAt = (edge: number) => videoEndAt(v0.keyShape, "low", edge);
+    const highAt = (edge: number) => videoEndAt(v0.keyShape, "high", edge);
+    if (d.kind === "low") video = { ...video, low: Math.min(lowAt(e0.left + dp), v0.high + 0.5) };
+    else if (d.kind === "high") video = { ...video, high: Math.max(highAt(e0.right + dp), v0.low - 0.5) };
     else {
       const away = vertical ? -dy : dx;
       const keyLine = dragKeyLine(view, v0, videoSize[0], videoSize[1], away);
-      video = { ...video, low: v0.low + dp, high: v0.high + dp, keyLine };
+      video = { ...video, low: lowAt(e0.left + dp), high: highAt(e0.right + dp), keyLine };
     }
   }
 
@@ -446,19 +478,29 @@
     if (Math.abs(stretch - video.stretch) > 1e-6) untrack(() => video && (video = { ...video, stretch }));
   });
 
+  /**
+   * 속도 맞추기에 쓰는 템포: 지금 화면 시작 자리의 bpm. 템포 지도가 바뀌면(탭 템포·t 고치기) 다시 읽고,
+   * 화면만 옮긴 것으로는 다시 읽지 않는다 (스크롤로 템포가 바뀌는 곳을 지날 때마다 확대가 튀지 않게).
+   * 템포 배열만 따른다: 음 편집·레이어 트랙 바꾸기는 곡 객체를 새로 만들지만 템포 배열은 그대로라
+   * tempoMap이 같은 값으로 남아 다시 읽지 않는다. 값이 같으면 아래 효과도 돌지 않는다
+   */
+  const tempoMap = $derived(fullSong.tempo);
+  const speedBpm = $derived(bpmAt(tempoMap, untrack(() => start)));
+
   // 속도 맞추기: 잰 영상 속도(원본 px/초) × 시간 축 배율 = 화면에서 떨어지는 속도가 롤의 px/초가 되게 롤 가로 확대를 둔다.
-  // 롤 크기(건반 칸)나 늘이기 배율이 바뀌면 다시 맞춘다 (가로 확대·화면 자리가 바뀐 것으로는 돌지 않는다). 템포는 지금 화면 시작 자리의 것
+  // 롤 크기(건반 칸)·늘이기 배율·템포(speedBpm)가 바뀌면 다시 맞춘다 (가로 확대·화면 자리가 바뀐 것으로는 돌지 않는다).
+  // 속도를 재지 않았으면 아무것도 하지 않아 사용자가 정한 확대를 그대로 둔다
   $effect(() => {
-    if (!video?.fit || !video.speed || !videoSize) return;
-    const keys = Math.max(1, video.high + 1 - video.low);
-    const time = ((keys * pxPerKey) / videoSize[0]) * video.stretch;
-    const speed = video.speed;
+    if (!video?.fit || !videoSize) return;
+    const zoom = videoSpeedZoom({ pxPerKey }, video, videoSize[0], speedBpm);
+    if (zoom === undefined) return;
     untrack(() => {
-      const zoom = clampTimeZoom(matchRollZoom(speed * time, bpmAt(song.tempo, start)));
       if (Math.abs(zoom - pxPerWhole) > 1e-6) pxPerWhole = zoom;
     });
   });
 
+  /** 옮긴 뒤 받은 프레임이 원하는 자리에서 이만큼(초) 안이면 그 자리 프레임으로 본다 (10fps 영상의 한 프레임) */
+  const SEEK_FRAME_SLACK = 0.1;
   /**
    * 영상을 seconds초로 옮기고 그 프레임이 준비될 때까지 기다린다 (오래 걸리면 그냥 넘어간다).
    * 실제로 보이는 프레임의 시각을 돌려준다: 옮긴 시각은 프레임 사이일 수 있어(30fps면 0.25초 = 7.5프레임)
@@ -468,8 +510,10 @@
     const want = Math.max(0, seconds);
     return new Promise((resolve) => {
       let shown: number | undefined;
+      let finished = false;
       const frames = el as HTMLVideoElement & { requestVideoFrameCallback?: (cb: (now: number, meta: { mediaTime: number }) => void) => number };
       const done = () => {
+        finished = true;
         clearTimeout(timer);
         el.removeEventListener("seeked", onseeked);
         resolve(shown ?? want);
@@ -480,10 +524,17 @@
         else setTimeout(done, 300);
       };
       const timer = setTimeout(done, 2000);
-      frames.requestVideoFrameCallback?.((_, meta) => {
+      // 영상을 막 연 때는 옮기기 전 첫 장면(0초)의 프레임 알림이 먼저 올 수 있다. 원하는 자리 근처 프레임이 올 때까지 기다린다
+      const onframe = (_: number, meta: { mediaTime: number }) => {
+        if (finished) return;
+        if (Math.abs(meta.mediaTime - want) > SEEK_FRAME_SLACK && el.duration - meta.mediaTime > SEEK_FRAME_SLACK) {
+          frames.requestVideoFrameCallback?.(onframe);
+          return;
+        }
         shown = meta.mediaTime;
         done();
-      });
+      };
+      frames.requestVideoFrameCallback?.(onframe);
       el.addEventListener("seeked", onseeked);
       el.currentTime = want;
     });
@@ -492,11 +543,20 @@
   /**
    * 속도 맞추기(자동): 멈춘 영상의 지금 프레임과 SPEED_FRAME_GAP초 뒤 프레임을 줄인 회색조로 그려, 건반 윗선 위쪽 구간이
    * 몇 px 내려왔는지 상호상관으로 찾는다. 찾으면 영상 설정에 속도를 적고(롤 확대는 위 효과가 맞춘다) true.
-   * 움직임이 없거나 상관이 낮으면 false (직접 재기로 넘어간다). 다 재면 원래 장면으로 되돌린다
+   * 움직임이 없거나 상관이 낮으면 false (직접 재기로 넘어간다). 다 재면 원래 장면으로 되돌린다.
+   * 재는 사이 영상을 바꿨거나 재생(곡·영상)이 시작됐으면 그만두고 undefined (결과도, 되돌리기도 없다).
+   * at: 지금 장면 대신 이 영상 시각(초)에서 잰다 (영상을 열자마자 재 볼 때. 첫 장면은 음이 없는 제목 화면이 많다)
    */
-  export async function measureVideoSpeed(): Promise<boolean> {
+  /**
+   * 자동 속도 재기가 영상을 옮기는 중 (겹쳐 재기·직접 재기 시작을 막는다).
+   * 반응 값이라야 한다: 재는 동안 위 영상 맞추기 효과가 일찍 끝나 화면 시작 위치를 안 읽으므로,
+   * 재기가 끝나 false가 되면 효과가 다시 돌아 그 뒤 스크롤도 영상 장면을 따라가게 한다
+   */
+  let measuring = $state(false);
+  export async function measureVideoSpeed(at?: number): Promise<boolean | undefined> {
     const el = videoEl;
-    if (!el || !video?.fit || !videoSize || seconds !== undefined) return false;
+    // 이미 재는 중이면 겹쳐 재지 않는다 (같은 영상을 둘이 옮기면 잡은 프레임과 시각이 어긋난다)
+    if (measuring || !el || !video?.fit || !videoSize || seconds !== undefined || speedStep !== 0) return false;
     videoPlay = false;
     const [vw, vh] = videoSize;
     const w = SPEED_FRAME_WIDTH;
@@ -512,21 +572,33 @@
       return toGray(g.getImageData(0, 0, w, rows).data, w, rows);
     };
     const t0 = el.currentTime;
+    // 재는 사이에 다른 영상으로 바꾸면(같은 video 요소에 새 주소) 그 자리에서 그만둔다: 새 영상 프레임을 잡거나,
+    // 앞 영상의 속도를 새 영상에 적거나, 새 영상을 앞 영상의 자리로 되돌리지 않게.
+    // 재생이 시작돼도 그만둔다: 재생이 영상을 곡 위치로 계속 옮겨, 잡은 두 장면이 잰 시각의 장면이 아니게 된다
+    const url = video.url;
+    const same = () => video?.url === url && videoEl === el;
+    const still = () => same() && seconds === undefined && !videoPlay;
+    measuring = true;
     try {
       if (!el.paused) el.pause();
       // 두 프레임 모두 옮긴 뒤 그 프레임 시각을 받아, 실제 두 프레임 사이 시간으로 나눈다
-      const at0 = await seekVideo(el, t0);
+      const from = at ?? t0;
+      const at0 = await seekVideo(el, from);
+      if (!still()) return undefined;
       const a = grab();
-      const at1 = await seekVideo(el, t0 + SPEED_FRAME_GAP);
+      const at1 = await seekVideo(el, from + SPEED_FRAME_GAP);
+      if (!still()) return undefined;
       const b = grab();
       const found = fallShift(a, b, w, rows);
-      if (!found || !video || !(at1 > at0)) return false;
+      // 재는 사이에 직접 재기가 시작됐으면 결과를 버린다
+      if (!found || !video || !(at1 > at0) || speedStep !== 0) return false;
       video = { ...video, speed: fallSpeed(found.shift, vw / w, at1 - at0) };
       return true;
     } catch {
       return false;
     } finally {
-      await seekVideo(el, t0);
+      if (still()) await seekVideo(el, t0);
+      measuring = false;
     }
   }
 
@@ -542,7 +614,7 @@
   let pickFrom: { start: number; url: string; song: Song; y?: number } | undefined;
   /** 직접 재기 시작: 멈춘 화면에서 영상 속 한 음의 앞 끝을 누른다 */
   export function startSpeedPick() {
-    if (!video?.fit || !videoSize) return;
+    if (measuring || !video?.fit || !videoSize) return;
     // 하던 편집 동작(끌기·고르기 상자 등)은 끝내고 재기로 들어간다
     cancelGesture();
     videoPlay = false;
@@ -688,8 +760,8 @@
     if (orientation === lastOrientation) return;
     lastOrientation = orientation;
     edgePitch = orientation === "horizontal" ? 84 : 36;
-    // 떨어지는 음 영상은 세로 롤에서 본다: 세로로 바꾸면 롤을 영상 건반에 맞춘다
-    if (orientation === "vertical" && video?.fit && videoSize) fitVideo();
+    // 건반에 맞춘 영상이 있으면 바꾼 방향에서도 롤을 영상 건반에 맞춘다 (영상을 열 때와 같게)
+    if (video?.fit && videoSize) fitVideo();
   });
 
   // 보던 자리·확대를 앱에 알린다 (휠·스크롤바·확대·따라가기·reveal·fitAll 등 어느 길로 바뀌어도)
@@ -792,6 +864,7 @@
       canonicalOf,
       volumeLabels: volumeLabels.mode,
       timbreZones: timbreZones.on,
+      keyLock: keyLock ? (song.keys ?? []) : undefined,
       lane: laneReserved > 0 ? { ...lane.draw(laneList), label: t("ui.laneName") } : undefined,
       css: cssVar,
     });
@@ -831,9 +904,9 @@
     return eventAt(eventLabels(view, song), x, y, "pointerType" in e && touchLike(e as PointerEvent));
   }
 
-  /** 라벨 하나를 끌어 옮길 수 있는지: 템포(곡 처음 것은 빼고)와 마커 */
+  /** 라벨 하나를 끌어 옮길 수 있는지: 템포·조표(곡 처음 것은 빼고)와 마커 */
   function movable(l: EventLabel): boolean {
-    return (l.kind === "tempo" && cmp(l.at, rat(0)) > 0) || l.kind === "marker";
+    return ((l.kind === "tempo" || l.kind === "key") && cmp(l.at, rat(0)) > 0) || l.kind === "marker";
   }
 
   function openEvent(label: EventLabel | undefined, row: 0 | 1, at: number) {
@@ -1160,7 +1233,7 @@
       id: freshIds("r")(),
       start: noteStart,
       dur: noteDur ?? rat(1, division),
-      pitch: at.pitch,
+      pitch: keyLock ? snapToKey(at.pitch, keyFifthsAt(song.keys, noteStart)) : at.pitch,
       vol: volume ?? noteBefore(active.notes, noteStart)?.vol ?? DEFAULT_VOLUME,
       tie: "none",
     };
@@ -1266,9 +1339,20 @@
       if (cmp(add(first, dt), rat(0)) < 0) dt = sub(rat(0), first);
       const pitches = all.map((n) => n.pitch);
       dp = Math.min(127 - Math.max(...pitches), Math.max(-Math.min(...pitches), dp));
-      const shift = (n: Note): Note => ({ ...n, start: add(n.start, dt), pitch: n.pitch + dp });
+      let shift = (n: Note): Note => ({ ...n, start: add(n.start, dt), pitch: n.pitch + dp });
+      // 조표 맞춤: 잡은 음은 조표대로 맞춘 줄로, 함께 옮기는 음은 같은 음계 칸 수만큼 (임시표는 같은 반음 수만큼).
+      // 칸 수는 잡은 음 자리의 조로 한 번만 세고, 음마다 제 자리의 조에서 그 칸 수만큼 옮긴다 (조바꿈을 걸친 선택도 같은 칸 수).
+      // 높이를 안 바꾸고 옆으로만 옮길 때는 높이를 그대로 둔다. 건반 밖으로 나가는 음이 있으면 높이는 그대로
+      if (keyLock && dp !== 0) {
+        const at = (n: Note) => ({ pitch: n.pitch, at: add(n.start, dt) });
+        const keyed = dragInKey(all.map(at), at(o), dp, song.keys);
+        const byId = new Map(all.map((n, i) => [n.id, keyed?.[i]]));
+        shift = keyed
+          ? (n) => ({ ...n, start: add(n.start, dt), pitch: byId.get(n.id) ?? n.pitch })
+          : (n) => ({ ...n, start: add(n.start, dt) });
+      }
       // 옮기는 높이를 들려준다
-      preview(o.pitch + dp);
+      preview(shift(o).pitch);
       drag = { ...drag, note: shift(o), moved: drag.group.map(shift) };
     } else if (drag.mode === "resize") {
       // 격자 한 칸보다 짧던 음은 그 길이까지는 줄일 수 있다
@@ -1632,7 +1716,13 @@
       : { fwd: "ArrowUp", back: "ArrowDown", up: "ArrowRight", down: "ArrowLeft" };
     const step = rat(1, division);
     let shift: ((n: Note) => Note) | undefined;
-    if (e.key === along.up && notes.every((n) => n.pitch < 127)) shift = (n) => ({ ...n, pitch: n.pitch + 1 });
+    // 조표 맞춤: ↑↓는 조 안 음계 한 칸씩 (조 밖 음은 먼저 조표대로 맞춘 뒤 옮긴다)
+    const keyStep = (dir: 1 | -1) => {
+      const to = new Map(notes.map((n) => [n.id, stepInKey(n.pitch, keyFifthsAt(song.keys, n.start), dir)]));
+      return [...to.values()].every((p) => p !== undefined) ? (n: Note) => ({ ...n, pitch: to.get(n.id) ?? n.pitch }) : undefined;
+    };
+    if (keyLock && (e.key === along.up || e.key === along.down)) shift = keyStep(e.key === along.up ? 1 : -1);
+    else if (e.key === along.up && notes.every((n) => n.pitch < 127)) shift = (n) => ({ ...n, pitch: n.pitch + 1 });
     else if (e.key === along.down && notes.every((n) => n.pitch > 0)) shift = (n) => ({ ...n, pitch: n.pitch - 1 });
     else if (e.key === along.fwd) shift = (n) => ({ ...n, start: add(n.start, step) });
     else if (e.key === along.back && notes.every((n) => cmp(n.start, step) >= 0)) shift = (n) => ({ ...n, start: sub(n.start, step) });

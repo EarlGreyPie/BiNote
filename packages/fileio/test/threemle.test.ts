@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { rat, type Song } from "@mmlce/core";
 import { parseMml, setTracksNotes } from "@mmlce/mml";
 import { decodeText, encode3mle, encodeCp949, read3mle, readMmi, write3mle, writeMmi } from "../src/index.js";
+import { joinSpacedValues } from "../src/threemle.js";
 
 const SAMPLE = [
   "[Settings]",
@@ -94,6 +95,25 @@ describe("read3mle", () => {
     expect(out).toContain("Memo=keep");
     expect(out).toContain("Volume=50\r\nPanpot=96");
     expect(out).toContain("Volume=100\r\nPanpot=64");
+  });
+});
+
+describe("명령과 숫자 사이 빈칸 (3MLE는 붙여 읽음)", () => {
+  it("f 4는 f4: 뒤 음이 앞당겨지지 않는다 (Count on me 114마디)", () => {
+    const file = ["[Settings]", "TimeBase=960", "[ChannelProperty1]", "Name=알토", "Patch=21", "[Channel1]", "l12g6f 4v13c&c2. d"].join("\r\n");
+    const { song, diagnostics } = read3mle(file);
+    const notes = song.tracks[0]!.notes;
+    expect(notes[1]!.dur).toEqual(rat(1, 4));
+    // g6(1/6) + f4(1/4) + c(1/12) + c2.(3/4) = 5/4
+    expect(notes[notes.length - 1]!.start).toEqual(rat(5, 4));
+    expect(song.tracks[0]!.mml?.text).toBe("l12g6f4v13c&c2. d");
+    expect(diagnostics).toEqual([{ level: "info", code: "spaced-value-joined", params: { count: 1 }, span: [0, 0], where: "알토" }]);
+  });
+
+  it("l·o·v·t·쉼표·반음 기호 뒤 빈칸과 줄바꿈도 붙이고, 주석과 숫자를 쓴 뒤 빈칸은 그대로", () => {
+    expect(joinSpacedValues("l 8 o\n5 v 10 t 120 r 4 c+ 8 n 60").text).toBe("l8 o5 v10 t120 r4 c+8 n60");
+    expect(joinSpacedValues("c4 8 d4 . /* a 4 */ e").text).toBe("c4 8 d4 . /* a 4 */ e");
+    expect(joinSpacedValues("c d e").joined).toBe(0);
   });
 });
 

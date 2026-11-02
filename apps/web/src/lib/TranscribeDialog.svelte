@@ -35,7 +35,7 @@
     reference: File | undefined;
     /** 지금 곡의 템포·박자와 원곡 어긋남. 곡이 없으면 undefined */
     timing: TranscribeTiming | undefined;
-    /** PC 환경이면 Basic Scriptor를 고를 수 있다 */
+    /** Basic Scriptor를 고를 수 있는지 (PC 환경이고 BASIC_SCRIPTOR_ON일 때). 아니면 Basic Scriptor 문구도 보이지 않는다 */
     pc: boolean;
     /** 받아 적은 결과. fromReference: 원곡을 받아 적었는지, retimed: 곡 템포에 놓았는지 */
     onresult: (analysis: MidiAnalysis, name: string, info: { fromReference: boolean; retimed: boolean }) => void;
@@ -204,7 +204,7 @@
     } catch (e) {
       if (run !== generation) return;
       running = false;
-      error = e instanceof PitchTooLong ? t("ui.transcribeTooLong", { minutes: e.maxMinutes }) : t("ui.transcribeDecodeFailed", { name: file.name });
+      error = e instanceof PitchTooLong ? t(pc ? "ui.transcribeTooLongScriptor" : "ui.transcribeTooLong", { minutes: e.maxMinutes }) : t("ui.transcribeDecodeFailed", { name: file.name });
       return;
     } finally {
       decoding = false;
@@ -377,12 +377,12 @@
     </div>
   {/if}
 
-  <label class="check" title={t("ui.transcribeSongTempoHelp")}>
+  <label class="check" title={t(pc ? "ui.transcribeSongTempoHelpScriptor" : "ui.transcribeSongTempoHelp")}>
     <input type="checkbox" bind:checked={useSongTempo} disabled={!timing || running} />
     {t("ui.transcribeSongTempo")}
   </label>
   {#if !timing}<p class="muted small">{t("ui.transcribeNoSong")}</p>{:else if useSongTempo && !fromReference}<p class="muted small">{t("ui.transcribeNotReference")}</p>{/if}
-  <p class="muted small">{t("ui.transcribeRights")}</p>
+  <p class="muted small">{t(pc ? "ui.transcribeRightsScriptor" : "ui.transcribeRights")}</p>
 
   {#if running}
     <div class="progress"><div class="bar" style:width={`${Math.round(progress * 100)}%`}></div></div>

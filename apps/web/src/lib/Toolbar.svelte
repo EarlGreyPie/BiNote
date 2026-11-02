@@ -24,7 +24,8 @@
 </script>
 
 <script lang="ts">
-  import { METER_UNITS } from "@mmlce/core";
+  import { KEY_FIFTHS, METER_UNITS } from "@mmlce/core";
+  import { keyOptionLabel } from "./keyLabel";
   import { t } from "./i18n.svelte";
   import { mediaAccept } from "./fileAccept";
   import Icon from "./Icon.svelte";
@@ -51,6 +52,12 @@
     onselectmove: (on: boolean) => void;
     meter: { beats: number; unit: number };
     onmeter: (beats: number, unit: number) => void;
+    /** 조표 맞춤 입력 (피아노롤) */
+    keyLock: boolean;
+    onkeylock: (on: boolean) => void;
+    /** 재생 커서 자리의 조표와, 고르면 그 조표 구간의 값을 바꾼다 */
+    keyFifths: number;
+    onkeyfifths: (fifths: number) => void;
     division: number;
     /** 고를 수 있는 격자 (목록 칸 + 잇단음 칸) */
     divisions: readonly number[];
@@ -118,6 +125,10 @@
     onselectmove,
     meter,
     onmeter,
+    keyLock,
+    onkeylock,
+    keyFifths,
+    onkeyfifths,
     division,
     divisions,
     ontuplet,
@@ -285,6 +296,14 @@
         {#each divisions as d (d)}<option value={d}>1/{d}</option>{/each}
       </select>
     </label>
+    <span class="field" title={t("ui.keyLockHelp")}>
+      <button class:on={keyLock} aria-pressed={keyLock} onclick={() => onkeylock(!keyLock)}>{t("ui.keyLock")}</button>
+      {#if keyLock}
+        <select value={keyFifths} aria-label={t("ui.event.key")} onchange={(e) => onkeyfifths(Number(e.currentTarget.value))}>
+          {#each KEY_FIFTHS as f (f)}<option value={f}>{keyOptionLabel(f)}</option>{/each}
+        </select>
+      {/if}
+    </span>
     <label class="field" title={t("ui.noteLengthHelp")}>
       <span class="muted">{t("ui.noteLength")}</span>
       <select value={noteLength} onchange={pickLength}>

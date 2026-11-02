@@ -521,6 +521,11 @@ export function appendSong(other: Song, label = "악보 더하기"): Command {
   };
 }
 
+/** 마디 넣기의 템포 지도: 곡 처음(0)의 템포는 그대로 두고, 넣는 자리(at)와 그 뒤의 템포는 넣는 길이만큼 민다 */
+function insertTempo(tempo: Song["tempo"], at: Rat, length: Rat): Song["tempo"] {
+  return tempo.map((t) => (cmp(t.at, ZERO) === 0 || cmp(t.at, at) < 0 ? t : { ...t, at: add(t.at, length) }));
+}
+
 /**
  * 마디 넣기: at 자리에 length만큼 빈 시간을 넣는다. at 뒤에서 시작하는 음·템포·마커를 모두 민다
  * (곡 처음 0의 템포·박자는 곡 전체의 시작 값이므로 제자리에 둔다).
@@ -537,9 +542,10 @@ export function insertTime(at: Rat, length: Rat, label = "마디 넣기"): Comma
         ...song,
         // 곡 처음(0)의 템포·박자는 그대로 둔다. 밀면 넣은 마디가 기본 템포(t120)로 연주된다.
         // 넣는 자리 뒤의 변화는 함께 민다
-        tempo: song.tempo.map((t) => (cmp(t.at, ZERO) === 0 ? t : { ...t, at: shift(t.at) })),
+        tempo: insertTempo(song.tempo, at, length),
         timeSig: song.timeSig.map((s) => (cmp(s.at, ZERO) === 0 ? s : { ...s, at: shift(s.at) })),
         markers: song.markers.map((m) => ({ ...m, at: shift(m.at) })),
+        ...(song.keys ? { keys: song.keys.map((k) => (cmp(k.at, ZERO) === 0 ? k : { ...k, at: shift(k.at) })) } : {}),
         tracks: song.tracks.map((t) => {
           if (!t.notes.some((n) => cmp(n.start, at) >= 0)) return keepText(t, t.mml && insertTextTime(t.mml, at, length, lengths));
           const { mml: _mml, ...rest } = t;
@@ -594,6 +600,7 @@ export function deleteTime(at: Rat, length: Rat, label = "마디 빼기"): Comma
         tempo,
         timeSig: removeSpan(song.timeSig, at, end, length),
         markers: song.markers.filter((m) => cmp(m.at, at) < 0 || cmp(m.at, end) >= 0).map((m) => ({ ...m, at: back(m.at) })),
+        ...(song.keys ? { keys: removeSpan(song.keys, at, end, length) } : {}),
         tracks: song.tracks.map((t) => {
           const touched = t.notes.some((n) => cmp(add(n.start, n.dur), at) > 0);
           if (!touched) return keepText(t, t.mml && deleteTextTime(t.mml, at, length, left, lengths));
@@ -719,11 +726,14 @@ export function deleteBars(ranges: readonly BarRange[], label = "마디 지우�
 }
 
 /**
- * 마디를 지울 때 원곡 대조(원곡 동시재생) 위치를 어떻게 맞출지.
+ * 마디를 지우거나 넣을 때 원곡 대조(원곡 동시재생) 위치를 어떻게 맞출지. 배경 영상 어긋남도 뜻이 같아 같은 계획을 쓴다.
  * 원곡 어긋남은 "원곡 시각(초) = 곡 시각(초) + 어긋남"이다
  */
 export interface ReferenceShiftPlan {
-  /** 어긋남에 더할 초 (지운 구간이 원곡보다 앞이거나 곡 처음이면 그 구간의 실제 길이). 0이면 그대로 */
+  /**
+   * 어긋남에 더할 초 (지운 구간이 원곡보다 앞이거나 곡 처음이면 그 구간의 실제 길이, 넣을 때는 넣은 길이만큼 음수).
+   * 0이면 그대로
+   */
   readonly shiftSec: number;
   /**
    * 어긋남 하나로는 맞출 수 없는(원곡이 울리는 가운데를 지우는) 첫 구간의 첫 마디. 지운 뒤 이 마디부터 원곡과 어긋난다.
@@ -762,6 +772,32 @@ export function referenceShiftForDelete(
     else return { shiftSec, brokenBar: barAt(song.timeSig, from) };
   }
   return { shiftSec };
+}
+
+/**
+ * 곡의 at 자리에 length(온음표 단위)만큼 마디를 넣을 때 원곡 대조(또는 배경 영상) 어긋남을 얼마나 옮기면 넣은 뒤 곡과 맞는지.
+ * 마디 지우기(referenceShiftForDelete)와 같은 규칙: 곡 처음(0)에 넣거나 원곡이 울리기 시작하는 곡 시각(-offsetSec)
+ * 앞에 넣으면 그 뒤 곡이 넣은 마디의 실제 길이(넣은 자리 템포로 잰 초)만큼 늦게 울리므로 어긋남에서 그만큼 뺀다 (shiftSec가 음수).
+ * 원곡이 울리는 가운데에 넣으면 어긋남 하나로 맞출 수 없다 (brokenBar = 넣은 마디). durationSec를 알면 원곡이 끝난 뒤에 넣는 것은 상관없다
+ */
+export function referenceShiftForInsert(
+  song: Pick<Song, "tempo" | "timeSig">,
+  at: Rat,
+  length: Rat,
+  offsetSec: number,
+  durationSec?: number,
+): ReferenceShiftPlan {
+  const a = tempoClock(song.tempo)(at);
+  const start = -offsetSec;
+  const end = durationSec === undefined ? Infinity : durationSec - offsetSec;
+  if (cmp(length, ZERO) <= 0) return { shiftSec: 0 };
+  if (cmp(at, ZERO) !== 0 && a >= end - REFERENCE_EPS) return { shiftSec: 0 };
+  if (cmp(at, ZERO) === 0 || a <= start + REFERENCE_EPS) {
+    // 넣은 마디는 넣는 자리 앞에서 울리던 템포로 연주된다 (마디 넣기의 템포 지도로 잰다)
+    const after = tempoClock(insertTempo(song.tempo, at, length));
+    return { shiftSec: -(after(add(at, length)) - after(at)) };
+  }
+  return { shiftSec: 0, brokenBar: barAt(song.timeSig, at) };
 }
 
 /** 고친 원문을 트랙에 넣는다. 원문이 그대로면 트랙도 그대로 돌려준다 */
@@ -1518,6 +1554,7 @@ export function convertTempoResult(song: Song, scale: Rat, from: Rat = ZERO, to?
     tempo: normalizeTempo(tempo),
     timeSig,
     markers: song.markers.map((m) => ({ ...m, at: move(m.at) })),
+    ...(song.keys ? { keys: song.keys.map((k) => ({ ...k, at: move(k.at) })) } : {}),
     tracks,
     ...(song.made ? { made: song.made.map(moveRecord) } : {}),
   };

@@ -23,3 +23,14 @@ describe("템포·박자·마커 창의 바뀐 것", () => {
     expect(eventChanges(here, { tempo: false, meter: false, marker: false }, { bpm: 100, beats: 3, unit: 4, text: "A" })).toEqual({ tempo: null, meter: null, marker: null });
   });
 });
+
+describe("조표 칸", () => {
+  const base = { tempo: { bpm: 120, here: false }, meter: { beats: 4, unit: 4, here: false }, marker: { text: "", here: false } };
+  const value = { bpm: 120, beats: 4, unit: 4, text: "", fifths: 2 };
+  const off = { tempo: false, meter: false, marker: false };
+  it("앞 조와 다를 때만 넣고, 이 자리 조표를 끄면 지운다", () => {
+    expect(eventChanges({ ...base, key: { fifths: 0, here: false } }, { ...off, key: true }, value)).toEqual({ key: 2 });
+    expect(eventChanges({ ...base, key: { fifths: 2, here: false } }, { ...off, key: true }, value)).toEqual({});
+    expect(eventChanges({ ...base, key: { fifths: 2, here: true } }, { ...off, key: false }, value)).toEqual({ key: null });
+  });
+});

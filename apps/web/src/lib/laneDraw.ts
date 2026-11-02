@@ -14,6 +14,8 @@ export interface LaneDraw {
   readonly readout?: { readonly at: number; readonly text: string } | undefined;
   /** 띠 이름 ("음량"). 칸 안 왼쪽 위에 옅게 적어 음 칸과 다른 곳이라는 걸 알린다 */
   readonly label?: string | undefined;
+  /** 박 선도 옅게 긋는다 (타브 아래 띠: 위 지판에 박 선이 없어 음량 막대로 박 자리를 맞춰 본다) */
+  readonly beatLines?: boolean | undefined;
 }
 
 export interface LaneDrawContext {
@@ -56,12 +58,15 @@ export function drawVolumeLane(g: CanvasRenderingContext2D, c: LaneDrawContext, 
   g.globalAlpha = 1;
   g.fillStyle = line;
   // 마디선과 v 가운데 안내선
+  const beat = l.beatLines ? c.css("--roll-beat-line") : undefined;
   for (const gl of gridLines(c.song.timeSig, from, to)) {
-    if (gl.kind !== "measure") continue;
+    if (gl.kind === "unit" || (gl.kind === "beat" && !beat)) continue;
+    g.fillStyle = gl.kind === "beat" ? beat! : line;
     const p = timeToScreen(v, gl.at);
     if (horizontal) g.fillRect(p, box.y, 1, box.h);
     else g.fillRect(box.x, p, box.w, 1);
   }
+  g.fillStyle = line;
   g.globalAlpha = 0.5;
   const mid = laneValueToScreen(v, (vr.min + vr.max) / 2, vr);
   if (horizontal) g.fillRect(box.x, mid, box.w, 1);

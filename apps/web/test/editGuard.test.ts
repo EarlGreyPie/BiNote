@@ -1,13 +1,13 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { attenuateChordVolumes, defaultLengthLimit, History, MOBILE_PROFILE, planGhost, planHarmonic, planLabClear, planReverbBatch, planReverbStamp, rat, type Command, type Note, type Rat, type Song } from "@mmlce/core";
-import { addPlayer, addTrack, applyPlan, barSpans, canWriteExactly, deleteBars, deleteTime, duplicateTrack, distributeSong, findOffgrid, findSpreadSpans, fixOffgrid, insertTime, mergeTracksSong, newSong, parseTrackText, planMergeTracks, planMoveNotes, rampTempos, referenceShiftForDelete, removeTrack, setMeter, setTrackText, setTempoAt, setTempos, setTracksNotes, spreadSong } from "@mmlce/mml";
+import { addPlayer, addTrack, applyPlan, barSpans, canWriteExactly, deleteBars, deleteTime, duplicateTrack, distributeSong, findOffgrid, findSpreadSpans, fixOffgrid, insertTime, mergeTracksSong, newSong, parseTrackText, planMergeTracks, planMoveNotes, rampTempos, referenceShiftForDelete, referenceShiftForInsert, removeTrack, setMeter, setTrackText, setTempoAt, setTempos, setTracksNotes, spreadSong } from "@mmlce/mml";
 import { pairBarTempo, tapTempos } from "../src/lib/tempoSync";
 import { newOutOfRangeTrack, newUnwritableTrack } from "../src/lib/writable";
 import { attenuationOptions, CHORD_ATT_DEFAULTS } from "../src/lib/chordAttPrefs";
 import { retuneCommand, retuneKeepingTab } from "../src/lib/retune";
 import { shiftStrings, TUNINGS } from "../src/lib/tunings";
-import { shiftMs, stepHistory, withReferenceShift } from "../src/lib/referenceShift";
+import { shiftMs, shiftVideoOffset, stepHistory, withReferenceShift } from "../src/lib/referenceShift";
 
 const limit = defaultLengthLimit();
 const note = (id: string, start: [number, number], dur: [number, number], pitch = 60): Note => ({ id, start: rat(...start), dur: rat(...dur), pitch, vol: 8, tie: "none" });
@@ -259,6 +259,63 @@ describe("마디 지우기·빼기와 원곡 대조 위치는 실행 취소 한 
     expect(offset).toBe(-10_000 + 2333);
     offset = step(h, "undo", offset);
     expect(offset).toBe(-10_000);
+  });
+});
+
+describe("마디 편집과 배경 영상 위치도 실행 취소 한 칸에 함께 돌아간다", () => {
+  /** 1~4마디에 한 음씩, t120(한 마디 2초) */
+  const four = (): Song => ({
+    ...song([note("a", [0, 1], [1, 1]), note("b", [1, 1], [1, 1], 62), note("c", [2, 1], [1, 1], 64), note("d", [3, 1], [1, 1], 65)]),
+    tempo: [{ at: rat(0), bpm: 120 }],
+  });
+
+  it("마디 지우기: 원곡과 영상을 함께 옮기고, 실행 취소·다시 실행이 두 위치를 정확히 되돌린다 (영상 이름도 함께)", () => {
+    const s = four();
+    const h = guarded(s);
+    // 원곡은 4마디 처음(6초)부터, 영상은 3마디 처음(4초)부터 (영상 어긋남은 초 소수)
+    let refMs = -6000;
+    let videoOffset = -4.05;
+    const spans = barSpans(s, [[1, 1]]);
+    const ms = shiftMs(referenceShiftForDelete(h.song, spans, refMs / 1000).shiftSec);
+    const vms = shiftMs(referenceShiftForDelete(h.song, spans, videoOffset).shiftSec);
+    expect([ms, vms]).toEqual([2000, 2000]);
+    h.run(withReferenceShift(deleteBars([[1, 1]]), ms, "a.mp3", { ms: vms, name: "v.mp4" }));
+    refMs += ms;
+    videoOffset = shiftVideoOffset(videoOffset, vms);
+    expect(videoOffset).toBe(-2.05);
+    const undo = stepHistory(h, "undo");
+    expect(h.song).toBe(s);
+    expect(undo).toMatchObject({ referenceShiftMs: -2000, referenceName: "a.mp3", videoShiftMs: -2000, videoName: "v.mp4" });
+    refMs += undo.referenceShiftMs;
+    videoOffset = shiftVideoOffset(videoOffset, undo.videoShiftMs);
+    expect([refMs, videoOffset]).toEqual([-6000, -4.05]);
+    const redo = stepHistory(h, "redo");
+    expect(redo).toMatchObject({ referenceShiftMs: 2000, videoShiftMs: 2000, videoName: "v.mp4" });
+    expect(shiftVideoOffset(videoOffset, redo.videoShiftMs)).toBe(-2.05);
+  });
+
+  it("마디 넣기: 영상만 있으면 영상만 옮기고(원곡 0), 실행 취소로 돌아온다. 옮길 것이 없으면 명령 그대로", () => {
+    const s = four();
+    const h = guarded(s);
+    let videoOffset = -5.123;
+    const vms = shiftMs(referenceShiftForInsert(h.song, rat(1), rat(1), videoOffset).shiftSec);
+    expect(vms).toBe(-2000);
+    h.run(withReferenceShift(insertTime(rat(1), rat(1)), 0, undefined, { ms: vms, name: "v.mp4" }));
+    videoOffset = shiftVideoOffset(videoOffset, vms);
+    expect(videoOffset).toBe(-7.123);
+    const undo = stepHistory(h, "undo");
+    expect(undo).toMatchObject({ referenceShiftMs: 0, referenceName: undefined, videoShiftMs: 2000, videoName: "v.mp4" });
+    expect(shiftVideoOffset(videoOffset, undo.videoShiftMs)).toBe(-5.123);
+    const plain = insertTime(rat(1), rat(1));
+    expect(withReferenceShift(plain, 0, "a.mp3", { ms: 0, name: "v.mp4" })).toBe(plain);
+  });
+
+  it("영상 어긋남 옮기기는 여러 번 옮기고 되돌려도 처음 값으로 정확히 돌아온다", () => {
+    let o = 0.35;
+    const moves = [2333, -1777, 2667, 4000, -1];
+    for (const m of moves) o = shiftVideoOffset(o, m);
+    for (const m of [...moves].reverse()) o = shiftVideoOffset(o, -m);
+    expect(o).toBe(0.35);
   });
 });
 

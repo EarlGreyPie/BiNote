@@ -1,4 +1,4 @@
-import { add, cmp, div, emptySong, fitNotes, INSTRUMENTS, tieChains, removeNotes, replaceNotes, meterGrid, trackInstrument, rat, sub, ZERO, type Command, type InstrumentRef, type Note, type Player, type PlayerTab, samePlayerTab, type Rat, type Song, type Track, type TrackRole } from "@mmlce/core";
+import { add, clampFifths, cmp, type KeyEvent, div, emptySong, fitNotes, INSTRUMENTS, tieChains, removeNotes, replaceNotes, meterGrid, trackInstrument, rat, sub, ZERO, type Command, type InstrumentRef, type Note, type Player, type PlayerTab, samePlayerTab, type Rat, type Song, type Track, type TrackRole } from "@mmlce/core";
 import { keepTextEnd, setTracksNotes } from "./edit.js";
 
 /** 트랙 색 (3MLE·마비꼬와 비슷한 6색을 차례로) */
@@ -503,6 +503,46 @@ export function moveMarker(id: string, to: Rat, label = "마커 옮기기"): Com
 /** 마커를 지운다 */
 export function removeMarker(id: string, label = "마커 지우기"): Command {
   return replaceWith(label, (song) => (song.markers.some((m) => m.id === id) ? { ...song, markers: song.markers.filter((m) => m.id !== id) } : song));
+}
+
+/**
+ * 조표를 at 자리에 넣거나 고친다 (fifths -7~7). 바로 앞 조표와 같으면 넣지 않고, 그 자리에 있던 것은 지운다
+ * (곡 처음의 다장조는 적지 않는다). 뒤 조표가 새 값과 같아지면 그것도 뺀다
+ */
+export function setKeyAt(at: Rat, fifths: number, label = "조표"): Command {
+  return replaceWith(label, (song) => {
+    const f = clampFifths(fifths);
+    const others = (song.keys ?? []).filter((k) => cmp(k.at, at) !== 0);
+    return withKeys(song, [...others, { at, fifths: f }]);
+  });
+}
+
+/** 조표를 지운다 (그 자리부터 앞 조표가 이어진다) */
+export function removeKeyAt(at: Rat, label = "조표 지우기"): Command {
+  return replaceWith(label, (song) => ((song.keys ?? []).some((k) => cmp(k.at, at) === 0) ? withKeys(song, (song.keys ?? []).filter((k) => cmp(k.at, at) !== 0)) : song));
+}
+
+/** 조표를 옮긴다 (옮길 자리에 있던 조표는 덮는다) */
+export function moveKey(from: Rat, to: Rat, label = "조표 옮기기"): Command {
+  return replaceWith(label, (song) => {
+    const key = (song.keys ?? []).find((k) => cmp(k.at, from) === 0);
+    if (!key || cmp(from, to) === 0) return song;
+    return withKeys(song, [...(song.keys ?? []).filter((k) => cmp(k.at, from) !== 0 && cmp(k.at, to) !== 0), { ...key, at: to }]);
+  });
+}
+
+/** 조표 목록을 위치 순으로 정리해 넣는다: 앞 조표와 같은 값(곡 처음 다장조 포함)은 뺀다. 비면 필드를 지운다 */
+function withKeys(song: Song, keys: readonly KeyEvent[]): Song {
+  const sorted = [...keys].sort((a, b) => cmp(a.at, b.at));
+  const out: KeyEvent[] = [];
+  let now = 0;
+  for (const k of sorted) {
+    if (k.fifths === now) continue;
+    out.push(k);
+    now = k.fifths;
+  }
+  const { keys: _old, ...rest } = song;
+  return out.length > 0 ? { ...rest, keys: out } : rest;
 }
 
 /** 트랙 이름을 바꾼다 (빈 이름은 무시) */

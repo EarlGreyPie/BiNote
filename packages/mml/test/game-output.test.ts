@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { emptySong, eq, MOBILE_PROFILE, rat, type Player, type Song, type Track } from "@mmlce/core";
-import { gameCharCounts, gamePaste, optimizeMml, orderPasted, gameScores, parseMml, parseTrackText, pasteTempoChoices, shortestWriting, splitSong } from "../src/index.js";
+import { gameCharCounts, gamePaste, gameReadyText, optimizeMml, orderPasted, gameScores, parseMml, parseTrackText, pasteTempoChoices, shortestWriting, splitSong } from "../src/index.js";
 
 const piano: Player = { id: "p1", name: "피아노", instrument: { canonical: "piano" } };
 const flute: Player = { id: "p2", name: "플루트", instrument: { canonical: "flute" } };
@@ -300,5 +300,23 @@ describe("gameScores와 gamePaste 글자 수", () => {
         expect(score.texts.map((x) => x.text)).toEqual(p.texts.map((x) => x.text));
       }
     }
+  });
+});
+
+describe("화면 글을 그대로 쓸 때(출력기로 못 쓰는 트랙) 게임이 막는 빈칸을 벗긴다", () => {
+  it("주석·빈칸·줄바꿈과 건너뛴 모르는 글자를 지운다 (게임은 `c 4`를 사용할 수 없는 악보로 막는다)", () => {
+    expect(gameReadyText("c4 d4\n/* 메모 */e8 f 4 g")).toBe("c4d4e8fg");
+  });
+
+  it("출력기로 쓸 수 없는 트랙도 빈칸 없는 글로 나간다", () => {
+    const text = "c128 d4\n/* 메모 */ e4";
+    const t = { ...track("a", "p1", text), mml: { text } };
+    const s = song([t], [{ at: rat(0), bpm: 120 }]);
+    const score = gameScores(s, 6)[0]!;
+    expect(score.asIs).toEqual(["a"]);
+    expect(score.texts[0]!.text).not.toMatch(/[\s/*]/);
+    const paste = gamePaste(s, ["a"], 6, 6, { tempo: false });
+    expect(paste.asIs).toEqual(["a"]);
+    expect(paste.texts[0]!.text).not.toMatch(/[\s/*]/);
   });
 });

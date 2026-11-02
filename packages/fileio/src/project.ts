@@ -11,6 +11,7 @@ import {
   type MadeNotes,
   type MadeRecord,
   type MadeTool,
+  type KeyEvent,
   type Marker,
   type Note,
   type NoteLab,
@@ -130,12 +131,13 @@ function known<T>(names: Record<Exclude<keyof T, "extras">, true>): ReadonlySet<
 }
 
 const FILE_KEYS = known<ProjectFile>({ format: true, version: true, minReader: true, app: true, savedAt: true, song: true, editor: true });
-const SONG_KEYS = known<Song>({ meta: true, tempo: true, timeSig: true, markers: true, players: true, tracks: true, sources: true, made: true });
+const SONG_KEYS = known<Song>({ meta: true, tempo: true, timeSig: true, markers: true, keys: true, players: true, tracks: true, sources: true, made: true });
 const META_KEYS = known<SongMeta>({ title: true, author: true, profileId: true, memo: true });
 const TEMPO_KEYS = known<TempoEvent>({ at: true, bpm: true });
 const TIME_SIG_KEYS = known<TimeSigEvent>({ at: true, beats: true, unit: true });
 const MADE_KEYS = known<MadeRecord>({ id: true, tool: true, options: true, trackId: true, picked: true, before: true, after: true, addedTracks: true });
 const MARKER_KEYS = known<Marker>({ id: true, at: true, label: true });
+const KEY_KEYS = known<KeyEvent>({ at: true, fifths: true });
 const PLAYER_KEYS = known<Player>({ id: true, name: true, instrument: true, splitFrom: true, tab: true });
 const TRACK_KEYS = known<Track>({
   id: true,
@@ -220,6 +222,7 @@ function fileSong(song: Song): Obj {
       tempo: song.tempo.map((e) => unfold(e, TEMPO_KEYS)),
       timeSig: song.timeSig.map((e) => unfold(e, TIME_SIG_KEYS)),
       markers: song.markers.map((m) => unfold(m, MARKER_KEYS)),
+      ...(song.keys ? { keys: song.keys.map((k) => unfold(k, KEY_KEYS)) } : {}),
       players: song.players.map((p) => unfold(p, PLAYER_KEYS)),
       tracks: song.tracks.map((t) => unfold({ ...t, notes: t.notes.map(note) }, TRACK_KEYS)),
       sources: song.sources.map((s) => unfold(s, SOURCE_KEYS)),
@@ -446,6 +449,17 @@ function readSong(raw: Obj, diagnostics: FileDiagnostic[]): Song {
     else warn(diagnostics, "project-dropped", "markers");
   }
 
+  // 조표: 같은 자리에 둘이면 뒤의 것을 쓴다
+  const keyMap = new Map<string, KeyEvent>();
+  for (const e of list(raw.keys)) {
+    const at = isObject(e) ? readRat(e.at) : undefined;
+    const fifths = isObject(e) ? e.fifths : undefined;
+    if (at && cmp(at, ZERO) >= 0 && Number.isInteger(fifths) && (fifths as number) >= -7 && (fifths as number) <= 7)
+      keyMap.set(`${at.n}/${at.d}`, { at, fifths: fifths as number, ...withExtras(e as Obj, KEY_KEYS) });
+    else warn(diagnostics, "project-dropped", "keys");
+  }
+  const keys = [...keyMap.values()].sort((a, b) => cmp(a.at, b.at));
+
   const players: Player[] = [];
   const playerIds = new Set<string>();
   for (const [i, p] of list(raw.players).entries()) {
@@ -526,7 +540,7 @@ function readSong(raw: Obj, diagnostics: FileDiagnostic[]): Song {
   }
 
   const made = readMade(raw.made, profile.volume);
-  return pruneMade({ meta, tempo, timeSig, markers, players, tracks, sources, ...(made.length > 0 ? { made } : {}), ...withExtras(raw, SONG_KEYS) });
+  return pruneMade({ meta, tempo, timeSig, markers, ...(keys.length > 0 ? { keys } : {}), players, tracks, sources, ...(made.length > 0 ? { made } : {}), ...withExtras(raw, SONG_KEYS) });
 }
 
 /**

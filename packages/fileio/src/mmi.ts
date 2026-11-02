@@ -274,13 +274,43 @@ function mmiVerbatim(song: Song, entries: readonly MmiEntry[]): Map<string, stri
   return texts;
 }
 
+export interface WriteMmiOptions {
+  /** 내보낼 트랙 (곡 트랙 순서는 그대로). 없으면 모든 트랙 */
+  readonly trackIds?: readonly string[];
+}
+
+/**
+ * 고른 트랙만 남긴 곡. 연주자는 그대로 둔다: 트랙이 없는 연주자는 mml-track을 만들지 않고,
+ * 그 뒤 '○○ 노래' 연주자의 노래 트랙은 지금처럼 그 연주자 이름의 빈 mml-track 노래 칸으로 간다 (mmiEntries)
+ */
+function pickTracks(song: Song, trackIds: readonly string[] | undefined): Song {
+  if (!trackIds) return song;
+  const keep = new Set(trackIds);
+  return { ...song, tracks: song.tracks.filter((t) => keep.has(t.id)) };
+}
+
+/** .mmi의 mml-track 하나에 들어갈 모양 (내보내기 창 미리보기) */
+export interface MmiLayoutEntry {
+  readonly name: string;
+  /** 멜로디·화음1·화음2 칸 트랙 (앞에서부터) */
+  readonly parts: readonly string[];
+  /** 노래 칸 트랙 */
+  readonly song?: string;
+}
+
+/** 고른 트랙을 .mmi로 쓸 때 mml-track으로 묶이는 모양. writeMmi와 같은 규칙(연주자마다, 악기·팬·보이기가 같은 트랙 3개씩) */
+export function mmiLayout(song: Song, trackIds?: readonly string[]): MmiLayoutEntry[] {
+  return mmiEntries(pickTracks(song, trackIds)).map((e) => ({ name: e.name, parts: e.parts.map((t) => t.id), ...(e.song ? { song: e.song.id } : {}) }));
+}
+
 /**
  * 곡을 .mmi 문자열로 쓴다. 연주자마다 트랙을 3개씩 묶어 멜로디·화음1·화음2에 넣고, 노래 칸에서 읽은 트랙은 노래 칸에 넣는다.
  * 연주자 트랙이 3개를 넘으면 mml-track을 더 만든다.
  * 모든 트랙에 원문이 있으면 원문을 그대로 쓰고(startDelta도 원문 시작 자리로), 아니면 출력기로 새로 쓴다.
  * 템포는 tempo= 줄과 첫 파트 본문에 같이 쓴다.
  */
-export function writeMmi(song: Song): { text: string; diagnostics: FileDiagnostic[] } {
+export function writeMmi(whole: Song, options: WriteMmiOptions = {}): { text: string; diagnostics: FileDiagnostic[] } {
+  const song = pickTracks(whole, options.trackIds);
   const diagnostics: FileDiagnostic[] = [];
   const tempoItems: string[] = [];
   for (const t of song.tempo) {
@@ -334,7 +364,14 @@ export function writeMmi(song: Song): { text: string; diagnostics: FileDiagnosti
     const tempo = tempoWritten ? [] : lead === ZERO ? song.tempo : song.tempo.map((t) => ({ ...t, at: shift(t.at) }));
     const printed = optimizeMml(notes, { tempo });
     tempoWritten = true;
-    for (const d of printed.diagnostics) diagnostics.push({ ...d, where: track.name });
+    // 같은 알림(옥타브째 옮긴 음 등)은 트랙마다 한 번만
+    const seen = new Set<string>();
+    for (const d of printed.diagnostics) {
+      const key = `${d.code}|${JSON.stringify(d.params ?? {})}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      diagnostics.push({ ...d, where: track.name });
+    }
     return printed.text;
   };
   /** 곡 시작보다 앞선 음(읽을 때 음수 startDelta로 당겨진 음)이 있으면 그 자리. 출력기는 음수 위치의 음을 쓸 수 없다 */

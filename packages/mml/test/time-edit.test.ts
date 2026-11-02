@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { emptySong, normalizeTempo, positionToSeconds, rat, type Rat, type Song, type TrackText } from "@mmlce/core";
-import { barSpans, checkDeleteBars, deleteBars, deleteTime, insertTime, parseTrackText, referenceShiftForDelete, tempoMismatch, trackEnd } from "../src/index.js";
+import { barSpans, checkDeleteBars, deleteBars, deleteTime, insertTime, parseTrackText, referenceShiftForDelete, referenceShiftForInsert, tempoMismatch, trackEnd } from "../src/index.js";
 
 function song(text: string): Song {
   const base = emptySong({ title: "", author: "", profileId: "mobile" });
@@ -301,5 +301,61 @@ describe("마디 지우기와 원곡 대조 위치 (referenceShiftForDelete)", (
     const base = song("c1 d1 e1 f1 g1 a1");
     expect(referenceShiftForDelete(base, barSpans(base, [[4, 4]]), 0, 3)).toEqual({ shiftSec: 0 });
     expect(referenceShiftForDelete(base, barSpans(base, [[4, 4]]), 0)).toEqual({ shiftSec: 0, brokenBar: 4 });
+  });
+});
+
+describe("마디 넣기와 원곡·배경 영상 위치 (referenceShiftForInsert)", () => {
+  // song(): t120(한 마디 2초) 뒤 2(3마디 처음)부터 t90(한 마디 8/3초)
+  const sec = (s: Song, pos: Rat) => positionToSeconds(s.tempo, pos);
+  /** 넣은 뒤 newPos 자리의 음이, 넣기 전 oldPos 자리에서 울리던 원곡 시각에 그대로 울리는지 */
+  function expectAligned(before: Song, after: Song, offset: number, shift: number, oldPos: Rat, newPos: Rat) {
+    expect(sec(after, newPos) + offset + shift).toBeCloseTo(sec(before, oldPos) + offset, 9);
+  }
+
+  it("원곡이 울리기 전에 넣으면 넣은 마디의 실제 길이만큼 어긋남을 빼고, 넣은 뒤 곡이 원곡과 맞는다", () => {
+    const base = song("c1 d1 e1 f1 g1 a1");
+    // 원곡은 5마디 처음(4)부터 울린다
+    const offset = -(4 + 16 / 3);
+    const plan = referenceShiftForInsert(base, rat(1), rat(1), offset);
+    expect(plan).toEqual({ shiftSec: -2 });
+    expectAligned(base, insertTime(rat(1), rat(1)).apply(base), offset, plan.shiftSec, rat(4), rat(5));
+  });
+
+  it("템포가 바뀌는 자리에 넣으면 넣은 마디는 그 앞 템포로 울린다 (마디 넣기가 템포를 뒤로 미는 것과 같게)", () => {
+    const base = song("c1 d1 e1 f1 g1 a1");
+    const offset = -(4 + 16 / 3);
+    // 3마디 처음(2)의 t90은 넣은 마디 뒤로 밀리므로 넣은 마디는 t120 = 2초
+    const plan = referenceShiftForInsert(base, rat(2), rat(1), offset);
+    expect(plan.shiftSec).toBeCloseTo(-2, 12);
+    expectAligned(base, insertTime(rat(2), rat(1)).apply(base), offset, plan.shiftSec, rat(4), rat(5));
+    // 원곡이 시작하는 바로 그 자리(4초 = 3마디 처음)에 넣어도 맞출 수 있다
+    expect(referenceShiftForInsert(base, rat(2), rat(1), -4).shiftSec).toBeCloseTo(-2, 12);
+  });
+
+  it("곡 처음에 넣으면 원곡이 이미 울리고 있어도 어긋남 하나로 맞는다 (처음 템포로 잰 길이)", () => {
+    const base = song("c1 d1 e1 f1 g1 a1");
+    const plan = referenceShiftForInsert(base, rat(0), rat(1), 1.5);
+    expect(plan).toEqual({ shiftSec: -2 });
+    expectAligned(base, insertTime(rat(0), rat(1)).apply(base), 1.5, plan.shiftSec, rat(3), rat(4));
+  });
+
+  it("원곡이 울리는 가운데에 넣으면 옮기지 않고 넣은 마디부터 어긋난다고 알린다. 원곡이 끝난 뒤면 상관없다", () => {
+    const base = song("c1 d1 e1 f1 g1 a1");
+    expect(referenceShiftForInsert(base, rat(2), rat(1), 0)).toEqual({ shiftSec: 0, brokenBar: 3 });
+    expect(referenceShiftForInsert(base, rat(3), rat(1), 0, 3)).toEqual({ shiftSec: 0 });
+    expect(referenceShiftForInsert(base, rat(3), rat(1), 0)).toEqual({ shiftSec: 0, brokenBar: 4 });
+  });
+});
+
+describe("마디 넣기·빼기와 조표", () => {
+  it("곡 처음 조표는 두고 뒤 조표를 밀고 당긴다", async () => {
+    const { newSong, insertTime, deleteTime } = await import("../src/index.js");
+    const { rat } = await import("@mmlce/core");
+    const song = { ...newSong({ playerName: "p", trackName: "t" }), keys: [{ at: rat(0), fifths: 1 }, { at: rat(2), fifths: -2 }] };
+    const ins = insertTime(rat(1), rat(1)).apply(song);
+    expect(ins.keys?.map((k) => k.at.n)).toEqual([0, 3]);
+    const del = deleteTime(rat(1), rat(2)).apply(song);
+    // 지운 구간 안의 조표는 구간 처음에 남는다 (템포·박자와 같다)
+    expect(del.keys?.map((k) => [k.at.n, k.fifths])).toEqual([[0, 1], [1, -2]]);
   });
 });

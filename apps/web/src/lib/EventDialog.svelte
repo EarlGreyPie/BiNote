@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { METER_UNITS } from "@mmlce/core";
+  import { KEY_FIFTHS, METER_UNITS } from "@mmlce/core";
+  import { keyOptionLabel } from "./keyLabel";
   import type { MessageKey } from "@mmlce/i18n";
   import { t } from "./i18n.svelte";
   import type { EventKind } from "./roll";
@@ -21,17 +22,19 @@
     meter: { readonly beats: number; readonly unit: number; readonly here: boolean };
     /** 고치는 마커 이름. here = 누른 마커를 고친다 (아니면 새 마커) */
     marker: { readonly text: string; readonly here: boolean };
+    /** 이 자리(또는 앞)의 조표. here = 바로 이 자리에 조표가 있다 */
+    keySig: { readonly fifths: number; readonly here: boolean };
     /** 곡 처음 박자는 지울 수 없다 / 곡 처음 템포를 지우면 t120 */
     atStart: boolean;
     onapply: (changes: EventChanges) => void;
     onclose: () => void;
   }
 
-  let { kind, where, tempoRange, tempo, meter, marker, atStart, onapply, onclose }: Props = $props();
+  let { kind, where, tempoRange, tempo, meter, marker, keySig, atStart, onapply, onclose }: Props = $props();
 
   let dialog: HTMLDialogElement;
   // svelte-ignore state_referenced_locally
-  let on = $state({ tempo: tempo.here || kind === "tempo", meter: meter.here || kind === "meter", marker: marker.here || kind === "marker" });
+  let on = $state({ tempo: tempo.here || kind === "tempo", meter: meter.here || kind === "meter", marker: marker.here || kind === "marker", key: keySig.here || kind === "key" });
   // svelte-ignore state_referenced_locally
   let bpm = $state(tempo.bpm);
   // svelte-ignore state_referenced_locally
@@ -40,14 +43,16 @@
   let beats = $state(meter.beats);
   // svelte-ignore state_referenced_locally
   let unit = $state(meter.unit);
+  // svelte-ignore state_referenced_locally
+  let fifths = $state(keySig.fifths);
   $effect(() => {
     dialog.showModal();
   });
 
-  const existing = $derived(tempo.here || meter.here || marker.here);
+  const existing = $derived(tempo.here || meter.here || marker.here || keySig.here);
   /** 곡 처음 박자는 늘 있다 (끌 수 없다) */
   const meterLocked = $derived(atStart && meter.here);
-  const changes = $derived(eventChanges({ tempo, meter, marker }, { tempo: on.tempo, meter: on.meter || meterLocked, marker: on.marker }, { bpm, beats, unit, text }));
+  const changes = $derived(eventChanges({ tempo, meter, marker, key: keySig }, { tempo: on.tempo, meter: on.meter || meterLocked, marker: on.marker, key: on.key }, { bpm, beats, unit, text, fifths }));
   const valid = $derived(
     (!on.tempo || (Number.isInteger(bpm) && bpm >= 1)) &&
       (!(on.meter || meterLocked) || (Number.isInteger(beats) && beats >= 1 && beats <= 32)) &&
@@ -95,6 +100,14 @@
     <input class="text" class:off={!on.marker} type="text" bind:value={text} placeholder={t("ui.markerPlaceholder")} oninput={() => (on.marker = true)} {onkeydown} autofocus={kind === "marker"} />
     {#if marker.here && !on.marker}<span class="muted gone">{t("ui.eventDelete")}</span>{/if}
   </div>
+  <div class="row">
+    <label class="kind"><input type="checkbox" bind:checked={on.key} />{label("key")}</label>
+    <select class:off={!on.key} bind:value={fifths} onchange={() => (on.key = true)}>
+      {#each KEY_FIFTHS as f (f)}<option value={f}>{keyOptionLabel(f)}</option>{/each}
+    </select>
+    {#if keySig.here && !on.key}<span class="muted gone">{t("ui.eventDelete")}</span>{/if}
+  </div>
+  {#if on.key}<p class="muted">{t("ui.keyEventHelp")}</p>{/if}
   {#if outOfRange}<p class="warn">{t("ui.tempoOutOfRange", { min: tempoRange.min, max: tempoRange.max })}</p>{/if}
   {#if tempo.here && atStart && !on.tempo}<p class="muted">{t("ui.tempoStartDelete")}</p>{/if}
   {#if on.meter && !meter.here}<p class="muted">{t("ui.meterHelpAt")}</p>{/if}
