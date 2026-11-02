@@ -130,9 +130,9 @@ export function diagnosticText(info: DiagnosticInfo): string {
 }
 
 /** 실험실 상태를 목록으로: 끔이면 빈 목록, 켰으면 "on"과 켠 세부 설정 */
-export function enabledLabs(labs: { readonly on: boolean; readonly buttonNames: boolean; readonly fade: boolean }, extra: readonly string[] = []): string[] {
+export function enabledLabs(labs: { readonly on: boolean; readonly buttonNames: boolean; readonly fade: boolean; readonly liveEdit?: boolean }, extra: readonly string[] = []): string[] {
   if (!labs.on) return [];
-  return ["on", ...(labs.buttonNames ? ["buttonNames"] : []), ...(labs.fade ? ["fade"] : []), ...extra];
+  return ["on", ...(labs.buttonNames ? ["buttonNames"] : []), ...(labs.fade ? ["fade"] : []), ...(labs.liveEdit ? ["liveEdit"] : []), ...extra];
 }
 
 /** 지금 화면 정보 한 줄: 화면 크기·배율·터치·앱 설치 여부 */

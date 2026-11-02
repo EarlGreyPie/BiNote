@@ -81,6 +81,12 @@ function soundingNotes(notes: readonly Note[]): { note: Note; end: Rat; legatoNe
   return out;
 }
 
+/** 소리 내는 트랙의 ID (끄기·솔로 반영). 일정의 소리 지점은 이 순서대로 하나씩이다 */
+export function audibleTrackIds(song: Song): string[] {
+  const anySolo = song.tracks.some((t) => t.solo);
+  return song.tracks.filter((t) => !t.mute && (!anySolo || t.solo)).map((t) => t.id);
+}
+
 export function buildSchedule(song: Song, profile: GameProfile, options: ScheduleOptions = {}): Schedule {
   const from = options.from;
   // 템포 지도는 한 번만 정리한다 (음마다 두 번씩 바꾸므로)

@@ -1,5 +1,6 @@
 import {
   assignPatches,
+  audibleTrackIds,
   bendValue,
   buildSchedule,
   LivePlayer,
@@ -576,8 +577,40 @@ export class Engine {
     this.player!.start(schedule, patches, { ...(loop ? { loop } : {}), ...(delay !== undefined ? { delay } : {}), ...(rate !== 1 ? { rate } : {}), ...(offset > 0 ? { offset } : {}) });
     this.fromSeconds = from ? positionToSeconds(song.tempo, from) : 0;
     this.runOrigin = this.player!.startTime ?? 0;
+    this.liveRun = { request, from, profileId: song.meta.profileId, tempo: JSON.stringify(song.tempo), tracks: audibleTrackIds(song).join("\n"), endless: !!lead?.endless };
     this.startReference();
     return unresolved;
+  }
+
+  /** 지금 재생을 시작한 곡의 조건. 재생 중에 고친 곡을 이어 붙일 수 있는지(update) 가린다 */
+  private liveRun: { request: number; from: Rat | undefined; profileId: string; tempo: string; tracks: string; endless: boolean } | undefined;
+
+  /**
+   * 실험실 "재생 중 고친 것 바로 듣기": 재생을 멈추지 않고 고친 곡을 이어 붙인다 (LivePlayer.replace).
+   * 이미 신스에 넣은 앞쪽(약 0.3초)은 그대로 나고 그 뒤부터 바뀐다. 악기·세기·음을 고친 것만 이어 붙이고,
+   * 템포·게임 프로필·소리 내는 트랙(끄기·솔로·트랙 더하기·빼기)이 바뀌었으면 "restart"(부르는 쪽이 지금 자리부터 다시 재생),
+   * 재생 중이 아니거나 녹음 중이거나 그사이 다른 재생을 눌렀으면 "idle"
+   */
+  async update(song: Song): Promise<{ result: "live"; unresolved: Unresolved[] } | { result: "restart" | "idle" }> {
+    const run = this.liveRun;
+    const player = this.player;
+    if (!run || !player?.playing || run.request !== this.playRequest || run.endless) return { result: "idle" };
+    if (song.meta.profileId !== run.profileId || JSON.stringify(song.tempo) !== run.tempo || audibleTrackIds(song).join("\n") !== run.tracks) return { result: "restart" };
+    const plan = () => {
+      const schedule = buildSchedule(song, getProfile(song.meta.profileId), { ...(run.from ? { from: run.from } : {}), canonicalOf: this.canonicalOf });
+      return { schedule, ...assignPatches(schedule, this.registry, this.gains) };
+    };
+    const version = this.packVersion;
+    let next = plan();
+    if (next.patches.some((p) => p.channel >= this.channels)) return { result: "restart" };
+    // 새로 쓰는 음(바꾼 악기·세기)만 미리 준비한다. 이미 준비한 음은 건너뛴다
+    await this.prepareVoices(next.schedule, next.patches);
+    if (run !== this.liveRun || run.request !== this.playRequest || !player.playing) return { result: "idle" };
+    // 준비하는 사이 팩 구성이 바뀌었으면 새 구성으로 다시 정한다 (준비 못 한 음은 처음 칠 때 준비된다)
+    if (version !== this.packVersion) next = plan();
+    if (!player.replace(next.schedule, next.patches)) return { result: "restart" };
+    this.playingPatches = next.patches;
+    return { result: "live", unresolved: next.unresolved };
   }
 
   /** 재생 요청 번호. 정지·새 재생마다 늘어, 준비하는 동안 취소된 재생이 뒤늦게 시작하지 않게 한다 */
@@ -912,10 +945,10 @@ export class Engine {
     return gain;
   }
 
-  /** 어긋남을 바꾸면 재생 중인 원곡도 그 자리로 다시 맞춘다 */
-  setReferenceOffset(seconds: number): void {
+  /** 어긋남을 바꾸면 재생 중인 원곡도 그 자리로 다시 맞춘다 (restart가 false면 다음 재생부터) */
+  setReferenceOffset(seconds: number, restart = true): void {
     this.referenceOffset = seconds;
-    if (this.playing) this.startReference();
+    if (restart && this.playing) this.startReference();
   }
 
   private startReference(wrapAt?: number): void {

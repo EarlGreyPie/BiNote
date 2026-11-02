@@ -163,7 +163,7 @@ export function readMmi(text: string, names: MmiNames = KO_NAMES): ReadResult {
         tempo,
         diagnostics,
       );
-      tracks.push({ ...track, ...(Object.keys(mix).length > 0 ? { mix } : {}), ...(isSong ? { mmiSong: true } : {}) });
+      tracks.push({ ...track, ...(Object.keys(mix).length > 0 ? { mix } : {}), ...(isSong ? { mmiSong: true } : {}), mmlDialect: "mabiicco" });
     });
   });
 

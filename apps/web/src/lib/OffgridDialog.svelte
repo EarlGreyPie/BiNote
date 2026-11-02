@@ -1,6 +1,6 @@
 <script lang="ts">
   import { barBeatAt, rat, type Rat, type Song } from "@mmlce/core";
-  import { customOffgrid, offgridLengthText, offgridLimit, type OffgridFix } from "@mmlce/mml";
+  import { customOffgrid, offgridLengthText, offgridLimit, offgridMixed, type OffgridFix } from "@mmlce/mml";
   import { t } from "./i18n.svelte";
   import { audible, listenState } from "./listenState";
 
@@ -48,9 +48,14 @@
         track: song.tracks.find((tr) => tr.id === fix.trackId)?.name ?? "",
         place: t("ui.checkPlace", { bar, beat: Number.isInteger(beat) ? beat : beat.toFixed(2) }),
         from: fix.edits.map((e) => e.from).join(", "),
+        // 자리마다 고칠 길이가 다른 묶음(마비꼬 트랙)은 길이 하나를 적을 수 없어 고칠 값을 글로만 보인다
+        mixed: offgridMixed(fix),
+        to: fix.edits.map((e) => e.to).join(", "),
       };
     }),
   );
+  /** 마비꼬 .mmi에서 읽은 트랙이 있는지 (그 트랙은 마비꼬 규칙으로 찾는다) */
+  const mabiicco = $derived(song.tracks.some((tr) => tr.mml && tr.mmlDialect === "mabiicco"));
   const usable = $derived(rows.flatMap((row) => (row.use ? [row.use] : [])));
 
   /** 어긋난 만큼: 64분음표 몇 개로 딱 떨어지면 그렇게, 아니면 4분음표의 몇 분의 몇 */
@@ -90,6 +95,7 @@
 <dialog bind:this={dialog} {onclose} {onkeydown}>
   <h2>{t("ui.offgrid")}</h2>
   <p class="muted">{t("ui.offgridIntro")}</p>
+  {#if mabiicco}<p class="muted">{t("ui.offgridMabiicco")}</p>{/if}
   {#if rows.length === 0}
     <p>{t("ui.offgridNone")}</p>
   {:else}
@@ -101,17 +107,17 @@
           <span class="where"><span class="muted">{row.track}</span> {row.place}</span>
           <span class="change">
             <code>{row.from}</code> →
-            <input
+            {#if row.mixed}<code>{row.to}</code>{:else}<input
               class="length"
               size="7"
               value={row.input}
               title={t("ui.offgridCustomHelp")}
               aria-label={t("ui.offgridCustomHelp")}
               oninput={(e) => (custom = { ...custom, [row.key]: e.currentTarget.value })}
-            />
+            />{/if}
             {#if customNote(row)}{@const note = customNote(row)!}<span class:bad={note.bad} class="custom">{note.text}</span>{/if}
           </span>
-          {#if row.fix.kind === "tuplet"}<span class="muted">{t("ui.offgridTuplet")}</span>{/if}
+          {#if row.fix.kind === "tuplet" && !row.mixed}<span class="muted">{t("ui.offgridTuplet")}</span>{/if}
           {#if !audible(song, row.fix.trackId)}<span class="silent">{t("ui.offgridSilent")}</span>{/if}
           <span class="buttons">
             <button class="small" onclick={() => ongo(row.fix)}>{t("ui.offgridGo")}</button>

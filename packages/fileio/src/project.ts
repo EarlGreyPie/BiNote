@@ -152,6 +152,7 @@ const TRACK_KEYS = known<Track>({
   instrument: true,
   mix: true,
   mmiSong: true,
+  mmlDialect: true,
 });
 const NOTE_KEYS = known<Note>({ id: true, start: true, dur: true, pitch: true, vol: true, tie: true, tabString: true, lab: true, made: true });
 const SOURCE_KEYS = known<SourceRef>({ id: true, kind: true, fileName: true, offsetSec: true });
@@ -512,6 +513,7 @@ function readSong(raw: Obj, diagnostics: FileDiagnostic[]): Song {
       ...(readInstrument(tr.instrument) ? { instrument: readInstrument(tr.instrument)! } : {}),
       ...readMix(tr.mix),
       ...(tr.mmiSong === true ? { mmiSong: true } : {}),
+      ...(tr.mmlDialect === "mabiicco" ? { mmlDialect: "mabiicco" as const } : {}),
       ...withExtras(tr, TRACK_KEYS, TRACK_INNER),
     });
   }

@@ -92,6 +92,20 @@ describe("trackColors", () => {
     expect(trackColors(made, scoreGroups(made, 6), "stored", "light").get("p0t0")).toBe("#2f6fe4");
   });
 
+  it("차분하게 보기는 채도를 낮춘 색을 쓰고, 트랙끼리는 여전히 다르며, 직접 고른 색은 그대로", () => {
+    const s = song([6]);
+    const g = scoreGroups(s, 6);
+    for (const theme of ["light", "dark"] as const) {
+      const calm = trackColors(s, g, "position", theme, true);
+      const normal = trackColors(s, g, "position", theme);
+      expect(calm.get("p0t0")).not.toBe(normal.get("p0t0"));
+      expect(new Set(calm.values()).size).toBe(6);
+    }
+    expect(trackColors(s, g, "score", "light", true).get("p0t0")).toMatch(/^hsl\(218 34% /);
+    const pinned: Song = { ...s, tracks: s.tracks.map((t) => (t.id === "p0t1" ? { ...t, color: "#e04a8a", colorPinned: true } : t)) };
+    expect(trackColors(pinned, scoreGroups(pinned, 6), "position", "light", true).get("p0t1")).toBe("#e04a8a");
+  });
+
   it("hexColor: #rgb·hsl()을 색 고르기 칸 값으로", () => {
     expect(hexColor("#ABC")).toBe("#aabbcc");
     expect(hexColor("#2f6fe4")).toBe("#2f6fe4");

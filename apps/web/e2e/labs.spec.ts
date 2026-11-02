@@ -40,10 +40,11 @@ test("실험실을 켜면 연주 누락음 검사이 보이고, 모두 고치면
   const dialog = page.locator("dialog[open]");
   await expect(dialog.getByRole("heading", { name: /연주 누락음 고치기/ })).toBeVisible();
   await expect(dialog.getByText("1곳", { exact: true })).toBeVisible();
-  // 같은 구간의 착지 음 C4·G3 두 개, 미리 보기에 늦출 음 수와 늘어나는 글자 수
-  await expect(dialog.getByText(/늦출 음 2개 · 글자 수 약 \d+자 늘어남/)).toBeVisible();
+  // 같은 구간의 착지 음 C4·G3 두 개, 미리 보기에 늦출 음 수와 늘어나는 내보내기 글자 수 (기본은 글자 수 한도 안에서만)
+  await expect(dialog.getByRole("checkbox", { name: /글자 수 한도\(2400자\) 안에서만 고치기/ })).toBeChecked();
+  await expect(dialog.getByText(/늦출 음 2개 · 글자 수 \+\d+자 · 가장 긴 트랙 \d+자 \(한도 2400자\)/)).toBeVisible();
   await expect(dialog.getByText("r64.만큼(48ms) 늦춤")).toBeVisible();
-  await dialog.getByRole("button", { name: "모두 고치기 (1곳)" }).click();
+  await dialog.getByRole("button", { name: "한도 안에서 고치기 (1/1곳)" }).click();
   await expect(dialog.getByText("연주 누락음 위험 자리가 없습니다.")).toBeVisible();
   await dialog.getByRole("button", { name: "닫기" }).click();
   await expect(dialog).toHaveCount(0);

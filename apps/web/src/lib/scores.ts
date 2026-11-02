@@ -72,6 +72,11 @@ const POSITION_COLORS: Record<PaletteTheme, readonly string[]> = {
   light: ["#2f6fe4", "#e0592f", "#1f9d5c", "#9146e0", "#c48a00", "#0094b3"],
   dark: ["#6ea2ff", "#ff8a66", "#4fcf8a", "#c08cff", "#f5c542", "#3fd0ec"],
 };
+/** 차분하게 보기의 위치 방식 6색: 같은 색조를 채도만 낮춘 짝 (트랙끼리는 여전히 구분된다) */
+const CALM_POSITION_COLORS: Record<PaletteTheme, readonly string[]> = {
+  light: ["#4a6fa8", "#b0705a", "#5a8a6e", "#7f6aa0", "#a08a4f", "#4f8a95"],
+  dark: ["#8fa9d6", "#d4a08e", "#93bfa3", "#b3a3cf", "#cdbb88", "#8fbcc4"],
+};
 /** 트랙을 만들 때 차례로 주는 6색(파일에 저장되는 값). 고정 색 방식은 이 색을 테마에 맞는 위치 방식 색으로 바꿔 보여 준다 */
 const CREATED_COLORS = ["#4f8cff", "#ff7a59", "#2bb673", "#b061ff", "#f2b705", "#00b8d9"];
 const SCORE_HUES = [218, 14, 145, 275, 45, 190, 330, 95];
@@ -84,10 +89,13 @@ export const PICK_COLORS: readonly string[] = [
   "#e04a8a", "#7a8a1e", "#c0392b", "#5b5fd6", "#8d6e4f", "#6f7c8a",
 ];
 
-/** 트랙 id → 화면에 쓸 색 */
-export function trackColors(song: Song, groups: readonly ScoreGroup[], scheme: ColorScheme, theme: PaletteTheme = "light"): Map<string, string> {
+/**
+ * 트랙 id → 화면에 쓸 색. calm(차분하게 보기)이면 채도를 낮춘 색을 쓴다.
+ * 사용자가 트랙 색에서 고른 색(colorPinned)은 차분하게 보기에서도 그대로 둔다
+ */
+export function trackColors(song: Song, groups: readonly ScoreGroup[], scheme: ColorScheme, theme: PaletteTheme = "light", calm = false): Map<string, string> {
   const out = new Map<string, string>();
-  const palette = POSITION_COLORS[theme];
+  const palette = (calm ? CALM_POSITION_COLORS : POSITION_COLORS)[theme];
   for (const t of song.tracks) {
     const k = CREATED_COLORS.indexOf(t.color.toLowerCase());
     out.set(t.id, !t.colorPinned && k >= 0 ? palette[k]! : t.color);
@@ -102,7 +110,7 @@ export function trackColors(song: Song, groups: readonly ScoreGroup[], scheme: C
         const hue = (SCORE_HUES[(g.number - 1) % SCORE_HUES.length]! + HUE_STEPS[k % HUE_STEPS.length]! + 360) % 360;
         // 진하기는 두 단계를 번갈아 (밝은 테마 42/56%, 어두운 테마 62/74%)
         const light = (theme === "dark" ? 62 : 42) + (k % 2) * (theme === "dark" ? 12 : 14);
-        out.set(id, `hsl(${hue} 72% ${light}%)`);
+        out.set(id, `hsl(${hue} ${calm ? 34 : 72}% ${light}%)`);
       }
     });
   }

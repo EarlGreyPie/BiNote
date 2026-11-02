@@ -21,16 +21,24 @@
   import { setSplitSpread, splitPrefs } from "./splitPrefs.svelte";
   import { canAskSave, canPickFolder, canShareFiles, pickSaveFolder, saveTarget, setSaveMode, setSaveShare } from "./saveTarget.svelte";
   import { LANE_MAX, LANE_MIN, saveVolumeLane, volumeLane, type LaneState } from "./volumeLane.svelte";
-  import { LAB_FEATURES, labs, setButtonNames, setFade, setLabs } from "./labs.svelte";
+  import { LAB_FEATURES, labs, setButtonNames, setFade, setLabs, setLiveEdit } from "./labs.svelte";
 
   import Icon from "./Icon.svelte";
+  import SettingGroup from "./SettingGroup.svelte";
+  import SettingRow from "./SettingRow.svelte";
+  import Switch from "./Switch.svelte";
+  import { SETTINGS_HELP, type SettingsHelp } from "./settingsHelp";
+  import { setContext } from "svelte";
   import PackBar from "./PackBar.svelte";
   import type { MidiKeys } from "./midiKeys.svelte";
   import type { ColorScheme } from "./scores";
   import { UI_SCALES } from "./uiScale";
   import { ACCENTS, EDITOR_FONT_SIZES, EDITOR_FONTS, type Appearance, type EditorFont, type NoteLook, type ThemeMode } from "./appearance";
 
-  /** 설정 창: 사운드팩 · 재생 · 화면 · 단축키. 맨 아래에 판 정보 */
+  /**
+   * 설정 창: 사운드팩 · 재생 · 화면 · 입력 · 화음 · 저장 · 실험실 · 언어 · 단축키. 맨 아래에 판 정보.
+   * 칸마다 묶음 상자(SettingGroup)에 줄(SettingRow: 왼쪽 이름 · 오른쪽 조작)을 담고, 설명은 ⓘ로 펼친다
+   */
   interface Props {
     packs: readonly SoundPackInfo[];
     /** 이 브라우저에 저장된 사운드팩 이름 */
@@ -68,7 +76,7 @@
     onclose: () => void;
   }
 
-  type Section = "packs" | "playback" | "display" | "chords" | "save" | "labs" | "language" | "keys";
+  type Section = "packs" | "playback" | "display" | "input" | "chords" | "save" | "labs" | "language" | "keys";
 
   let {
     packs,
@@ -100,6 +108,12 @@
     initial = "packs",
     onclose,
   }: Props = $props();
+
+  /** 설명 펼침: 칸 위 "설명 모두 펼치기"가 줄마다 ⓘ 상태를 한꺼번에 맞춘다 */
+  const help = $state<SettingsHelp>({ all: false });
+  setContext(SETTINGS_HELP, help);
+  /** 설명(ⓘ)이 있는 칸 */
+  const HAS_HELP: ReadonlySet<Section> = new Set(["playback", "display", "input", "chords", "save", "labs"]);
 
   /** 오디오 상태 칸에 보여 줄 글 (재기 전에는 빈 글) */
   let audioReport = $state("");
@@ -140,14 +154,14 @@
     if (section === "packs") void checkSpace();
   });
 
-  const SECTIONS: readonly Section[] = ["packs", "playback", "display", "chords", "save", "labs", "language", "keys"];
+  const SECTIONS: readonly Section[] = ["packs", "playback", "display", "input", "chords", "save", "labs", "language", "keys"];
   /** 언어 칸은 글자를 못 읽는 언어로 바뀌어도 찾을 수 있게 영어 "Language"를 늘 같이 적는다 */
   const sectionLabel = (s: Section) =>
     s === "language"
       ? i18n.locale === "en"
         ? t("ui.language")
         : `${t("ui.language")} · Language`
-      : t(s === "packs" ? "ui.settingsPacks" : s === "playback" ? "ui.settingsPlayback" : s === "display" ? "ui.settingsDisplay" : s === "chords" ? "ui.settingsChords" : s === "save" ? "ui.settingsSave" : s === "labs" ? "ui.settingsLabs" : "ui.settingsKeys");
+      : t(s === "packs" ? "ui.settingsPacks" : s === "playback" ? "ui.settingsPlayback" : s === "display" ? "ui.settingsDisplay" : s === "input" ? "ui.settingsInput" : s === "chords" ? "ui.settingsChords" : s === "save" ? "ui.settingsSave" : s === "labs" ? "ui.settingsLabs" : "ui.settingsKeys");
 </script>
 
 <dialog bind:this={dialog} {onclose}>
@@ -163,6 +177,12 @@
       {/each}
     </nav>
     <div class="content">
+      <!-- 저장 칸이 내려받기 안내 글만 보일 때는 펼칠 설명이 없다 -->
+      {#if HAS_HELP.has(section) && (section !== "save" || canAskSave || canPickFolder || canShareFiles)}
+        <div class="tools">
+          <button class="link" onclick={() => (help.all = !help.all)}>{t(help.all ? "ui.settingHelpHideAll" : "ui.settingHelpShowAll")}</button>
+        </div>
+      {/if}
       {#if section === "packs"}
         <div class="packs-list">
           <PackBar {packs} {stored} loading={loadingPack} onremove={onremovepack} onmove={onmovepack} />
@@ -172,236 +192,226 @@
         <p class="muted help">{t(pwa.storage === "persisted" ? "ui.storagePersisted" : "ui.storageBestEffort")}</p>
         {#if pwa.space}<p class="muted help">{t("ui.storageSpace", { used: formatBytes(pwa.space.usage), free: formatBytes(freeBytes(pwa.space)) })}</p>{/if}
       {:else if section === "playback"}
-        <label class="row" title={t("ui.masterVolume")}>
-          <span>{t("ui.masterVolume")}</span>
-          <input type="range" min="0" max={MASTER_MAX} step="0.05" value={masterVolume} oninput={(e) => onvolume(Number(e.currentTarget.value))} />
-        </label>
-        <label class="row" title={t("ui.lightKeysHelp")}>
-          <input type="checkbox" checked={lightKeys} onchange={onlightkeys} />
-          <span>{t("ui.lightKeys")}</span>
-        </label>
-        <label class="row" title={t("ui.selectKeysHelp")}>
-          <span>{t("ui.selectKeys")}</span>
-          <select value={selectKeys.mode} onchange={(e) => setSelectKeys(e.currentTarget.value as SelectKeysMode)}>
-            <option value="off">{t("ui.selectKeysOff")}</option>
-            <option value="press">{t("ui.selectKeysPress")}</option>
-            <option value="select">{t("ui.selectKeysSelect")}</option>
-          </select>
-        </label>
-        <p class="muted help">{t("ui.selectKeysHelp")}</p>
-        <label class="row" title={t("ui.midiKeysVelocityHelp")}>
-          <input type="checkbox" checked={midiKeys.velocity} onchange={(e) => midiKeys.setVelocity(e.currentTarget.checked)} />
-          <span>{t("ui.midiKeys")}: {t("ui.midiKeysVelocity")}</span>
-        </label>
-        <label class="row" title={t("ui.syncOffsetHelp")}>
-          <span>{t("ui.syncOffset")}</span>
-          <input class="num wide" type="number" step="10" min="-1000" max="1000" value={syncOffsetMs} onchange={(e) => onsync(Number(e.currentTarget.value) || 0)} />
-          ms
-        </label>
-        <p class="muted help">{t("ui.syncOffsetHelp")}</p>
-        <details class="audio-state">
-          <summary>{t("ui.audioState")}</summary>
-          <p class="muted help">{t("ui.audioStateHelp")}</p>
-          <div class="row">
-            <button onclick={measureAudio} disabled={measuring}>{t(measuring ? "ui.audioStateMeasuring" : "ui.audioStateMeasure")}</button>
-            <button disabled={!audioReport} onclick={() => void navigator.clipboard.writeText(audioReport).catch(() => {})}>{t("ui.audioStateCopy")}</button>
-            <button title={t("ui.audioRebuildHelp")} onclick={rebuildAudio}>{t("ui.audioRebuild")}</button>
-          </div>
-          <p class="muted help">{t("ui.audioRebuildHelp")}</p>
-          {#if audioReport}<pre class="audio-report">{audioReport}</pre>{/if}
-        </details>
-        <h3 class="sub">{t("ui.instrumentGains")}</h3>
-        {#if packs.length === 0}
-          <p class="muted help">{t("ui.instrumentGainsNoPack")}</p>
-        {:else}
-          <p class="muted help">{t("ui.instrumentGainsHelp")}</p>
-          {#each packs as pack (pack.id)}
-            <details class="gains" open={packs.length === 1}>
-              <summary>
-                <span class="pack-name">{pack.label}</span>
-                {#if packChanged(pack)}<span class="muted">{t("ui.instrumentGainsChanged", { count: packChanged(pack) })}</span>{/if}
-              </summary>
-              {#each pack.instruments as ins (ins.program)}
-                {@const key = gainKey(pack.label, ins.program)}
-                {@const db = instrumentGains[key] ?? 0}
-                <div class="gain-row">
-                  <span class="gain-name" title={ins.name}>{ins.canonical ? instrumentName(ins.canonical) : ins.name}</span>
-                  <input
-                    type="range"
-                    min={-GAIN_RANGE}
-                    max={GAIN_RANGE}
-                    step="1"
-                    value={db}
-                    aria-label={`${ins.name} ${t("ui.instrumentGains")}`}
-                    oninput={(e) => ongain(key, Number(e.currentTarget.value))}
-                  />
-                  <button class="gain-value" class:changed={db !== 0} title={t("ui.instrumentGainsReset")} disabled={db === 0} onclick={() => ongain(key, 0)}>{dbText(db)}</button>
-                </div>
-              {/each}
-            </details>
-          {/each}
-        {/if}
+        <SettingGroup title={t("ui.settingGroupSound")}>
+          <SettingRow label={t("ui.masterVolume")} for="set-master">
+            <input id="set-master" class="ctl-range" type="range" min="0" max={MASTER_MAX} step="0.05" value={masterVolume} oninput={(e) => onvolume(Number(e.currentTarget.value))} />
+          </SettingRow>
+          <SettingRow label={t("ui.syncOffset")} for="set-sync" help={t("ui.syncOffsetHelp")}>
+            <input id="set-sync" class="num wide" type="number" step="10" min="-1000" max="1000" value={syncOffsetMs} onchange={(e) => onsync(Number(e.currentTarget.value) || 0)} />
+            <span class="muted">ms</span>
+          </SettingRow>
+        </SettingGroup>
+        <SettingGroup title={t("ui.settingGroupKeyLights")}>
+          <SettingRow label={t("ui.lightKeys")} for="set-lightkeys" help={t("ui.lightKeysHelp")}>
+            <Switch id="set-lightkeys" checked={lightKeys} onchange={() => onlightkeys()} />
+          </SettingRow>
+          <SettingRow label={t("ui.selectKeys")} for="set-selectkeys" help={t("ui.selectKeysHelp")}>
+            <select id="set-selectkeys" value={selectKeys.mode} onchange={(e) => setSelectKeys(e.currentTarget.value as SelectKeysMode)}>
+              <option value="off">{t("ui.selectKeysOff")}</option>
+              <option value="press">{t("ui.selectKeysPress")}</option>
+              <option value="select">{t("ui.selectKeysSelect")}</option>
+            </select>
+          </SettingRow>
+        </SettingGroup>
+        <SettingGroup title={t("ui.instrumentGains")}>
+          {#if packs.length === 0}
+            <p class="muted help in-box">{t("ui.instrumentGainsNoPack")}</p>
+          {:else}
+            <p class="muted help in-box">{t("ui.instrumentGainsHelp")}</p>
+            {#each packs as pack (pack.id)}
+              <details class="gains" open={packs.length === 1}>
+                <summary>
+                  <span class="pack-name">{pack.label}</span>
+                  {#if packChanged(pack)}<span class="muted">{t("ui.instrumentGainsChanged", { count: packChanged(pack) })}</span>{/if}
+                </summary>
+                {#each pack.instruments as ins (ins.program)}
+                  {@const key = gainKey(pack.label, ins.program)}
+                  {@const db = instrumentGains[key] ?? 0}
+                  <div class="gain-row">
+                    <span class="gain-name" title={ins.name}>{ins.canonical ? instrumentName(ins.canonical) : ins.name}</span>
+                    <input
+                      type="range"
+                      min={-GAIN_RANGE}
+                      max={GAIN_RANGE}
+                      step="1"
+                      value={db}
+                      aria-label={`${ins.name} ${t("ui.instrumentGains")}`}
+                      oninput={(e) => ongain(key, Number(e.currentTarget.value))}
+                    />
+                    <button class="gain-value" class:changed={db !== 0} title={t("ui.instrumentGainsReset")} disabled={db === 0} onclick={() => ongain(key, 0)}>{dbText(db)}</button>
+                  </div>
+                {/each}
+              </details>
+            {/each}
+          {/if}
+        </SettingGroup>
+        <SettingGroup title={t("ui.settingGroupTrouble")}>
+          <details class="audio-state">
+            <summary>{t("ui.audioState")}</summary>
+            <p class="muted help">{t("ui.audioStateHelp")}</p>
+            <div class="buttons">
+              <button onclick={measureAudio} disabled={measuring}>{t(measuring ? "ui.audioStateMeasuring" : "ui.audioStateMeasure")}</button>
+              <button disabled={!audioReport} onclick={() => void navigator.clipboard.writeText(audioReport).catch(() => {})}>{t("ui.audioStateCopy")}</button>
+              <button onclick={rebuildAudio}>{t("ui.audioRebuild")}</button>
+            </div>
+            <p class="muted help">{t("ui.audioRebuildHelp")}</p>
+            {#if audioReport}<pre class="audio-report">{audioReport}</pre>{/if}
+          </details>
+        </SettingGroup>
       {:else if section === "display"}
-        <label class="row" title={t("ui.uiScaleHelp")}>
-          <span>{t("ui.uiScale")}</span>
-          <select value={appearance.uiScale} onchange={(e) => onappearance({ ...appearance, uiScale: Number(e.currentTarget.value) })}>
-            {#each UI_SCALES as pct (pct)}<option value={pct}>{pct}%</option>{/each}
-          </select>
-        </label>
-        <p class="muted help">{t("ui.uiScaleHelp")}</p>
-        <label class="row">
-          <span>{t("ui.colorScheme")}</span>
-          <select value={colorScheme} onchange={(e) => oncolorscheme(e.currentTarget.value as ColorScheme)}>
-            <option value="score">{t("ui.colorByScore")}</option>
-            <option value="position">{t("ui.colorByPosition")}</option>
-            <option value="stored">{t("ui.colorStored")}</option>
-          </select>
-        </label>
-        <p class="muted help">{t("ui.colorSchemeHelp")}</p>
-        <label class="row" title={t("ui.rollFlowHelp")}>
-          <span>{t("ui.rollFlow")}</span>
-          <select value={rollFlow.mode} onchange={(e) => setRollFlow(e.currentTarget.value as RollFlow)}>
-            <option value="page">{t("ui.rollFlowPage")}</option>
-            <option value="flow">{t("ui.rollFlowFlow")}</option>
-          </select>
-        </label>
-        <p class="muted help">{t("ui.rollFlowHelp")}</p>
-        <label class="row" title={t("ui.editorMaxHelp")}>
-          <span>{t("ui.editorMax")}</span>
-          <select value={editorMax} onchange={(e) => oneditormax(Number(e.currentTarget.value))}>
-            {#each Array.from({ length: Math.max(1, editorLimit - 1) }, (_, k) => k + 2) as n (n)}<option value={n}>{n}</option>{/each}
-          </select>
-        </label>
-        <p class="muted help">{t("ui.editorMaxHelp")}</p>
-        <label class="row" title={t("ui.tabTrackTintHelp")}>
-          <input type="checkbox" checked={tabTint.on} onchange={(e) => setTabTint(e.currentTarget.checked)} />
-          <span>{t("ui.tabTrackTint")}</span>
-        </label>
-        <label class="row" title={t("ui.lengthPadTripletsHelp")}>
-          <input type="checkbox" checked={fretPadPrefs.triplets} onchange={(e) => setLengthPadTriplets(e.currentTarget.checked)} />
-          <span>{t("ui.lengthPadTriplets")}</span>
-        </label>
-        <label class="row" title={t("ui.lengthPadTupletHelp")}>
-          <input type="checkbox" checked={tupletPrefs.pad} onchange={(e) => setLengthPadTuplet(e.currentTarget.checked)} />
-          <span>{t("ui.lengthPadTuplet")}</span>
-        </label>
-        <label class="row" title={t("ui.padAdvanceDirHelp")}>
-          <span>{t("ui.padAdvanceDir")}</span>
-          <select value={fretPadPrefs.advance} onchange={(e) => setPadAdvanceDir(e.currentTarget.value as PadAdvanceDir)}>
-            <option value="right">{t("ui.padAdvanceRight")}</option>
-            <option value="down">{t("ui.padAdvanceDown")}</option>
-          </select>
-        </label>
-        <label class="row" title={t("ui.tabEventFontHelp")}>
-          <span>{t("ui.tabEventFont")}</span>
-          <select value={tabEventPrefs.font} onchange={(e) => setTabEventFont(Number(e.currentTarget.value))}>
-            {#each TAB_EVENT_FONTS as px (px)}<option value={px}>{t(px === TAB_EVENT_FONT ? "ui.tabEventFontDefault" : "ui.tabEventFontPx", { px })}</option>{/each}
-          </select>
-        </label>
-        <label class="row">
-          <span>{t("ui.theme")}</span>
-          <select value={appearance.theme} onchange={(e) => onappearance({ ...appearance, theme: e.currentTarget.value as ThemeMode })}>
-            <option value="system">{t("ui.themeSystem")}</option>
-            <option value="light">{t("ui.themeLight")}</option>
-            <option value="dark">{t("ui.themeDark")}</option>
-          </select>
-        </label>
-        <div class="row">
-          <span>{t("ui.accent")}</span>
-          <span class="swatches">
-            {#each ACCENTS as a (a.id)}
-              <button
-                class="swatch"
-                class:on={appearance.accent === a.id}
-                style:--sw-light={a.light}
-                style:--sw-dark={a.dark}
-                title={t(`ui.accent.${a.id}`)}
-                aria-label={t(`ui.accent.${a.id}`)}
-                aria-pressed={appearance.accent === a.id}
-                onclick={() => onappearance({ ...appearance, accent: a.id })}
-              ></button>
-            {/each}
-          </span>
-        </div>
-        <div class="row">
-          <span>{t("ui.noteLook")}</span>
-          <span class="checks">
-            {#each NOTE_LOOKS as k (k)}
-              <label><input type="checkbox" checked={appearance.note[k]} onchange={(e) => setLook(k, e.currentTarget.checked)} /> {t(`ui.noteLook.${k}`)}</label>
-            {/each}
-          </span>
-        </div>
-        <label class="row" title={t("ui.volumeLabelsHelp")}>
-          <span>{t("ui.volumeLabels")}</span>
-          <select value={volumeLabels.mode} onchange={(e) => setVolumeLabels(e.currentTarget.value as VolumeLabelMode)}>
-            <option value="off">{t("ui.volumeLabels.off")}</option>
-            <option value="changes">{t("ui.volumeLabels.changes")}</option>
-            <option value="all">{t("ui.volumeLabels.all")}</option>
-          </select>
-        </label>
-        <p class="muted help">{t("ui.volumeLabelsHelp")}</p>
-        <label class="row" title={t("ui.timbreZonesHelp")}>
-          <span>{t("ui.timbreZones")}</span>
-          <input type="checkbox" checked={timbreZones.on} onchange={(e) => setTimbreZones(e.currentTarget.checked)} />
-        </label>
-        <p class="muted help">{t("ui.timbreZonesHelp")}</p>
-        <div class="row">
-          <span>{t("ui.editorFont")}</span>
-          <span class="checks">
-            <select aria-label={t("ui.editorFont")} value={appearance.editorFont} onchange={(e) => onappearance({ ...appearance, editorFont: e.currentTarget.value as EditorFont })}>
+        <SettingGroup title={t("ui.settingGroupLook")}>
+          <SettingRow label={t("ui.uiScale")} for="set-uiscale" help={t("ui.uiScaleHelp")}>
+            <select id="set-uiscale" value={appearance.uiScale} onchange={(e) => onappearance({ ...appearance, uiScale: Number(e.currentTarget.value) })}>
+              {#each UI_SCALES as pct (pct)}<option value={pct}>{pct}%</option>{/each}
+            </select>
+          </SettingRow>
+          <SettingRow label={t("ui.theme")} for="set-theme">
+            <select id="set-theme" value={appearance.theme} onchange={(e) => onappearance({ ...appearance, theme: e.currentTarget.value as ThemeMode })}>
+              <option value="system">{t("ui.themeSystem")}</option>
+              <option value="light">{t("ui.themeLight")}</option>
+              <option value="dark">{t("ui.themeDark")}</option>
+            </select>
+          </SettingRow>
+          <SettingRow label={t("ui.accent")}>
+            <span class="swatches">
+              {#each ACCENTS as a (a.id)}
+                <button
+                  class="swatch"
+                  class:on={appearance.accent === a.id}
+                  style:--sw-light={a.light}
+                  style:--sw-dark={a.dark}
+                  title={t(`ui.accent.${a.id}`)}
+                  aria-label={t(`ui.accent.${a.id}`)}
+                  aria-pressed={appearance.accent === a.id}
+                  onclick={() => onappearance({ ...appearance, accent: a.id })}
+                ></button>
+              {/each}
+            </span>
+          </SettingRow>
+          <SettingRow label={t("ui.calm")} for="set-calm" help={t("ui.calmHelp")}>
+            <Switch id="set-calm" checked={appearance.calm} onchange={(on) => onappearance({ ...appearance, calm: on })} />
+          </SettingRow>
+        </SettingGroup>
+        <SettingGroup title={t("ui.settingGroupRollTab")}>
+          <SettingRow label={t("ui.colorScheme")} for="set-colors" help={t("ui.colorSchemeHelp")}>
+            <select id="set-colors" value={colorScheme} onchange={(e) => oncolorscheme(e.currentTarget.value as ColorScheme)}>
+              <option value="score">{t("ui.colorByScore")}</option>
+              <option value="position">{t("ui.colorByPosition")}</option>
+              <option value="stored">{t("ui.colorStored")}</option>
+            </select>
+          </SettingRow>
+          <SettingRow label={t("ui.rollFlow")} for="set-rollflow" help={t("ui.rollFlowHelp")}>
+            <select id="set-rollflow" value={rollFlow.mode} onchange={(e) => setRollFlow(e.currentTarget.value as RollFlow)}>
+              <option value="page">{t("ui.rollFlowPage")}</option>
+              <option value="flow">{t("ui.rollFlowFlow")}</option>
+            </select>
+          </SettingRow>
+          <SettingRow label={t("ui.noteLook")}>
+            <span class="chips" role="group" aria-label={t("ui.noteLook")}>
+              {#each NOTE_LOOKS as k (k)}
+                <button class="chip" aria-pressed={appearance.note[k]} onclick={() => setLook(k, !appearance.note[k])}>{t(`ui.noteLook.${k}`)}</button>
+              {/each}
+            </span>
+          </SettingRow>
+          <SettingRow label={t("ui.volumeLabels")} for="set-vollabels" help={t("ui.volumeLabelsHelp")}>
+            <select id="set-vollabels" value={volumeLabels.mode} onchange={(e) => setVolumeLabels(e.currentTarget.value as VolumeLabelMode)}>
+              <option value="off">{t("ui.volumeLabels.off")}</option>
+              <option value="changes">{t("ui.volumeLabels.changes")}</option>
+              <option value="all">{t("ui.volumeLabels.all")}</option>
+            </select>
+          </SettingRow>
+          <SettingRow label={t("ui.timbreZones")} for="set-zones" help={t("ui.timbreZonesHelp")}>
+            <Switch id="set-zones" checked={timbreZones.on} onchange={setTimbreZones} />
+          </SettingRow>
+          <SettingRow label={t("ui.tabTrackTint")} for="set-tabtint" help={t("ui.tabTrackTintHelp")}>
+            <Switch id="set-tabtint" checked={tabTint.on} onchange={setTabTint} />
+          </SettingRow>
+          <SettingRow label={t("ui.tabEventFont")} for="set-evfont" help={t("ui.tabEventFontHelp")}>
+            <select id="set-evfont" value={tabEventPrefs.font} onchange={(e) => setTabEventFont(Number(e.currentTarget.value))}>
+              {#each TAB_EVENT_FONTS as px (px)}<option value={px}>{t(px === TAB_EVENT_FONT ? "ui.tabEventFontDefault" : "ui.tabEventFontPx", { px })}</option>{/each}
+            </select>
+          </SettingRow>
+        </SettingGroup>
+        <SettingGroup title={t("ui.laneSettings")}>
+          <SettingRow label={t("ui.laneShow")} for="set-lane" help={t("ui.laneHelp")}>
+            <select id="set-lane" value={volumeLane.state} onchange={(e) => saveVolumeLane({ state: e.currentTarget.value as LaneState })}>
+              <option value="collapsed">{t("ui.laneStateCollapsed")}</option>
+              <option value="compact">{t("ui.laneStateCompact")}</option>
+              <option value="expanded">{t("ui.laneStateExpanded")}</option>
+            </select>
+          </SettingRow>
+          <SettingRow label={t("ui.laneSize")} for="set-lanesize" help={t("ui.laneSizeHelp")}>
+            <input
+              id="set-lanesize"
+              class="ctl-range"
+              type="range"
+              min={LANE_MIN}
+              max={LANE_MAX}
+              step="4"
+              value={volumeLane.size}
+              oninput={(e) => saveVolumeLane({ size: Number(e.currentTarget.value), state: "expanded" })}
+            />
+            <output class="muted">{volumeLane.size}px</output>
+          </SettingRow>
+        </SettingGroup>
+        <SettingGroup title={t("ui.settingGroupEditor")}>
+          <SettingRow label={t("ui.editorMax")} for="set-editormax" help={t("ui.editorMaxHelp")}>
+            <select id="set-editormax" value={editorMax} onchange={(e) => oneditormax(Number(e.currentTarget.value))}>
+              {#each Array.from({ length: Math.max(1, editorLimit - 1) }, (_, k) => k + 2) as n (n)}<option value={n}>{n}</option>{/each}
+            </select>
+          </SettingRow>
+          <SettingRow label={t("ui.settingEditorText")} for="set-edfont">
+            <select id="set-edfont" aria-label={t("ui.editorFont")} value={appearance.editorFont} onchange={(e) => onappearance({ ...appearance, editorFont: e.currentTarget.value as EditorFont })}>
               {#each Object.keys(EDITOR_FONTS) as f (f)}<option value={f}>{t(`ui.editorFont.${f as EditorFont}`)}</option>{/each}
             </select>
             <select aria-label={t("ui.editorFontSize")} value={appearance.editorFontSize} onchange={(e) => onappearance({ ...appearance, editorFontSize: Number(e.currentTarget.value) })}>
               {#each EDITOR_FONT_SIZES as px (px)}<option value={px}>{px}px</option>{/each}
             </select>
-          </span>
-        </div>
-        <h3 class="sub">{t("ui.laneSettings")}</h3>
-        <label class="row" title={t("ui.laneHelp")}>
-          <span>{t("ui.laneShow")}</span>
-          <select value={volumeLane.state} onchange={(e) => saveVolumeLane({ state: e.currentTarget.value as LaneState })}>
-            <option value="collapsed">{t("ui.laneStateCollapsed")}</option>
-            <option value="compact">{t("ui.laneStateCompact")}</option>
-            <option value="expanded">{t("ui.laneStateExpanded")}</option>
-          </select>
-        </label>
-        <label class="row" title={t("ui.laneSizeHelp")}>
-          <span>{t("ui.laneSize")}</span>
-          <input
-            type="range"
-            min={LANE_MIN}
-            max={LANE_MAX}
-            step="4"
-            value={volumeLane.size}
-            oninput={(e) => saveVolumeLane({ size: Number(e.currentTarget.value), state: "expanded" })}
-          />
-          <output>{volumeLane.size}px</output>
-        </label>
+          </SettingRow>
+        </SettingGroup>
+      {:else if section === "input"}
+        <SettingGroup title={t("ui.tabPad")}>
+          <SettingRow label={t("ui.padAdvanceDir")} for="set-padadvance" help={t("ui.padAdvanceDirHelp")}>
+            <select id="set-padadvance" value={fretPadPrefs.advance} onchange={(e) => setPadAdvanceDir(e.currentTarget.value as PadAdvanceDir)}>
+              <option value="right">{t("ui.padAdvanceRight")}</option>
+              <option value="down">{t("ui.padAdvanceDown")}</option>
+            </select>
+          </SettingRow>
+          <SettingRow label={t("ui.lengthPadTriplets")} for="set-triplets" help={t("ui.lengthPadTripletsHelp")}>
+            <Switch id="set-triplets" checked={fretPadPrefs.triplets} onchange={setLengthPadTriplets} />
+          </SettingRow>
+          <SettingRow label={t("ui.lengthPadTuplet")} for="set-tuplet" help={t("ui.lengthPadTupletHelp")}>
+            <Switch id="set-tuplet" checked={tupletPrefs.pad} onchange={setLengthPadTuplet} />
+          </SettingRow>
+        </SettingGroup>
+        <SettingGroup title={t("ui.midiKeys")}>
+          <SettingRow label={t("ui.midiKeysVelocity")} for="set-velocity" help={t("ui.midiKeysVelocityHelp")}>
+            <Switch id="set-velocity" checked={midiKeys.velocity} onchange={(on) => midiKeys.setVelocity(on)} />
+          </SettingRow>
+        </SettingGroup>
       {:else if section === "chords"}
-        <label class="row">
-          <input type="checkbox" checked={chordPrefs.merge} onchange={(e) => setMidiMerge(e.currentTarget.checked)} />
-          <span>{t("ui.mergeOnImport")}</span>
-        </label>
-        <p class="muted help">{t("ui.mergeSettingHelp")}</p>
-        <label class="row">
-          <input type="checkbox" checked={splitPrefs.spread} onchange={(e) => setSplitSpread(e.currentTarget.checked)} />
-          <span>{t("ui.spreadOnSplit")}</span>
-        </label>
-        <p class="muted help">{t("ui.spreadSettingHelp")}</p>
+        <SettingGroup>
+          <SettingRow label={t("ui.mergeOnImport")} for="set-merge" help={t("ui.mergeSettingHelp")}>
+            <Switch id="set-merge" checked={chordPrefs.merge} onchange={setMidiMerge} />
+          </SettingRow>
+          <SettingRow label={t("ui.spreadOnSplit")} for="set-spread" help={t("ui.spreadSettingHelp")}>
+            <Switch id="set-spread" checked={splitPrefs.spread} onchange={setSplitSpread} />
+          </SettingRow>
+        </SettingGroup>
       {:else if section === "save"}
         {#if canAskSave || canPickFolder}
-          <div class="save-modes" role="radiogroup" aria-label={t("ui.saveFolder")}>
-            {#if canAskSave}
-              <label class="row">
-                <input type="radio" name="save-mode" checked={saveTarget.mode === "ask"} onchange={() => setSaveMode("ask")} />
-                <span>{t("ui.saveAsk")}</span>
-              </label>
-              <p class="muted help">{t("ui.saveAskHelp")}</p>
-            {/if}
-            {#if canPickFolder}
-              <div class="row">
-                <label class="checks">
+          <SettingGroup title={t("ui.saveFolder")}>
+            <div class="save-modes" role="radiogroup" aria-label={t("ui.saveFolder")}>
+              {#if canAskSave}
+                <SettingRow label={t("ui.saveAsk")} for="set-save-ask" help={t("ui.saveAskHelp")}>
+                  <input id="set-save-ask" type="radio" name="save-mode" checked={saveTarget.mode === "ask"} onchange={() => setSaveMode("ask")} />
+                </SettingRow>
+              {/if}
+              {#if canPickFolder}
+                <SettingRow label={t("ui.saveFolderFixed")} for="set-save-folder" help={t("ui.saveFolderHelp")}>
+                  <button onclick={() => void pickSaveFolder()}>{t("ui.saveFolderPick")}…</button>
                   <input
+                    id="set-save-folder"
                     type="radio"
                     name="save-mode"
                     checked={saveTarget.mode === "folder" && !!saveTarget.folder}
@@ -413,50 +423,53 @@
                     }}
                     onchange={() => setSaveMode("folder")}
                   />
-                  <span>{t("ui.saveFolderFixed")}</span>
-                </label>
-                <span class="checks">
-                  {#if saveTarget.folder}<span class="folder-name">{saveTarget.folder}</span>{/if}
-                  <button onclick={() => void pickSaveFolder()}>{t("ui.saveFolderPick")}…</button>
-                </span>
-              </div>
-              <p class="muted help">{t("ui.saveFolderHelp")}</p>
-            {/if}
-            <label class="row">
-              <input type="radio" name="save-mode" checked={saveTarget.mode === "download" || (saveTarget.mode === "folder" && !saveTarget.folder) || (saveTarget.mode === "ask" && !canAskSave)} onchange={() => setSaveMode("download")} />
-              <span>{t("ui.saveFolderDownloads")}</span>
-            </label>
-          </div>
+                  {#snippet below()}
+                    {#if saveTarget.folder}<span class="folder-name">{saveTarget.folder}</span>{/if}
+                  {/snippet}
+                </SettingRow>
+              {/if}
+              <SettingRow label={t("ui.saveFolderDownloads")} for="set-save-download">
+                <input
+                  id="set-save-download"
+                  type="radio"
+                  name="save-mode"
+                  checked={saveTarget.mode === "download" || (saveTarget.mode === "folder" && !saveTarget.folder) || (saveTarget.mode === "ask" && !canAskSave)}
+                  onchange={() => setSaveMode("download")}
+                />
+              </SettingRow>
+            </div>
+          </SettingGroup>
         {:else if canShareFiles}
-          <label class="row">
-            <input type="checkbox" checked={saveTarget.share} onchange={(e) => setSaveShare(e.currentTarget.checked)} />
-            <span>{t("ui.saveShare")}</span>
-          </label>
-          <p class="muted help">{t("ui.saveShareHelp")}</p>
+          <SettingGroup>
+            <SettingRow label={t("ui.saveShare")} for="set-share" help={t("ui.saveShareHelp")}>
+              <Switch id="set-share" checked={saveTarget.share} onchange={setSaveShare} />
+            </SettingRow>
+          </SettingGroup>
         {:else}
           <p class="muted help">{t("ui.saveDownloadOnly")}</p>
         {/if}
       {:else if section === "labs"}
-        <label class="row">
-          <input type="checkbox" checked={labs.on} onchange={(e) => setLabs(e.currentTarget.checked)} />
-          <span>{t("ui.labsOn")}</span>
-        </label>
-        <p class="muted help">{t("ui.labsHelp")}</p>
-        <ul class="labs">
+        <SettingGroup>
+          <SettingRow label={t("ui.labsOn")} for="set-labs" help={t("ui.labsHelp")}>
+            <Switch id="set-labs" checked={labs.on} onchange={setLabs} />
+          </SettingRow>
+        </SettingGroup>
+        <SettingGroup title={t("ui.labsMenuFeatures")} dim={!labs.on}>
           {#each LAB_FEATURES as f (f.id)}
-            <li class:off={!labs.on}><b>{t(f.label)}</b> <span class="muted">{t(f.help)}</span></li>
+            <SettingRow label={t(f.label)} help={t(f.help)} />
           {/each}
-        </ul>
-        <label class="row">
-          <input type="checkbox" checked={labs.buttonNames} disabled={!labs.on} onchange={(e) => setButtonNames(e.currentTarget.checked)} />
-          <span>{t("ui.labButtonNames")}</span>
-        </label>
-        <p class="muted help">{t("ui.labButtonNamesHelp")}</p>
-        <label class="row">
-          <input type="checkbox" checked={labs.fade} disabled={!labs.on} onchange={(e) => setFade(e.currentTarget.checked)} />
-          <span>{t("ui.labFade")}</span>
-        </label>
-        <p class="muted help">{t("ui.labFadeHelp")}</p>
+        </SettingGroup>
+        <SettingGroup title={t("ui.labsSettings")}>
+          <SettingRow label={t("ui.labButtonNames")} for="set-lab-names" help={t("ui.labButtonNamesHelp")}>
+            <Switch id="set-lab-names" checked={labs.buttonNames} disabled={!labs.on} onchange={setButtonNames} />
+          </SettingRow>
+          <SettingRow label={t("ui.labFade")} for="set-lab-fade" help={t("ui.labFadeHelp")}>
+            <Switch id="set-lab-fade" checked={labs.fade} disabled={!labs.on} onchange={setFade} />
+          </SettingRow>
+          <SettingRow label={t("ui.labLiveEdit")} for="set-lab-live" help={t("ui.labLiveEditHelp")}>
+            <Switch id="set-lab-live" checked={labs.liveEdit} disabled={!labs.on} onchange={setLiveEdit} />
+          </SettingRow>
+        </SettingGroup>
       {:else if section === "language"}
         <div class="langs" role="radiogroup" aria-label={t("ui.language")}>
           {#each LOCALES as l (l)}
@@ -486,16 +499,6 @@
 </dialog>
 
 <style>
-  .labs {
-    margin: 4px 0;
-    padding-left: 1.2em;
-  }
-  .labs li {
-    margin: 4px 0;
-  }
-  .labs li.off {
-    opacity: 0.6;
-  }
   dialog {
     width: min(720px, calc(100vw - 32px));
     max-height: calc(100dvh - 48px);
@@ -509,15 +512,9 @@
     display: flex;
     flex-direction: column;
   }
-  .sub {
-    margin: 14px 0 2px;
-    font-size: 0.9rem;
-  }
   .gains {
-    border: 1px solid var(--line);
-    border-radius: 6px;
-    padding: 4px 8px;
-    margin-top: 6px;
+    border-top: 1px solid var(--line);
+    padding: 4px 0;
   }
   .gains summary {
     cursor: pointer;
@@ -595,18 +592,7 @@
   .content {
     display: grid;
     align-content: start;
-    gap: 10px;
-    min-width: 0;
-  }
-  .row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .row > span:first-child {
-    min-width: 8em;
-  }
-  .row input[type="checkbox"] + span {
+    gap: 14px;
     min-width: 0;
   }
   .packs-list {
@@ -631,6 +617,10 @@
   .audio-state {
     display: grid;
     gap: 8px;
+    padding: 8px 0;
+  }
+  .audio-state summary {
+    cursor: pointer;
   }
   .audio-state[open] summary {
     margin-bottom: 6px;
@@ -688,16 +678,56 @@
       white-space: nowrap;
     }
   }
-  .swatches,
   .folder-name {
+    font-size: 12px;
     font-weight: 600;
     overflow-wrap: anywhere;
   }
-  .checks {
+  .swatches,
+  .chips {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px 12px;
-    align-items: center;
+    gap: 6px;
+    justify-content: flex-end;
+  }
+  .chip {
+    font-size: 12px;
+    padding: 2px 10px;
+    border-radius: 999px;
+    background: var(--panel);
+  }
+  .chip[aria-pressed="true"] {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 16%, var(--panel));
+    font-weight: 600;
+  }
+  .chip[aria-pressed="true"]::before {
+    content: "✓ ";
+    color: var(--accent);
+  }
+  .tools {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: -6px;
+  }
+  .content .link {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--accent);
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .in-box {
+    margin: 8px 0 4px;
+  }
+  .buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .ctl-range {
+    width: min(160px, 40vw);
   }
   .swatch {
     width: 24px;

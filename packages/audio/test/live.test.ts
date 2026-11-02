@@ -243,3 +243,204 @@ describe("실시간 재생 예약", () => {
     expect(player.position).toBeCloseTo(0.1);
   });
 });
+
+describe("재생 중 고친 곡 이어 붙이기 (replace)", () => {
+  const ev = (time: number, type: "on" | "off" | "bend", note: number, extra: { velocity?: number; bend?: number; slot?: number } = {}) => ({
+    time,
+    type,
+    slot: extra.slot ?? 0,
+    note,
+    velocity: extra.velocity ?? 100,
+    trackId: "t1",
+    ...(extra.bend !== undefined ? { bend: extra.bend } : {}),
+  });
+  const two = (velocity: number): Schedule => ({
+    ...schedule,
+    events: [ev(0, "on", 60, { velocity }), ev(0.5, "off", 60), ev(0.5, "on", 62, { velocity }), ev(1, "off", 62)],
+  });
+  const begin = (first: Schedule) => {
+    const sink = new FakeSink();
+    const player = new LivePlayer(sink, { lookahead: 0.3, startDelay: 0.1, timers: manualTimers });
+    player.start(first, patches);
+    const mark = sink.log.length;
+    return { sink, player, mark };
+  };
+
+  it("세기를 바꾸면 이미 넣은 음은 그대로, 다음 음부터 새 세기로 낸다", () => {
+    const { sink, player, mark } = begin(two(100));
+    expect(sink.log.slice(mark - 1)).toEqual(["on 0 60 100 @10.10"]);
+    expect(player.replace(two(50), patches)).toBe(true);
+    sink.currentTime = 12;
+    player.tick();
+    // 60은 바꾸기 전에 켰으니 끄기만 한 번, 62는 새 세기
+    expect(sink.log.slice(mark)).toEqual(["off 0 60 @10.60", "on 0 62 50 @10.60", "off 0 62 @11.10"]);
+  });
+
+  it("악기를 바꾸면 이미 넣은 켜기 뒤에 패치를 바꾼다", () => {
+    const { sink, player, mark } = begin(two(100));
+    player.replace(two(100), [{ ...patches[0]!, program: 30 }]);
+    expect(sink.log.slice(mark)).toEqual(["patch 0 1/30 @10.30"]);
+    sink.currentTime = 12;
+    player.tick();
+    expect(sink.log.slice(mark + 1)).toEqual(["off 0 60 @10.60", "on 0 62 100 @10.60", "off 0 62 @11.10"]);
+  });
+
+  it("악기를 바꾼 뒤 곧바로 멈추고 다시 재생해도, 앞서 넣어 둔 악기 바꾸기가 새 재생의 악기를 덮지 않는다 (beta.36 Codex 점검)", () => {
+    const { sink, player } = begin(two(100));
+    player.replace(two(100), [{ ...patches[0]!, program: 30 }]);
+    expect(sink.log.at(-1)).toBe("patch 0 1/30 @10.30");
+    player.stop();
+    const mark = sink.log.length;
+    player.start(two(100), patches);
+    // 새 재생의 악기(1/21)는 10.30의 바꾸기보다 뒤에, 첫 음은 그보다 더 뒤에
+    sink.currentTime = 10.2;
+    player.tick();
+    const after = sink.log.slice(mark);
+    const at = (line: string) => Number(line.split("@")[1]);
+    expect(after[0]).toMatch(/^patch 0 1\/21 @/);
+    expect(at(after[0]!)).toBeGreaterThanOrEqual(10.3);
+    expect(at(after.find((l) => l.startsWith("on "))!)).toBeGreaterThan(at(after[0]!));
+  });
+
+  it("켠 음을 줄이면 새 일정의 끝에서 끊어, 뒤의 다른 높이 사슬이 높이를 옮겨도 같이 옮겨지지 않는다 (beta.36 Codex 점검)", () => {
+    // C를 0-3초 켜 둔 뒤, C를 0-1초로 줄이고 1초에 D, 1.5초에 E로 붙인다(높이 +2)
+    const { sink, player, mark } = begin({ ...schedule, events: [ev(0, "on", 60), ev(3, "off", 60)] });
+    player.replace(
+      { ...schedule, events: [ev(0, "on", 60), ev(1, "off", 60), ev(1, "on", 62), ev(1.5, "bend", 62, { bend: 2 }), ev(2, "off", 62), ev(2, "bend", 62, { bend: 0 })] },
+      patches,
+    );
+    sink.currentTime = 14;
+    player.tick();
+    const after = sink.log.slice(mark);
+    // C는 D가 켜지는 11.10에 끊기고, 높이 옮기기(11.60)보다 먼저 끝난다
+    expect(after).toEqual(["off 0 60 @11.10", "on 0 62 100 @11.10", "bend 0 2 @11.60", "off 0 62 @12.10", "bend 0 0 @12.10"]);
+  });
+
+  it("울리는 음과 같은 높이를 새로 치면 그 앞에서 끊는다 (뒤늦은 끄기가 새 음을 끄지 않게)", () => {
+    const { sink, player, mark } = begin({ ...schedule, events: [ev(0, "on", 60), ev(1, "off", 60)] });
+    player.replace({ ...schedule, events: [ev(0, "on", 60), ev(0.4, "off", 60), ev(0.4, "on", 60), ev(1, "off", 60)] }, patches);
+    sink.currentTime = 12;
+    player.tick();
+    expect(sink.log.slice(mark)).toEqual(["off 0 60 @10.50", "on 0 60 100 @10.50", "off 0 60 @11.10"]);
+  });
+
+  it("높이를 옮기던 사슬을 줄이면 새 일정의 끝에서 끊고 높이를 되돌린 뒤 다음 음을 친다", () => {
+    const { sink, player, mark } = begin({ ...schedule, events: [ev(0, "on", 60), ev(0.1, "bend", 60, { bend: 2 }), ev(1, "off", 60), ev(1, "bend", 60, { bend: 0 })] });
+    expect(sink.log.slice(mark - 2)).toEqual(["on 0 60 100 @10.10", "bend 0 2 @10.20"]);
+    player.replace({ ...schedule, events: [ev(0, "on", 60), ev(0.1, "bend", 60, { bend: 2 }), ev(0.4, "off", 60), ev(0.4, "bend", 60, { bend: 0 }), ev(0.5, "on", 64), ev(1, "off", 64)] }, patches);
+    sink.currentTime = 12;
+    player.tick();
+    expect(sink.log.slice(mark)).toEqual(["off 0 60 @10.50", "bend 0 0 @10.50", "on 0 64 100 @10.60", "off 0 64 @11.10"]);
+  });
+
+  it("이미 넣은 자리 안에 새로 넣은 음은 치지 않고, 끄기만 남지 않게 한다", () => {
+    const { sink, player, mark } = begin(two(100));
+    player.replace({ ...schedule, events: [ev(0, "on", 60), ev(0.1, "on", 67), ev(0.5, "off", 60), ev(0.5, "off", 67), ev(0.5, "on", 62), ev(1, "off", 62)] }, patches);
+    sink.currentTime = 12;
+    player.tick();
+    expect(sink.log.slice(mark)).toEqual(["off 0 60 @10.60", "on 0 62 100 @10.60", "off 0 62 @11.10"]);
+  });
+
+  describe("켠 음은 새 일정대로 잇는다 (beta.36 바로 듣기 점검)", () => {
+    it("울리는 음에 같은 높이 &를 붙이면 다음 음까지 이어 울린다 (사이가 비지 않는다)", () => {
+      const { sink, player, mark } = begin(two(100));
+      player.replace({ ...schedule, events: [ev(0, "on", 60), ev(1, "off", 60)] }, patches);
+      sink.currentTime = 12;
+      player.tick();
+      expect(sink.log.slice(mark)).toEqual(["off 0 60 @11.10"]);
+    });
+
+    it("울리는 음에 다른 높이 &를 붙이면 그 높이로 옮겨 이어 울린다", () => {
+      const { sink, player, mark } = begin(two(100));
+      player.replace({ ...schedule, events: [ev(0, "on", 60), ev(0.5, "bend", 60, { bend: 4 }), ev(1, "off", 60), ev(1, "bend", 60, { bend: 0 })] }, patches);
+      sink.currentTime = 12;
+      player.tick();
+      expect(sink.log.slice(mark)).toEqual(["bend 0 4 @10.60", "off 0 60 @11.10", "bend 0 0 @11.10"]);
+    });
+
+    it("울리는 음을 늘이면 새 끝까지 울리고 다음 음은 그 뒤에 친다", () => {
+      const { sink, player, mark } = begin({ ...schedule, events: [ev(0, "on", 60), ev(0.5, "off", 60), ev(0.5, "on", 62), ev(1, "off", 62)] });
+      player.replace({ ...schedule, events: [ev(0, "on", 60), ev(0.75, "off", 60), ev(0.75, "on", 62), ev(1, "off", 62)] }, patches);
+      sink.currentTime = 12;
+      player.tick();
+      expect(sink.log.slice(mark)).toEqual(["off 0 60 @10.85", "on 0 62 100 @10.85", "off 0 62 @11.10"]);
+    });
+
+    it("앞에서 줄였다가 되돌리면 원래 끝까지 울린다 (앞 바꾸기에서 끊은 것이 남지 않는다)", () => {
+      const long = { ...schedule, events: [ev(0, "on", 60), ev(4, "off", 60)] };
+      const { sink, player, mark } = begin(long);
+      player.replace({ ...schedule, events: [ev(0, "on", 60), ev(3, "off", 60), ev(3, "on", 60), ev(4, "off", 60)] }, patches);
+      sink.currentTime = 11;
+      player.tick();
+      player.replace(long, patches);
+      sink.currentTime = 15;
+      player.tick();
+      expect(sink.log.slice(mark)).toEqual(["off 0 60 @14.10"]);
+    });
+
+    it("울리는 사슬 뒤쪽의 붙인 음 높이를 바꾸면 새 높이로 옮긴다", () => {
+      const { sink, player, mark } = begin({ ...schedule, events: [ev(0, "on", 60), ev(0.5, "bend", 60, { bend: 2 }), ev(1, "off", 60), ev(1, "bend", 60, { bend: 0 })] });
+      player.replace({ ...schedule, events: [ev(0, "on", 60), ev(0.5, "bend", 60, { bend: 5 }), ev(1, "off", 60), ev(1, "bend", 60, { bend: 0 })] }, patches);
+      sink.currentTime = 12;
+      player.tick();
+      expect(sink.log.slice(mark)).toEqual(["bend 0 5 @10.60", "off 0 60 @11.10", "bend 0 0 @11.10"]);
+    });
+
+    it("새 일정에서 그 자리에 다른 음이 걸치면 켠 음은 바꾸는 자리에서 끊는다", () => {
+      const { sink, player, mark } = begin(two(100));
+      player.replace({ ...schedule, events: [ev(0, "on", 64), ev(0.5, "off", 64), ev(0.5, "on", 62), ev(1, "off", 62)] }, patches);
+      expect(sink.log.slice(mark)).toEqual(["off 0 60 @10.30"]);
+      sink.currentTime = 12;
+      player.tick();
+      expect(sink.log.slice(mark + 1)).toEqual(["on 0 62 100 @10.60", "off 0 62 @11.10"]);
+    });
+
+    it("반복 가운데서 시작해 켜지 않은 사슬의 높이 옮기기만 보냈으면, 바꿀 때 높이를 되돌린다", () => {
+      const sink = new FakeSink();
+      const player = new LivePlayer(sink, { lookahead: 0.3, startDelay: 0.1, timers: manualTimers });
+      const chain = { ...schedule, events: [ev(0, "on", 60), ev(0.5, "bend", 60, { bend: 2 }), ev(1.5, "off", 60), ev(1.5, "bend", 60, { bend: 0 }), ev(1.5, "on", 64), ev(2, "off", 64)] };
+      player.start(chain, patches, { loop: 2, offset: 0.3 });
+      expect(sink.log.at(-1)).toBe("bend 0 2 @10.30");
+      const mark = sink.log.length;
+      player.replace(chain, patches);
+      sink.currentTime = 11.2;
+      player.tick();
+      // 64는 높이를 되돌린 뒤에 친다
+      expect(sink.log.slice(mark)).toEqual(["bend 0 0 @10.30", "on 0 64 100 @11.30"]);
+    });
+
+    it("이어 간 사슬의 끝 높이 되돌리기는 켠 채널로 보낸다 (소리 지점의 채널이 바뀌어도)", () => {
+      const bentChain = { ...schedule, events: [ev(0, "on", 60), ev(0.1, "bend", 60, { bend: 2 }), ev(1, "off", 60), ev(1, "bend", 60, { bend: 0 })] };
+      const { sink, player, mark } = begin(bentChain);
+      player.replace(bentChain, [{ ...patches[0]!, channel: 3 }]);
+      sink.currentTime = 12;
+      player.tick();
+      expect(sink.log.slice(mark)).toEqual(["patch 3 1/21 @10.30", "range 3 24 @10.30", "bend 3 0 @10.30", "off 0 60 @11.10", "bend 0 0 @11.10"]);
+    });
+
+    it("새로 쓰는 채널은 높이를 되돌려 둔다 (앞 재생이 옮겨 둔 높이로 치지 않게)", () => {
+      const { sink, player, mark } = begin(two(100));
+      player.replace(two(100), [{ ...patches[0]!, channel: 3 }]);
+      expect(sink.log.slice(mark, mark + 3)).toEqual(["patch 3 1/21 @10.30", "range 3 24 @10.30", "bend 3 0 @10.30"]);
+    });
+  });
+
+  it("소리 지점 수가 다르면 바꾸지 않는다 (부르는 쪽이 다시 재생)", () => {
+    const { player } = begin(two(100));
+    expect(player.replace({ ...two(100), slots: [...schedule.slots, { key: "t2", instrument: "flute" }] }, patches)).toBe(false);
+  });
+
+  it("반복이면 다음 회차는 새 일정 그대로 처음부터 낸다", () => {
+    const sink = new FakeSink();
+    const player = new LivePlayer(sink, { lookahead: 0.3, startDelay: 0.1, timers: manualTimers });
+    player.start(two(100), patches, { loop: 1 });
+    const mark = sink.log.length;
+    player.replace(two(50), patches);
+    sink.currentTime = 10.9;
+    player.tick();
+    sink.currentTime = 11.4;
+    player.tick();
+    // 이번 회차의 62와 다음 회차의 60 모두 새 세기 (다음 회차 60을 이번 회차에 걸친 음으로 착각해 빼지 않는다)
+    expect(sink.log.slice(mark)).toEqual(expect.arrayContaining(["on 0 62 50 @10.60", "on 0 60 50 @11.10", "on 0 62 50 @11.60"]));
+  });
+});

@@ -1,12 +1,13 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { attenuateChordVolumes, defaultLengthLimit, History, MOBILE_PROFILE, planGhost, planHarmonic, planLabClear, planReverbBatch, planReverbStamp, rat, type Note, type Song } from "@mmlce/core";
-import { addPlayer, addTrack, applyPlan, canWriteExactly, deleteTime, duplicateTrack, distributeSong, findOffgrid, findSpreadSpans, fixOffgrid, insertTime, mergeTracksSong, newSong, parseTrackText, planMergeTracks, planMoveNotes, rampTempos, removeTrack, setMeter, setTrackText, setTempoAt, setTempos, setTracksNotes, spreadSong } from "@mmlce/mml";
+import { attenuateChordVolumes, defaultLengthLimit, History, MOBILE_PROFILE, planGhost, planHarmonic, planLabClear, planReverbBatch, planReverbStamp, rat, type Command, type Note, type Rat, type Song } from "@mmlce/core";
+import { addPlayer, addTrack, applyPlan, barSpans, canWriteExactly, deleteBars, deleteTime, duplicateTrack, distributeSong, findOffgrid, findSpreadSpans, fixOffgrid, insertTime, mergeTracksSong, newSong, parseTrackText, planMergeTracks, planMoveNotes, rampTempos, referenceShiftForDelete, removeTrack, setMeter, setTrackText, setTempoAt, setTempos, setTracksNotes, spreadSong } from "@mmlce/mml";
 import { pairBarTempo, tapTempos } from "../src/lib/tempoSync";
 import { newOutOfRangeTrack, newUnwritableTrack } from "../src/lib/writable";
 import { attenuationOptions, CHORD_ATT_DEFAULTS } from "../src/lib/chordAttPrefs";
 import { retuneCommand, retuneKeepingTab } from "../src/lib/retune";
 import { shiftStrings, TUNINGS } from "../src/lib/tunings";
+import { shiftMs, stepHistory, withReferenceShift } from "../src/lib/referenceShift";
 
 const limit = defaultLengthLimit();
 const note = (id: string, start: [number, number], dur: [number, number], pitch = 60): Note => ({ id, start: rat(...start), dur: rat(...dur), pitch, vol: 8, tie: "none" });
@@ -27,6 +28,21 @@ describe("모든 편집은 실행 취소 기록 한 곳에서 쓸 수 없는 길
     // 칸에 맞는 자리(마디 처음)에서 빼면 된다
     h.run(deleteTime(rat(0), rat(1)));
     expect(h.refused).toBe(false);
+  });
+
+  it("고른 마디 지우기: 두 트랙을 실행 한 번에 지우고 당기며, 1/70 조각이 남는 박자에서는 거절, 실행 취소 한 번에 돌아간다", () => {
+    const s = song([note("a", [0, 1], [1, 1]), note("b", [1, 1], [1, 1]), note("c", [2, 1], [1, 1])], [note("d", [2, 1], [1, 1], 64)]);
+    const h = guarded(s);
+    h.run(deleteBars([[2, 2]]));
+    expect(h.refused).toBe(false);
+    expect(h.song.tracks.map((tr) => tr.notes.map((n) => n.start))).toEqual([[rat(0), rat(1)], [rat(1)]]);
+    h.undo();
+    expect(h.song).toBe(s);
+    // 1/20 음 가운데(1/28 자리)에서 마디가 끝나는 박자로 마디를 지우면 1/70 조각이 남으므로 거절 (마디 빼기와 같은 검사)
+    const odd = { ...song([note("e", [0, 1], [1, 20])]), timeSig: [{ at: rat(0), beats: 1, unit: 28 }, { at: rat(1, 28), beats: 4, unit: 4 }] };
+    const g = guarded(odd);
+    expect(g.run(deleteBars([[1, 1]]))).toBe(odd);
+    expect(g.refused).toBe(true);
   });
 
   it("마디 넣기: 원래 있던 쓸 수 없는 조각은 밀기만 하면 막지 않는다", () => {
@@ -123,6 +139,27 @@ describe("모든 편집은 실행 취소 기록 한 곳에서 쓸 수 없는 길
     expect(h.song.tracks[0]!.mml!.text).toBe("l64c4r32.cdefgg8b+4b16&b64abcd4");
     expect(h.song.tracks[0]!.notes.at(-1)!.start).toEqual(rat(7, 8));
   });
+
+  it("어긋난 길이 고치기 (마비꼬 .mmi 트랙): 잇단음 묶음·템포 사이 쉼표를 고쳐도 검사를 지나고 한 번에 되돌아간다", () => {
+    const text = "t120l42cc+d20l10fgfg c4r21t100r16.r21r16c2";
+    const base = song([]);
+    const s: Song = {
+      ...base,
+      tempo: [{ at: rat(0), bpm: 120 }, ...parseTrackText("t1", { text }).tempo.slice(1)],
+      tracks: base.tracks.map((tr) => (tr.id === "t1" ? { ...tr, notes: parseTrackText("t1", { text }).notes, mml: { text }, mmlDialect: "mabiicco" as const } : tr)),
+    };
+    const h = guarded(s);
+    h.run(fixOffgrid(findOffgrid(s)));
+    expect(h.refused).toBe(false);
+    expect(h.song.tracks[0]!.mml!.text).toBe("t120l42c40c+40d20l10fgfg c4r32.t100r16.r32.r16c2");
+    // 템포는 고친 글 자리로 (c4 뒤 r32. 다음: 2분 + 4분 + 32분 점)
+    expect(h.song.tempo.map((e) => [e.bpm, e.at])).toEqual([
+      [120, rat(0)],
+      [100, rat(51, 64)],
+    ]);
+    h.undo();
+    expect(h.song).toBe(s);
+  });
 });
 
 describe("화음 분산·병합 창의 명령도 같은 검사를 지난다", () => {
@@ -142,6 +179,86 @@ describe("화음 분산·병합 창의 명령도 같은 검사를 지난다", ()
     g.run(mergeTracksSong(MOBILE_PROFILE, { keep: ["t1"], remove: ["t2"], level: 1 }));
     expect(g.refused).toBe(false);
     expect(g.song.tracks).toHaveLength(1);
+  });
+});
+
+describe("마디 지우기·빼기와 원곡 대조 위치는 실행 취소 한 칸에 함께 돌아간다", () => {
+  /** 1~4마디에 한 음씩, t120(한 마디 2초) */
+  const four = (): Song => ({
+    ...song([note("a", [0, 1], [1, 1]), note("b", [1, 1], [1, 1], 62), note("c", [2, 1], [1, 1], 64), note("d", [3, 1], [1, 1], 65)]),
+    tempo: [{ at: rat(0), bpm: 120 }],
+  });
+  /** 앱(commitDelete)처럼: 지우기 계획만큼 어긋남(ms)을 옮기고 그 옮김을 명령에 붙여 기록에 넣는다. 지운 뒤 어긋남 */
+  function deleteWithReference(h: History, command: Command, spans: readonly (readonly [Rat, Rat])[], offsetMs: number): number {
+    const ms = shiftMs(referenceShiftForDelete(h.song, spans, offsetMs / 1000).shiftSec);
+    h.run(withReferenceShift(command, ms));
+    return h.refused ? offsetMs : offsetMs + ms;
+  }
+  /** 앱의 undo·redo처럼 한 칸 움직이고 어긋남도 옮긴다 */
+  const step = (h: History, way: "undo" | "redo", offsetMs: number) => offsetMs + stepHistory(h, way).referenceShiftMs;
+
+  it("실행 취소·다시 실행은 지울 때 옮긴 원곡 파일 이름을 함께 돌려준다 (다른 원곡은 옮기지 않게)", () => {
+    const s = four();
+    const h = guarded(s);
+    const ms = shiftMs(referenceShiftForDelete(h.song, barSpans(s, [[1, 1]]), -6).shiftSec);
+    h.run(withReferenceShift(deleteBars([[1, 1]]), ms, "a.mp3"));
+    const undo = stepHistory(h, "undo");
+    expect(undo.referenceShiftMs).toBe(-2000);
+    expect(undo.referenceName).toBe("a.mp3");
+    const redo = stepHistory(h, "redo");
+    expect(redo.referenceShiftMs).toBe(2000);
+    expect(redo.referenceName).toBe("a.mp3");
+  });
+
+  it("원곡보다 앞 마디를 지우면 어긋남을 옮기고, 실행 취소 한 번에 곡과 어긋남이 함께 돌아가며, 다시 실행하면 다시 옮긴다", () => {
+    const s = four();
+    const h = guarded(s);
+    // 원곡은 4마디 처음(6초)부터 울린다
+    let offset = deleteWithReference(h, deleteBars([[2, 2]]), barSpans(s, [[2, 2]]), -6000);
+    expect(offset).toBe(-4000);
+    expect(h.song.tracks[0]!.notes.map((n) => n.start)).toEqual([rat(0), rat(1), rat(2)]);
+    offset = step(h, "undo", offset);
+    expect(h.song).toBe(s);
+    expect(offset).toBe(-6000);
+    offset = step(h, "redo", offset);
+    expect(offset).toBe(-4000);
+    expect(h.song.tracks[0]!.notes).toHaveLength(3);
+    // 더 되돌릴 칸이 없으면 어긋남도 그대로
+    offset = step(h, "undo", offset);
+    expect(step(h, "undo", offset)).toBe(-6000);
+  });
+
+  it("원곡이 울리는 가운데를 지우면 어긋남은 그대로이고, 실행 취소·다른 편집의 되돌리기도 어긋남을 건드리지 않는다", () => {
+    const s = four();
+    const h = guarded(s);
+    let offset = deleteWithReference(h, deleteBars([[3, 3]]), barSpans(s, [[3, 3]]), 0);
+    expect(offset).toBe(0);
+    expect(h.song.tracks[0]!.notes).toHaveLength(3);
+    h.run(setTempoAt(rat(1), 90));
+    offset = step(h, "undo", offset);
+    offset = step(h, "undo", offset);
+    expect(h.song).toBe(s);
+    expect(offset).toBe(0);
+  });
+
+  it("마디 빼기(커서 자리 한 마디)도 같은 길: 곡 처음을 빼면 어긋남을 옮기고 실행 취소로 함께 돌아간다", () => {
+    const s = four();
+    const h = guarded(s);
+    let offset = deleteWithReference(h, deleteTime(rat(0), rat(1)), [[rat(0), rat(1)]], 250);
+    expect(offset).toBe(2250);
+    offset = step(h, "undo", offset);
+    expect(h.song).toBe(s);
+    expect(offset).toBe(250);
+  });
+
+  it("템포가 바뀌는 곡: 지운 마디의 실제 초(구간 안 템포 변화 포함)를 정수 ms로 옮기고 실행 취소로 정확히 돌아온다", () => {
+    // 2마디 가운데(3/2)부터 t90: 1~3/2는 1초, 3/2~2는 4/3초 → 2333ms
+    const s = { ...four(), tempo: [{ at: rat(0), bpm: 120 }, { at: rat(3, 2), bpm: 90 }] };
+    const h = guarded(s);
+    let offset = deleteWithReference(h, deleteBars([[2, 2]]), barSpans(s, [[2, 2]]), -10_000);
+    expect(offset).toBe(-10_000 + 2333);
+    offset = step(h, "undo", offset);
+    expect(offset).toBe(-10_000);
   });
 });
 

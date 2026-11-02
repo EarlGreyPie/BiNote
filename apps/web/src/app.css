@@ -13,17 +13,28 @@
   --ev-tempo: #7b45d6;
   --ev-meter: #2f8a5f;
   --ev-marker: #a47c12;
+  /* 피아노롤·타브 격자와 다른 트랙 진하기 (캔버스가 읽는다, rollDraw.ts rollTone) */
+  --roll-black-row: rgba(127, 127, 127, 0.1);
+  --roll-sub-line: rgba(127, 127, 127, 0.12);
+  --roll-unit-line: rgba(127, 127, 127, 0.18);
+  --roll-beat-line: rgba(127, 127, 127, 0.32);
+  --roll-sub-min-px: 6;
+  --roll-other-fill: 0.28;
+  --roll-other-edge: 0.7;
+  --tab-tint: 0.32;
   color-scheme: light;
   /* 셸 띠 높이와 컨트롤 높이 (터치 기기에서는 아래에서 키운다) */
   --bar-h: 44px;
   --tool-h: 40px;
-  --status-h: 26px;
+  /* 상태줄: 글자 13px가 한눈에 읽히는 높이 (예전 26px는 너무 얇았다) */
+  --status-h: 36px;
   --ctl-h: 28px;
 }
 @media (pointer: coarse) {
   :root {
     --bar-h: 48px;
     --tool-h: 46px;
+    --status-h: 40px;
     --ctl-h: 36px;
   }
 }
@@ -57,6 +68,18 @@
   --ev-meter: #8fd1ad;
   --ev-marker: #e2c374;
   color-scheme: dark;
+}
+
+/* 차분하게 보기: 격자는 확대했을 때만 옅게, 마디선만 또렷하게, 고르지 않은 트랙은 흐린 그림자로 */
+:root[data-calm] {
+  --roll-black-row: rgba(127, 127, 127, 0.05);
+  --roll-sub-line: rgba(127, 127, 127, 0.06);
+  --roll-unit-line: rgba(127, 127, 127, 0.08);
+  --roll-beat-line: rgba(127, 127, 127, 0.16);
+  --roll-sub-min-px: 14;
+  --roll-other-fill: 0.14;
+  --roll-other-edge: 0.35;
+  --tab-tint: 0.18;
 }
 * {
   box-sizing: border-box;
@@ -582,10 +605,11 @@ input[type="range"] {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 10px;
   height: var(--status-h);
   padding: 0 12px;
-  font-size: 12px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
   background: var(--panel);
   border-top: 1px solid var(--line);
@@ -595,26 +619,72 @@ input[type="range"] {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* 항목 사이 가는 세로 줄로 나눠, 이어 붙은 글이 한 덩어리로 보이지 않게 */
+.statusbar > .item + .item {
+  padding-left: 10px;
+  border-left: 1px solid var(--line);
+}
+/* 좁아지면 동시발음부터 줄이고, 짧은 글자 수는 줄이지 않는다 */
+.statusbar > .poly {
+  flex-shrink: 3;
+}
+.statusbar > .chars {
+  flex-shrink: 0;
+}
+/* 고른 음 정보는 옅은 바탕으로 묶는다 (트랙·글자 수와 구별). 길이 칸이 있어 좁아지면 트랙 이름부터 줄인다 */
+.statusbar > .item.note-info {
+  flex-shrink: 0.2;
+  padding: 2px 8px;
+  border-left: none;
+  border-radius: 6px;
+  background: var(--bg);
+}
 .statusbar .pill {
-  padding: 0 8px;
-  border-radius: 9px;
+  padding: 1px 8px;
+  border-radius: 10px;
   background: var(--danger);
-  color: #fff;
+  /* 어두운 테마의 밝은 빨강 위에서도 읽히게 흰 글 대신 판 색 */
+  color: var(--panel);
+  font-weight: 600;
 }
 .status-btn {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  flex-shrink: 0;
+  gap: 5px;
   min-height: 0;
-  height: 22px;
+  height: calc(var(--status-h) - 8px);
   padding: 0 8px;
-  font-size: 12px;
+  font-size: 13px;
   border-color: transparent;
   background: none;
 }
 .status-btn.over {
   color: var(--danger);
   font-weight: 600;
+}
+/* 곡 검사 단추: 가장 무거운 검사 단계에 따라 색 배지로 눈에 띄게 */
+.status-btn.checks {
+  font-weight: 600;
+  border-color: var(--line);
+  background: var(--bg);
+}
+.status-btn.checks.warning {
+  border-color: color-mix(in srgb, var(--ev-marker) 80%, var(--panel));
+  background: color-mix(in srgb, var(--ev-marker) 26%, var(--panel));
+}
+.status-btn.checks.warning svg {
+  color: var(--ev-marker);
+}
+.status-btn.checks.error {
+  border-color: var(--danger);
+  background: var(--danger);
+  color: var(--panel);
+}
+/* 검사 칸이 펼쳐져 있으면 강조색 테두리 */
+.status-btn.checks.on {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 /* 자동 보존 안 됨: 배지와 단추는 좁은 화면에서도 줄지 않게 */
 .statusbar .unsaved {

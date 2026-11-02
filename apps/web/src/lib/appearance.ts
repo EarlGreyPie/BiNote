@@ -1,4 +1,4 @@
-/** 화면 모양 설정: 테마(밝게·어둡게·시스템), 강조색, 피아노롤 음 모양, MML 편집기 글자, 화면 배율 */
+/** 화면 모양 설정: 테마(밝게·어둡게·시스템), 차분하게 보기, 강조색, 피아노롤 음 모양, MML 편집기 글자, 화면 배율 */
 import { DEFAULT_UI_SCALE, REM_BASE, UI_SCALES } from "./uiScale";
 
 export type ThemeMode = "system" | "light" | "dark";
@@ -40,6 +40,11 @@ export const EDITOR_FONT_SIZES = [12, 13, 14, 15, 16, 18, 20, 22, 24] as const;
 
 export interface Appearance {
   readonly theme: ThemeMode;
+  /**
+   * 차분하게 보기: 피아노롤·타브의 격자와 검은건반 줄을 옅게, 고르지 않은 트랙 음을 흐리게, 트랙 색 채도를 낮춘다.
+   * 밝게·어둡게 어느 테마와도 함께 쓴다 (CSS는 data-calm, 트랙 색은 trackColors의 calm)
+   */
+  readonly calm: boolean;
   readonly accent: AccentId;
   readonly note: NoteLook;
   readonly editorFont: EditorFont;
@@ -50,6 +55,7 @@ export interface Appearance {
 
 export const DEFAULT_APPEARANCE: Appearance = {
   theme: "system",
+  calm: false,
   accent: "blue",
   // 기본 음 모양 (EarlGreyPie 선택 B): 둥근 모서리 + 테두리 + 확대 시 음 이름. v 진하기는 설정에서 켠다
   note: { round: true, border: true, shade: false, names: true },
@@ -73,6 +79,7 @@ export function parseAppearance(raw: string | null): Appearance {
   const flag = (k: keyof NoteLook) => (typeof n[k] === "boolean" ? (n[k] as boolean) : DEFAULT_APPEARANCE.note[k]);
   return {
     theme: o.theme === "light" || o.theme === "dark" ? o.theme : "system",
+    calm: o.calm === true,
     accent: ACCENTS.some((a) => a.id === o.accent) ? (o.accent as AccentId) : DEFAULT_APPEARANCE.accent,
     note: { round: flag("round"), border: flag("border"), shade: flag("shade"), names: flag("names") },
     editorFont: typeof o.editorFont === "string" && Object.hasOwn(EDITOR_FONTS, o.editorFont) ? (o.editorFont as EditorFont) : DEFAULT_APPEARANCE.editorFont,
@@ -85,6 +92,8 @@ export function parseAppearance(raw: string | null): Appearance {
 export function applyAppearance(a: Appearance, root: HTMLElement): void {
   if (a.theme === "system") delete root.dataset.theme;
   else root.dataset.theme = a.theme;
+  if (a.calm) root.dataset.calm = "";
+  else delete root.dataset.calm;
   const accent = ACCENTS.find((x) => x.id === a.accent) ?? ACCENTS[0];
   root.style.setProperty("--accent-light", accent.light);
   root.style.setProperty("--accent-dark", accent.dark);
@@ -97,8 +106,8 @@ export function applyAppearance(a: Appearance, root: HTMLElement): void {
 
 /**
  * 캔버스(피아노롤·타브·볼륨 레인·원곡 파형 띠)를 다시 그릴 열쇠. 캔버스는 그릴 때만 CSS 색을 읽으니,
- * 테마·강조색이 바뀌거나 "시스템" 테마에서 기기 밝기 모드가 바뀌면 이 값이 달라져 다시 그리게 한다
+ * 테마·강조색·차분하게 보기가 바뀌거나 "시스템" 테마에서 기기 밝기 모드가 바뀌면 이 값이 달라져 다시 그리게 한다
  */
-export function themeKeyOf(a: Pick<Appearance, "theme" | "accent">, systemDark: boolean): string {
-  return `${a.theme}:${a.accent}:${systemDark}`;
+export function themeKeyOf(a: Pick<Appearance, "theme" | "accent" | "calm">, systemDark: boolean): string {
+  return `${a.theme}:${a.accent}:${systemDark}:${a.calm ? "calm" : ""}`;
 }

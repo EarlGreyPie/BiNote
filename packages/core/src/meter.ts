@@ -115,6 +115,29 @@ export function barAt(timeSig: readonly TimeSigEvent[], at: Rat): number {
   return bar;
 }
 
+/**
+ * 마디 번호(1부터)의 [시작, 끝) 자리. barAt과 같은 규칙으로 센다: 박자가 바뀌기 전 덜 찬 마디도 한 마디이고,
+ * 그 마디는 박자가 바뀌는 자리에서 끝난다
+ */
+export function barBounds(timeSig: readonly TimeSigEvent[], bar: number): readonly [Rat, Rat] {
+  const sigs = [...timeSig].sort((a, b) => cmp(a.at, b.at));
+  const segments = sigs.length === 0 || cmp(sigs[0]!.at, ZERO) > 0 ? [{ at: ZERO, beats: 4, unit: 4 }, ...sigs] : sigs;
+  let first = 1;
+  for (let i = 0; i < segments.length; i++) {
+    const sig = segments[i]!;
+    const next = segments[i + 1];
+    const { measure } = meterGrid(sig);
+    const count = next ? -floorDiv(sub(sig.at, next.at), measure) : Infinity;
+    if (bar < first + count) {
+      const start = add(sig.at, mul(measure, rat(bar - first)));
+      const end = add(start, measure);
+      return [start, next && cmp(end, next.at) > 0 ? next.at : end];
+    }
+    first += count;
+  }
+  throw new RangeError(`bar ${bar}`);
+}
+
 /** [from, to) 구간이 걸친 마디 [첫, 끝] (마디 번호, 1부터). to가 마디선이면 그 마디는 넣지 않는다 */
 export function barsOfRange(timeSig: readonly TimeSigEvent[], from: Rat, to: Rat): readonly [number, number] {
   const first = barAt(timeSig, from);

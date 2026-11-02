@@ -1,4 +1,5 @@
 import type { GraceTiming } from "@mmlce/core";
+import { parseExcluded } from "./pickLines";
 
 /** 꾸밈음 창에서 고르는 꾸밈음 하나 길이 (게임 최단 l64부터 l16까지) */
 export const GRACE_LENGTHS = ["64", "48", "32", "24", "16"] as const;
@@ -75,6 +76,8 @@ export interface GraceMade {
   readonly choice: GraceChoice;
   readonly tab?: { readonly fret: number; readonly string: number; readonly maxFret: number };
   readonly strings: readonly (readonly [string, number])[];
+  /** 창에서 뺀 트랙 (옛 기록은 빈 목록: 모두 씀) */
+  readonly excluded: readonly string[];
 }
 
 /** 만든 기록의 설정을 읽는다 (모르는 값은 기본으로) */
@@ -83,7 +86,7 @@ export function parseGraceMade(raw: unknown): GraceMade {
   const t = v.tab && typeof v.tab === "object" ? (v.tab as Record<string, unknown>) : undefined;
   const int = (x: unknown) => Number.isInteger(x) && (x as number) >= 0;
   const tab = t && int(t.fret) && int(t.string) && int(t.maxFret) ? { fret: t.fret as number, string: t.string as number, maxFret: t.maxFret as number } : undefined;
-  return { choice: parseGraceChoice(v.choice), ...(tab ? { tab } : {}), strings: parseStrings(v.strings) };
+  return { choice: parseGraceChoice(v.choice), ...(tab ? { tab } : {}), strings: parseStrings(v.strings), excluded: parseExcluded(v.excluded) };
 }
 
 /** 고른 음 id → 타브 줄 목록 (만든 기록) */

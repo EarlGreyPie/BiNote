@@ -4,6 +4,10 @@ import type { Engine } from "./engine";
 import { countIn, Metronome } from "./midiRecord";
 
 const asRat = (time: number) => rat(Math.round(time * 960), 960);
+const toWhole = (r: Rat) => r.n / r.d;
+
+/** 재생 중 고친 것을 이어 붙이는 가장 짧은 간격(밀리초). 드래그 중에도 이보다 자주 일정을 다시 만들지 않는다 */
+const FOLLOW_MS = 120;
 
 /** 재생 하나의 덧붙임 */
 export interface PlayOptions {
@@ -34,6 +38,16 @@ export class Playback {
   /** 이번 재생에 쓴 템포 지도 (재생 중에 곡 템포를 바꿔도 소리는 이 템포로 난다. 탭 템포가 쓴다) */
   tempo: readonly TempoEvent[] = [];
   private generation = 0;
+  /** 지금 소리 내는 곡 (재생 중에 고친 것을 이어 붙이면 그 곡). 녹음·짧게 듣기면 undefined (고친 것을 따라가지 않는다) */
+  private heard: Song | undefined;
+  /** 재생 중 고친 것 바로 듣기: 기다리는 곡과 반복 구간, 이어 붙이는 중인지 */
+  private follow: { song: Song | undefined; loop: readonly [number, number] | undefined; timer: ReturnType<typeof setTimeout> | undefined; busy: number | undefined } = {
+    song: undefined,
+    loop: undefined,
+    timer: undefined,
+    /** 엔진에 넣는 중인 재생의 세대. 앞 재생의 넣기가 늦게 끝나도 새 재생의 바로 듣기를 막지 않게 세대로 둔다 */
+    busy: undefined,
+  };
   /** 준비 중(아직 소리 나기 전)인 재생 요청. 그사이 속도를 바꾸면 이것을 새 속도로 다시 요청한다 */
   pending: { song: Song; start: number | undefined; loop: readonly [number, number] | undefined; rate: number; options: PlayOptions } | undefined;
   /** 일반 재생 메트로놈 (녹음 메트로놈은 녹음 쪽에 따로 있다) */
@@ -91,6 +105,7 @@ export class Playback {
    */
   async play(song: Song, start: number | undefined, loop: readonly [number, number] | undefined, rate = 1, at?: number, options: PlayOptions = {}): Promise<boolean> {
     const generation = ++this.generation;
+    this.clearFollow();
     this.pending = { song, start, loop, rate, options };
     // 앞 재생의 박은 더 예약하지 않는다 (이미 예약한 것은 엔진이 새 재생을 시작할 때 끈다)
     this.metronome.end();
@@ -106,6 +121,7 @@ export class Playback {
     const result = await this.engine.play(song, from, loopSeconds && loopSeconds > 0 ? loopSeconds : undefined, rate, offset, lead);
     if (generation !== this.generation) return false;
     this.pending = undefined;
+    this.heard = options.record || options.noClicks ? undefined : song;
     this.unresolved = result;
     this.from = fromSeconds;
     this.tempo = song.tempo;
@@ -128,8 +144,65 @@ export class Playback {
     return this.engine.playing;
   }
 
+  /**
+   * 실험실 "재생 중 고친 것 바로 듣기": 재생 중에 곡이 바뀌면 멈추지 않고 이어 붙인다 (Engine.update). 드래그처럼
+   * 잇달아 바뀌면 FOLLOW_MS에 한 번만, 하나씩 차례로 한다. 템포·트랙 구성이 바뀌었으면 지금 들리는 자리(박자 기준)부터 다시 재생한다.
+   * loop: 지금 반복 구간 (다시 재생할 때 쓴다)
+   */
+  followEdit(song: Song, loop: readonly [number, number] | undefined): void {
+    if (!this.playing || !this.heard) return;
+    // 되돌리기로 들리는 곡과 같아져도 기다리는 곡을 바꿔 둔다 (안 그러면 120ms 뒤 되돌린 편집을 다시 들려준다)
+    this.follow.song = song;
+    this.follow.loop = loop;
+    // 템포 등이 바뀌어 다시 재생을 준비하는 중이면 그 곡과 견준다 (준비 중에 되돌리면 준비가 끝난 뒤 되돌린 곡을 넣는다)
+    if (song === (this.pending?.song ?? this.heard)) return;
+    if (this.follow.timer === undefined && this.follow.busy !== this.generation) this.follow.timer = setTimeout(() => void this.applyFollow(), FOLLOW_MS);
+  }
+
+  private async applyFollow(): Promise<void> {
+    this.follow.timer = undefined;
+    const generation = this.generation;
+    const { song, loop } = this.follow;
+    if (!song || !this.playing || !this.heard || song === this.heard) return;
+    // 다시 재생을 준비하는 중이면 끝난 뒤에 한다
+    if (this.pending) {
+      this.follow.timer = setTimeout(() => void this.applyFollow(), FOLLOW_MS);
+      return;
+    }
+    this.follow.busy = generation;
+    try {
+      const done = await this.engine.update(song);
+      if (generation !== this.generation) return;
+      if (done.result === "live") {
+        this.heard = song;
+        this.unresolved = done.unresolved;
+      } else if (done.result === "restart") {
+        const seconds = this.now();
+        if (seconds === undefined) return;
+        // 박자 자리를 지켜 바뀐 템포로 다시 잰다
+        const whole = asRat(secondsToWhole(this.tempo, seconds));
+        void this.play(song, toWhole(whole), loop, this.rate, positionToSeconds(song.tempo, whole), {});
+        return;
+      }
+    } finally {
+      if (this.follow.busy === generation) this.follow.busy = undefined;
+    }
+    if (generation === this.generation && this.follow.song !== this.heard && this.follow.timer === undefined) {
+      this.follow.timer = setTimeout(() => void this.applyFollow(), FOLLOW_MS);
+    }
+  }
+
+  /** 새 재생·정지 때 앞 재생에서 기다리던 바로 듣기를 버린다 (앞 재생의 곡을 새 재생에 덮지 않게) */
+  private clearFollow(): void {
+    if (this.follow.timer !== undefined) clearTimeout(this.follow.timer);
+    this.follow.timer = undefined;
+    this.follow.song = undefined;
+    this.follow.loop = undefined;
+  }
+
   stop(): void {
     this.generation++;
+    this.clearFollow();
     this.pending = undefined;
     this.metronome.end();
     this.clickRun = undefined;

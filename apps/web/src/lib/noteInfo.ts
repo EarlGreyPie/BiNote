@@ -1,4 +1,4 @@
-import { barBeatAt, fromLength, rat, type Note, type Rat, type TimeSigEvent } from "@mmlce/core";
+import { barBeatAt, fromLength, placeLoss, rat, type Note, type PlaceLoss, type Rat, type TimeSigEvent } from "@mmlce/core";
 
 const NAMES = ["c", "c+", "d", "d+", "e", "f", "f+", "g", "g+", "a", "a+", "b"];
 
@@ -57,4 +57,22 @@ export function common<T>(notes: readonly Note[], pick: (n: Note) => T, same: (a
   if (notes.length === 0) return null;
   const first = pick(notes[0]!);
   return notes.every((n) => same(pick(n), first)) ? first : null;
+}
+
+/**
+ * 고른 음(ids) 길이를 모두 dur로 바꾸면 고르지 않은 다른 음 가운데 무엇이 잘리고 지워지는지 (트랙마다 placeLoss를 모은다).
+ * 정보 칸에서 길이를 넣기 전에 물어볼지 정할 때 쓴다. 규칙은 바꿀 때 쓰는 replaceNotes와 같다
+ */
+export function lengthLoss(tracks: readonly { readonly notes: readonly Note[] }[], ids: ReadonlySet<string>, dur: Rat): PlaceLoss {
+  const cut = new Map<string, Rat>();
+  const removed = new Set<string>();
+  for (const track of tracks) {
+    const changes = new Map<string, Note | null>();
+    for (const n of track.notes) if (ids.has(n.id)) changes.set(n.id, { ...n, dur });
+    if (changes.size === 0) continue;
+    const loss = placeLoss(track.notes, changes);
+    for (const [id, left] of loss.cut) cut.set(id, left);
+    for (const id of loss.removed) removed.add(id);
+  }
+  return { cut, removed };
 }

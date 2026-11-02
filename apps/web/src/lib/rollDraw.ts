@@ -117,6 +117,50 @@ function noteName(pitch: number, octave: boolean): string {
 }
 
 /** 격자·마디선·음·이음 선·건반 띠·마디 줄·이벤트·커서·재생선을 그린다 */
+/** 피아노롤 격자·다른 트랙 진하기. CSS 값이 없거나 잘못되면 기본 화면 값 */
+export interface RollTone {
+  readonly blackRow: string;
+  readonly subLine: string;
+  readonly unitLine: string;
+  readonly beatLine: string;
+  /** 격자 한 칸이 이만큼(px) 넓어야 칸 선을 긋는다 */
+  readonly subMinPx: number;
+  /** 고르지 않은 트랙 음의 채움·테두리 진하기 */
+  readonly otherFill: number;
+  readonly otherEdge: number;
+}
+
+export const DEFAULT_ROLL_TONE: RollTone = {
+  blackRow: "rgba(127,127,127,0.10)",
+  subLine: "rgba(127,127,127,0.12)",
+  unitLine: "rgba(127,127,127,0.18)",
+  beatLine: "rgba(127,127,127,0.32)",
+  subMinPx: 6,
+  otherFill: 0.28,
+  otherEdge: 0.7,
+};
+
+export function rollTone(css: (name: string) => string): RollTone {
+  const color = (name: string, fallback: string) => {
+    const v = css(name).trim();
+    return v.startsWith("rgb") || v.startsWith("hsl") ? v : fallback;
+  };
+  const num = (name: string, fallback: number, max: number) => {
+    const v = Number.parseFloat(css(name));
+    return Number.isFinite(v) && v >= 0 && v <= max ? v : fallback;
+  };
+  const d = DEFAULT_ROLL_TONE;
+  return {
+    blackRow: color("--roll-black-row", d.blackRow),
+    subLine: color("--roll-sub-line", d.subLine),
+    unitLine: color("--roll-unit-line", d.unitLine),
+    beatLine: color("--roll-beat-line", d.beatLine),
+    subMinPx: num("--roll-sub-min-px", d.subMinPx, 100),
+    otherFill: num("--roll-other-fill", d.otherFill, 1),
+    otherEdge: num("--roll-other-edge", d.otherEdge, 1),
+  };
+}
+
 export function drawRoll(canvas: HTMLCanvasElement, o: RollDrawOptions): void {
   const v = o.view;
   const s = o.song;
@@ -135,6 +179,8 @@ export function drawRoll(canvas: HTMLCanvasElement, o: RollDrawOptions): void {
   g.setTransform(ratio, 0, 0, ratio, 0, 0);
   const bg = o.css("--panel");
   const line = o.css("--line");
+  // 격자·검은건반 줄·다른 트랙 음의 진하기 (app.css의 --roll-* 값, 차분하게 보기에서 옅어진다)
+  const tone = rollTone(o.css);
   // 배경 영상이 있으면 바탕을 비워 영상이 비치게 한다
   if (overVideo) g.clearRect(0, 0, v.width, v.height);
   else {
@@ -150,7 +196,7 @@ export function drawRoll(canvas: HTMLCanvasElement, o: RollDrawOptions): void {
   for (let p = low; p <= high; p++) {
     const r = noteRect(v, from, to - from, p);
     if (isBlackKey(p)) {
-      g.fillStyle = "rgba(127,127,127,0.10)";
+      g.fillStyle = tone.blackRow;
       g.fillRect(r.x, r.y, r.w, r.h);
     }
     if (p % 12 === 0) {
@@ -208,13 +254,13 @@ export function drawRoll(canvas: HTMLCanvasElement, o: RollDrawOptions): void {
     if (horizontal) g.fillRect(p, 0, w, v.height);
     else g.fillRect(0, p, v.width, w);
   };
-  if (step * v.pxPerWhole >= 6) {
-    for (let t = Math.ceil(from / step) * step; t < to; t += step) drawTimeLine(t, "rgba(127,127,127,0.12)", 1);
+  if (step * v.pxPerWhole >= tone.subMinPx) {
+    for (let t = Math.ceil(from / step) * step; t < to; t += step) drawTimeLine(t, tone.subLine, 1);
   }
   g.font = '10px "D2Coding", ui-monospace, monospace';
   for (const gl of gridLines(s.timeSig, from, to)) {
-    if (gl.kind === "unit") drawTimeLine(gl.at, "rgba(127,127,127,0.18)", 1);
-    else if (gl.kind === "beat") drawTimeLine(gl.at, "rgba(127,127,127,0.32)", 1);
+    if (gl.kind === "unit") drawTimeLine(gl.at, tone.unitLine, 1);
+    else if (gl.kind === "beat") drawTimeLine(gl.at, tone.beatLine, 1);
     else drawTimeLine(gl.at, line, 2);
   }
 
@@ -261,8 +307,8 @@ export function drawRoll(canvas: HTMLCanvasElement, o: RollDrawOptions): void {
     const color = o.colors?.get(track.id) ?? track.color;
     const vols = chainVolumes(notes);
     // 채움 농도와 테두리 농도를 따로: 다른 트랙도 테두리는 또렷하게 남겨 겹친 음을 셀 수 있게
-    const fillAlpha = track.mute ? 0 : isActive ? 0.95 : 0.28;
-    const edgeAlpha = track.mute ? 0.45 : isActive ? 1 : 0.7;
+    const fillAlpha = track.mute ? 0 : isActive ? 0.95 : tone.otherFill;
+    const edgeAlpha = track.mute ? 0.45 : isActive ? 1 : tone.otherEdge;
     for (const n of notes) {
       const st = toFloat(n.start);
       const du = toFloat(n.dur);

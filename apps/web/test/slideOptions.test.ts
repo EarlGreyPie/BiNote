@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { breakTimbreTies, defaultLengthLimit, History, MOBILE_PROFILE, planSlides, rat, type Note, type Song } from "@mmlce/core";
 import { addTrack, newSong, setTracksNotes } from "@mmlce/mml";
-import { DEFAULT_SLIDE, parseSlideChoice, tabSlidePick } from "../src/lib/slideOptions";
+import { DEFAULT_SLIDE, parseSlideChoice, parseSlideMade, tabSlidePick } from "../src/lib/slideOptions";
+import { pickedTracks as slideTracks, pickedWithout as slidePicked } from "../src/lib/pickLines";
+import { madeCommand } from "@mmlce/mml";
 import { newUnwritableTrack } from "../src/lib/writable";
 
 describe("슬라이드 창 저장값", () => {
@@ -57,5 +59,54 @@ describe("슬라이드·음색 경계 끊기는 실행 취소 기록 한 곳을 
     expect(h.song.tracks[0]!.notes.map((x) => x.tie)).toEqual(["none", "none"]);
     h.undo();
     expect(h.song).toBe(s);
+  });
+});
+
+describe("슬라이드 미끄러질 줄(트랙) 고르기", () => {
+  const note = (id: string, start: [number, number], dur: [number, number], pitch: number): Note => ({ id, start: rat(...start), dur: rat(...dur), pitch, vol: 8, tie: "none" });
+  function chord(): Song {
+    const s = addTrack("p1", "트랙 2").apply(addTrack("p1", "트랙 3").apply(newSong({ playerName: "기타", trackName: "트랙 1" })));
+    const by: Record<string, Note[]> = {
+      t1: [note("a", [0, 1], [1, 4], 64)],
+      t2: [note("b", [0, 1], [1, 4], 60)],
+    };
+    return { ...s, tracks: s.tracks.map((x, i) => ({ ...x, notes: by[x.id] ?? [note(`c${i}`, [0, 1], [1, 4], 55)] })) };
+  }
+  const opts = { kind: "in" as const, path: "chromatic" as const, direction: "down" as const, semitones: 2, length: rat(1, 16), instrumentOf: () => "folk-guitar", breakAtZones: true };
+  it("고른 음이 든 트랙만 곡 순서로", () => {
+    const s = chord();
+    const all = s.tracks.flatMap((x) => x.notes);
+    expect(slideTracks(s, all).map((x) => x.id)).toEqual(s.tracks.map((x) => x.id));
+    expect(slideTracks(s, [all[1]!]).map((x) => x.id)).toEqual([s.tracks[1]!.id]);
+  });
+  it("뺀 트랙의 음은 고른 음에서 빠지고, 빼지 않으면 그대로", () => {
+    const s = chord();
+    const all = s.tracks.flatMap((x) => x.notes);
+    expect(slidePicked(s, all, new Set())).toEqual(all);
+    expect(slidePicked(s, all, new Set([s.tracks[1]!.id])).map((x) => x.id)).toEqual(all.filter((n) => n.id !== "b").map((x) => x.id));
+  });
+  it("뺀 줄은 그대로 두고 고른 줄만 미끄러진다 (실행 취소 한 번에 원래 곡, 만든 기록에 뺀 트랙이 남는다)", () => {
+    const s = chord();
+    const all = s.tracks.flatMap((x) => x.notes);
+    const off = s.tracks[1]!.id;
+    const h = new History(s, (before, after) => newUnwritableTrack(before, after, defaultLengthLimit()) === undefined);
+    let k = 0;
+    const r = planSlides(s, slidePicked(s, all, new Set([off])), opts, MOBILE_PROFILE, (id) => `${id}.x${++k}`);
+    expect(r.changes.map((c) => c.trackId)).not.toContain(off);
+    expect(r.made).toBe(s.tracks.length - 1);
+    const options = { choice: DEFAULT_SLIDE, strings: [], excluded: [off] };
+    h.run(madeCommand(setTracksNotes(r.changes, "슬라이드"), { tool: "slide", options, picked: all.map((n) => n.id) }));
+    expect(h.refused).toBe(false);
+    expect(h.song.tracks.find((x) => x.id === off)!.notes).toBe(s.tracks[1]!.notes);
+    expect(h.song.tracks.filter((x) => x.id !== off).every((x) => x.notes.length === 3)).toBe(true);
+    const record = h.song.made!.at(-1)!;
+    expect(record.picked).toEqual(all.map((n) => n.id));
+    expect(parseSlideMade(record.options).excluded).toEqual([off]);
+    h.undo();
+    expect(h.song).toBe(s);
+  });
+  it("옛 기록(뺀 트랙 없음)은 모두 미끄러지게 읽는다", () => {
+    expect(parseSlideMade({ choice: {}, strings: [] }).excluded).toEqual([]);
+    expect(parseSlideMade({ excluded: ["t2", 3, null] }).excluded).toEqual(["t2"]);
   });
 });

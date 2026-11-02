@@ -8,6 +8,7 @@ import { loadStored, saveStored } from "./persist";
 const LABS_KEY = "mmlce.labs";
 const BUTTON_NAMES_KEY = "mmlce.labs.buttonNames";
 const FADE_KEY = "mmlce.labs.fade";
+const LIVE_EDIT_KEY = "mmlce.labs.liveEdit";
 
 /** 소리 줄어듦 알림: 가장 클 때보다 이만큼(dB) 작아진 뒤로도 이어지는 음을 검사에서 알린다 */
 export const FADE_DB = 30;
@@ -53,6 +54,8 @@ export const labs = $state({
   buttonNames: loadStored(BUTTON_NAMES_KEY, (raw) => raw === "1"),
   /** 소리 줄어듦 알림 (실험실을 켰을 때만 쓴다). 곡은 바꾸지 않고 검사 안내만 더한다 */
   fade: loadStored(FADE_KEY, (raw) => raw === "1"),
+  /** 재생 중 고친 것 바로 듣기 (실험실을 켰을 때만 쓴다). 실험실을 켜면 처음부터 켜져 있고, 끈 것만 기억한다. 곡은 바꾸지 않고 재생만 따라간다 */
+  liveEdit: loadStored(LIVE_EDIT_KEY, (raw) => raw !== "0"),
 });
 
 /** 단추 이름 펼치기를 지금 쓰는지 */
@@ -78,6 +81,16 @@ export function noteDropOn(): boolean {
 export function setFade(on: boolean): void {
   labs.fade = on;
   saveStored(FADE_KEY, on ? "1" : "0");
+}
+
+/** 재생 중 고친 것 바로 듣기를 지금 쓰는지 */
+export function liveEditOn(): boolean {
+  return labs.on && labs.liveEdit;
+}
+
+export function setLiveEdit(on: boolean): void {
+  labs.liveEdit = on;
+  saveStored(LIVE_EDIT_KEY, on ? "1" : "0");
 }
 
 export function setLabs(on: boolean): void {

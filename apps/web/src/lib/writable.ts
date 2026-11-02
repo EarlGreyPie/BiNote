@@ -1,5 +1,5 @@
 import { add, cmp, sub, ZERO, type LengthLimit, type Note, type Rat, type Song } from "@mmlce/core";
-import { canWriteExactly } from "@mmlce/mml";
+import { canWriteExactly, mmlPitchRange } from "@mmlce/mml";
 
 type Notes = readonly Pick<Note, "start" | "dur">[];
 
@@ -96,4 +96,38 @@ export function newOutOfRangeTrack(before: Song, after: Song, octave: { readonly
   take((w, n) => w.shape === shape(n));
   const bad = notes.find((x) => !x.ok && old.get(x.tr.id) !== x.tr.notes) ?? notes.find((x) => !x.ok);
   return bad?.tr.id;
+}
+
+/**
+ * 편집으로 출력기가 새로 다시 쓰게 된, 출력기가 제 높이로 쓸 수 없는 음(o0c-보다 낮거나 o9b+보다 높은 음)이 있는 트랙 id 목록.
+ * 출력기는 그런 음을 옥타브째 옮겨 쓰므로(pitch-unwritable), 원문 그대로 나가던 음이 편집 한 번으로 말없이 바뀌지 않게 알린다.
+ * 바뀐 트랙만 본다: 원문(mml)이 있다가 없어진 트랙은 그런 음이 하나라도 있으면 넣는다.
+ * 이미 원문 없이 다시 쓰던 트랙은 편집 전에도 다시 쓰던 범위 밖 음(id와 높이, 또는 높이·시작·길이가 같은 음)이면 넣지 않는다
+ * (같은 트랙을 고칠 때마다 다시 알리지 않게). 다른 트랙의 원문에서 옮겨 온 음(합치기 등)만 새로 친다
+ */
+export function newlyReprintedOutOfRange(before: Song, after: Song, octave: { readonly min: number; readonly max: number }): string[] {
+  const { low, high } = mmlPitchRange(octave);
+  const outside = (n: Note) => n.pitch < low || n.pitch > high;
+  const old = new Map(before.tracks.map((tr) => [tr.id, tr]));
+  // 원문 없이 출력기로 나가고, 편집 전과 달라진 트랙만 (그대로인 트랙은 볼 것이 없다)
+  const changed = after.tracks.filter((tr) => {
+    if (tr.mml) return false;
+    const was = old.get(tr.id);
+    return !was || was.mml !== undefined || was.notes !== tr.notes;
+  });
+  if (changed.length === 0) return [];
+  const idKey = (n: Note) => `id|${n.id}|${n.pitch}`;
+  const shape = (n: Note) => `at|${n.pitch}|${n.start.n}/${n.start.d}|${n.dur.n}/${n.dur.d}`;
+  // 편집 전에도 출력기가 옮겨 쓰던 음 (필요할 때만 센다)
+  let printed: Set<string> | undefined;
+  const wasPrinted = (n: Note) => {
+    printed ??= new Set(before.tracks.filter((tr) => !tr.mml).flatMap((tr) => tr.notes.filter(outside).flatMap((m) => [idKey(m), shape(m)])));
+    return printed.has(idKey(n)) || printed.has(shape(n));
+  };
+  return changed
+    .filter((tr) => {
+      const lost = old.get(tr.id)?.mml !== undefined;
+      return tr.notes.some((n) => outside(n) && (lost || !wasPrinted(n)));
+    })
+    .map((tr) => tr.id);
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { emptySong, eq, getProfile, History, rat, type Song } from "@mmlce/core";
-import { cleanPieces, customOffgrid, findOffgrid, findTrackOffgrid, fixOffgrid, offgridLengthText, parseOffgridLength, parseTrackText } from "../src/index.js";
+import { cleanPieces, customOffgrid, findOffgrid, findTrackOffgrid, findTrackOffgridMabiicco, fixOffgrid, offgridMixed, offgridLengthText, parseOffgridLength, parseTrackText } from "../src/index.js";
 
 const limit = getProfile("mobile").length;
 const find = (text: string) => findTrackOffgrid(text, limit).map((f) => f.edits.map((e) => `${e.from}→${e.to}`).join(" "));
@@ -206,5 +206,95 @@ describe("자리가 많을 때", () => {
     expect(findOffgrid(h.song).length).toBe(11);
     h.run(fixOffgrid(findOffgrid(h.song)));
     expect(findOffgrid(h.song)).toEqual([]);
+  });
+});
+
+describe("마비꼬 .mmi 트랙 (마비꼬가 다시 적은 길이를 원래 값으로)", () => {
+  const findM = (text: string) => findTrackOffgridMabiicco(text, limit).map((f) => f.edits.map((e) => `${e.from}→${e.to}`).join(" "));
+  const mabiicco = (...texts: string[]): Song => {
+    const s = song(...texts);
+    return { ...s, tracks: s.tracks.map((t) => ({ ...t, mmlDialect: "mabiicco" as const })) };
+  };
+
+  it("32분 점음표(18틱)를 적은 e21, 42틱을 적은 d9", () => {
+    expect(findM("l64d+e21g8c4")).toEqual(["e21→e32."]);
+    expect(findM("l64c+d9c16<b8")).toEqual(["d9→d16&d32."]);
+  });
+
+  it("l40 둘 + l20 + l10 넷 = 2분음표를 적은 l42 c c+ (예전 규칙은 l14 일곱으로 틀리게 고쳤다)", () => {
+    expect(findM("l42cc+d20l10fgfg c4")).toEqual(["c→c40 c+→c+40"]);
+    expect(find("l42cc+d20l10fgfg c4")).toEqual(["c→c14 c+→c+14 d20→d14 f→f14 g→g14 f→f14 g→g14"]);
+  });
+
+  it("l28 일곱을 적은 l29, 3MLE가 쓴 l27도 같이 l28로", () => {
+    expect(findM("l29dc+dc+dc+d27 c4")).toEqual(["d→d28 c+→c+28 d→d28 c+→c+28 d→d28 c+→c+28 d27→d28"]);
+  });
+
+  it("l36 아홉을 적은 l38은 셋잇단 8분 칸마다 l36으로", () => {
+    expect(findM("l38cdecdecde c4")).toEqual(["c→c36 d→d36 e→e36", "c→c36 d→d36 e→e36", "c→c36 d→d36 e→e36"]);
+  });
+
+  it("처음 닿는 칸보다 뒤까지 보고 덜 바꾸는 값으로 (r19. + 64분 셋 → r16r64, r12가 아니다)", () => {
+    expect(findM("l64a+b9>g8r19.d<bg+l16f")).toEqual(["b9→b16&b32.", "r19.→r16r64"]);
+  });
+
+  it("짧게 맞추면 뒤가 맞지 않을 때는 같이 본다 (rrr4.r7 c8&c9)", () => {
+    // 사이의 깔끔한 쉼표·음(r r r4. / c8)은 그대로 두고 칸에 안 맞는 토막만 고친다
+    expect(findM("l4c4rrr4.r7c8&c9r4g4rr")).toEqual(["r7→r8r64 c9→c16&c32."]);
+  });
+
+  it("템포가 바뀌는 자리에서 자른 쉼표·음은 명령을 남기고 토막마다 고친다", () => {
+    expect(findM("c4r21t100r16.r21r16c2")).toEqual(["r21→r32. r21→r32."]);
+    expect(findM("r2c&c22t80&c4.&c54 r2")).toEqual(["c22→c32. c54→c64"]);
+  });
+
+  it.each([
+    ["5잇단", "l20ccccc c4"],
+    ["7잇단", "l28ccccccc c4"],
+    ["10·20·40 섞인 잇단", "l40cc+d20l10fgf c4"],
+    ["셋잇단·스윙·점음표", "l12ccc l6c c12 c8.c16 l24cccccc c4"],
+    ["9잇단", "l36ccccccccc c4"],
+    ["처음부터 칸에 맞는 곡", "t120 o4 l8 cdefgab>c4 r2"],
+    ["점 붙은 11잇단", "l44c.d.e.f.g.a.b.c.d.e.f.c4"],
+  ])("건드리지 않는 곳: %s", (_name, text) => {
+    expect(findM(text)).toEqual([]);
+  });
+
+  it("어느 값인지 하나로 정해지지 않으면 짐작하지 않는다", () => {
+    expect(findM("l7ccc l11cc c4")).toEqual([]);
+  });
+
+  it("마비꼬 트랙만 마비꼬 규칙으로 찾는다", () => {
+    expect(findOffgrid(song("l42cc+d20l10fgfg c4"))[0]!.edits.map((e) => e.to)).toEqual(["c14", "c+14", "d14", "f14", "g14", "f14", "g14"]);
+    expect(findOffgrid(mabiicco("l42cc+d20l10fgfg c4"))[0]!.edits.map((e) => e.to)).toEqual(["c40", "c+40"]);
+  });
+
+  it("템포를 실은 트랙을 고치면 템포가 고친 자리로 옮겨 가고, 다른 트랙에 되풀이한 템포는 지도에 더하지 않는다", () => {
+    // 마비꼬처럼 두 트랙에 같은 템포를 서로 다른(어긋난) 자리에 적었다
+    const base = mabiicco("t120l64d+e21g8 t90 c4", "l8 rr r21r64 t90 c4");
+    const s = { ...base, tempo: [{ at: rat(0), bpm: 120 }, { at: base.tracks[0]!.notes[3]!.start, bpm: 90 }] };
+    const h = new History(s);
+    h.run(fixOffgrid(findOffgrid(s)));
+    expect(h.song.tracks[0]!.mml!.text).toBe("t120l64d+e32.g8 t90 c4");
+    expect(h.song.tracks[1]!.mml!.text).toBe("l8 rr r32.r64 t90 c4");
+    expect(h.song.tempo.map((e) => [e.bpm, e.at.n, e.at.d])).toEqual([
+      [120, 0, 1],
+      [90, 3, 16],
+    ]);
+    h.undo();
+    expect(h.song).toBe(s);
+    // 템포를 싣지 않은 트랙만 고치면 템포 지도는 그대로
+    const second = findOffgrid(s).filter((f) => f.trackId === "t2");
+    expect(second.length).toBe(1);
+    expect(fixOffgrid(second).apply(s).tempo).toEqual(s.tempo);
+  });
+
+  it("사용자가 적은 길이는 묶음 안 고칠 길이가 모두 같을 때만 쓴다", () => {
+    const [mixed] = findOffgrid(mabiicco("l4c4rrr4.r7c8&c9r4g4rr"));
+    expect(offgridMixed(mixed!)).toBe(true);
+    expect(customOffgrid(mixed!, "4", limit)).toBeUndefined();
+    const [same] = findOffgrid(mabiicco("l42cc+d20l10fgfg c4"));
+    expect(offgridMixed(same!)).toBe(false);
+    expect(customOffgrid(same!, "40", limit)!.fix.edits.map((e) => e.to)).toEqual(["c40", "c+40"]);
   });
 });

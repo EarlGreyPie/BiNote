@@ -1307,7 +1307,9 @@
       const owner = trackOf.get(f.ids[0]!);
       const tint = tabTint.on && tracks.length > 1 && owner ? colors?.get(owner) : undefined;
       if (tint) {
-        g.globalAlpha = 0.32;
+        // 칸 색 진하기 (app.css --tab-tint, 차분하게 보기에서 옅어진다)
+        const a = Number.parseFloat(css("--tab-tint"));
+        g.globalAlpha = Number.isFinite(a) && a >= 0 && a <= 1 ? a : 0.32;
         g.fillStyle = tint;
         box(f.string, f.left, f.width);
         g.globalAlpha = 1;

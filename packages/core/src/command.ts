@@ -105,6 +105,19 @@ export class History {
     return this.redoStack.length > 0;
   }
 
+  /**
+   * 실행 취소하면 되돌릴 단계의 명령 (run에 넣었던 그대로). 없으면 undefined.
+   * 곡 밖 상태(원곡 대조 위치 등)를 함께 바꾼 단계를 앱이 알아보고 그 상태도 같이 되돌릴 때 쓴다
+   */
+  get undoCommand(): Command | undefined {
+    return this.undoStack[this.undoStack.length - 1]?.forward;
+  }
+
+  /** 다시 실행하면 다시 할 단계의 명령 (run에 넣었던 그대로). 없으면 undefined */
+  get redoCommand(): Command | undefined {
+    return this.redoStack[this.redoStack.length - 1]?.forward;
+  }
+
   /** 마지막 run을 거절해(검사, 또는 분수 계산 범위 넘침) 곡이 그대로인지 */
   get refused(): boolean {
     return this.lastRefusal !== undefined;

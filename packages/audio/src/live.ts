@@ -1,5 +1,5 @@
 import type { SlotPatch } from "./patches.js";
-import { BEND_RANGE, type Schedule } from "./schedule.js";
+import { BEND_RANGE, type PlaybackEvent, type Schedule } from "./schedule.js";
 
 /**
  * 실시간 재생이 소리를 보내는 곳. 브라우저에서는 AudioWorklet 신스가 이 모양을 갖추고,
@@ -43,6 +43,12 @@ export interface LivePlayerOptions {
 /** 정지 뒤 한 번 더 끊을 때까지의 틈(초). 신스가 한두 처리 단위 늦게 켜는 음까지 덮는다 */
 const STOP_GUARD = 0.03;
 
+/** 이어 붙인 일정의 이벤트. channel이 있으면 그 채널로 보낸다 (바꾸기 전에 켠 음의 끄기) */
+type LiveEvent = PlaybackEvent & { readonly channel?: number };
+
+/** 같은 시각이면 끄기 → 높이 되돌리기 → 켜기 (buildSchedule과 같은 순서) */
+const EVENT_ORDER = { off: 0, bend: 1, on: 2 } as const;
+
 const defaultTimers: TimerHost = {
   setInterval: (fn, ms) => globalThis.setInterval(fn, ms),
   clearInterval: (h) => globalThis.clearInterval(h as ReturnType<typeof globalThis.setInterval>),
@@ -54,6 +60,10 @@ const defaultTimers: TimerHost = {
  */
 export class LivePlayer {
   private schedule: Schedule | undefined;
+  /** 이번 회차에 보낼 이벤트. 보통 schedule.events이고, 재생 중에 일정을 바꾸면(replace) 이어 붙인 목록이 된다 */
+  private events: readonly LiveEvent[] = [];
+  /** 지금 회차에서 신스에 이미 넣은 곡 시각(초). 이 시각까지의 이벤트는 보냈다 */
+  private sentUntil = -Infinity;
   private bySlot = new Map<number, SlotPatch>();
   private index = 0;
   private origin = 0;
@@ -66,11 +76,12 @@ export class LivePlayer {
   /** 재생 속도 (1 = 원래, 0.5 = 절반). 곡 시간 = 흐른 오디오 시간 × 속도 */
   private rate = 1;
   private handle: unknown;
-  /** 소리가 켜진(또는 켜지도록 예약된) 음: 채널:음 → 켠 시각 */
+  /** 소리가 켜진(또는 켜지도록 예약된) 음: 소리 지점:음 → 채널·음·켠 시각 */
   private sounding = new Map<string, { channel: number; note: number; at: number }>();
   /** 아직 오지 않은 시각에 예약한 켜기. 정지하면 바로 끄도록 붙잡아 둔다 (신스 큐는 지울 수 없어서) */
   private future: { channel: number; note: number; at: number }[] = [];
-  private bent = new Set<number>();
+  /** 높이를 옮겨 둔 채널 → 옮긴 반음 수 (보낸 예약 기준) */
+  private bent = new Map<number, number>();
   private readonly lookahead: number;
   private readonly intervalMs: number;
   private readonly startDelay: number;
@@ -129,6 +140,8 @@ export class LivePlayer {
   start(schedule: Schedule, patches: readonly SlotPatch[], options: { loop?: number; delay?: number; rate?: number; offset?: number } = {}): void {
     this.stop();
     this.schedule = schedule;
+    this.events = schedule.events;
+    this.sentUntil = -Infinity;
     this.rate = options.rate !== undefined && options.rate > 0 && Number.isFinite(options.rate) ? options.rate : 1;
     this.loop = options.loop !== undefined && options.loop > 0 ? options.loop : undefined;
     this.bySlot = new Map(patches.map((p) => [p.slot, p]));
@@ -194,27 +207,31 @@ export class LivePlayer {
     if (!schedule) return;
     const now = this.sink.currentTime;
     this.future = this.future.filter((f) => f.at > now);
-    const events = schedule.events;
     for (;;) {
+      const events = this.events;
       // 미리 예약할 범위는 곡 시간으로 잰다 (느리게 재생하면 오디오 시간 lookahead 안에 드는 곡 시간이 줄어든다)
       const horizon = (now - this.origin + this.lookahead) * this.rate;
       const end = this.loop ?? Infinity;
       while (this.index < events.length && events[this.index]!.time <= horizon && events[this.index]!.time < end) {
         this.send(events[this.index++]!);
       }
+      this.sentUntil = Math.min(horizon, end);
       if (this.loop === undefined || horizon < this.loop) break;
       // 반복 끝: 울리던 음을 끊고, 높이를 되돌리고, 같은 오디오 시계에서 처음부터 이어 예약한다
       const boundary = this.origin + this.loop / this.rate;
       this.quietAfter = Math.max(this.quietAfter, boundary);
       for (const s of this.sounding.values()) this.sink.noteOff(s.channel, s.note, boundary);
-      for (const ch of this.bent) this.sink.pitchBend(ch, 0, boundary);
+      for (const ch of this.bent.keys()) this.sink.pitchBend(ch, 0, boundary);
       this.sounding.clear();
       this.bent.clear();
       this.origin = boundary;
       this.index = 0;
+      // 다음 회차는 이어 붙이기 없이 지금 일정 그대로
+      this.events = schedule.events;
+      this.sentUntil = -Infinity;
       this.onWrap?.(boundary);
     }
-    if (this.loop === undefined && this.index >= events.length && (now - this.origin) * this.rate >= schedule.duration) {
+    if (this.loop === undefined && this.index >= this.events.length && (now - this.origin) * this.rate >= schedule.duration) {
       if (this.handle !== undefined) this.timers.clearInterval(this.handle);
       this.handle = undefined;
       this.schedule = undefined;
@@ -224,22 +241,136 @@ export class LivePlayer {
     }
   }
 
-  private send(e: Schedule["events"][number]): void {
-    const patch = this.bySlot.get(e.slot);
-    if (!patch) return;
+  /**
+   * 재생 중에 일정을 바꾼다 (실험실 "재생 중 고친 것 바로 듣기"). 신스에 이미 넣은 앞쪽(lookahead 안)은 그대로 두고
+   * 그 뒤부터 새 일정으로 이어 간다. 이미 켠 음은 원래 악기·세기로 울린다(게임도 & 뒤 v를 무시한다).
+   * 켠 음이 어떻게 이어지는지(끄기·높이 옮기기)는 새 일정이 정한다: 새 일정에서도 그 자리에 같은 음이 걸쳐 있으면
+   * 새 일정의 끄기·높이 옮기기를 따르고(줄이기·늘이기·& 붙이기·되돌리기가 그대로 들린다), 걸쳐 있지 않으면 바꾸는 자리에서 끊는다.
+   * 새 일정에서 그 자리에 걸친 다른 음은 다시 치지 않는다 (트랙은 한 번에 한 음이라 켠 음과 겹치지 않는다).
+   * 소리 지점 수·순서, 템포, 시작 자리는 같아야 한다 (다르면 부르는 쪽이 지금 자리부터 다시 재생한다). 재생 중이 아니면 false
+   */
+  replace(schedule: Schedule, patches: readonly SlotPatch[]): boolean {
+    const old = this.schedule;
+    if (!old || schedule.slots.length !== old.slots.length) return false;
+    const sentUntil = this.sentUntil;
+    const now = this.sink.currentTime;
+    const changeAt = Math.max(now, this.origin + Math.max(0, sentUntil) / this.rate);
+    const bySlot = new Map(patches.map((p) => [p.slot, p]));
+    // 악기가 바뀐 채널은 이미 넣은 켜기 뒤에 바꾼다. 울리던 음은 바꾸기 전 악기로 끝난다
+    let queued = false;
+    for (const p of patches) {
+      const before = this.bySlot.get(p.slot);
+      if (!before || before.channel !== p.channel) {
+        // 새로 쓰는 채널은 앞 재생이 옮겨 둔 높이가 남아 있을 수 있어 되돌린다
+        this.sink.setPatch(p.channel, p.bank, p.program, changeAt);
+        this.sink.setBendRange(p.channel, BEND_RANGE, changeAt);
+        this.sink.pitchBend(p.channel, 0, changeAt);
+        this.bent.delete(p.channel);
+        queued = true;
+      } else if (before.bank !== p.bank || before.program !== p.program) {
+        this.sink.setPatch(p.channel, p.bank, p.program, changeAt);
+        queued = true;
+      }
+      this.sink.setGain?.(p.channel, p.gain ?? 1);
+    }
+    const key = (e: PlaybackEvent) => `${e.slot}:${e.note}`;
+
+    // 새 일정에서 이미 보낸 자리(sentUntil)에 걸친 음과 그 음의 지금 높이 옮김
+    const started = new Map<string, number>();
+    let i = 0;
+    for (; i < schedule.events.length && schedule.events[i]!.time <= sentUntil; i++) {
+      const e = schedule.events[i]!;
+      const k = key(e);
+      if (e.type === "on") started.set(k, 0);
+      else if (e.type === "off") started.delete(k);
+      else if (started.has(k)) started.set(k, e.bend ?? 0);
+    }
+    // 켠 음: 새 일정에도 걸쳐 있으면 새 일정대로 잇고(채널은 켠 채널), 아니면 바꾸는 자리에서 끊는다
+    const follow = new Map<string, number>();
+    const lead: LiveEvent[] = [];
+    for (const [k, s] of this.sounding) {
+      const shift = started.get(k);
+      if (shift !== undefined) {
+        follow.set(k, s.channel);
+        // 높이를 옮기던 사슬이면 새 일정의 지금 높이로 맞춘다
+        if (shift !== (this.bent.get(s.channel) ?? 0)) {
+          const [slot, note] = k.split(":").map(Number) as [number, number];
+          lead.push({ slot, note, velocity: 0, trackId: "", time: Math.max(0, sentUntil), type: "bend", bend: shift, channel: s.channel });
+        }
+        continue;
+      }
+      this.sink.noteOff(s.channel, s.note, changeAt);
+      if (this.bent.has(s.channel)) {
+        this.sink.pitchBend(s.channel, 0, changeAt);
+        this.bent.delete(s.channel);
+      }
+      this.sounding.delete(k);
+      queued = true;
+    }
+    // 이어 가는 음이 없는데 높이가 옮겨진 채널(반복 가운데서 시작해 켜지 않은 사슬의 높이 옮기기만 보낸 경우 등)은 되돌린다
+    const owned = new Set(follow.values());
+    for (const ch of [...this.bent.keys()]) {
+      if (owned.has(ch)) continue;
+      this.sink.pitchBend(ch, 0, changeAt);
+      this.bent.delete(ch);
+      queued = true;
+    }
+
+    // 새 일정: 이미 보낸 자리 뒤의 이벤트. 다시 치지 않는 음(걸쳤지만 켜지 않은 음)의 끄기·높이 옮기기는 뺀다
+    const fresh: LiveEvent[] = [...lead];
+    const skipped = new Map<string, number>();
+    // 이어 간 음이 끝난 시각과 채널. 사슬 끝의 높이 되돌리기도 그 채널로 보낸다 (소리 지점의 채널이 바뀌었을 수 있다)
+    const ended = new Map<string, { time: number; channel: number }>();
+    for (; i < schedule.events.length; i++) {
+      const e = schedule.events[i]!;
+      if (this.loop !== undefined && e.time >= this.loop) break;
+      const k = key(e);
+      if (e.type !== "on" && started.has(k)) {
+        const channel = follow.get(k);
+        if (channel !== undefined) {
+          fresh.push({ ...e, channel });
+          if (e.type === "off") ended.set(k, { time: e.time, channel });
+        } else if (e.type === "off") skipped.set(k, e.time);
+        if (e.type === "off") started.delete(k);
+        continue;
+      }
+      if (e.type === "bend") {
+        // 다시 치지 않은 사슬의 끝에서 높이를 되돌리는 이벤트는 뺀다
+        if (skipped.get(k) === e.time) continue;
+        const end = ended.get(k);
+        if (end && end.time === e.time) {
+          fresh.push({ ...e, channel: end.channel });
+          continue;
+        }
+      }
+      fresh.push(e);
+    }
+    // 바꾸는 자리에 넣은 악기 바꾸기·끄기는 정지해도 지울 수 없다. 다음 재생은 그 뒤에 시작해야 새 악기가 덮이지 않는다
+    if (queued) this.quietAfter = Math.max(this.quietAfter, changeAt);
+
+    this.schedule = schedule;
+    this.bySlot = bySlot;
+    this.events = fresh.sort((a, b) => a.time - b.time || EVENT_ORDER[a.type] - EVENT_ORDER[b.type]);
+    this.index = 0;
+    return true;
+  }
+
+  private send(e: LiveEvent): void {
+    const channel = e.channel ?? this.bySlot.get(e.slot)?.channel;
+    if (channel === undefined) return;
     const at = this.origin + e.time / this.rate;
     this.quietAfter = Math.max(this.quietAfter, at);
-    const key = `${patch.channel}:${e.note}`;
+    const key = `${e.slot}:${e.note}`;
     if (e.type === "bend") {
-      this.sink.pitchBend(patch.channel, e.bend ?? 0, at);
-      if (e.bend) this.bent.add(patch.channel);
-      else this.bent.delete(patch.channel);
+      this.sink.pitchBend(channel, e.bend ?? 0, at);
+      if (e.bend) this.bent.set(channel, e.bend);
+      else this.bent.delete(channel);
     } else if (e.type === "on") {
-      this.sink.noteOn(patch.channel, e.note, e.velocity, at);
-      this.sounding.set(key, { channel: patch.channel, note: e.note, at });
-      this.future.push({ channel: patch.channel, note: e.note, at });
+      this.sink.noteOn(channel, e.note, e.velocity, at);
+      this.sounding.set(key, { channel, note: e.note, at });
+      this.future.push({ channel, note: e.note, at });
     } else {
-      this.sink.noteOff(patch.channel, e.note, at);
+      this.sink.noteOff(channel, e.note, at);
       this.sounding.delete(key);
     }
   }

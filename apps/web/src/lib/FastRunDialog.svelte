@@ -1,12 +1,14 @@
 <script lang="ts">
   import { barBeatAt, type GameProfile, type Rat, type Song } from "@mmlce/core";
-  import { lengthPieces, type FastRunFixResult, type FastRunMoment } from "@mmlce/mml";
+  import { lengthPieces, type FastRunFitResult, type FastRunFixResult, type FastRunMoment } from "@mmlce/mml";
   import { t } from "./i18n.svelte";
 
   /**
    * 연주 누락음 고치기 창 (실험실, 곡 검사의 연주 누락음 위험 줄). 같은 샘플 구간에서 빠른 음 연속 뒤 같은 순간 착지해 게임에서 빠질 수 있는
    * 음을 자리마다 보이고, 그 음을 조금 늦춰 고친다(끝은 그대로). 자리마다 또는 모두 고칠 수 있고, 고칠 때마다 실행 취소 한 칸이다.
-   * 기준은 실측 전(GameProfile.fastRunDrop, pending fastRunDrop)이라 그 안내를 함께 보인다. 곡을 볼 수 있게 화면을 막지 않는 창으로 띄운다
+   * 기준은 실측 전(GameProfile.fastRunDrop, pending fastRunDrop)이라 그 안내를 함께 보인다. 곡을 볼 수 있게 화면을 막지 않는 창으로 띄운다.
+   * 모두 고치기는 기본으로 글자 수 한도 안에서만 고친다 (fitFastRunFix: 넘치면 화음 분산, 그래도 넘치면 들어가는 만큼만, 악보책 곡은 권 수가 늘지 않는 만큼).
+   * 글자 수 세기는 무거우므로(악보책 곡은 나누기까지 해서 수 초) 곡이 바뀐 뒤 잠깐 쉬었을 때 센다
    */
   interface Props {
     song: Song;
@@ -16,12 +18,38 @@
      * found를 주면 늘어나는 글자 수·남는 자리를 세지 않는 빠른 미리 보기 (이미 찾은 순간을 다시 쓴다)
      */
     plan: (only?: ReadonlySet<string>, found?: readonly FastRunMoment[]) => FastRunFixResult;
+    /** 모두 고치기 계획 (글자 수 한도 안에서만, 넘치면 화음 분산). 잠근 트랙·실제 악기·화음 수는 부르는 쪽이 넣는다 */
+    fit: (song: Song, options: FitChoice) => FastRunFitResult;
     ongo: (moment: FastRunMoment) => void;
     onapply: (result: FastRunFixResult) => void;
+    onapplyfit: (result: FastRunFitResult, options: FitChoice) => void;
     onclose: () => void;
   }
+  interface FitChoice {
+    readonly limit: boolean;
+    readonly distribute: boolean;
+  }
 
-  let { song, profile, plan, ongo, onapply, onclose }: Props = $props();
+  let { song, profile, plan, fit, ongo, onapply, onapplyfit, onclose }: Props = $props();
+
+  /** 곡이 바뀐 뒤 글자 수를 다시 셀 때까지 기다리는 시간 (ms) */
+  const FIT_DELAY_MS = 300;
+  let limitOn = $state(true);
+  let distributeOn = $state(true);
+  let fitted = $state.raw<{ readonly song: Song; readonly choice: FitChoice; readonly result: FastRunFitResult } | undefined>(undefined);
+  $effect(() => {
+    const s = song;
+    const choice: FitChoice = { limit: limitOn, distribute: distributeOn };
+    const timer = setTimeout(() => {
+      fitted = { song: s, choice, result: fit(s, choice) };
+    }, FIT_DELAY_MS);
+    return () => clearTimeout(timer);
+  });
+  /** 지금 곡과 고른 방식으로 센 모두 고치기 (세는 중이면 없음) */
+  const current = $derived(fitted && fitted.song === song && fitted.choice.limit === limitOn && fitted.choice.distribute === distributeOn ? fitted.result : undefined);
+  /** 글자 수 한도 때문에 고치지 않는 자리 (첫 착지 음 id) */
+  const overLimit = $derived(new Set(limitOn && current ? current.overLimit.map((m) => m.landings[0]!.noteId) : []));
+  const signed = (n: number) => (n > 0 ? `+${n}` : `${n}`);
 
   let dialog: HTMLDialogElement;
   $effect(() => {
@@ -84,6 +112,7 @@
           <span class="notes">{row.notes.join(" · ")}</span>
           <span class="muted fine">{row.delays.join(" · ")}</span>
           {#if skippedCount(row.one) > 0}<span class="muted fine">{skippedText(row.one)}</span>{/if}
+          {#if overLimit.has(row.key)}<span class="warn fine">{t("ui.fastRunRowOverLimit")}</span>{/if}
           <span class="buttons">
             <button class="small" onclick={() => ongo(row.moment)}>{t("ui.offgridGo")}</button>
             <button class="small primary" disabled={row.one.changes.length === 0} title={t("ui.fastRunNotes", { n: row.one.delays.length })} onclick={() => apply(plan(row.ids))}
@@ -93,10 +122,22 @@
         </li>
       {/each}
     </ul>
-    <p class="muted">
-      {t("ui.fastRunNotes", { n: all.delays.length })}{#if all.chars}{` · ${t("ui.slideChars", { n: all.chars.delta })}`}{/if}
-    </p>
-    {#if all.chars?.over}<p class="warn">{t("ui.slideCharsOver", { limit: profile.charLimitPerScore })}</p>{/if}
+    <label class="choice"><input type="checkbox" bind:checked={limitOn} /> {t("ui.fastRunLimitOn", { limit: profile.charLimitPerScore })}</label>
+    <label class="choice sub"><input type="checkbox" bind:checked={distributeOn} disabled={!limitOn} /> {t("ui.fastRunDistributeOn")}</label>
+    {#if !current}
+      <p class="muted">{t("ui.fastRunCounting")}</p>
+    {:else}
+      <p class="muted">
+        {t("ui.fastRunNotes", { n: current.plan.delays.length })} · {t("ui.fastRunFitChars", { n: signed(current.chars.delta), longest: current.chars.longest, limit: profile.charLimitPerScore })}{#if current.books}{` · ${t("ui.fastRunBooks", { from: current.books.from, to: current.books.to })}`}{/if}
+      </p>
+      {#if current.moved > 0}<p class="muted">{t("ui.fastRunMoved", { n: current.moved })}</p>{/if}
+      {#if limitOn && current.overLimit.length > 0}
+        <p class="warn">{t("ui.fastRunOverLimit", { n: current.overLimit.length })}</p>
+        {#if current.distributeKept}<p class="muted">{t("ui.fastRunNoDistribute")}</p>{/if}
+        {#if current.fullOver > 0}<p class="muted">{t("ui.fastRunFullOver", { n: current.fullOver, limit: profile.charLimitPerScore })}</p>{/if}
+      {/if}
+      {#if !limitOn && !current.books && current.chars.longest > profile.charLimitPerScore}<p class="warn">{t("ui.slideCharsOver", { limit: profile.charLimitPerScore })}</p>{/if}
+    {/if}
     {#if skippedCount(all) > 0}<p class="muted">{skippedText(all)}</p>{/if}
     {#if all.changes.length > 0 && all.left}<p class="warn">{t("ui.fastRunLeft", { n: all.left })}</p>{/if}
     {#if rule}<p class="muted fine">{t("ui.fastRunOther", { notes: rule.maxStarts })}</p>{/if}
@@ -104,7 +145,12 @@
   <div class="actions">
     <span class="spacer"></span>
     <button onclick={() => dialog.close()}>{t("ui.close")}</button>
-    <button class="primary" disabled={all.changes.length === 0} onclick={() => apply(all)}>{t("ui.fastRunApplyAll", { n: rows.length })}</button>
+    <button
+      class="primary"
+      disabled={!current || current.song === current.before}
+      onclick={() => current && onapplyfit(current, { limit: limitOn, distribute: distributeOn })}
+      >{limitOn ? t("ui.fastRunApplyFit", { n: current?.fixed.length ?? 0, total: rows.length }) : t("ui.fastRunApplyAll", { n: rows.length })}</button
+    >
   </div>
 </dialog>
 
@@ -177,5 +223,14 @@
   }
   .spacer {
     flex: 1;
+  }
+  .choice {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 6px 0 0;
+  }
+  .choice.sub {
+    margin-left: 1.5em;
   }
 </style>

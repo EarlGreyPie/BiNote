@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import { canWriteExactly, optimizeMml } from "@mmlce/mml";
   import { add, cmp, planTrill, positionToSeconds, toFloat, TRILL_VOLUME_PATTERNS, volumeStepMax, type GameProfile, type Note, type Rat, type Song, type TrillResult, type TrillVolumePattern } from "@mmlce/core";
   import { t } from "./i18n.svelte";
@@ -6,6 +7,8 @@
   import { lengthsFor, noteLengthOf } from "./roll";
   import { DEFAULT_TRILL, formatTrillInput, parseTrillChoice, parseTrillInput, TRILL_KEY, TRILL_LENGTHS, type TrillChoice, type TrillLength } from "./trillOptions";
   import { loadStored, parseJson, saveStored } from "./persist";
+  import { excludedOf, mainNoteOf, pickedTracks, pickedWithout } from "./pickLines";
+  import LinePicker from "./LinePicker.svelte";
 
   /**
    * 트릴·트레몰로 창 (편집 메뉴): 고른 음을 같은 길이의 짧은 음 여러 개로 나눈다. 트릴은 상대 음을 타브에서는 본음 줄의 프렛 번호,
@@ -24,16 +27,43 @@
     instrumentOf: (trackId: string) => string | undefined;
     /** 다시 고치기: 만들 때 고른 것 (없으면 이 브라우저에 기억해 둔 값) */
     initial?: TrillChoice | undefined;
+    /** 다시 고치기: 만들 때 뺀 트랙 */
+    initialExcluded?: readonly string[] | undefined;
+    /** 타브에서 열었으면 고른 음마다 보이는 프렛·줄 (줄을 빼면 기준 본음이 바뀌어 그 음의 프렛으로 받는다) */
+    tabOf?: ReadonlyMap<string, { readonly fret: number; readonly string: number; readonly maxFret: number }> | undefined;
+    /** 트랙 색 (보이는 색과 같게) */
+    colors?: ReadonlyMap<string, string> | undefined;
     /** 창 제목 (다시 고치기) */
     title?: string | undefined;
     /** 다시 고치기: 창을 닫고 원래 음으로 되돌린다 (있으면 "원래대로" 버튼) */
     onrestore?: (() => void) | undefined;
     /** 적용: 결과와 만든 기록에 남길 고른 것 */
-    onapply: (result: TrillResult, choice: TrillChoice) => void;
+    /** 적용: 결과, 만든 기록에 남길 고른 것, 뺀 트랙과 쓴 기준 본음 프렛 */
+    onapply: (result: TrillResult, choice: TrillChoice, lines: { excluded: readonly string[]; tab: { fret: number; string: number; maxFret: number } | undefined }) => void;
     onclose: () => void;
   }
 
-  let { song, picked, profile, locked, tab, stringOf, instrumentOf, initial, title, onrestore, onapply, onclose }: Props = $props();
+  let { song, picked, profile, locked, tab, tabOf, colors, stringOf, instrumentOf, initial, initialExcluded, title, onrestore, onapply, onclose }: Props = $props();
+
+  /** 고른 음이 든 트랙 (둘 이상이면 쓸 줄을 체크로 고른다) */
+  const lines = $derived(pickedTracks(song, picked));
+  /** 뺀 트랙 (기본은 모두 씀. 다시 고치기는 만들 때 뺀 것) */
+  // svelte-ignore state_referenced_locally
+  let excluded = $state<ReadonlySet<string>>(new Set(initialExcluded ?? []));
+  /** 고른 음 중 실제로 쓸 음 (뺀 트랙 음은 그대로 둔다) */
+  const using = $derived(pickedWithout(song, picked, excluded));
+  const sameSet = (a: ReadonlySet<string>, b: readonly string[]) => a.size === new Set(b).size && b.every((x) => a.has(x));
+  /**
+   * 높이를 받을 기준 본음 프렛. 타브에서 열었으면 남은 음의 기준 본음 프렛,
+   * 다시 고치기(프렛 목록 없음)는 만들 때 뺀 줄 그대로일 때만 그때 적은 프렛. 아니면 반음 수로 받는다
+   */
+  const tabRef = $derived.by(() => {
+    if (tabOf) {
+      const ref = mainNoteOf(using);
+      return ref ? tabOf.get(ref.id) : undefined;
+    }
+    return sameSet(excluded, initialExcluded ?? []) ? tab : undefined;
+  });
 
   let dialog: HTMLDialogElement;
   // svelte-ignore state_referenced_locally
@@ -48,8 +78,17 @@
 
   // 상대 음 입력: 처음에는 기억해 둔 간격을 이 본음 기준으로 (타브 줄 밖이면 기본 간격, 그것도 밖이면 아래로)
   // svelte-ignore state_referenced_locally
-  let text = $state(formatTrillInput(choice.offset, tab) ?? formatTrillInput(DEFAULT_TRILL.offset, tab) ?? formatTrillInput(-DEFAULT_TRILL.offset, tab) ?? "");
-  const offset = $derived(choice.kind === "tremolo" ? DEFAULT_TRILL.offset : parseTrillInput(text, tab));
+  let text = $state(formatTrillInput(choice.offset, tabRef) ?? formatTrillInput(DEFAULT_TRILL.offset, tabRef) ?? formatTrillInput(-DEFAULT_TRILL.offset, tabRef) ?? "");
+  // 줄을 빼서 기준 본음(프렛을 재는 줄)이 바뀌면 같은 간격을 새 기준으로 다시 적는다
+  // svelte-ignore state_referenced_locally
+  let shownRef = tabRef;
+  $effect(() => {
+    const now = tabRef;
+    if (now === shownRef) return;
+    shownRef = now;
+    text = untrack(() => formatTrillInput(choice.offset, now) ?? text);
+  });
+  const offset = $derived(choice.kind === "tremolo" ? DEFAULT_TRILL.offset : parseTrillInput(text, tabRef));
   $effect(() => {
     if (choice.kind === "trill" && offset !== undefined && offset !== choice.offset) set({ offset });
   });
@@ -72,7 +111,7 @@
     };
     return planTrill(
       song,
-      picked,
+      using,
       {
         kind: choice.kind,
         offset: offset ?? 0,
@@ -95,7 +134,7 @@
   // 빠르기: 첫 본음 자리에서 음 하나가 걸리는 시간으로 초당 몇 번인지와 그 자리 템포
   // 빠름 기준: 고른 음 트랙 악기 가운데 가장 낮은 값 (바이올린·플루트처럼 지속음 악기는 더 일찍 흐려진다)
   const fastRate = $derived.by(() => {
-    const ids = new Set(picked.map((n) => n.id));
+    const ids = new Set(using.map((n) => n.id));
     let low = Infinity;
     for (const tr of song.tracks) {
       if (!tr.notes.some((n) => ids.has(n.id))) continue;
@@ -105,8 +144,8 @@
     return Number.isFinite(low) ? low : profile.ornamentFastRate;
   });
   const rate = $derived.by(() => {
-    if (picked.length === 0) return undefined;
-    const from = picked.reduce<Rat>((m, n) => (cmp(n.start, m) < 0 ? n.start : m), picked[0]!.start);
+    if (using.length === 0) return undefined;
+    const from = using.reduce<Rat>((m, n) => (cmp(n.start, m) < 0 ? n.start : m), using[0]!.start);
     const sec = positionToSeconds(song.tempo, add(from, unit)) - positionToSeconds(song.tempo, from);
     if (!(sec > 0)) return undefined;
     return { n: Math.round(10 / sec) / 10, bpm: Math.round((toFloat(unit) * 240) / sec) };
@@ -131,9 +170,9 @@
   const W = 400;
   const H = 110;
   const preview = $derived.by(() => {
-    if (result.changes.length === 0 || picked.length === 0) return undefined;
-    const from = toFloat(picked.reduce<Rat>((m, n) => (cmp(n.start, m) < 0 ? n.start : m), picked[0]!.start));
-    const to = Math.max(...picked.map((n) => toFloat(n.start) + toFloat(n.dur)));
+    if (result.changes.length === 0 || using.length === 0) return undefined;
+    const from = toFloat(using.reduce<Rat>((m, n) => (cmp(n.start, m) < 0 ? n.start : m), using[0]!.start));
+    const to = Math.max(...using.map((n) => toFloat(n.start) + toFloat(n.dur)));
     const on = new Set(result.ids);
     const notes = result.changes.flatMap((c) => c.notes).filter((n) => toFloat(n.start) < to && toFloat(n.start) + toFloat(n.dur) > from);
     if (notes.length === 0) return undefined;
@@ -153,7 +192,7 @@
   const ok = $derived(offset !== undefined && result.made > 0);
   function apply() {
     if (!ok) return;
-    onapply(result, { ...choice, length, ...(offset !== undefined && choice.kind === "trill" ? { offset } : {}) });
+    onapply(result, { ...choice, length, ...(offset !== undefined && choice.kind === "trill" ? { offset } : {}) }, { excluded: excludedOf(song, picked, excluded), tab: tabRef });
     dialog.close();
   }
   const s = $derived(result.skipped);
@@ -188,10 +227,10 @@
       </label>
     </span>
     {#if trill}
-      <span>{tab ? t("ui.trillFret") : t("ui.trillSemitones")}</span>
+      <span>{tabRef ? t("ui.trillFret") : t("ui.trillSemitones")}</span>
       <span class="row">
-        <input class="pitch" type="text" inputmode={tab ? "numeric" : "text"} bind:value={text} aria-invalid={offset === undefined} />
-        <small class="muted">{tab ? t("ui.trillFretHint", { string: tab.string, fret: tab.fret }) : t("ui.trillSemitonesHint")}</small>
+        <input class="pitch" type="text" inputmode={tabRef ? "numeric" : "text"} bind:value={text} aria-invalid={offset === undefined} />
+        <small class="muted">{tabRef ? t("ui.trillFretHint", { string: tabRef.string, fret: tabRef.fret }) : t("ui.trillSemitonesHint")}</small>
       </span>
     {/if}
     <span>{t("ui.trillLength")}</span>
@@ -240,13 +279,16 @@
       <label><input type="checkbox" checked={choice.tie} disabled={choice.staccato} onchange={(e) => set({ tie: e.currentTarget.checked })} /> {t("ui.trillTie")}</label>
     {/if}
   </div>
+  {#if lines.length > 1}
+    <LinePicker tracks={lines} {excluded} {colors} label={t("ui.trillLines")} help={t("ui.trillLinesHelp")} onchange={(next) => (excluded = next)} />
+  {/if}
   <svg class="preview" viewBox="0 0 {W} {H}" role="img" aria-label={t("ui.arpPreview")}>
     {#if preview}
       {#each preview as r, i (i)}<rect x={r.x} y={r.y} width={r.w} height={r.h} rx="1.5" class:on={r.on} />{/each}
     {/if}
   </svg>
   {#if offset === undefined}
-    <p class="warn">{tab ? t("ui.trillBadFret", { max: tab.maxFret }) : t("ui.trillBadSemitones")}</p>
+    <p class="warn">{tabRef ? t("ui.trillBadFret", { max: tabRef.maxFret }) : t("ui.trillBadSemitones")}</p>
   {:else}
     {#if result.made > 0}
       <p class="muted">

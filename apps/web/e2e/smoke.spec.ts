@@ -23,3 +23,18 @@ test("새 악보를 만들면 트랙 하나와 롤이 생긴다", async ({ page 
   await expect(page.getByRole("tab")).toHaveCount(1);
   await expect(page.getByText(/악보가 없습니다/)).toHaveCount(0);
 });
+
+test("설정 창의 스위치는 그림(동그라미 막대)을 눌러도 켜지고 꺼진다", async ({ page }) => {
+  await openApp(page);
+  await page.getByRole("button", { name: "설정", exact: true }).click();
+  const dialog = page.locator("dialog[open]");
+  await dialog.getByRole("button", { name: "화면", exact: true }).click();
+  const calm = dialog.getByRole("switch", { name: "차분하게 보기" });
+  await expect(calm).not.toBeChecked();
+  // 마우스로 보이는 막대 가운데를 누른다 (체크칸은 투명하게 그 밑에 깔려 있다)
+  const box = (await dialog.locator("#set-calm + i").boundingBox())!;
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await expect(calm).toBeChecked();
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await expect(calm).not.toBeChecked();
+});

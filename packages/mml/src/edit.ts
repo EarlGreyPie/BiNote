@@ -6,6 +6,11 @@ import {
   meterAt,
   meterGrid,
   measureStart,
+  barAt,
+  barBounds,
+  barsOfRange,
+  pruneMade,
+  type BarRange,
   METER_UNITS,
   carryTabStrings,
   unmarkNotes,
@@ -15,6 +20,7 @@ import {
   ZERO,
   DEFAULT_BPM,
   normalizeTempo,
+  tempoClock,
   getProfile,
   PROFILES,
   type Command,
@@ -582,6 +588,7 @@ export function deleteTime(at: Rat, length: Rat, label = "마디 빼기"): Comma
       const tempo = removeSpan(song.tempo, at, end, length);
       // 구간 끝(end)에 템포가 있으면 그것이 at으로 당겨지고, 구간 안 템포는 하나도 남지 않는다 (removeSpan)
       const left = { bpm: tempoAtPosition(tempo, at), endTempo: song.tempo.some((e) => eq(e.at, end)) };
+      const broken = new Set<string>();
       const next: Song = {
         ...song,
         tempo,
@@ -595,6 +602,8 @@ export function deleteTime(at: Rat, length: Rat, label = "마디 빼기"): Comma
           const kept = new Map<Note, Note>();
           for (const n of sorted) {
             const nEnd = add(n.start, n.dur);
+            // 구간에 걸리는 만든 음(지워지거나 잘림)은 그 기록을 끊는다 (아래 broken)
+            if (n.made !== undefined && cmp(nEnd, at) > 0 && cmp(n.start, end) < 0) broken.add(n.made);
             if (cmp(nEnd, at) <= 0) kept.set(n, n);
             else if (cmp(n.start, end) >= 0) kept.set(n, { ...n, start: sub(n.start, length) });
             else if (cmp(n.start, at) < 0) {
@@ -622,10 +631,137 @@ export function deleteTime(at: Rat, length: Rat, label = "마디 빼기"): Comma
         }),
       };
       // 구간 안 자리는 구간 시작으로, 뒤는 구간만큼 당긴다
-      return keepMovedEnd(song, next, (r) => (cmp(r, at) < 0 ? r : cmp(r, end) < 0 ? at : sub(r, length)));
+      const moved = keepMovedEnd(song, next, (r) => (cmp(r, at) < 0 ? r : cmp(r, end) < 0 ? at : sub(r, length)));
+      return broken.size === 0 ? moved : breakMade(moved, broken);
     },
     invert: (before) => restoreSong(before),
   };
+}
+
+/**
+ * 마디 빼기로 일부가 지워지거나 잘린 만든 기록(아르페지오·꾸밈음·슬라이드·트릴)은 그 표시를 모두 떼고 기록을 버린다.
+ * 남겨 두면 되돌리기가 지운 마디의 원래 음을 앞 마디 자리에 다시 넣을 수 있다. 남은 음은 보통 음으로 그대로 둔다
+ */
+function breakMade(song: Song, broken: ReadonlySet<string>): Song {
+  const tracks = song.tracks.map((t) =>
+    t.notes.some((n) => n.made !== undefined && broken.has(n.made))
+      ? { ...t, notes: t.notes.map((n) => (n.made !== undefined && broken.has(n.made) ? unmarkNotes([n])[0]! : n)) }
+      : t,
+  );
+  return pruneMade({ ...song, tracks });
+}
+
+/** 곡에서 지울 마디 구간 [시작, 끝) 목록 (앞에서부터, 붙은 범위는 하나로). 곡 끝 뒤 마디는 뺀다 ("20-"는 곡 끝 마디까지) */
+export function barSpans(song: Song, ranges: readonly BarRange[]): (readonly [Rat, Rat])[] {
+  // 원문 길이(끝 쉼표 포함)와 음 끝 가운데 늦은 쪽
+  let songEnd = scoreEnd(song.tracks);
+  for (const t of song.tracks) if (cmp(notesEnd(t.notes), songEnd) > 0) songEnd = notesEnd(t.notes);
+  if (cmp(songEnd, ZERO) <= 0) return [];
+  const lastBar = barsOfRange(song.timeSig, ZERO, songEnd)[1];
+  const bars = new Set<number>();
+  for (const [a, b] of ranges) for (let k = Math.max(1, a); k <= Math.min(b, lastBar); k++) bars.add(k);
+  const out: [Rat, Rat][] = [];
+  for (const k of [...bars].sort((x, y) => x - y)) {
+    const [start, stop] = barBounds(song.timeSig, k);
+    const prev = out[out.length - 1];
+    if (prev && eq(prev[1], start)) prev[1] = stop;
+    else out.push([start, stop]);
+  }
+  return out;
+}
+
+/** 마디 지우기 미리 보기: 지울 마디 수, 지울 음 수, 잘릴(구간에 걸친) 음 수, 끊길 만든 기록 수 */
+export interface DeleteBarsCheck {
+  readonly bars: number;
+  readonly removed: number;
+  readonly cut: number;
+  readonly made: number;
+}
+
+export function checkDeleteBars(song: Song, ranges: readonly BarRange[]): DeleteBarsCheck {
+  const spans = barSpans(song, ranges);
+  let bars = 0;
+  for (const [start, stop] of spans) {
+    const [a, b] = barsOfRange(song.timeSig, start, stop);
+    bars += b - a + 1;
+  }
+  let removed = 0;
+  let cut = 0;
+  const made = new Set<string>();
+  for (const t of song.tracks)
+    for (const n of t.notes) {
+      const nEnd = add(n.start, n.dur);
+      const hit = spans.find(([start, stop]) => cmp(nEnd, start) > 0 && cmp(n.start, stop) < 0);
+      if (!hit) continue;
+      if (cmp(n.start, hit[0]) >= 0 && cmp(nEnd, hit[1]) <= 0) removed++;
+      else cut++;
+      if (n.made !== undefined) made.add(n.made);
+    }
+  const live = new Set((song.made ?? []).map((r) => r.id));
+  return { bars, removed, cut, made: [...made].filter((id) => live.has(id)).length };
+}
+
+/**
+ * 고른 마디들 지우기: 모든 트랙에서 그 마디를 지우고 뒤 음·템포·박자·마커를 당긴다 (마디 빼기를 뒤 범위부터 차례로).
+ * 실행 취소 한 칸. 곡 끝 뒤 마디만 고르면 곡 그대로
+ */
+export function deleteBars(ranges: readonly BarRange[], label = "마디 지우기"): Command {
+  return {
+    label,
+    apply(song) {
+      // 뒤 구간부터 지워야 앞 구간 자리가 그대로다
+      return barSpans(song, ranges)
+        .reverse()
+        .reduce((s, [start, stop]) => deleteTime(start, sub(stop, start), label).apply(s), song);
+    },
+    invert: (before) => restoreSong(before),
+  };
+}
+
+/**
+ * 마디를 지울 때 원곡 대조(원곡 동시재생) 위치를 어떻게 맞출지.
+ * 원곡 어긋남은 "원곡 시각(초) = 곡 시각(초) + 어긋남"이다
+ */
+export interface ReferenceShiftPlan {
+  /** 어긋남에 더할 초 (지운 구간이 원곡보다 앞이거나 곡 처음이면 그 구간의 실제 길이). 0이면 그대로 */
+  readonly shiftSec: number;
+  /**
+   * 어긋남 하나로는 맞출 수 없는(원곡이 울리는 가운데를 지우는) 첫 구간의 첫 마디. 지운 뒤 이 마디부터 원곡과 어긋난다.
+   * 이 마디 앞은 지운 만큼(shiftSec) 당겨 맞춘다. 모두 맞출 수 있으면 undefined
+   */
+  readonly brokenBar?: number;
+}
+
+/** 원곡 어긋남은 ms로 맞추므로 0.5ms 안의 차이는 같은 자리로 본다 */
+const REFERENCE_EPS = 0.0005;
+
+/**
+ * 곡에서 spans 구간들(앞에서부터, [시작, 끝) 온음표 단위)을 지울 때 원곡 어긋남을 얼마나 옮기면 남은 곡과 원곡이 맞는지.
+ * 지운 구간이 원곡이 울리기 시작하는 곡 시각(-offsetSec)보다 앞에서 끝나거나 곡 처음(0)에서 시작하면,
+ * 그 뒤 곡은 구간의 실제 길이(지우기 전 곡 템포로 잰 초)만큼 일찍 울리므로 어긋남에 그만큼 더하면 맞는다.
+ * (지우기는 구간 끝에서 울리던 템포를 구간 시작에 남기므로 뒤 곡의 템포는 그대로다)
+ * 원곡이 울리는 가운데를 지우면 그 자리부터는 어긋남 하나로 맞출 수 없다 (brokenBar).
+ * durationSec(원곡 길이)를 알면 원곡이 끝난 뒤를 지우는 구간은 원곡과 상관없다고 본다
+ */
+export function referenceShiftForDelete(
+  song: Pick<Song, "tempo" | "timeSig">,
+  spans: readonly (readonly [Rat, Rat])[],
+  offsetSec: number,
+  durationSec?: number,
+): ReferenceShiftPlan {
+  const clock = tempoClock(song.tempo);
+  // 원곡이 울리기 시작·끝나는 곡 시각(초)
+  const start = -offsetSec;
+  const end = durationSec === undefined ? Infinity : durationSec - offsetSec;
+  let shiftSec = 0;
+  for (const [from, to] of [...spans].sort((a, b) => cmp(a[0], b[0]))) {
+    const a = clock(from);
+    const b = clock(to);
+    if (a >= end - REFERENCE_EPS) break;
+    if (cmp(from, ZERO) === 0 || b <= start + REFERENCE_EPS) shiftSec += b - a;
+    else return { shiftSec, brokenBar: barAt(song.timeSig, from) };
+  }
+  return { shiftSec };
 }
 
 /** 고친 원문을 트랙에 넣는다. 원문이 그대로면 트랙도 그대로 돌려준다 */

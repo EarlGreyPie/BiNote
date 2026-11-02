@@ -1,5 +1,6 @@
 import { TRILL_OFFSET_LIMIT, TRILL_VOLUME_DEPTH_LIMIT, TRILL_VOLUME_PATTERNS, type TrillKind, type TrillVolumePattern } from "@mmlce/core";
 import { parseStrings } from "./graceOptions";
+import { parseExcluded } from "./pickLines";
 
 /** 트릴·트레몰로 창에서 고르는 음 하나 길이 (게임 최단 l64부터 l8까지) */
 export const TRILL_LENGTHS = ["64", "48", "32", "24", "16", "12", "8"] as const;
@@ -87,6 +88,8 @@ export interface TrillMade {
   readonly choice: TrillChoice;
   readonly tab?: { readonly fret: number; readonly string: number; readonly maxFret: number };
   readonly strings: readonly (readonly [string, number])[];
+  /** 창에서 뺀 트랙 (옛 기록은 빈 목록: 모두 씀) */
+  readonly excluded: readonly string[];
 }
 
 /** 만든 기록의 설정을 읽는다 (모르는 값은 기본으로) */
@@ -98,5 +101,5 @@ export function parseTrillMade(raw: unknown): TrillMade {
   // 전체 낮추기가 없던 판(beta.29)에 만든 기록은 낮추지 않은 것이다 (다시 고치기가 같은 결과로 열리게)
   const c = v.choice && typeof v.choice === "object" ? (v.choice as Record<string, unknown>) : undefined;
   const choice = parseTrillChoice(c && !("volumeLower" in c) ? { ...c, volumeLower: 0 } : v.choice);
-  return { choice, ...(tab ? { tab } : {}), strings: parseStrings(v.strings) };
+  return { choice, ...(tab ? { tab } : {}), strings: parseStrings(v.strings), excluded: parseExcluded(v.excluded) };
 }

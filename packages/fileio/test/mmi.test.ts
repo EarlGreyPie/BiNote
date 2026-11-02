@@ -40,6 +40,16 @@ describe("readMmi", () => {
     expect(song.tracks[1]!.notes[0]!.pitch).toBe(48);
   });
 
+  it("마비꼬 트랙 표시(mmlDialect): 어긋난 길이 찾기가 마비꼬 규칙을 쓰게. 프로젝트로 저장해도 남는다", () => {
+    const { song } = readMmi(SAMPLE);
+    expect(song.tracks.map((t) => t.mmlDialect)).toEqual(["mabiicco", "mabiicco", "mabiicco", "mabiicco"]);
+    expect(readProject(writeProject(song)).song.tracks.map((t) => t.mmlDialect)).toEqual(["mabiicco", "mabiicco", "mabiicco", "mabiicco"]);
+    // 모르는 값은 받지 않는다
+    const raw = JSON.parse(writeProject(song));
+    raw.song.tracks[0].mmlDialect = "3mle";
+    expect(readProject(JSON.stringify(raw)).song.tracks[0]!.mmlDialect).toBeUndefined();
+  });
+
   it("tempo= 줄(96TPQN)과 마커, startDelta", () => {
     const { song } = readMmi(SAMPLE);
     expect(song.tempo).toEqual([

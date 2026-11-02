@@ -14,7 +14,8 @@
     range: PitchRange;
     /** 실험실 소리 줄어듦: 음이 끝날 때 가장 클 때보다 몇 dB 작은지 (샘플이 먼저 끝나면 -Infinity). 없으면 안 보인다 */
     endDb?: number | undefined;
-    onlength: (dur: Rat) => void;
+    /** 넣은 길이 적용. false면 바꾸지 않았다(물음에서 취소 등) — 칸을 지금 길이로 되돌린다 */
+    onlength: (dur: Rat) => boolean | void;
   }
 
   let { notes, timeSig, range, endDb, onlength }: Props = $props();
@@ -47,7 +48,7 @@
       return;
     }
     bad = false;
-    if (!dur || !eq(dur, next)) onlength(next);
+    if ((!dur || !eq(dur, next)) && onlength(next) === false) text = dur ? lengthText(dur) : "";
   }
 </script>
 
@@ -104,8 +105,11 @@
     align-items: center;
     gap: 3px;
   }
+  /* 길이 칸은 상태줄 안에 들어가게 (기본 컨트롤 높이는 터치 기기에서 상태줄보다 높다) */
   .num {
     width: 4.5em;
+    min-height: 0;
+    height: calc(var(--status-h) - 12px);
     padding: 0 4px;
     font: inherit;
     color: inherit;

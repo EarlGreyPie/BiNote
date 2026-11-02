@@ -160,6 +160,11 @@ export interface Track {
    * .mmi로 저장할 때 다시 노래 칸에 쓴다. 다른 출력·편집과는 상관없다
    */
   readonly mmiSong?: boolean;
+  /**
+   * 원문(mml)을 쓴 프로그램이 길이를 고유하게 바꿔 적는 곳이면 그 이름. 지금은 마비꼬 .mmi에서 읽은 트랙만 "mabiicco".
+   * 어긋난 길이 찾기가 그 프로그램의 규칙으로 원래 길이를 짐작한다. 다른 출력·편집과는 상관없다
+   */
+  readonly mmlDialect?: "mabiicco";
   readonly extras?: Extras;
 }
 

@@ -5,6 +5,8 @@
   import { lengthLabel } from "./Toolbar.svelte";
   import { lengthsFor, noteLengthOf, type NoteLength } from "./roll";
   import { parseSlideChoice, SLIDE_KEY, type SlideChoice } from "./slideOptions";
+  import { excludedOf, pickedTracks, pickedWithout } from "./pickLines";
+  import LinePicker from "./LinePicker.svelte";
   import { loadStored, parseJson, saveStored } from "./persist";
 
   /**
@@ -21,18 +23,22 @@
     /** 타브에서 열면 음이 보이는 줄 (사이 음도 그 줄에) */
     stringOf?: (note: Note) => number | undefined;
     locked: ReadonlySet<string>;
+    /** 트랙 색 (보이는 색과 같게. 없으면 트랙에 적힌 색) */
+    colors?: ReadonlyMap<string, string> | undefined;
     /** 다시 고치기: 만들 때 고른 것 (없으면 이 브라우저에 기억해 둔 값) */
     initial?: SlideChoice | undefined;
+    /** 다시 고치기: 만들 때 뺀 트랙 */
+    initialExcluded?: readonly string[] | undefined;
     /** 창 제목 (다시 고치기) */
     title?: string | undefined;
     /** 다시 고치기: 창을 닫고 원래 음으로 되돌린다 (있으면 "원래대로" 버튼) */
     onrestore?: (() => void) | undefined;
-    /** 적용: 결과와 만든 기록에 남길 고른 것 */
-    onapply: (result: SlidesResult, choice: SlideChoice) => void;
+    /** 적용: 결과와 만든 기록에 남길 고른 것 (뺀 트랙 포함) */
+    onapply: (result: SlidesResult, choice: SlideChoice, excluded: readonly string[]) => void;
     onclose: () => void;
   }
 
-  let { song, picked, profile, instrumentOf, stringOf, locked, initial, title, onrestore, onapply, onclose }: Props = $props();
+  let { song, picked, profile, instrumentOf, stringOf, locked, colors, initial, initialExcluded, title, onrestore, onapply, onclose }: Props = $props();
 
   let dialog: HTMLDialogElement;
   // svelte-ignore state_referenced_locally
@@ -45,8 +51,15 @@
     dialog.showModal();
   });
 
+  /** 고른 음이 든 트랙 (둘 이상이면 미끄러질 줄을 체크로 고른다. 아르페지오 "화음에 넣을 트랙"과 같게) */
+  const lines = $derived(pickedTracks(song, picked));
+  /** 미끄러지지 않게 뺀 트랙 (창을 열 때마다 비운다: 기본은 모두. 다시 고치기는 만들 때 뺀 것) */
+  // svelte-ignore state_referenced_locally
+  let excluded = $state<ReadonlySet<string>>(new Set(initialExcluded ?? []));
+  /** 고른 음 중 실제로 미끄러질 음 (뺀 트랙 음은 그대로 둔다) */
+  const sliding = $derived(pickedWithout(song, picked, excluded));
   /** 두 음 사이는 한 트랙에서 음 둘 이상을 골라야 쓸 수 있다 */
-  const canBetween = $derived(song.tracks.some((tr) => tr.notes.filter((n) => picked.some((p) => p.id === n.id)).length >= 2));
+  const canBetween = $derived(song.tracks.some((tr) => tr.notes.filter((n) => sliding.some((p) => p.id === n.id)).length >= 2));
   const kind = $derived(!canBetween && choice.kind === "between" ? "in" : choice.kind);
   const wantIn = $derived(kind === "in" || kind === "both");
   /** 게임이 받는 길이만 (격자는 빼고) */
@@ -71,7 +84,7 @@
     const side = kind === "out" ? { direction: choice.outDirection, semitones: choice.outSemitones, length: noteLengthOf(outLength, 1) } : { direction: choice.direction, semitones: choice.semitones, length: noteLengthOf(length, 1) };
     return planSlides(
       song,
-      picked,
+      sliding,
       {
         kind,
         path: choice.path,
@@ -115,7 +128,7 @@
     const zone = new Set(result.zoneAt);
     const all = result.changes.flatMap((c) => c.notes);
     const made = all.filter((n) => chain.has(n.id));
-    const span = [...picked, ...made];
+    const span = [...sliding, ...made];
     const from = span.reduce<Rat>((m, n) => (cmp(n.start, m) < 0 ? n.start : m), span[0]!.start);
     const to = Math.max(...span.map((n) => toFloat(n.start) + toFloat(n.dur)));
     const notes = all.filter((n) => toFloat(n.start) < to && toFloat(n.start) + toFloat(n.dur) > toFloat(from));
@@ -139,7 +152,8 @@
   const ok = $derived(result.made > 0 && result.changes.length > 0);
   function apply() {
     if (!ok) return;
-    onapply(result, choice);
+    // 고른 음에 없는 트랙 id는 남기지 않는다
+    onapply(result, choice, excludedOf(song, picked, excluded));
     dialog.close();
   }
   const s = $derived(result.skipped);
@@ -213,6 +227,9 @@
       </select>
     {/if}
   </div>
+  {#if lines.length > 1}
+    <LinePicker tracks={lines} {excluded} {colors} label={t("ui.slideTracks")} help={t("ui.slideTracksHelp")} onchange={(next) => (excluded = next)} />
+  {/if}
   <label class="check" title={t("ui.slideBreakZonesHelp")}>
     <input type="checkbox" checked={choice.breakAtZones} onchange={(e) => set({ breakAtZones: e.currentTarget.checked })} />
     {t("ui.slideBreakZones")}

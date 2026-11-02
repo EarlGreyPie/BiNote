@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import { canWriteExactly, optimizeMml } from "@mmlce/mml";
   import { cmp, graceMax, planGrace, toFloat, type GameProfile, type GraceResult, type Note, type Rat, type Song } from "@mmlce/core";
   import { t } from "./i18n.svelte";
@@ -6,6 +7,8 @@
   import { lengthsFor, noteLengthOf } from "./roll";
   import { formatGraceInput, GRACE_KEY, GRACE_LENGTHS, parseGraceChoice, parseGraceInput, type GraceChoice, type GraceLength } from "./graceOptions";
   import { loadStored, parseJson, saveStored } from "./persist";
+  import { excludedOf, mainNoteOf, pickedTracks, pickedWithout } from "./pickLines";
+  import LinePicker from "./LinePicker.svelte";
 
   /**
    * 꾸밈음 창 (편집 메뉴): 고른 음(본음) 앞에 짧은 꾸밈음을 붙인다. 타브는 본음 줄의 프렛 번호, 피아노롤은 본음 기준 반음 수로 높이를 받는다.
@@ -24,16 +27,43 @@
     instrumentOf: (trackId: string) => string | undefined;
     /** 다시 고치기: 만들 때 고른 것 (없으면 이 브라우저에 기억해 둔 값) */
     initial?: GraceChoice | undefined;
+    /** 다시 고치기: 만들 때 뺀 트랙 */
+    initialExcluded?: readonly string[] | undefined;
+    /** 타브에서 열었으면 고른 음마다 보이는 프렛·줄 (줄을 빼면 기준 본음이 바뀌어 그 음의 프렛으로 받는다) */
+    tabOf?: ReadonlyMap<string, { readonly fret: number; readonly string: number; readonly maxFret: number }> | undefined;
+    /** 트랙 색 (보이는 색과 같게) */
+    colors?: ReadonlyMap<string, string> | undefined;
     /** 창 제목 (다시 고치기) */
     title?: string | undefined;
     /** 다시 고치기: 창을 닫고 원래 음으로 되돌린다 (있으면 "원래대로" 버튼) */
     onrestore?: (() => void) | undefined;
     /** 적용: 결과와 만든 기록에 남길 고른 것 */
-    onapply: (result: GraceResult, choice: GraceChoice) => void;
+    /** 적용: 결과, 만든 기록에 남길 고른 것, 뺀 트랙과 쓴 기준 본음 프렛 */
+    onapply: (result: GraceResult, choice: GraceChoice, lines: { excluded: readonly string[]; tab: { fret: number; string: number; maxFret: number } | undefined }) => void;
     onclose: () => void;
   }
 
-  let { song, picked, profile, locked, tab, stringOf, instrumentOf, initial, title, onrestore, onapply, onclose }: Props = $props();
+  let { song, picked, profile, locked, tab, tabOf, colors, stringOf, instrumentOf, initial, initialExcluded, title, onrestore, onapply, onclose }: Props = $props();
+
+  /** 고른 음이 든 트랙 (둘 이상이면 쓸 줄을 체크로 고른다) */
+  const lines = $derived(pickedTracks(song, picked));
+  /** 뺀 트랙 (기본은 모두 씀. 다시 고치기는 만들 때 뺀 것) */
+  // svelte-ignore state_referenced_locally
+  let excluded = $state<ReadonlySet<string>>(new Set(initialExcluded ?? []));
+  /** 고른 음 중 실제로 쓸 음 (뺀 트랙 음은 그대로 둔다) */
+  const using = $derived(pickedWithout(song, picked, excluded));
+  const sameSet = (a: ReadonlySet<string>, b: readonly string[]) => a.size === new Set(b).size && b.every((x) => a.has(x));
+  /**
+   * 높이를 받을 기준 본음 프렛. 타브에서 열었으면 남은 음의 기준 본음 프렛,
+   * 다시 고치기(프렛 목록 없음)는 만들 때 뺀 줄 그대로일 때만 그때 적은 프렛. 아니면 반음 수로 받는다
+   */
+  const tabRef = $derived.by(() => {
+    if (tabOf) {
+      const ref = mainNoteOf(using);
+      return ref ? tabOf.get(ref.id) : undefined;
+    }
+    return sameSet(excluded, initialExcluded ?? []) ? tab : undefined;
+  });
 
   let dialog: HTMLDialogElement;
   // svelte-ignore state_referenced_locally
@@ -48,8 +78,17 @@
 
   // 높이 입력: 처음에는 기억해 둔 높이를 이 본음 기준으로 (타브 줄 밖이면 2프렛 위 하나)
   // svelte-ignore state_referenced_locally
-  let text = $state(formatGraceInput(choice.offsets, tab) ?? formatGraceInput([2], tab) ?? "");
-  const offsets = $derived(parseGraceInput(text, tab));
+  let text = $state(formatGraceInput(choice.offsets, tabRef) ?? formatGraceInput([2], tabRef) ?? "");
+  // 줄을 빼서 기준 본음(프렛을 재는 줄)이 바뀌면 같은 간격을 새 기준으로 다시 적는다
+  // svelte-ignore state_referenced_locally
+  let shownRef = tabRef;
+  $effect(() => {
+    const now = tabRef;
+    if (now === shownRef) return;
+    shownRef = now;
+    text = untrack(() => formatGraceInput(choice.offsets, now) ?? text);
+  });
+  const offsets = $derived(parseGraceInput(text, tabRef));
   $effect(() => {
     if (offsets && offsets.join() !== choice.offsets.join()) set({ offsets });
   });
@@ -59,7 +98,7 @@
   const length = $derived(lengths.includes(choice.length) ? choice.length : (lengths[0] ?? "64"));
   const canWrite = (r: Rat) => canWriteExactly(r, profile.length);
   /** 길이마다 넣을 수 있는 최대 개수 (길이 목록에 함께 보인다) */
-  const maxOf = $derived(new Map(lengths.map((l) => [l, graceMax(song, picked, { length: noteLengthOf(l, 1), timing: choice.timing, canWrite, locked }, profile)] as const)));
+  const maxOf = $derived(new Map(lengths.map((l) => [l, graceMax(song, using, { length: noteLengthOf(l, 1), timing: choice.timing, canWrite, locked }, profile)] as const)));
 
   const result = $derived.by(() => {
     const used = new Set(song.tracks.flatMap((tr) => tr.notes.map((n) => n.id)));
@@ -73,7 +112,7 @@
     };
     return planGrace(
       song,
-      picked,
+      using,
       { offsets: offsets ?? [], length: noteLengthOf(length, 1), timing: choice.timing, tie: choice.tie, canWrite, locked, instrumentOf, ...(stringOf ? { stringOf } : {}) },
       profile,
       newId,
@@ -99,9 +138,9 @@
   const W = 400;
   const H = 110;
   const preview = $derived.by(() => {
-    if (result.changes.length === 0 || picked.length === 0) return undefined;
-    const from = toFloat(picked.reduce<Rat>((m, n) => (cmp(n.start, m) < 0 ? n.start : m), picked[0]!.start)) - 1 / 8;
-    const to = Math.max(...picked.map((n) => toFloat(n.start) + toFloat(n.dur)));
+    if (result.changes.length === 0 || using.length === 0) return undefined;
+    const from = toFloat(using.reduce<Rat>((m, n) => (cmp(n.start, m) < 0 ? n.start : m), using[0]!.start)) - 1 / 8;
+    const to = Math.max(...using.map((n) => toFloat(n.start) + toFloat(n.dur)));
     const on = new Set(result.ids);
     const notes = result.changes.flatMap((c) => c.notes).filter((n) => toFloat(n.start) < to && toFloat(n.start) + toFloat(n.dur) > from);
     if (notes.length === 0) return undefined;
@@ -121,7 +160,7 @@
   const ok = $derived(!!offsets && result.made > 0 && !result.tooMany);
   function apply() {
     if (!ok) return;
-    onapply(result, { ...choice, length });
+    onapply(result, { ...choice, length }, { excluded: excludedOf(song, picked, excluded), tab: tabRef });
     dialog.close();
   }
   const s = $derived(result.skipped);
@@ -142,10 +181,10 @@
         {t("ui.graceBeforeBeat")} <small class="muted">({t("ui.graceBeforeBeatHint")})</small>
       </label>
     </span>
-    <span>{tab ? t("ui.graceFrets") : t("ui.graceSemitones")}</span>
+    <span>{tabRef ? t("ui.graceFrets") : t("ui.graceSemitones")}</span>
     <span class="row">
-      <input class="pitches" type="text" inputmode={tab ? "numeric" : "text"} bind:value={text} aria-invalid={!offsets} />
-      <small class="muted">{tab ? t("ui.graceFretsHint", { string: tab.string, fret: tab.fret }) : t("ui.graceSemitonesHint")}</small>
+      <input class="pitches" type="text" inputmode={tabRef ? "numeric" : "text"} bind:value={text} aria-invalid={!offsets} />
+      <small class="muted">{tabRef ? t("ui.graceFretsHint", { string: tabRef.string, fret: tabRef.fret }) : t("ui.graceSemitonesHint")}</small>
     </span>
     <span>{t("ui.graceLength")}</span>
     <select value={length} onchange={(e) => set({ length: e.currentTarget.value as GraceLength })}>
@@ -154,13 +193,16 @@
     <span></span>
     <label><input type="checkbox" checked={choice.tie} onchange={(e) => set({ tie: e.currentTarget.checked })} /> {t("ui.graceTie")}</label>
   </div>
+  {#if lines.length > 1}
+    <LinePicker tracks={lines} {excluded} {colors} label={t("ui.graceLines")} help={t("ui.graceLinesHelp")} onchange={(next) => (excluded = next)} />
+  {/if}
   <svg class="preview" viewBox="0 0 {W} {H}" role="img" aria-label={t("ui.arpPreview")}>
     {#if preview}
       {#each preview as r, i (i)}<rect x={r.x} y={r.y} width={r.w} height={r.h} rx="1.5" class:on={r.on} />{/each}
     {/if}
   </svg>
   {#if !offsets}
-    <p class="warn">{tab ? t("ui.graceBadFrets", { max: tab.maxFret }) : t("ui.graceBadSemitones")}</p>
+    <p class="warn">{tabRef ? t("ui.graceBadFrets", { max: tabRef.maxFret }) : t("ui.graceBadSemitones")}</p>
   {:else if result.tooMany}
     <p class="warn">{result.max === 0 ? (choice.timing === "on" ? t("ui.graceNoRoomOn") : t("ui.graceNoRoomBefore")) : t("ui.graceTooMany", { n: count, max: result.max })}</p>
   {:else}

@@ -20,6 +20,8 @@
     /** 타브에서 칠 수 없는 음 수 (0이면 숨김) */
     unplayable: number;
     checkCount: number;
+    /** 곡 검사 중 가장 무거운 단계. 검사 단추 색을 정한다 (오류: 빨간 바탕, 주의: 노란 바탕, 알림: 테두리만) */
+    checkLevel?: "error" | "warning" | "info" | undefined;
     packCount: number;
     instrumentCount: number;
     /** 잠깐 보여 주는 한 줄 (글자 수 줄이기 결과 등) */
@@ -39,7 +41,7 @@
     help?: Snippet | undefined;
   }
 
-  let { track, polyphony, chars, textCursor, unplayable, checkCount, packCount, instrumentCount, flash, unsaved, onretrysave, onsaveproject, panel, onpanel, onpacks, messages, selection, checks, help }: Props = $props();
+  let { track, polyphony, chars, textCursor, unplayable, checkCount, checkLevel, packCount, instrumentCount, flash, unsaved, onretrysave, onsaveproject, panel, onpanel, onpacks, messages, selection, checks, help }: Props = $props();
 
   const over = $derived(!!chars && chars.count > chars.limit);
 
@@ -63,10 +65,10 @@
     {#if panel === "checks" && checks}<div class="status-panel checks-panel">{@render checks()}</div>{/if}
     {#if panel === "help" && help}<div class="status-panel help-panel">{@render help()}</div>{/if}
   </div>
-  <span class="item"><span class="muted">{t("ui.statusTrack")}</span> {track || "-"}</span>
-  <span class="item" title={t("ui.polyphonyHelp")}>{polyphony}</span>
+  <span class="item track"><span class="muted">{t("ui.statusTrack")}</span> {track || "-"}</span>
+  <span class="item poly" title={t("ui.polyphonyHelp")}>{polyphony}</span>
   {#if chars}
-    <span class="item" title={t("ui.statusCharsHelp")}>
+    <span class="item chars" title={t("ui.statusCharsHelp")}>
       <span class:pill={over}>{t("ui.statusChars", { count: chars.count, limit: chars.limit })}</span>
     </span>
   {/if}
@@ -76,21 +78,21 @@
   {#if flash}<span class="item muted">{flash}</span>{/if}
   {#if unsaved}
     <span class="item unsaved" role="alert">
-      <span class="pill" title={unsaved}><Icon name="alert-triangle" size={13} />{t("ui.autosaveFailed")}</span>
+      <span class="pill" title={unsaved}><Icon name="alert-triangle" size={14} />{t("ui.autosaveFailed")}</span>
       {#if onretrysave}<button class="status-btn" title={unsaved} onclick={onretrysave}>{t("ui.autosaveRetry")}</button>{/if}
       {#if onsaveproject}<button class="status-btn" onclick={onsaveproject}>{t("ui.autosaveSaveProject")}</button>{/if}
     </span>
   {/if}
   <span class="spacer"></span>
   {#if checkCount > 0}
-    <button class="status-btn" class:on={panel === "checks"} title={t("ui.statusChecksHelp")} onclick={() => toggle("checks")}>
-      <Icon name="alert-triangle" size={13} />{t("ui.statusChecks", { count: checkCount })}
+    <button class="status-btn checks {checkLevel ?? 'info'}" class:on={panel === "checks"} title={t("ui.statusChecksHelp")} onclick={() => toggle("checks")}>
+      <Icon name="alert-triangle" size={14} />{t("ui.statusChecks", { count: checkCount })}
     </button>
   {/if}
   <button class="status-btn" class:over={packCount === 0} title={packCount === 0 ? t("ui.statusNoPackHelp") : ""} onclick={onpacks}>
     {packCount === 0 ? t("ui.statusNoPack") : t("ui.statusPacks", { count: packCount, instruments: instrumentCount })}
   </button>
   <button class="status-btn" class:on={panel === "help"} onclick={() => toggle("help")}>
-    <Icon name="help" size={13} />{t("ui.help")}
+    <Icon name="help" size={14} />{t("ui.help")}
   </button>
 </footer>

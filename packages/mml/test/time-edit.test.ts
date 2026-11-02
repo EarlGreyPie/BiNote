@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { emptySong, normalizeTempo, rat, type Song, type TrackText } from "@mmlce/core";
-import { deleteTime, insertTime, parseTrackText, tempoMismatch, trackEnd } from "../src/index.js";
+import { emptySong, normalizeTempo, positionToSeconds, rat, type Rat, type Song, type TrackText } from "@mmlce/core";
+import { barSpans, checkDeleteBars, deleteBars, deleteTime, insertTime, parseTrackText, referenceShiftForDelete, tempoMismatch, trackEnd } from "../src/index.js";
 
 function song(text: string): Song {
   const base = emptySong({ title: "", author: "", profileId: "mobile" });
@@ -195,5 +195,111 @@ describe("마디 넣기·빼기: 음이 안 바뀐 트랙의 원문", () => {
     const cut = deleteTime(rat(1), rat(3, 2)).apply(base);
     expect(cut.tracks[0]!.mml).toEqual({ text: "r2t60r1", offset: rat(1) });
     expect(tempoMismatch(cut)).toBe(false);
+  });
+});
+
+describe("고른 마디 지우기 (deleteBars)", () => {
+  // 4/4, 한 마디 = 1. c1 d1 e1 f1 g1 = 1~5마디
+  it("여러 범위를 실행 한 번에 지우고 뒤를 당긴다 (뒤 범위부터)", () => {
+    const s = deleteBars([[2, 2], [4, 4]]).apply(song("c1 d1 e1 f1 g1"));
+    expect(starts(s)).toEqual([[0, 1, 60], [1, 1, 64], [2, 1, 67]]);
+    // 2에 있던 t90은 2마디가 지워지며 구간 끝(=2, 3마디 처음)이 1로 당겨진다
+    expect(s.tempo.map((t) => [t.at.n / t.at.d, t.bpm])).toEqual([[0, 120], [1, 90]]);
+  });
+
+  it("붙은 범위는 한 구간으로, \"3-\"는 곡 끝 마디까지, 곡 끝 뒤 마디는 무시", () => {
+    expect(starts(deleteBars([[2, 2], [3, 3]]).apply(song("c1 d1 e1 f1")))).toEqual([[0, 1, 60], [1, 1, 65]]);
+    expect(starts(deleteBars([[3, Infinity]]).apply(song("c1 d1 e1 f1")))).toEqual([[0, 1, 60], [1, 1, 62]]);
+    const base = song("c1 d1");
+    expect(deleteBars([[5, 9]]).apply(base)).toBe(base);
+  });
+
+  it("마디에 걸친 음은 밖 부분만 남고, 미리 보기가 지울 음·잘릴 음을 센다", () => {
+    // c2. (0~3/4) d4 (3/4~1) e1 (1~2) f2 (2~5/2): 2마디(e1)를 지우면 c·d는 그대로
+    const base = song("c2.d4e1f2");
+    expect(checkDeleteBars(base, [[2, 2]])).toEqual({ bars: 1, removed: 1, cut: 0, made: 0 });
+    // c1. (0~3/2)은 2마디에 걸쳐 잘린다
+    const cross = song("c1.d2e1");
+    expect(checkDeleteBars(cross, [[2, 2]])).toEqual({ bars: 1, removed: 1, cut: 1, made: 0 });
+    expect(starts(deleteBars([[2, 2]]).apply(cross))).toEqual([[0, 1, 60], [1, 1, 64]]);
+  });
+
+  it("지운 마디에 걸친 만든 기록은 끊고(표시·기록 버림), 통째로 뒤에 있던 기록은 함께 당겨 되돌릴 수 있게 둔다", () => {
+    const base = song("c1 d2e2 f1 g2a2");
+    const tr = base.tracks[0]!;
+    // mk1: 2마디의 d·e (지워짐), mk2: 4마디의 g·a (당겨짐)
+    const marked = tr.notes.map((n) => (n.pitch === 62 || n.pitch === 64 ? { ...n, made: "mk1" } : n.pitch === 67 || n.pitch === 69 ? { ...n, made: "mk2" } : n));
+    const rec = (id: string) => ({ id, tool: "arpeggio" as const, options: {}, picked: [], before: [], after: [] });
+    const s0: Song = { ...base, made: [rec("mk1"), rec("mk2")], tracks: [{ ...tr, notes: marked }] };
+    expect(checkDeleteBars(s0, [[2, 2]]).made).toBe(1);
+    const s = deleteBars([[2, 2]]).apply(s0);
+    expect(s.made?.map((r) => r.id)).toEqual(["mk2"]);
+    expect(s.tracks[0]!.notes.filter((n) => n.made === "mk2").map((n) => n.start)).toEqual([rat(2), rat(5, 2)]);
+    // 걸쳐 잘린 기록 음도 끊는다: mk3이 1~2마디에 걸친 c1. 에서 2마디 지우기
+    const c = song("c1.d2");
+    const s1: Song = { ...c, made: [rec("mk3")], tracks: [{ ...c.tracks[0]!, notes: c.tracks[0]!.notes.map((n) => ({ ...n, made: "mk3" })) }] };
+    const out = deleteBars([[2, 2]]).apply(s1);
+    expect(out.made).toBeUndefined();
+    expect(out.tracks[0]!.notes.every((n) => n.made === undefined)).toBe(true);
+  });
+});
+
+describe("마디 지우기와 원곡 대조 위치 (referenceShiftForDelete)", () => {
+  // song(): t120(한 마디 2초) 뒤 2(3마디 처음)부터 t90(한 마디 8/3초)
+  const sec = (s: Song, pos: Rat) => positionToSeconds(s.tempo, pos);
+  /** 지운 뒤 newPos 자리의 음이, 지우기 전 oldPos 자리에서 울리던 원곡 시각에 그대로 울리는지 (원곡 시각 = 곡 시각 + 어긋남) */
+  function expectAligned(before: Song, after: Song, offset: number, shift: number, oldPos: Rat, newPos: Rat) {
+    expect(sec(after, newPos) + offset + shift).toBeCloseTo(sec(before, oldPos) + offset, 9);
+  }
+
+  it("원곡이 울리기 전 구간을 지우면 그 실제 길이(지우기 전 템포)만큼 어긋남을 옮기고, 남은 곡이 원곡과 맞는다", () => {
+    const base = song("c1 d1 e1 f1 g1 a1");
+    // 원곡은 5마디 처음(4)부터 울린다: 4초 + 2마디 × 8/3초
+    const offset = -(4 + 16 / 3);
+    const plan = referenceShiftForDelete(base, barSpans(base, [[2, 2]]), offset);
+    expect(plan).toEqual({ shiftSec: 2 });
+    expectAligned(base, deleteBars([[2, 2]]).apply(base), offset, plan.shiftSec, rat(4), rat(3));
+    // 처음에 템포가 바뀌는 마디(3마디 t90)를 지우면 t90 길이(8/3초)만큼
+    const t90 = referenceShiftForDelete(base, barSpans(base, [[3, 3]]), offset);
+    expect(t90.shiftSec).toBeCloseTo(8 / 3, 12);
+    expect(t90.brokenBar).toBeUndefined();
+    expectAligned(base, deleteBars([[3, 3]]).apply(base), offset, t90.shiftSec, rat(5), rat(4));
+  });
+
+  it("지운 구간 안에서 템포가 바뀌어도 그 구간의 실제 초를 옮긴다 (구간 앞 템포 변화도 반영)", () => {
+    // 2마디 가운데(3/2)에서 t60: 1~3/2는 1초, 3/2~2는 2초 → 3초
+    const inside = { ...song("c1 d1 e1 f1 g1 a1"), tempo: [{ at: rat(0), bpm: 120 }, { at: rat(3, 2), bpm: 60 }] };
+    const plan = referenceShiftForDelete(inside, barSpans(inside, [[2, 2]]), -20);
+    expect(plan.shiftSec).toBeCloseTo(3, 12);
+    expectAligned(inside, deleteBars([[2, 2]]).apply(inside), -20, plan.shiftSec, rat(5), rat(4));
+    // 지우는 구간 앞에서 템포가 바뀌면 그 템포로 잰다: t60(4초) 뒤 2마디부터 t120 → 3마디는 2초
+    const before = { ...inside, tempo: [{ at: rat(0), bpm: 60 }, { at: rat(1), bpm: 120 }] };
+    const b = referenceShiftForDelete(before, barSpans(before, [[3, 3]]), -20);
+    expect(b.shiftSec).toBeCloseTo(2, 12);
+    expectAligned(before, deleteBars([[3, 3]]).apply(before), -20, b.shiftSec, rat(5), rat(4));
+  });
+
+  it("곡 처음부터 지우면 원곡이 울리던 부분이어도 어긋남 하나로 맞는다", () => {
+    const base = song("c1 d1 e1 f1 g1 a1");
+    const plan = referenceShiftForDelete(base, barSpans(base, [[1, 1]]), 1.5);
+    expect(plan).toEqual({ shiftSec: 2 });
+    expectAligned(base, deleteBars([[1, 1]]).apply(base), 1.5, plan.shiftSec, rat(3), rat(2));
+    // 붙은 1~2마디는 한 구간 (t120 두 마디 = 4초)
+    expect(referenceShiftForDelete(base, barSpans(base, [[1, 2]]), 0)).toEqual({ shiftSec: 4 });
+  });
+
+  it("원곡이 울리는 가운데를 지우면 옮기지 않고 그 마디부터 어긋난다고 알린다", () => {
+    const base = song("c1 d1 e1 f1 g1 a1");
+    expect(referenceShiftForDelete(base, barSpans(base, [[3, 3]]), 0)).toEqual({ shiftSec: 0, brokenBar: 3 });
+    // 원곡 시작(3초 = 2마디 가운데)에 걸친 구간도 맞출 수 없다
+    expect(referenceShiftForDelete(base, barSpans(base, [[2, 2]]), -3)).toEqual({ shiftSec: 0, brokenBar: 2 });
+    // 앞 구간(원곡 전)은 당겨 맞추고, 원곡 가운데의 구간부터 어긋난다
+    expect(referenceShiftForDelete(base, barSpans(base, [[2, 2], [4, 4]]), -4)).toEqual({ shiftSec: 2, brokenBar: 4 });
+  });
+
+  it("원곡이 끝난 뒤를 지우면 원곡과 상관없다", () => {
+    const base = song("c1 d1 e1 f1 g1 a1");
+    expect(referenceShiftForDelete(base, barSpans(base, [[4, 4]]), 0, 3)).toEqual({ shiftSec: 0 });
+    expect(referenceShiftForDelete(base, barSpans(base, [[4, 4]]), 0)).toEqual({ shiftSec: 0, brokenBar: 4 });
   });
 });

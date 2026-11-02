@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { placeLoss, rat, type Note } from "@mmlce/core";
 import { translate, type MessageKey, type Params } from "@mmlce/i18n";
-import { overlapNotice } from "../src/lib/overlapNotice";
+import { lengthLossQuestion, overlapNotice } from "../src/lib/overlapNotice";
 
 const note = (id: string, start: number, dur: number): Note => ({ id, start: rat(start, 8), dur: rat(dur, 8), pitch: 60, vol: 8, tie: "none" });
 const ko = (key: MessageKey, params?: Params) => translate("ko", key, params);
@@ -20,5 +20,19 @@ describe("놓은 뒤 겹친 음 알림", () => {
   it("손해 본 음이 없으면 알리지 않는다", () => {
     expect(overlapNotice(placeLoss(base, new Map([["x", note("x", 6, 2)]])), ko)).toBeUndefined();
     expect(overlapNotice(placeLoss(base, new Map([["a", null]])), ko)).toBeUndefined();
+  });
+});
+
+describe("정보 칸 길이를 바꾸기 전 물음", () => {
+  it("잘릴 음과 지워질 음 수를 넣어 묻는다", () => {
+    expect(lengthLossQuestion(placeLoss(base, new Map([["x", note("x", 1, 4)]])), ko)).toBe(
+      "이 길이로 바꾸면 겹치는 다른 음 1개는 끝이 잘리고 2개는 지워져요. 그래도 바꿀까요? (취소하면 그대로 둡니다)",
+    );
+    expect(lengthLossQuestion(placeLoss(base, new Map([["x", note("x", 1, 1)]])), ko)).toBe("이 길이로 바꾸면 겹치는 다른 음 1개의 끝이 잘려요. 그래도 바꿀까요? (취소하면 그대로 둡니다)");
+    expect(lengthLossQuestion(placeLoss(base, new Map([["a", note("a", 0, 4)]])), ko)).toBe("이 길이로 바꾸면 겹치는 다른 음 1개가 지워져요. 그래도 바꿀까요? (취소하면 그대로 둡니다)");
+  });
+
+  it("손해 볼 음이 없으면 묻지 않는다", () => {
+    expect(lengthLossQuestion(placeLoss(base, new Map([["a", note("a", 0, 1)]])), ko)).toBeUndefined();
   });
 });
