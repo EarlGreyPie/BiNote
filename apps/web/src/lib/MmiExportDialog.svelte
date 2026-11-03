@@ -53,8 +53,17 @@
     if (!x || !y) return true;
     return trackInstrument(song, x).program === trackInstrument(song, y).program && (x.mix?.pan ?? 64) === (y.mix?.pan ?? 64) && (x.mix?.visible ?? true) === (y.mix?.visible ?? true);
   };
-  const mixed = (g: Group) => g.parts.some((id) => !sameKey(g.parts[0]!, id));
+  /** 노래 칸은 악기를 따로 저장하지만 팬·보이기는 마비꼬 트랙 것 하나라 함께 비교한다 */
+  const sameMix = (a: string, b: string) => {
+    const x = trackOf(a);
+    const y = trackOf(b);
+    if (!x || !y) return true;
+    return (x.mix?.pan ?? 64) === (y.mix?.pan ?? 64) && (x.mix?.visible ?? true) === (y.mix?.visible ?? true);
+  };
+  const mixed = (g: Group) => g.parts.some((id) => !sameKey(g.parts[0]!, id)) || (!!g.song && g.parts.length > 0 && !sameMix(g.parts[0]!, g.song));
   const filled = $derived(groups.filter((g) => g.parts.length > 0 || g.song));
+  /** 직접 묶기에서 아무 칸에도 넣지 않은 트랙 수 (마비꼬 트랙을 빼면 그 트랙들도 여기로 온다). 저장 전에 알린다 */
+  const unplaced = $derived(manual ? song.tracks.filter((tr) => !groups.some((g) => g.parts.includes(tr.id) || g.song === tr.id)).length : 0);
 
   function toggle(id: string, on: boolean) {
     picked = on ? [...picked.filter((x) => x !== id), id] : picked.filter((x) => x !== id);
@@ -112,6 +121,7 @@
 
   function save() {
     if (manual) {
+      if (unplaced > 0 && !confirm(t("ui.mmiExportUnplaced", { count: unplaced }))) return;
       const out: MmiLayoutEntry[] = filled.map((g) => ({ name: g.name.trim() || t("ui.mmiExportNewTrack", { n: 1 }), parts: [...g.parts], ...(g.song ? { song: g.song } : {}) }));
       onsave({ layout: out });
     } else onsave({ trackIds: ordered });
@@ -188,6 +198,7 @@
       {/each}
     </ol>
     <button onclick={addGroup}>{t("ui.mmiExportAdd")}</button>
+    {#if unplaced > 0}<p class="warn">{t("ui.mmiExportUnplaced", { count: unplaced })}</p>{/if}
   {:else}
     <h3>{t("ui.mmiExportPreview", { count: layout.length })}</h3>
     {#if layout.length === 0}

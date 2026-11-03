@@ -187,6 +187,54 @@ describe("quantize", () => {
     expect(quantize([{ id: "a", notes: sloppy }], slow).grid).toBe(4);
   });
 
+  it("느린 곡에서 한 음만 100ms쯤 늦게 쳐도 곡 전체를 32분 격자로 잡지 않는다", () => {
+    // 60 BPM 4분음표 40개(길이 5/24), 8번째 음만 늦게. 94ms와 96ms가 같은 격자여야 한다.
+    // 전에는 96ms면 그 음이 32분 칸에 30ms 안으로 맞아 4·8·16 격자를 모두 버리고 32분 격자를 골라, 첫 음 길이가 1/4 대신 7/32가 됐다
+    const slow = [{ at: rat(0), bpm: 60 }];
+    for (const ms of [94, 96]) {
+      const notes = Array.from({ length: 40 }, (_, i) => {
+        const ms0 = i * 1000 + (i === 7 ? ms : 0);
+        return { start: rat(ms0, 4000), dur: rat(5, 24), seconds: ms0 / 1000, pitch: 60, velocity: 100 };
+      });
+      const q = quantize([{ id: "a", notes }], slow);
+      expect(q.grid).toBe(4);
+      expect(key(q.notes[0]!.dur)).toBe("1/4");
+      expect(key(q.notes[7]!.start)).toBe("7/4");
+    }
+  });
+
+  it("자동 격자: 외톨이 음이 흔들린 음인지 잘게 친 음인지 가린다", () => {
+    // 60 BPM 4분음표 40개(길이 5/24), 8번째 음만 offset(ms)만큼 옮긴다
+    const slow = [{ at: rat(0), bpm: 60 }];
+    const song = (offsetMs: number, dur = rat(5, 24)) =>
+      quantize(
+        [
+          {
+            id: "a",
+            notes: Array.from({ length: 40 }, (_, i) => {
+              const ms = i * 1000 + (i === 7 ? offsetMs : 0);
+              return { start: rat(ms, 4000), dur: i === 7 ? dur : rat(5, 24), seconds: ms / 1000, pitch: 60, velocity: 100 };
+            }),
+          },
+        ],
+        slow,
+      );
+    // 32분 칸에 겨우 걸린(29ms) 흔들린 음, 32분 칸 가까이(15ms) 있지만 외톨이 32분 엇박인 음 → 4분 격자 그대로
+    for (const ms of [110]) expect(song(ms).grid).toBe(4);
+    // 정확히 16분 엇박(250ms)에 친 외톨이 음 → 16분 격자로 그 자리·길이를 지킨다
+    const exact = song(250, rat(1, 16));
+    expect(exact.grid).toBe(16);
+    expect(key(exact.notes[7]!.start)).toBe("29/16");
+    expect(key(exact.notes[7]!.dur)).toBe("1/16");
+    // 16분 엇박에 20ms 어긋나게 친 음(칸 250ms의 20% 안)도 16분으로
+    expect(song(270, rat(1, 16)).grid).toBe(16);
+    // 200 BPM 4분음표 곡에 사람이 20ms 늦게 친 엇박 8분음표 → 8분 격자 (칸 150ms의 20% = 30ms 안)
+    const fast = [{ at: rat(0), bpm: 200 }];
+    const notes = Array.from({ length: 40 }, (_, i) => ({ ...raw(i * PPQ, 400), seconds: i * 0.3 }));
+    notes[20] = { ...raw(20 * PPQ + 240 + 32, 200), seconds: 20 * 0.3 + 0.15 + 0.02 };
+    expect(quantize([{ id: "a", notes }], fast).grid).toBe(8);
+  });
+
   it("4분 셋잇단 곡을 자동 격자로 맞춰도 다른 파트의 4분음표 끝이 1/6로 밀리지 않는다", () => {
     // 4분 격자의 셋잇단 칸(1/6)에는 1/4 자리가 없다. 그래서 4분 격자를 고르면 셋잇단 박에서 조금 일찍 끊은 4분음표가 1/6로 줄었다
     const melody = [0, 320, 640, 960, 1280, 1600, 1920, 2400, 2880, 3360].map((t) => raw(t, t < 1920 ? 320 : 480, 72));

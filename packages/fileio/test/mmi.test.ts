@@ -369,6 +369,15 @@ describe("writeMmi 직접 묶기 (layout)", () => {
     expect(gA).toBeDefined();
   });
 
+  it("노래 칸 트랙의 팬이 첫 칸과 다르면 알린다 (악기는 노래 악기로 따로 쓰므로 견주지 않는다)", () => {
+    const a = readMmi(SIX).song;
+    const [c, d] = a.tracks.map((t) => t.id) as [string, string];
+    const withPan = { ...a, tracks: a.tracks.map((t) => (t.id === c ? { ...t, mix: { ...t.mix, pan: 10 } } : t.id === d ? { ...t, mix: { ...t.mix, pan: 110 } } : t)) };
+    const mixedOf = (song: typeof a) => writeMmi(song, { layout: [{ name: "X", parts: [c], song: d }] }).diagnostics.filter((x) => x.code === "mmi-mixed-track");
+    expect(mixedOf(withPan)).toEqual([{ level: "warning", code: "mmi-mixed-track", params: { count: 1 }, span: [0, 0], where: "X" }]);
+    expect(mixedOf(a)).toEqual([]);
+  });
+
   it("칸 3개를 넘는 트랙·두 번 넣은 트랙·빈 mml-track은 쓰지 않는다", () => {
     const a = readMmi(SIX).song;
     const ids = a.tracks.map((t) => t.id);

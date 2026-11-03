@@ -270,6 +270,7 @@
   import { shiftMs, shiftVideoOffset, stepHistory, withReferenceShift } from "./lib/referenceShift";
   import TransposeDialog, { type TransposeCheck, type TransposeScope } from "./lib/TransposeDialog.svelte";
   import VolumeDialog, { type VolumeCheck } from "./lib/VolumeDialog.svelte";
+  import { typedAccidental } from "./lib/keyTyping";
   import KeyFitDialog, { type KeyFitCheck } from "./lib/KeyFitDialog.svelte";
   import DeleteBarsDialog from "./lib/DeleteBarsDialog.svelte";
   import ChordAttenuationDialog, { type ChordAttCheck } from "./lib/ChordAttenuationDialog.svelte";
@@ -296,7 +297,7 @@
   import AboutDialog from "./lib/AboutDialog.svelte";
   import ReleaseNotesDialog from "./lib/ReleaseNotesDialog.svelte";
   import FitDialog from "./lib/FitDialog.svelte";
-  import { bookMarks, withFixed, type BookMark, type FitTab } from "./lib/splitView";
+  import { bookMarks, fixedAfterDelete, fixedAfterInsert, withFixed, type BookMark, type FitTab } from "./lib/splitView";
   import { setSplitPreview, setSplitSpread, setSplitThorough, splitPrefs } from "./lib/splitPrefs.svelte";
   import { playPrefs, setPlayCountIn, setPlayMetronome, setPlaySpeed } from "./lib/playPrefs.svelte";
   import { PLAY_SPEEDS } from "./lib/playSpeed";
@@ -781,7 +782,7 @@
    * 마디를 지우거나 넣는 명령을 실행 취소 한 칸으로 넣는다. 고친 자리가 원곡·배경 영상보다 앞(또는 곡 처음)이면
    * 그 위치도 지운(넣은) 만큼 옮기고, 그 옮김을 명령에 붙여 실행 취소·다시 실행이 함께 되돌린다. 곡이 바뀌어 기록에 넣었으면 true
    */
-  function commitBarEdit(command: Command, plan: BarEditPlan): boolean {
+  function commitBarEdit(command: Command, plan: BarEditPlan, moveFixed: (list: readonly Rat[]) => Rat[]): boolean {
     const ms = plan.reference ? shiftMs(plan.reference.shiftSec) : 0;
     const videoMs = plan.video ? shiftMs(plan.video.shiftSec) : 0;
     const was = history?.song;
@@ -792,6 +793,7 @@
     if (!next || next === was) return false;
     moveReference(ms, name);
     moveVideo(videoMs, vName);
+    keepFixedAcross(moveFixed(splitFixed));
     return true;
   }
 
@@ -1182,6 +1184,8 @@
     const was = error;
     error = "";
     const next = commit(replaceSong(t("ui.outputTempoConvert"), result.song));
+    // 템포 변환은 그 구간 음 자리를 늘이거나 줄이므로 고정 자리는 풀고, 실행 취소하면 되돌린다
+    if (next && next !== before) keepFixedAcross([]);
     if (next) {
       // 편집 검사가 받아들이며 남긴 알림(원문을 잃어 옥타브째 옮겨 쓰는 음)은 지우지 않는다
       if (!error) error = was;
@@ -1194,6 +1198,18 @@
   let split = $state.raw<{ song: Song; plan: BookPlan; locked: string } | undefined>(undefined);
   /** 악보책 나누기에서 고정한 자르는 자리 (이 곡을 여는 동안만. 바꾸면 다시 나눈다) */
   let splitFixed = $state.raw<readonly Rat[]>([]);
+  /**
+   * 시간을 옮기는 편집(마디 넣기·빼기, 템포 변환)의 기록 칸(명령)마다 앞뒤 고정 자리. 고정 자리는 곡이 아니라 화면 상태라
+   * 실행 취소·다시 실행이 그 칸을 지날 때 이것으로 고정 자리도 되돌린다 (점검: 마디를 넣은 뒤 옛 자리에서 자름).
+   * 다시 실행은 명령을 새로 적용해 새 곡 객체를 만드므로 곡이 아니라 기록에 남은 명령으로 찾는다
+   */
+  const fixedByCommand = new WeakMap<Command, { readonly before: readonly Rat[]; readonly after: readonly Rat[] }>();
+  /** 방금 기록에 넣은 칸에 앞뒤 고정 자리를 적고 옮긴 자리로 바꾼다 */
+  function keepFixedAcross(moved: readonly Rat[]) {
+    const command = history?.undoCommand;
+    if (command) fixedByCommand.set(command, { before: splitFixed, after: moved });
+    splitFixed = moved;
+  }
   /** 나누기에 실패한 곡 (글자 수 맞추기 창이 같은 곡을 거듭 나누지 않게) */
   let splitFailed = $state.raw<Song | undefined>(undefined);
   /** 글자 수 맞추기 창: 연 칸과 화음 분산 칸에서 처음 고를 보내는 트랙 */
@@ -1441,19 +1457,26 @@
     });
   });
 
+
   function undo() {
     if (!history || picking) return;
     // 마디 지우기처럼 원곡 대조 위치도 함께 옮긴 단계면 그 위치도 같이 되돌린다
+    const command = history.undoCommand;
     const step = stepHistory(history, "undo");
     sync(step.song, true);
+    const fixed = command && fixedByCommand.get(command);
+    if (fixed) splitFixed = fixed.before;
     moveReference(step.referenceShiftMs, step.referenceName);
     moveVideo(step.videoShiftMs, step.videoName);
   }
 
   function redo() {
     if (!history || picking) return;
+    const command = history.redoCommand;
     const step = stepHistory(history, "redo");
     sync(step.song, true);
+    const fixed = command && fixedByCommand.get(command);
+    if (fixed) splitFixed = fixed.after;
     moveReference(step.referenceShiftMs, step.referenceName);
     moveVideo(step.videoShiftMs, step.videoName);
   }
@@ -3367,7 +3390,8 @@
     const plan = kind === "insert" ? insertPlan(history.song, at, bar) : deletePlan(history.song, [[at, add(at, bar)]]);
     const command = kind === "insert" ? insertTime(at, bar, t("ui.insertBar")) : deleteTime(at, bar, t("ui.deleteBar"));
     const notice = barEditOffNotice(kind, plan);
-    if (commitBarEdit(command, plan) && notice) flash(notice);
+    const moveFixed = (list: readonly Rat[]) => (kind === "insert" ? fixedAfterInsert(list, at, bar) : fixedAfterDelete(list, [[at, add(at, bar)]]));
+    if (commitBarEdit(command, plan, moveFixed) && notice) flash(notice);
   }
 
   /** 고른 마디 지우기 창 (곡 메뉴). 볼륨 창처럼 반복 구간이나 적은 마디로 고르고, 모든 트랙에서 지운 뒤 뒤를 당긴다 */
@@ -3381,7 +3405,8 @@
     if (after === before) return;
     const locked = lockedNames(changedTrackIds(before, after));
     if (locked && !confirm(t("ui.deleteBarsLocked", { names: locked }))) return;
-    commitBarEdit(replaceSong(label, after), deletePlan(before, barSpans(before, bars)));
+    const spans = barSpans(before, bars);
+    commitBarEdit(replaceSong(label, after), deletePlan(before, spans), (list) => fixedAfterDelete(list, spans));
   }
 
   /** 일시정지: 지금 재생 자리를 커서로 두고 멈춘다. 다시 재생하면 그 자리부터 */
@@ -3575,6 +3600,11 @@
   function changeKeyHere(fifths: number) {
     if (!history || !song) return;
     runIfChanged(setKeyAt(keyStartAt(song.keys, meterPos), fifths, t("ui.keyLabel")));
+  }
+  /** 조표 맞춤 글 입력: 편집기 커서 앞 글로 곡 위치를 재어 그 자리 조표의 올림·내림 (트랙 원문 시작 자리를 더한다) */
+  function typedKeyAccidental(trackId: string, before: string, letter: string): string {
+    const track = song?.tracks.find((tr) => tr.id === trackId);
+    return song ? typedAccidental(before, letter, track?.mml?.offset, song.keys) : "";
   }
   // 재생 중 피아노롤 건반에 불 켜기 (기억)
   const LIGHT_KEYS_KEY = "mmlce.lightKeys";
@@ -5079,7 +5109,6 @@
         openKeyFit();
         return !!song;
       case "edit.keyLock":
-        if (viewMode !== "roll") return false;
         setKeyLock(!keyLock);
         return true;
       case "edit.find":
@@ -5995,6 +6024,8 @@
           <button class="link" onclick={() => (settings = { section: "packs" })}>{t("ui.addPack")}</button>
         </p>
       {/if}
+      <!-- 처음 쓰는 사람이 사용 안내서를 바로 찾도록 첫 화면에도 가이드북 링크를 둔다 -->
+      <p class="muted empty-note"><a class="link" href={guideUrl(i18n.locale)} target="_blank" rel="noopener">{t("ui.helpGuide")}</a></p>
       {#if works.length > 0}<RecoverList {works} elsewhere={worksElsewhere} onrestore={restoreWork} onforget={removeWork} />{/if}
     </div>
   {:else}
@@ -6195,6 +6226,7 @@
           hold={picking}
           ongodiag={(trackId, from, to) => (reveal = { trackId, from, to, focus: true, nonce: (reveal?.nonce ?? 0) + 1 })}
           oncursor={followTextCursor}
+          accidental={keyLock ? typedKeyAccidental : undefined}
         >
           {#snippet top()}
             {#if noteListOpen && activeTrack && song}

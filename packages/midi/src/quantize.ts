@@ -37,7 +37,7 @@ export const GRID_CHOICES = [4, 8, 16, 32, 64] as const;
 /** 추정할 때 "맞는다"고 보는 오차(초)와 비율 */
 const FIT_SECONDS = 0.03;
 const FIT_RATIO = 0.97;
-/** 굵은 격자가 시작을 이보다 멀리(초) 옮기는데 더 잘게 나눈 격자에는 맞으면, 그 굵은 격자는 고르지 않는다 */
+/** 굵은 격자가 시작을 이보다 멀리(초) 옮기면 잘게 친 음인지 본다 (guessGrid) */
 const MOVE_SECONDS = 0.06;
 
 export interface QuantizeResult {
@@ -186,39 +186,47 @@ export function prepareQuantize(
 }
 
 /**
- * 가장 굵은 격자 중 음 시작의 97%가 30ms 안에 맞는 것. 그런 격자가 없으면 가장 많이 맞는 격자.
- * 다만 굵은 격자가 어떤 시작을 60ms 넘게 옮기는데 더 잘게 나눈 격자(칸이 120ms 이상)에는 그 시작이 30ms 안에 맞으면, 그 시작은 흔들린 음이 아니라
- * 잘게 친 음(예: 4분 곡의 엇박 8분음표)이므로 그 굵은 격자는 쓰지 않는다. 97%만 보면 첫 마디가 몇 ms 바뀌어 한 음이 30ms 경계를
- * 넘나드는 것만으로 격자가 1/8 ↔ 1/4로 바뀌고, 엇박 음이 한 칸 반(200 BPM에서 약 130ms)씩 옮겨졌다
+ * 격자 고르기: 가장 굵은 격자 중 음 시작의 97%가 30ms 안에 맞는 것. 그런 격자가 없으면 가장 많이 맞는 격자.
+ *
+ * 다만 굵은 격자가 어떤 시작을 60ms 넘게 옮기면, 그 시작이 "흔들린 음"인지 "잘게 친 음"인지 가린다.
+ * 잘게 친 음이면 굵은 격자로 맞출 때 음이 한 칸 옆으로 가므로 그 굵은 격자는 쓰지 않는다.
+ * 잘게 친 음으로 보려면 더 잘게 나눈 격자 가운데
+ * - 두 단계 안(4분 격자면 8분·16분)이고 (외톨이 32분 엇박은 음악에서 드물어, 흔들린 음이 우연히 걸린 것으로 본다)
+ * - 칸이 120ms 이상이며 (좁은 칸에는 흔들린 음도 어디엔가 걸린다)
+ * - 그 칸 자리에 칸 너비의 20% 안, 30ms 안으로 붙어 있는
+ * 격자가 있어야 한다. 칸 너비에 견준 기준이라 칸 가장자리에 겨우 걸린 음(60 BPM 32분 칸에서 29ms 어긋남)은 흔들림으로 본다.
+ *
+ * 지난 고침들 (같은 곳을 여러 번 고쳐 한 규칙으로 다시 짰다):
+ * - 97%만 보면 한 음이 30ms 경계를 넘나드는 것만으로 1/8 ↔ 1/4가 바뀌어 엇박 8분음표가 옮겨졌다 (beta.38)
+ * - 더 잘게 나눈 격자를 모두 보면 느린 곡의 흔들린 음 하나로 32분 격자가 되어 다른 음 길이까지 바뀌었다 (beta.39 점검)
+ * - 바로 다음 격자만 보면 느린 곡의 외톨이 16분음표가 4분 칸으로 옮겨졌다 (beta.39 점검)
  */
 function guessGrid(onsets: readonly number[], triplets: boolean, secondsPerWhole: (at: number) => number): number {
-  // 격자마다 시작의 오차(초)
+  // 격자마다 시작의 오차와 칸 너비(초)
   const errors = GRID_CHOICES.map((grid) => {
     const choice = chooseBeats(onsets, grid, triplets);
+    const stepOf = (x: number) => choice.get(Math.floor(x * 4 + 1e-9)) ?? grid;
     return {
       grid,
       // 4분 격자의 셋잇단 칸(1/6)에는 박 경계(1/4·3/4)가 없다. 그래서 셋잇단 박에서 끝나는 정규 음(다른 파트의 4분음표 등)이
       // 1/6이나 1/3으로 밀린다. 셋잇단 박이 있어야 맞는 곡이면 셋잇단 칸(1/12)에 박 경계가 있는 8분 격자부터 본다
       skip: grid === 4 && choice.size > 0,
       error: onsets.map((x) => {
-        const step = choice.get(Math.floor(x * 4 + 1e-9)) ?? grid;
+        const step = stepOf(x);
         return Math.abs(x - Math.round(x * step) / step) * secondsPerWhole(x);
       }),
-      // 이 격자에 30ms 안에 맞는 것이 우연이 아닌가. 칸이 120ms보다 좁으면 흔들린 음도 어느 칸엔가 30ms 안에 걸리기 쉽다
-      // (느린 곡의 64분 칸 등). 그런 격자에 맞았다고 잘게 친 음으로 보지 않는다
-      clean: onsets.map((x) => {
-        const step = choice.get(Math.floor(x * 4 + 1e-9)) ?? grid;
-        return secondsPerWhole(x) / step >= FIT_SECONDS * 4;
-      }),
+      cell: onsets.map((x) => secondsPerWhole(x) / stepOf(x)),
     };
   });
+  /** k번째 시작이 i번째 격자보다 잘게 친 음인가 (위 규칙) */
+  const finerNote = (i: number, k: number) =>
+    errors.slice(i + 1, i + 1 + FINER_LEVELS).some((f) => f.cell[k]! >= MIN_CELL_SECONDS && f.error[k]! <= Math.min(FIT_SECONDS, f.cell[k]! * TIGHT_RATIO));
   let best: number = GRID_CHOICES[2];
   let bestFit = -1;
   for (const [i, { grid, skip, error }] of errors.entries()) {
     if (skip) continue;
     const fit = error.filter((e) => e <= FIT_SECONDS).length;
-    const finer = errors.slice(i + 1);
-    const movesFinerNote = error.some((e, k) => e > MOVE_SECONDS && finer.some((f) => f.clean[k]! && f.error[k]! <= FIT_SECONDS));
+    const movesFinerNote = error.some((e, k) => e > MOVE_SECONDS && finerNote(i, k));
     if (fit >= onsets.length * FIT_RATIO && !movesFinerNote) return grid;
     // 더 잘게 나눠도 맞는 음이 거의 늘지 않으면 굵은 쪽을 남긴다
     if (!movesFinerNote && fit > bestFit + onsets.length * 0.05) {
@@ -228,6 +236,12 @@ function guessGrid(onsets: readonly number[], triplets: boolean, secondsPerWhole
   }
   return best;
 }
+/** 잘게 친 음을 찾을 때 볼 더 잘게 나눈 격자 단계 수 */
+const FINER_LEVELS = 2;
+/** 잘게 친 음으로 볼 칸의 가장 좁은 너비(초) */
+const MIN_CELL_SECONDS = FIT_SECONDS * 4;
+/** 잘게 친 음으로 보려면 칸 자리에 칸 너비의 이 비율 안으로 붙어 있어야 한다 */
+const TIGHT_RATIO = 0.2;
 
 /**
  * 4분 5잇단 칸 (16분음표 5개를 4개 자리에, 1/20). 16분보다 굵은 격자에서는 쓰지 않는다

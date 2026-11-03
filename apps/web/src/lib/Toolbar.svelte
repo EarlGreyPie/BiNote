@@ -251,6 +251,18 @@
   </span>
 {/snippet}
 
+{#snippet keyLockField()}
+  <!-- 조표 맞춤: 피아노롤 입력·MML 편집기 타이핑·MML 키판이 함께 쓴다 (타브 보기에서도 편집기 타이핑에 쓰려고 둘 다 둔다) -->
+  <span class="field" title={t("ui.keyLockHelp")}>
+    <button class:on={keyLock} aria-pressed={keyLock} onclick={() => onkeylock(!keyLock)}>{t("ui.keyLock")}</button>
+    {#if keyLock}
+      <select value={keyFifths} aria-label={t("ui.event.key")} onchange={(e) => onkeyfifths(Number(e.currentTarget.value))}>
+        {#each KEY_FIFTHS as f (f)}<option value={f}>{keyOptionLabel(f)}</option>{/each}
+      </select>
+    {/if}
+  </span>
+{/snippet}
+
 <div class="toolbar" class:compact role="toolbar">
   <span class="seg">
     <button class:on={viewMode === "roll"} onclick={() => onview("roll")}>{t("ui.pianoRoll")}</button>
@@ -296,14 +308,7 @@
         {#each divisions as d (d)}<option value={d}>1/{d}</option>{/each}
       </select>
     </label>
-    <span class="field" title={t("ui.keyLockHelp")}>
-      <button class:on={keyLock} aria-pressed={keyLock} onclick={() => onkeylock(!keyLock)}>{t("ui.keyLock")}</button>
-      {#if keyLock}
-        <select value={keyFifths} aria-label={t("ui.event.key")} onchange={(e) => onkeyfifths(Number(e.currentTarget.value))}>
-          {#each KEY_FIFTHS as f (f)}<option value={f}>{keyOptionLabel(f)}</option>{/each}
-        </select>
-      {/if}
-    </span>
+    {@render keyLockField()}
     <label class="field" title={t("ui.noteLengthHelp")}>
       <span class="muted">{t("ui.noteLength")}</span>
       <select value={noteLength} onchange={pickLength}>
@@ -388,6 +393,7 @@
       <button title={t("ui.retuneHelp")} onclick={onretune}>{t("ui.retune")}…</button>
     {/if}
     {@render meterField()}
+    {@render keyLockField()}
     <label class="field">
       <span class="muted">{t("ui.grid")}</span>
       <select value={division} onchange={(e) => ondivision(Number(e.currentTarget.value))}>

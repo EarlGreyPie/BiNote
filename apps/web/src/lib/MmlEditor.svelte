@@ -107,9 +107,14 @@
      * 롤에서 고른 음으로 커서가 옮겨 간 것(reveal)과 실행 취소로 바뀐 글은 알리지 않는다 (서로 되부르지 않게)
      */
     oncursor?: ((pos: number, owner: string | undefined) => void) | undefined;
+    /**
+     * 조표 맞춤 글 입력 (피아노롤 조표 맞춤을 켰을 때만 준다): 커서 앞 글 뒤에 음 글자(c~b 소문자)를 칠 때 붙일 올림·내림.
+     * 키보드로 치거나 MML 키판을 눌러도 같다. 붙인 바로 뒤에 +·-·#을 치면 붙인 것을 그 글자로 바꾼다 (f++가 되지 않게)
+     */
+    accidental?: ((before: string, letter: string) => string) | undefined;
   }
 
-  let { text, diagnostics, onedit, onundo, onredo, reveal, playing, follow = false, owner, readonly = false, oncursor }: Props = $props();
+  let { text, diagnostics, onedit, onundo, onredo, reveal, playing, follow = false, owner, readonly = false, oncursor, accidental }: Props = $props();
   // 남은 입력을 닫힐 때 저장하므로 주인은 만들 때 값으로 고정한다
   const ownerAtMount = untrack(() => owner);
 
@@ -125,6 +130,31 @@
   let host: HTMLDivElement;
   let view: EditorView | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
+
+  /** 조표 맞춤으로 올림·내림을 붙인 뒤의 글 (그 바로 뒤에 친 +·-·#은 붙인 것을 바꾼다). 다른 입력이 끼면 버린다 */
+  let autoAccidental: { readonly doc: EditorState["doc"]; readonly end: number } | undefined;
+  /** 음 글자 하나를 넣을 글: 조표 맞춤이면 올림·내림을 붙인다 */
+  function keyedLetter(state: EditorState, from: number, letter: string): string {
+    return /^[a-g]$/.test(letter) && accidental ? letter + accidental(state.doc.sliceString(0, from), letter) : letter;
+  }
+  /** 조표 맞춤 글 입력 (키보드). 처리했으면 true */
+  function keyedInput(v: EditorView, from: number, to: number, text: string): boolean {
+    const auto = autoAccidental;
+    autoAccidental = undefined;
+    if (!accidental || v.state.readOnly) return false;
+    // 붙인 올림·내림 바로 뒤에 직접 친 +·-·#: 붙인 것을 지우고 친 글자로
+    if (/^[+\-#]$/.test(text) && auto && auto.doc === v.state.doc && from === to && from === auto.end) {
+      v.dispatch({ changes: { from: from - 1, to, insert: text }, selection: { anchor: from }, userEvent: "input.type" });
+      return true;
+    }
+    // 바로 뒤에 올림·내림이 이미 있으면(c+4의 c만 골라 f로 바꿀 때 등) 붙이지 않는다. 붙이면 f++4처럼 겹쳐 높이가 바뀐다
+    if (/^[+\-#]$/.test(v.state.doc.sliceString(to, to + 1))) return false;
+    const insert = keyedLetter(v.state, from, text);
+    if (insert === text) return false;
+    v.dispatch({ changes: { from, to, insert }, selection: { anchor: from + insert.length }, userEvent: "input.type" });
+    autoAccidental = { doc: v.state.doc, end: from + insert.length };
+    return true;
+  }
 
   /** 기다리던 입력을 바로 반영한다 (실행 취소 전, 포커스를 잃을 때) */
   function flush() {
@@ -172,13 +202,16 @@
               onedit(u.state.doc.toString(), ownerAtMount);
             }, COMMIT_DELAY_MS);
           }),
+          EditorView.inputHandler.of((v, from, to, text) => keyedInput(v, from, to, text)),
           EditorView.domEventHandlers({
             blur: () => flush(),
             focus: (_e, v) => {
               mmlPad.target = v;
+              mmlPad.typed = (text) => keyedInput(v, v.state.selection.main.from, v.state.selection.main.to, text);
             },
             pointerdown: (_e, v) => {
               mmlPad.target = v;
+              mmlPad.typed = (text) => keyedInput(v, v.state.selection.main.from, v.state.selection.main.to, text);
             },
           }),
           inputMode.of(inputModeFor(mmlPad.enabled)),
@@ -191,7 +224,10 @@
       flush();
       flushers.delete(flush);
       if (view) views.delete(view);
-      if (mmlPad.target === view) mmlPad.target = undefined;
+      if (mmlPad.target === view) {
+        mmlPad.target = undefined;
+        mmlPad.typed = undefined;
+      }
       view?.destroy();
     };
   });

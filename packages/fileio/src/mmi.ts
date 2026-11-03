@@ -461,7 +461,9 @@ export function writeMmi(whole: Song, options: WriteMmiOptions = {}): { text: st
     const key = (t: Track) => `${trackInstrument(song, t).program ?? -1}|${t.mix?.pan ?? 64}|${t.mix?.visible ?? true}`;
     for (const entry of entries) {
       const head = entry.parts[0] ?? entry.song!;
-      const odd = entry.parts.filter((t) => key(t) !== key(head));
+      // 노래 칸은 악기를 따로(songProgram) 저장하지만 팬·보이기는 하나라 그것만 견준다
+      const mix = (t: Track) => `${t.mix?.pan ?? 64}|${t.mix?.visible ?? true}`;
+      const odd = [...entry.parts.filter((t) => key(t) !== key(head)), ...(entry.song && entry.parts.length > 0 && mix(entry.song) !== mix(head) ? [entry.song] : [])];
       if (odd.length > 0) diagnostics.push({ level: "warning", code: "mmi-mixed-track", params: { count: odd.length }, span: [0, 0], where: entry.name });
     }
   }

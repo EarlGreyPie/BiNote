@@ -154,6 +154,25 @@ test("마비꼬로 저장 직접 묶기: 마비꼬 트랙을 더해 트랙을 �
   expect(errors).toEqual([]);
 });
 
+test("마비꼬로 저장 직접 묶기: 마비꼬 트랙을 빼서 넣을 곳이 없어진 트랙은 알리고, 저장 전에 묻는다", async ({ page }) => {
+  const errors = watchErrors(page);
+  await openApp(page);
+  await pasteAsNewSong(page, SAMPLE_MML);
+  await menu(page, "파일", /다른 형식으로 저장/);
+  await page.getByRole("menuitem", { name: /마비꼬로 저장/ }).click();
+  const dialog = page.locator("dialog[open]").filter({ hasText: "마비꼬(.mmi)로 저장" });
+  await dialog.getByLabel("직접 묶기").check();
+  await dialog.getByRole("button", { name: "마비꼬 트랙 더하기" }).click();
+  await dialog.getByRole("combobox", { name: "연주자 1-2 넣을 곳" }).selectOption({ label: "트랙 2" });
+  await dialog.getByRole("button", { name: "빼기" }).nth(1).click();
+  await expect(dialog.getByText("넣을 곳을 고르지 않은 트랙 1개는 저장하지 않습니다.")).toBeVisible();
+  // 묻는 창에서 그만두면 저장하지 않고 창이 남는다
+  page.once("dialog", (d) => void d.dismiss());
+  await dialog.getByRole("button", { name: "마비꼬로 저장" }).click();
+  await expect(dialog).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
 test("마비꼬 가져오기 창: 마비꼬 트랙 둘을 악보 하나로 모아 연다", async ({ page }, testInfo) => {
   const errors = watchErrors(page);
   await openApp(page);
