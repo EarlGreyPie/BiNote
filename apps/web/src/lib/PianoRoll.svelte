@@ -56,7 +56,8 @@
   import { tabEventPrefs } from "./tabEventPrefs.svelte";
   import { scaledPx } from "./uiScaleNow.svelte";
   import { EDGE_SPEED, edgeScroll, freeDivision, notesBeside } from "./editNav";
-  import { fallShift, fallSpeed, SPEED_FRAME_GAP, SPEED_FRAME_WIDTH, SPEED_PICK_GAP, speedPickLost, speedPickPress, speedPickWheel, toGray } from "./videoSpeed";
+  import type { BookMark } from "./splitView";
+  import { agreeSpeed, fallShift, fallSpeed, rowDiff, sameFrame, SPEED_FRAME_GAP, SPEED_FRAME_WIDTH, SPEED_PICK_GAP, SPEED_RETRY_AFTER, SPEED_ROW_SCALE, speedBand, speedPairTimes, speedPickLost, speedPickPress, speedPickWheel, toGray } from "./videoSpeed";
   import {
     bpmAt,
     clampPitchView,
@@ -107,6 +108,8 @@
     cursor?: number | undefined;
     /** 반복 구간 [시작, 끝] (온음표 단위). Shift+끌기로 정한다 */
     loop?: readonly [number, number] | undefined;
+    /** 악보책 예상 분할 위치 (보기 → 악보책 나눌 자리 보기) */
+    books?: readonly BookMark[] | undefined;
     oncursor?: (time: number | undefined) => void;
     onloop?: (range: readonly [number, number] | undefined) => void;
     /** 트랙 id → 화면 색. 없으면 트랙에 저장된 색 */
@@ -228,7 +231,7 @@
     onlanetoggle?: ((trackId: string) => void) | undefined;
   }
 
-  let { cursor, loop, oncursor, onloop, song: fullSong, ghost = [], activeTrackId, orientation, division, playhead, onnotes, onselecttrack, onpicknote, ontrim, onpreview, onseek, showEvents = false, video = $bindable(), videoPlay = $bindable(false), speedStep = $bindable(0), onspeedpicked, fitOnLoad = false, onvideoready, pitchRange = [12, 119], wave, look, themeKey = "", seconds, rate = 1, colors, tool = "pen", onreverb, noteDur, volume, onvolume, lightKeys = false, keyLock = false, canonicalOf, memory, onmemory, work, visibleTrackIds, selectMove = false, locked, pickOthers = true, onevent, oneventmove, onalignbar, bardragtext, onwaveoffset, pickedEvent, onpickevent, ontempowheel, laneTrackIds, melodyIds, onvolumes, onclearlane, onlanetoggle }: Props =
+  let { cursor, loop, books, oncursor, onloop, song: fullSong, ghost = [], activeTrackId, orientation, division, playhead, onnotes, onselecttrack, onpicknote, ontrim, onpreview, onseek, showEvents = false, video = $bindable(), videoPlay = $bindable(false), speedStep = $bindable(0), onspeedpicked, fitOnLoad = false, onvideoready, pitchRange = [12, 119], wave, look, themeKey = "", seconds, rate = 1, colors, tool = "pen", onreverb, noteDur, volume, onvolume, lightKeys = false, keyLock = false, canonicalOf, memory, onmemory, work, visibleTrackIds, selectMove = false, locked, pickOthers = true, onevent, oneventmove, onalignbar, bardragtext, onwaveoffset, pickedEvent, onpickevent, ontempowheel, laneTrackIds, melodyIds, onvolumes, onclearlane, onlanetoggle }: Props =
     $props();
 
   /** 레이어: 고른 트랙이 든 보기만 그리고 다루는 곡 (나머지 트랙은 롤에서 보이지도 눌리지도 않는다) */
@@ -541,9 +544,10 @@
   }
 
   /**
-   * 속도 맞추기(자동): 멈춘 영상의 지금 프레임과 SPEED_FRAME_GAP초 뒤 프레임을 줄인 회색조로 그려, 건반 윗선 위쪽 구간이
-   * 몇 px 내려왔는지 상호상관으로 찾는다. 찾으면 영상 설정에 속도를 적고(롤 확대는 위 효과가 맞춘다) true.
-   * 움직임이 없거나 상관이 낮으면 false (직접 재기로 넘어간다). 다 재면 원래 장면으로 되돌린다.
+   * 속도 맞추기(자동): 멈춘 영상의 프레임과 SPEED_FRAME_GAP초 뒤 프레임을 줄인 회색조로 그려, 건반 윗선 위쪽 구간이
+   * 몇 px 내려왔는지 상호상관으로 찾는다. 한 자리에서 쌍 SPEED_PAIRS개를 재서 값이 모이면 받고, 흩어지면 SPEED_RETRY_AFTER초 뒤에서
+   * 한 번 더 잰다(위쪽 제목·건반 선 바로 위 효과는 빼고 잰다: videoSpeed.ts). 받으면 영상 설정에 속도를 적고(롤 확대는 위 효과가 맞춘다) true.
+   * 두 자리 모두 값이 안 모이면 false (직접 재기로 넘어간다). 다 재면 원래 장면으로 되돌린다.
    * 재는 사이 영상을 바꿨거나 재생(곡·영상)이 시작됐으면 그만두고 undefined (결과도, 되돌리기도 없다).
    * at: 지금 장면 대신 이 영상 시각(초)에서 잰다 (영상을 열자마자 재 볼 때. 첫 장면은 음이 없는 제목 화면이 많다)
    */
@@ -560,8 +564,11 @@
     videoPlay = false;
     const [vw, vh] = videoSize;
     const w = SPEED_FRAME_WIDTH;
-    const h = Math.max(8, Math.round((w * vh) / vw));
-    const rows = Math.max(4, Math.floor(h * video.keyLine));
+    // 세로는 가로보다 SPEED_ROW_SCALE배 촘촘히 줄인다 (이동이 몇 줄뿐이면 소수 부분이 정수 쪽으로 쏠려 값이 흩어진다)
+    const h = Math.max(8, Math.round((w * vh) / vw)) * SPEED_ROW_SCALE;
+    // 위쪽(제목)과 건반 선 바로 위(효과)를 뺀 줄만, 세로 밝기 차로 맞댄다 (videoSpeed.ts speedBand·rowDiff)
+    const band = speedBand(h, video.keyLine);
+    if (!band) return false;
     const c = document.createElement("canvas");
     c.width = w;
     c.height = h;
@@ -569,7 +576,7 @@
     if (!g) return false;
     const grab = () => {
       g.drawImage(el, 0, 0, w, h);
-      return toGray(g.getImageData(0, 0, w, rows).data, w, rows);
+      return toGray(g.getImageData(0, band.top, w, band.rows).data, w, band.rows);
     };
     const t0 = el.currentTime;
     // 재는 사이에 다른 영상으로 바꾸면(같은 video 요소에 새 주소) 그 자리에서 그만둔다: 새 영상 프레임을 잡거나,
@@ -578,21 +585,55 @@
     const url = video.url;
     const same = () => video?.url === url && videoEl === el;
     const still = () => same() && seconds === undefined && !videoPlay;
+    // 프레임 시각을 알려 주는 브라우저인지 (없으면 seekVideo가 옮겨 달라고 한 시각을 돌려준다)
+    const frameTimes = typeof (el as HTMLVideoElement & { requestVideoFrameCallback?: unknown }).requestVideoFrameCallback === "function";
+    // 30fps를 60fps로 담은 영상은 같은 그림이 두 번씩 나온다. 첫 쌍에서 같은 그림을 못 보면 그 뒤로는 앞 프레임을 보지 않는다.
+    // 프레임 시각을 모르면 앞 프레임을 볼 수 없으므로(옮겨도 같은 그림) 처음부터 보지 않는다
+    let repeats: boolean | undefined = frameTimes ? undefined : false;
+    /** 잡은 그림 img(시각 at)가 앞 프레임에서부터 이어진 같은 그림이면 처음 나온 프레임 시각. 그만둬야 하면 undefined */
+    const firstShown = async (at: number, img: Float32Array): Promise<number | undefined> => {
+      if (repeats === false) return at;
+      let t = at;
+      for (let i = 0; i < 3; i++) {
+        const prev = await seekVideo(el, t - 0.004);
+        if (!still()) return undefined;
+        if (!(prev < t) || !sameFrame(grab(), img)) break;
+        t = prev;
+        repeats = true;
+      }
+      return t;
+    };
+    /** 한 자리에서 프레임 쌍 여러 개를 재서 값이 모이면 그 속도, 흩어지면 undefined, 그만둬야 하면 null */
+    const measureAt = async (from: number): Promise<number | undefined | null> => {
+      const found: number[] = [];
+      for (const t of speedPairTimes(from, el.duration)) {
+        // 두 프레임 모두 옮긴 뒤 그 프레임 시각을 받아, 실제 두 그림 사이 시간으로 나눈다
+        const at0 = await seekVideo(el, t);
+        if (!still()) return null;
+        const a = grab();
+        const s0 = await firstShown(at0, a);
+        if (s0 === undefined) return null;
+        const at1 = await seekVideo(el, t + SPEED_FRAME_GAP);
+        if (!still()) return null;
+        const b = grab();
+        const s1 = await firstShown(at1, b);
+        if (s1 === undefined) return null;
+        repeats ??= false;
+        const shift = fallShift(rowDiff(a, w, band.rows), rowDiff(b, w, band.rows), w, band.rows - 1);
+        if (shift && s1 > s0) found.push(fallSpeed(shift.shift, vh / h, s1 - s0));
+      }
+      return agreeSpeed(found, frameTimes);
+    };
     measuring = true;
     try {
       if (!el.paused) el.pause();
-      // 두 프레임 모두 옮긴 뒤 그 프레임 시각을 받아, 실제 두 프레임 사이 시간으로 나눈다
       const from = at ?? t0;
-      const at0 = await seekVideo(el, from);
-      if (!still()) return undefined;
-      const a = grab();
-      const at1 = await seekVideo(el, from + SPEED_FRAME_GAP);
-      if (!still()) return undefined;
-      const b = grab();
-      const found = fallShift(a, b, w, rows);
+      let speed = await measureAt(from);
+      if (speed === undefined) speed = await measureAt(from + SPEED_RETRY_AFTER);
+      if (speed === null) return undefined;
       // 재는 사이에 직접 재기가 시작됐으면 결과를 버린다
-      if (!found || !video || !(at1 > at0) || speedStep !== 0) return false;
-      video = { ...video, speed: fallSpeed(found.shift, vw / w, at1 - at0) };
+      if (speed === undefined || !video || speedStep !== 0) return false;
+      video = { ...video, speed };
       return true;
     } catch {
       return false;
@@ -851,6 +892,8 @@
       overVideo: !!video,
       cursorAt: cursor,
       range: marking ?? loop,
+      books,
+      bookLabel: (n: number) => t("ui.splitPart", { n }),
       colors,
       ruler: rulerSize(),
       look,

@@ -45,6 +45,7 @@ import { distributeChords } from "./distribute.js";
 import { mergeChords, type MergeResult } from "./merge.js";
 import { gameTimeline } from "./game-timeline.js";
 import { gameScores, withoutDefaultStart } from "./game-output.js";
+import { pitchlessForOutput } from "./pitchless.js";
 import { mergeTies, sameSound } from "./compare.js";
 import { audibleTempo, gameSource, localAt, shortestWriting, spliceText, surgicalSource, sameTempo, tempoAtPosition, tempoInsertOffset, tempoTokens, type TempoToken } from "./tempo-text.js";
 
@@ -1634,11 +1635,13 @@ function offOutput(song: Song): { readonly trackId: string; readonly pitch: numb
     const b = exactSeconds(tempo, add(n.start, n.dur));
     return `${a.n}/${a.d}|${b.n}/${b.d}|${n.pitch}`;
   };
+  // 게임 글은 높이와 상관없는 타악기를 한 높이로 쓰므로 곡 모델도 같게 바꿔 견준다
+  const model = pitchlessForOutput(song, PROFILES[song.meta.profileId] ?? getProfile("mobile"));
   for (const score of gameScores(song, songChordsPerScore(song))) {
     const parsed = score.texts.map(({ trackId, text }) => ({ trackId, result: parseMml(text) }));
     const tempo = normalizeTempo(parsed.flatMap((p) => p.result.tempo));
     for (const { trackId, result } of parsed) {
-      const track = song.tracks.find((t) => t.id === trackId);
+      const track = model.tracks.find((t) => t.id === trackId);
       if (!track) continue;
       const heard = new Map<string, number>();
       for (const n of mergeTies(result.notes)) heard.set(key(tempo, n), (heard.get(key(tempo, n)) ?? 0) + 1);

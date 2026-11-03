@@ -1,3 +1,4 @@
+import type { BookMark } from "./splitView";
 import { DEFAULT_APPEARANCE, type NoteLook } from "./appearance";
 import { chainVolumes } from "./scores";
 import { drawVolumeLane, type LaneDraw } from "./laneDraw";
@@ -76,6 +77,10 @@ export interface RollDrawOptions {
   readonly overVideo: boolean;
   readonly cursorAt: number | undefined;
   readonly range: readonly [number, number] | undefined;
+  /** 악보책 예상 분할 위치: 지연 구간을 옅게 칠하고(소리가 잘리면 경고 색), 자르는 자리에 선과 "n권" */
+  readonly books?: readonly BookMark[] | undefined;
+  /** 권 표시 글 ("2권") */
+  readonly bookLabel?: ((book: number) => string) | undefined;
   readonly colors: ReadonlyMap<string, string> | undefined;
   /** 마디 번호 줄 두께 */
   readonly ruler: number;
@@ -110,6 +115,44 @@ export interface RollDrawOptions {
   readonly keyLock?: readonly KeyEvent[] | undefined;
   /** CSS 변수 값 (테마 색) */
   readonly css: (name: string) => string;
+}
+
+/**
+ * 악보책 예상 분할 위치. 지연 구간(앞 권을 일찍 끝내는 구간)은 시간 축을 따라 옅게 칠하고(모두 쉬면 흐린 색, 소리가 잘리면 경고 색),
+ * 자르는 자리에 실선(고정한 자리는 굵게)을 긋고, 마디 줄에 "n권"을 쓴다
+ */
+function drawBookMarks(g: CanvasRenderingContext2D, v: RollView, books: readonly BookMark[], css: (name: string) => string, label: (book: number) => string): void {
+  const horizontal = v.orientation === "horizontal";
+  const along = horizontal ? v.width : v.height;
+  const bar = barRowSize(v);
+  g.save();
+  for (const b of books) {
+    const p = timeToScreen(v, b.at);
+    const q = timeToScreen(v, b.trimFrom);
+    if (Math.max(p, q) < 0 || Math.min(p, q) > along) continue;
+    const color = b.clean ? css("--muted") : css("--danger");
+    g.fillStyle = color;
+    g.globalAlpha = b.clean ? 0.1 : 0.16;
+    if (horizontal) g.fillRect(Math.min(p, q), 0, Math.abs(p - q), v.height);
+    else g.fillRect(0, Math.min(p, q), v.width, Math.abs(p - q));
+    g.globalAlpha = 0.9;
+    g.fillStyle = b.fixed ? css("--accent") : css("--text");
+    const w = b.fixed ? 3 : 1.5;
+    if (horizontal) g.fillRect(p - w / 2, 0, w, v.height);
+    else g.fillRect(0, p - w / 2, v.width, w);
+    // 마디 줄에 권 이름: 자르는 자리 바로 앞(지연 구간 쪽)에 써서 그 마디 번호를 가리지 않는다
+    const text = label(b.book);
+    g.font = 'bold 11px "D2Coding", ui-monospace, monospace';
+    const tw = g.measureText(text).width + 6;
+    const x = horizontal ? p - tw - 2 : 2;
+    const y = horizontal ? 1 : p - 16;
+    g.globalAlpha = 1;
+    g.fillStyle = b.fixed ? css("--accent") : css("--text");
+    g.fillRect(x, y, tw, Math.min(bar - 2, 14));
+    g.fillStyle = css("--bg");
+    g.fillText(text, x + 3, y + 11);
+  }
+  g.restore();
 }
 
 /** 음량 레인 그리기 */
@@ -778,6 +821,7 @@ export function drawRoll(canvas: HTMLCanvasElement, o: RollDrawOptions): void {
     if (horizontal) g.fillRect(Math.min(a, b), 0, Math.abs(b - a), v.height);
     else g.fillRect(0, Math.min(a, b), v.width, Math.abs(b - a));
   }
+  if (o.books && o.books.length > 0) drawBookMarks(g, v, o.books, o.css, o.bookLabel ?? String);
   if (cursorAt !== undefined) {
     const p = timeToScreen(v, cursorAt);
     g.strokeStyle = o.css("--accent");

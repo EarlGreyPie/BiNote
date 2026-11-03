@@ -36,11 +36,17 @@
     onseek: (at: Rat) => void;
     onapply: (command: Command) => void;
     onclose: () => void;
+    /** 글자 수 맞추기 창의 한 칸으로 넣는다: 따로 창을 띄우지 않고, 적용해도 닫지 않는다 (취소 단추 없음) */
+    embedded?: boolean;
   }
 
-  let { song, colors, profile, locked, activeTrackId, where, onseek, onapply, onclose }: Props = $props();
+  let { song, colors, profile, locked, activeTrackId, where, onseek, onapply, onclose, embedded = false }: Props = $props();
 
-  let dialog: HTMLDialogElement;
+  let dialog: HTMLElement;
+  /** 창을 닫는다 (글자 수 맞추기 창 안이면 닫지 않는다: 곡이 바뀌면 그 창이 이 칸을 새로 만든다) */
+  function finish() {
+    if (!embedded) (dialog as HTMLDialogElement).close();
+  }
   const limit = $derived(profile.charLimitPerScore);
   // 창은 열 때마다 새로 만들고, 열 때의 곡으로 묶음을 정한다 (적용하면 닫힌다)
   // svelte-ignore state_referenced_locally
@@ -118,18 +124,18 @@
   }
 
   $effect(() => {
-    dialog.showModal();
+    if (!embedded) (dialog as HTMLDialogElement).showModal();
   });
 
   function apply() {
     if (!changed || busy) return;
     onapply(mergeTracksSong(profile, options, locked, t("ui.merge")));
-    dialog.close();
+    finish();
   }
 </script>
 
-<dialog bind:this={dialog} {onclose}>
-  <h2>{t("ui.merge")}</h2>
+<svelte:element this={embedded ? "div" : "dialog"} bind:this={dialog} class:embedded {...embedded ? {} : { onclose }}>
+  {#if !embedded}<h2>{t("ui.merge")}</h2>{/if}
   <p class="muted">{t("ui.mergeIntro")}</p>
 
   {#if groups.length === 0}
@@ -252,14 +258,17 @@
   {/if}
 
   <footer>
-    <button onclick={() => dialog.close()}>{t("ui.cancel")}</button>
+    {#if !embedded}<button onclick={() => (dialog as HTMLDialogElement).close()}>{t("ui.cancel")}</button>{/if}
     <button class="primary" disabled={busy || !changed} onclick={apply}>
       {dropped.length > 0 ? t("ui.mergeApplyDrop", { count: dropped.length }) : t("ui.apply")}
     </button>
   </footer>
-</dialog>
+</svelte:element>
 
 <style>
+  .embedded {
+    display: block;
+  }
   dialog {
     width: min(620px, calc(100vw - 32px));
     max-height: calc(100dvh - 48px);

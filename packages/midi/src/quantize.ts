@@ -37,6 +37,8 @@ export const GRID_CHOICES = [4, 8, 16, 32, 64] as const;
 /** 추정할 때 "맞는다"고 보는 오차(초)와 비율 */
 const FIT_SECONDS = 0.03;
 const FIT_RATIO = 0.97;
+/** 굵은 격자가 시작을 이보다 멀리(초) 옮기는데 더 잘게 나눈 격자에는 맞으면, 그 굵은 격자는 고르지 않는다 */
+const MOVE_SECONDS = 0.06;
 
 export interface QuantizeResult {
   readonly notes: GridNote[];
@@ -183,24 +185,43 @@ export function prepareQuantize(
   return { grid, suspect, place };
 }
 
-/** 가장 굵은 격자 중 음 시작의 90%가 30ms 안에 맞는 것. 그런 격자가 없으면 가장 많이 맞는 격자 */
+/**
+ * 가장 굵은 격자 중 음 시작의 97%가 30ms 안에 맞는 것. 그런 격자가 없으면 가장 많이 맞는 격자.
+ * 다만 굵은 격자가 어떤 시작을 60ms 넘게 옮기는데 더 잘게 나눈 격자(칸이 120ms 이상)에는 그 시작이 30ms 안에 맞으면, 그 시작은 흔들린 음이 아니라
+ * 잘게 친 음(예: 4분 곡의 엇박 8분음표)이므로 그 굵은 격자는 쓰지 않는다. 97%만 보면 첫 마디가 몇 ms 바뀌어 한 음이 30ms 경계를
+ * 넘나드는 것만으로 격자가 1/8 ↔ 1/4로 바뀌고, 엇박 음이 한 칸 반(200 BPM에서 약 130ms)씩 옮겨졌다
+ */
 function guessGrid(onsets: readonly number[], triplets: boolean, secondsPerWhole: (at: number) => number): number {
+  // 격자마다 시작의 오차(초)
+  const errors = GRID_CHOICES.map((grid) => {
+    const choice = chooseBeats(onsets, grid, triplets);
+    return {
+      grid,
+      // 4분 격자의 셋잇단 칸(1/6)에는 박 경계(1/4·3/4)가 없다. 그래서 셋잇단 박에서 끝나는 정규 음(다른 파트의 4분음표 등)이
+      // 1/6이나 1/3으로 밀린다. 셋잇단 박이 있어야 맞는 곡이면 셋잇단 칸(1/12)에 박 경계가 있는 8분 격자부터 본다
+      skip: grid === 4 && choice.size > 0,
+      error: onsets.map((x) => {
+        const step = choice.get(Math.floor(x * 4 + 1e-9)) ?? grid;
+        return Math.abs(x - Math.round(x * step) / step) * secondsPerWhole(x);
+      }),
+      // 이 격자에 30ms 안에 맞는 것이 우연이 아닌가. 칸이 120ms보다 좁으면 흔들린 음도 어느 칸엔가 30ms 안에 걸리기 쉽다
+      // (느린 곡의 64분 칸 등). 그런 격자에 맞았다고 잘게 친 음으로 보지 않는다
+      clean: onsets.map((x) => {
+        const step = choice.get(Math.floor(x * 4 + 1e-9)) ?? grid;
+        return secondsPerWhole(x) / step >= FIT_SECONDS * 4;
+      }),
+    };
+  });
   let best: number = GRID_CHOICES[2];
   let bestFit = -1;
-  for (const grid of GRID_CHOICES) {
-    const choice = chooseBeats(onsets, grid, triplets);
-    // 4분 격자의 셋잇단 칸(1/6)에는 박 경계(1/4·3/4)가 없다. 그래서 셋잇단 박에서 끝나는 정규 음(다른 파트의 4분음표 등)이
-    // 1/6이나 1/3으로 밀린다. 셋잇단 박이 있어야 맞는 곡이면 셋잇단 칸(1/12)에 박 경계가 있는 8분 격자부터 본다
-    if (grid === 4 && choice.size > 0) continue;
-    let fit = 0;
-    for (const x of onsets) {
-      const step = choice.get(Math.floor(x * 4 + 1e-9)) ?? grid;
-      const error = Math.abs(x - Math.round(x * step) / step) * secondsPerWhole(x);
-      if (error <= FIT_SECONDS) fit++;
-    }
-    if (fit >= onsets.length * FIT_RATIO) return grid;
+  for (const [i, { grid, skip, error }] of errors.entries()) {
+    if (skip) continue;
+    const fit = error.filter((e) => e <= FIT_SECONDS).length;
+    const finer = errors.slice(i + 1);
+    const movesFinerNote = error.some((e, k) => e > MOVE_SECONDS && finer.some((f) => f.clean[k]! && f.error[k]! <= FIT_SECONDS));
+    if (fit >= onsets.length * FIT_RATIO && !movesFinerNote) return grid;
     // 더 잘게 나눠도 맞는 음이 거의 늘지 않으면 굵은 쪽을 남긴다
-    if (fit > bestFit + onsets.length * 0.05) {
+    if (!movesFinerNote && fit > bestFit + onsets.length * 0.05) {
       best = grid;
       bestFit = fit;
     }

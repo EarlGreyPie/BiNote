@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { axes, fillStretch, matchRollZoom, videoMatrix, type RollView } from "../src/lib/roll";
-import { fallShift, fallSpeed, speedPickAllows, speedPickLost, speedPickPress, speedPickWheel, toGray } from "../src/lib/videoSpeed";
+import { agreeSpeed, fallShift, fallSpeed, rowDiff, sameFrame, SPEED_FRAME_GAP, SPEED_PAIRS, SPEED_PAIR_STEP, speedBand, speedPairTimes, speedPickAllows, speedPickLost, speedPickPress, speedPickWheel, toGray } from "../src/lib/videoSpeed";
 
 /** 롤: 가로·세로, 건반 띠 44px */
 const roll = (orientation: "horizontal" | "vertical", width = 1000, height = 600): RollView => ({
@@ -78,6 +78,83 @@ describe("떨어지는 속도 재기: 세로 상호상관", () => {
   });
   it("RGBA를 회색조로", () => {
     expect([...toGray(new Uint8ClampedArray([255, 255, 255, 255, 0, 0, 0, 255]), 2, 1)]).toEqual([1, 0]);
+  });
+});
+
+/** 실영상 모양 합성 프레임: 위에 안 움직이는 밝은 제목 띠, 가운데 떨어지는 막대들, 아래(건반 선 바로 위)에 위로 번지는 안개 */
+function realish(width: number, height: number, fall: number, fog: number): Float32Array {
+  const out = new Float32Array(width * height);
+  for (let y = 0; y < height; y++)
+    for (let x = 0; x < width; x++) {
+      let v = 0.05;
+      if (y >= 2 && y < 6 && x >= 4 && x < width / 2) v = 0.9; // 제목 글자 (안 움직임)
+      // 떨어지는 막대: 열마다 다른 자리, fall줄만큼 내려옴
+      const col = Math.floor(x / 8);
+      const top = ((col * 13) % 37) + fall;
+      if (x % 8 >= 2 && x % 8 < 6 && y >= top + 8 && y < top + 13) v = 0.8;
+      // 안개: 건반 선 근처에서 위로 올라오는 넓고 흐린 밝기
+      const fy = height - 12 - fog;
+      v += 0.35 * Math.exp(-(((y - fy) / 6) ** 2));
+      out[y * width + x] = Math.min(1, v);
+    }
+  return out;
+}
+
+describe("실영상에서 속도 재기 (2026-11-02 실영상 3개 측정)", () => {
+  it("속도를 잴 줄: 위 15%와 건반 선 위 구간의 아래 20%를 뺀다", () => {
+    expect(speedBand(72, 0.85)).toEqual({ top: 10, rows: 48 - 10 });
+    // 건반 선이 화면 가운데쯤인 영상 (손 카메라)
+    expect(speedBand(72, 0.46)).toEqual({ top: 10, rows: 26 - 10 });
+    // 남는 줄이 8줄보다 적으면 재지 않는다
+    expect(speedBand(72, 0.3)).toBeUndefined();
+  });
+  it("세로 밝기 차: 한 줄 적고, 고른 밝기는 0", () => {
+    const g = new Float32Array([0.2, 0.2, 0.5, 0.2, 0.5, 0.9]);
+    const d = rowDiff(g, 2, 3);
+    expect(d.length).toBe(4);
+    expect([...d].map((v) => Math.round(v * 10) / 10)).toEqual([0.3, 0, 0, 0.7]);
+  });
+  it("같은 그림 판단", () => {
+    const a = new Float32Array([0.1, 0.5, 0.9]);
+    expect(sameFrame(a, Float32Array.from(a))).toBe(true);
+    // 부호화 잡음 정도는 같은 그림, 한 칸이라도 크게 다르면 다른 그림 (음이 드문 화면)
+    expect(sameFrame(a, new Float32Array([0.11, 0.49, 0.9]))).toBe(true);
+    expect(sameFrame(a, new Float32Array([0.1, 0.5, 0.75]))).toBe(false);
+    expect(sameFrame(a, new Float32Array([0.1, 0.5]))).toBe(false);
+  });
+  it("제목 글자가 있는 영상: 전체를 맞대면 실패하고, 위를 빼고 세로 차로 맞대면 내려온 줄 수를 찾는다", () => {
+    const w = 96;
+    const h = 72;
+    const keyLine = 0.85;
+    const a = realish(w, h, 0, 0);
+    const b = realish(w, h, 5, 1);
+    const rows = Math.floor(h * keyLine);
+    // 지금까지의 방식: 안 움직이는 제목과 안개 때문에 0줄이 가장 잘 맞거나 틀린 값
+    const old = fallShift(a.slice(0, w * rows), b.slice(0, w * rows), w, rows);
+    expect(old === undefined || Math.abs(old.shift - 5) > 0.5).toBe(true);
+    const band = speedBand(h, keyLine)!;
+    const cut = (f: Float32Array) => rowDiff(f.slice(band.top * w, (band.top + band.rows) * w), w, band.rows);
+    const found = fallShift(cut(a), cut(b), w, band.rows - 1);
+    expect(found).toBeDefined();
+    expect(found!.shift).toBeCloseTo(5, 0);
+  });
+  it("한 자리에서 잴 쌍 시각: 간격대로, 영상 끝을 넘는 쌍은 뺀다", () => {
+    expect(speedPairTimes(10, 100)).toEqual(Array.from({ length: SPEED_PAIRS }, (_, k) => 10 + k * SPEED_PAIR_STEP));
+    expect(speedPairTimes(-1, Number.NaN)[0]).toBe(0);
+    const near = speedPairTimes(10, 10 + SPEED_PAIR_STEP + SPEED_FRAME_GAP);
+    expect(near).toEqual([10, 10 + SPEED_PAIR_STEP]);
+    expect(speedPairTimes(100, 50)).toEqual([]);
+  });
+  it("값이 모이면 받고 흩어지면 버린다", () => {
+    expect(agreeSpeed([300, 301, 299, 300.5, 250])).toBeCloseTo(300.125, 3);
+    // 30fps 영상의 같은 그림처럼 두 무리로 갈리면 버린다 (직접 재기로)
+    expect(agreeSpeed([300, 280, 300, 280, 300])).toBeUndefined();
+    expect(agreeSpeed([300, 300, 300])).toBeUndefined();
+    expect(agreeSpeed([300, Number.NaN, 0, -5, 300, 300, 300])).toBeCloseTo(300, 6);
+  });
+  it("프레임 시각을 모르는 브라우저: 모이기를 따지지 않고 3개 이상의 중앙값", () => {
+    expect(agreeSpeed([72, 108, 72, 108, 90], false)).toBe(90);
+    expect(agreeSpeed([300, 280], false)).toBeUndefined();
   });
 });
 

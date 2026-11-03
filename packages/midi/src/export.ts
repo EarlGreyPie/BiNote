@@ -34,6 +34,8 @@ export function songToSmf(
   const conductor: SmfEvent[] = song.tempo.map((t) => ({ tick: tick(t.at), type: "tempo", usPerQuarter: Math.round(60_000_000 / t.bpm) }));
   // 곡 중간 박자 변화도 함께 쓴다
   for (const sig of song.timeSig) conductor.push({ tick: tick(sig.at), type: "timeSig", beats: sig.beats, unit: sig.unit });
+  // 마커도 쓴다 (다시 가져오면 곡 마커로 돌아온다)
+  for (const m of song.markers) conductor.push({ tick: tick(m.at), type: "marker", text: m.label });
   const tracks = [{ events: conductor }];
   type Span = [number, number, number];
   // 연주자마다 악기와 낼 음. 같은 음 &는 볼륨이 달라도 첫 음 볼륨으로 이어지는 한 음이다 (게임·앱 재생과 같음)

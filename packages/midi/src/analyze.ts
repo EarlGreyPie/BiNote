@@ -41,10 +41,18 @@ export interface MidiAnalysis {
   /** 정확한 빠르기(소수). 곡에 넣을 때 반올림한다 (keepTiming이면 소수 그대로) */
   readonly tempo: TempoEvent[];
   readonly timeSig: TimeSigEvent[];
+  /** 마커 (FF 06, 모든 트랙에서 모아 위치 순). 곡 마커로 가져온다. 없으면 마커 없이 */
+  readonly markers?: readonly MidiMarker[];
   /**
    * 템포·박자 위치를 그대로 쓴다 (가져오기 격자에 맞추지 않음). 받아 적은 음을 지금 곡의 템포에 놓을 때, 곡의 분수 위치를 지킨다
    */
   readonly keepTiming?: boolean;
+}
+
+/** MIDI 마커. 위치는 tick을 그대로 옮긴 정확한 분수(온음표 단위) */
+export interface MidiMarker {
+  readonly at: Rat;
+  readonly label: string;
 }
 
 const SUSTAIN = 64;
@@ -60,12 +68,16 @@ export function analyzeMidi(smf: Smf): MidiAnalysis {
   // 템포 지도는 모든 트랙의 템포 이벤트를 모은 것 (형식 1은 보통 첫 트랙에 있다)
   const tempoTicks: { tick: number; us: number }[] = [];
   const timeSig: TimeSigEvent[] = [];
+  // 마커는 보통 첫 트랙에 있지만 다른 트랙 것도 모은다 (같은 자리 같은 글은 한 번만)
+  const markerTicks: { tick: number; label: string }[] = [];
   for (const track of smf.tracks) {
     for (const e of track.events) {
       if (e.type === "tempo") tempoTicks.push({ tick: e.tick, us: e.usPerQuarter });
       else if (e.type === "timeSig") timeSig.push({ at: toWhole(e.tick), beats: e.beats, unit: e.unit });
+      else if (e.type === "marker" && !markerTicks.some((m) => m.tick === e.tick && m.label === e.text)) markerTicks.push({ tick: e.tick, label: e.text });
     }
   }
+  markerTicks.sort((a, b) => a.tick - b.tick);
   tempoTicks.sort((a, b) => a.tick - b.tick);
   const seconds = secondsAt(tempoTicks, quarter);
 
@@ -166,7 +178,8 @@ export function analyzeMidi(smf: Smf): MidiAnalysis {
   });
 
   const tempo: TempoEvent[] = tempoTicks.map((t) => ({ at: toWhole(t.tick), bpm: 60_000_000 / t.us }));
-  return { ppq: quarter, parts, tempo, timeSig };
+  const markers: MidiMarker[] = markerTicks.map((m) => ({ at: toWhole(m.tick), label: m.label }));
+  return { ppq: quarter, parts, tempo, timeSig, ...(markers.length > 0 ? { markers } : {}) };
 }
 
 /** tick → 초 (템포 지도를 따라) */

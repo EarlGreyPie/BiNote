@@ -29,11 +29,17 @@
     onsplit: () => void;
     onapply: (command: Command) => void;
     onclose: () => void;
+    /** 글자 수 맞추기 창의 한 칸으로 넣는다: 따로 창을 띄우지 않고, 적용해도 닫지 않는다 (취소 단추 없음) */
+    embedded?: boolean;
   }
 
-  let { song, colors, profile, locked, initialSource, where, newScoreOnAdd, onseek, onaddtrack, onsplit, onapply, onclose }: Props = $props();
+  let { song, colors, profile, locked, initialSource, where, newScoreOnAdd, onseek, onaddtrack, onsplit, onapply, onclose, embedded = false }: Props = $props();
 
-  let dialog: HTMLDialogElement;
+  let dialog: HTMLElement;
+  /** 창을 닫는다 (글자 수 맞추기 창 안이면 닫지 않는다: 곡이 바뀌면 그 창이 이 칸을 새로 만든다) */
+  function finish() {
+    if (!embedded) (dialog as HTMLDialogElement).close();
+  }
   const limit = $derived(profile.charLimitPerScore);
   // svelte-ignore state_referenced_locally
   let source = $state(defaultSpreadSource(song, profile.charLimitPerScore, locked, initialSource) ?? "");
@@ -112,18 +118,18 @@
   const player = $derived(song.tracks.find((tr) => tr.id === source)?.playerId);
 
   $effect(() => {
-    dialog.showModal();
+    if (!embedded) (dialog as HTMLDialogElement).showModal();
   });
 
   function apply() {
     if (!result || result.moved === 0 || busy) return;
     onapply(spreadSong(profile, source, pickedSpans, locked, t("ui.distribute")));
-    dialog.close();
+    finish();
   }
 </script>
 
-<dialog bind:this={dialog} {onclose}>
-  <h2>{t("ui.distribute")}</h2>
+<svelte:element this={embedded ? "div" : "dialog"} bind:this={dialog} class:embedded {...embedded ? {} : { onclose }}>
+  {#if !embedded}<h2>{t("ui.distribute")}</h2>{/if}
   <p class="muted">{t("ui.spreadIntro")}</p>
 
   <label class="row">
@@ -228,12 +234,15 @@
   {/if}
 
   <footer>
-    <button onclick={() => dialog.close()}>{t("ui.cancel")}</button>
+    {#if !embedded}<button onclick={() => (dialog as HTMLDialogElement).close()}>{t("ui.cancel")}</button>{/if}
     <button class="primary" disabled={busy || !result || result.moved === 0} onclick={apply}>{t("ui.apply")}</button>
   </footer>
-</dialog>
+</svelte:element>
 
 <style>
+  .embedded {
+    display: block;
+  }
   dialog {
     width: min(600px, calc(100vw - 32px));
     max-height: calc(100dvh - 48px);

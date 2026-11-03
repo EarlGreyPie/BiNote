@@ -37,6 +37,11 @@ export interface GameProfile {
   /** 타악기(큰북·심벌즈)를 칠 때 쓰는 음 높이 (MIDI 번호). 큰북은 높이를 바꿔도 소리가 옮겨지지 않았다 */
   readonly percussionPitch: number;
   /**
+   * 높이를 바꿔도 같은 소리인 악기(canonical). 게임에 넣을 글(게임에 넣기·MML로 내보내기·악보책)에서는 이 악기 트랙의 음을
+   * 모두 percussionPitch 한 높이로 써서 옥타브 명령과 #·♭을 없앤다 (pitchlessForOutput). 편집 중인 곡과 저장 파일은 그대로
+   */
+  readonly pitchlessInstruments: readonly string[];
+  /**
    * 악기별 샘플 길이. 게임 샘플은 반복 없이 한 번 울리고 끝나서, 음을 길게 써도 이 길이 뒤로는 소리가 없다.
    * 구간(from = 그 구간 첫 음 MIDI 번호)마다 첫 음의 길이(초)를 두고, 위로 반음마다 2^(-1/12)배 짧아진다
    * (샘플을 빨리 돌려 높이를 올리므로). 맨 아래 구간은 아래로도 같은 식으로 늘린다. 없는 악기는 제한 없음
@@ -227,6 +232,10 @@ export const MOBILE_PROFILE: GameProfile = {
   scoreBookGapMs: 1010,
   sampleBoundaries: { piano: E_BOUNDARIES, lute: E_BOUNDARIES, harp: E_BOUNDARIES },
   percussionPitch: 60,
+  // 큰북·심벌즈: 높이와 상관없이 같은 소리 (게임 녹음 MTS_2초, 28~100 짝수 음 37개: 6옥타브 내내 피크 고정
+  // 큰북 135·141Hz, 심벌즈 773·803·3498Hz, 길이도 같음 큰북 1.03~1.06초·심벌즈 2.08~2.14초. 2026-11-02 DLS 분석 스레드).
+  // 게임은 칠 때마다 샘플 몇 개(심벌즈 3, 큰북 4) 가운데 하나를 높이와 상관없이 고른다 (제3자 팩의 건반 구간별 샘플과 다름)
+  pitchlessInstruments: ["bass-drum", "cymbal"],
   // 플루트 맨 위·샬루모·실로폰·오르골·고양이 하모니카 경계: 2026-10-31 반음 음계·6초 녹음으로 재확인 (한 반음 아래로 옮김)
   sampleSeconds: {
     piano: [{ from: 40, seconds: 5.31 }, { from: 52, seconds: 5.3 }, { from: 64, seconds: 5.29 }, { from: 77, seconds: 5.04 }, { from: 89, seconds: 4.99 }],

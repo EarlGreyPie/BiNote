@@ -19,6 +19,7 @@
   import type { SelectKeysMode } from "./selectKeys";
   import { chordPrefs, setMidiMerge } from "./chordPrefs.svelte";
   import { setSplitSpread, splitPrefs } from "./splitPrefs.svelte";
+  import { mmiPrefs, setMmiExportQuick, setMmiImportQuick } from "./mmiPrefs.svelte";
   import { canAskSave, canPickFolder, canShareFiles, pickSaveFolder, saveTarget, setSaveMode, setSaveShare } from "./saveTarget.svelte";
   import { LANE_MAX, LANE_MIN, saveVolumeLane, volumeLane, type LaneState } from "./volumeLane.svelte";
   import { LAB_FEATURES, labs, setButtonNames, setFade, setLabs, setLiveEdit } from "./labs.svelte";
@@ -448,6 +449,14 @@
         {:else}
           <p class="muted help">{t("ui.saveDownloadOnly")}</p>
         {/if}
+        <SettingGroup title={t("ui.mmiPrefsTitle")}>
+          <SettingRow label={t("ui.mmiExportQuick")} for="set-mmi-export" help={t("ui.mmiExportQuickHelp")}>
+            <Switch id="set-mmi-export" checked={mmiPrefs.exportQuick} onchange={setMmiExportQuick} />
+          </SettingRow>
+          <SettingRow label={t("ui.mmiImportQuick")} for="set-mmi-import" help={t("ui.mmiImportQuickHelp")}>
+            <Switch id="set-mmi-import" checked={mmiPrefs.importQuick} onchange={setMmiImportQuick} />
+          </SettingRow>
+        </SettingGroup>
       {:else if section === "labs"}
         <SettingGroup>
           <SettingRow label={t("ui.labsOn")} for="set-labs" help={t("ui.labsHelp")}>

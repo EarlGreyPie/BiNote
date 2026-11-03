@@ -1,6 +1,6 @@
 /**
  * 표준 MIDI 파일(SMF) 읽기·쓰기. 가져오기에 필요한 이벤트만 다룬다:
- * 음 켜기·끄기, 프로그램 변경, 컨트롤(서스테인 등), 템포, 박자, 트랙 이름.
+ * 음 켜기·끄기, 프로그램 변경, 컨트롤(서스테인 등), 템포, 박자, 트랙 이름, 마커.
  * 시간은 파일의 tick 그대로 둔다(분수 변환은 가져오기 단계에서).
  */
 export type SmfEvent =
@@ -11,7 +11,9 @@ export type SmfEvent =
   /** 4분음표 하나의 마이크로초 */
   | { readonly tick: number; readonly type: "tempo"; readonly usPerQuarter: number }
   | { readonly tick: number; readonly type: "timeSig"; readonly beats: number; readonly unit: number }
-  | { readonly tick: number; readonly type: "name"; readonly text: string };
+  | { readonly tick: number; readonly type: "name"; readonly text: string }
+  /** 마커 (FF 06). 곡 마커로 가져온다 */
+  | { readonly tick: number; readonly type: "marker"; readonly text: string };
 
 export interface SmfTrack {
   readonly events: SmfEvent[];
@@ -95,6 +97,8 @@ function readTrack(bytes: Uint8Array, start: number, end: number): SmfTrack {
         events.push({ tick, type: "timeSig", beats: bytes[data]!, unit: 2 ** bytes[data + 1]! });
       } else if (type === 0x03) {
         events.push({ tick, type: "name", text: text(data, length) });
+      } else if (type === 0x06) {
+        events.push({ tick, type: "marker", text: text(data, length) });
       }
       continue;
     }
@@ -137,7 +141,7 @@ export function writeSmf(smf: Smf): Uint8Array {
   return Uint8Array.from(out);
 }
 
-const ORDER: Record<SmfEvent["type"], number> = { name: 0, tempo: 1, timeSig: 2, program: 3, control: 4, noteOff: 5, noteOn: 6 };
+const ORDER: Record<SmfEvent["type"], number> = { name: 0, tempo: 1, timeSig: 2, marker: 3, program: 4, control: 5, noteOff: 6, noteOn: 7 };
 
 function encodeTrack(events: readonly SmfEvent[]): number[] {
   const out: number[] = [];
@@ -170,9 +174,10 @@ function encodeTrack(events: readonly SmfEvent[]): number[] {
       case "timeSig":
         out.push(0xff, 0x58, 4, e.beats, Math.round(Math.log2(e.unit)), 24, 8);
         break;
-      case "name": {
+      case "name":
+      case "marker": {
         const text = new TextEncoder().encode(e.text);
-        out.push(0xff, 0x03);
+        out.push(0xff, e.type === "name" ? 0x03 : 0x06);
         vlq(text.length);
         out.push(...text);
         break;

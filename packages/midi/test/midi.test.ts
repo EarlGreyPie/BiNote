@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { add, emptySong, MOBILE_PROFILE, rat, type Note, type Rat, type Song } from "@mmlce/core";
 import { optimizeMml } from "@mmlce/mml";
+import { readProject, writeProject } from "@mmlce/fileio";
 import {
   attenuateChords,
   chordVolume,
@@ -163,6 +164,27 @@ describe("quantize", () => {
     const q = quantize([{ id: "a", notes: mixed }], tempo);
     const want = [0, 1, 2].flatMap((b) => bar.map((t) => key(rat(b * 1920 + t, 1920))));
     expect(q.notes.map((n) => key(n.start))).toEqual(want);
+  });
+
+  it("자동 격자가 몇 ms 차이로 1/8 ↔ 1/4를 오가며 엇박 8분음표를 옮기지 않는다", () => {
+    // Basic Scriptor s03: 첫 마디가 2ms 바뀐 것만으로 1/4 격자가 골라져 끝의 엇박 음이 131ms 앞으로 옮겨졌다.
+    // 200 BPM 4분음표 곡에 홀로 있는 엇박 8분음표 둘, 흔들린 4분음표 하나(30ms 경계 바로 안/밖)
+    const fast = [{ at: rat(0), bpm: 200 }];
+    const at = (tick: number, len: number) => ({ ...raw(tick, len), seconds: (tick / PPQ) * 0.3 });
+    for (const edge of [46, 50]) {
+      const notes = Array.from({ length: 78 }, (_, i) => at(i * PPQ, 400));
+      notes[11] = at(11 * PPQ - edge, 400);
+      notes[30] = at(30 * PPQ + 240, 200);
+      notes.push(at(78 * PPQ + 240, 200));
+      const q = quantize([{ id: "a", notes }], fast);
+      expect(q.grid).toBe(8);
+      expect(q.notes.filter((n) => n.start.d === 8).map((n) => key(n.start))).toEqual(["61/8", "157/8"]);
+    }
+    // 느린 곡에서 한 음만 70ms 늦게 친 것은 흔들림으로 보고 4분 격자를 그대로 쓴다 (64분 칸에 우연히 맞아도 잘게 친 음으로 보지 않는다)
+    const slow = [{ at: rat(0), bpm: 60 }];
+    const late = (tick: number) => ({ ...raw(tick, 400), seconds: tick / PPQ });
+    const sloppy = Array.from({ length: 40 }, (_, i) => late(i * PPQ + (i === 7 ? 34 : 0)));
+    expect(quantize([{ id: "a", notes: sloppy }], slow).grid).toBe(4);
   });
 
   it("4분 셋잇단 곡을 자동 격자로 맞춰도 다른 파트의 4분음표 끝이 1/6로 밀리지 않는다", () => {
@@ -625,5 +647,51 @@ describe("드럼을 타악기 한 높이로 바꾼 뒤 합쳐진 음 (지시문 
     expect(r.song.tracks.flatMap((t) => t.notes)).toHaveLength(1);
     expect(r.merged).toBe(1);
     expect(r.compressed[0]!.dropped).toBe(0);
+  });
+});
+
+describe("MIDI 마커 (FF 06)", () => {
+  const conductor: SmfEvent[] = [
+    { tick: 0, type: "tempo", usPerQuarter: 500_000 },
+    { tick: 0, type: "marker", text: "A 도입" },
+    { tick: 1925, type: "marker", text: "BS:tempo_octave 8.1-30.6s" },
+  ];
+  const notes = [on(0, 60), off(480, 60), on(1920, 64), off(2400, 64)];
+
+  it("쓰고 읽으면 마커가 그대로 남는다 (다른 메타 이벤트처럼 버리지 않는다)", () => {
+    const file = smf(conductor, notes);
+    expect(file.tracks[0]!.events.filter((e) => e.type === "marker")).toEqual([
+      { tick: 0, type: "marker", text: "A 도입" },
+      { tick: 1925, type: "marker", text: "BS:tempo_octave 8.1-30.6s" },
+    ]);
+  });
+
+  it("가져오면 곡 마커가 되고, 위치는 템포·박자처럼 가져오기 격자에 맞춘다", () => {
+    const a = analyzeMidi(smf(conductor, notes));
+    expect(a.markers?.map((m) => [key(m.at), m.label])).toEqual([["0/1", "A 도입"], ["385/384", "BS:tempo_octave 8.1-30.6s"]]);
+    const r = midiToSong(a, suggestPlan(a, MOBILE_PROFILE), MOBILE_PROFILE);
+    expect(r.song.markers.map((m) => [m.id, key(m.at), m.label])).toEqual([["m1", "0/1", "A 도입"], ["m2", "1/1", "BS:tempo_octave 8.1-30.6s"]]);
+    // 음은 그대로 (마커가 음 가져오기를 바꾸지 않는다)
+    expect(r.song.tracks.flatMap((t) => t.notes).map((n) => n.pitch)).toEqual([60, 64]);
+  });
+
+  it("다른 트랙의 마커도 모으고, 같은 자리 같은 글은 한 번만 넣는다", () => {
+    const a = analyzeMidi(smf([...conductor], [...notes, { tick: 0, type: "marker", text: "A 도입" }, { tick: 960, type: "marker", text: "B" }]));
+    expect(a.markers?.map((m) => m.label)).toEqual(["A 도입", "B", "BS:tempo_octave 8.1-30.6s"]);
+  });
+
+  it("마커가 없는 MIDI는 곡 마커도 없다 (전과 같음)", () => {
+    const a = analyzeMidi(smf([{ tick: 0, type: "tempo", usPerQuarter: 500_000 }], notes));
+    expect(a.markers).toBeUndefined();
+    expect(midiToSong(a, suggestPlan(a, MOBILE_PROFILE), MOBILE_PROFILE).song.markers).toEqual([]);
+  });
+
+  it("곡 마커는 MIDI로 내보내고 다시 가져오면 돌아오고, .mme 저장·열기에도 남는다", () => {
+    const a = analyzeMidi(smf(conductor, notes));
+    const imported = midiToSong(a, suggestPlan(a, MOBILE_PROFILE), MOBILE_PROFILE).song;
+    const back = analyzeMidi(readSmf(writeSmf(songToSmf(imported))));
+    expect(back.markers?.map((m) => [key(m.at), m.label])).toEqual([["0/1", "A 도입"], ["1/1", "BS:tempo_octave 8.1-30.6s"]]);
+    const reopened = readProject(writeProject(imported)).song;
+    expect(reopened.markers).toEqual(imported.markers);
   });
 });

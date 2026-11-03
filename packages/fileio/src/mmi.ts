@@ -179,6 +179,82 @@ export function readMmi(text: string, names: MmiNames = KO_NAMES): ReadResult {
   return { song, diagnostics };
 }
 
+/** 가져올 때 BiNote 악보 하나로 모을 마비꼬 트랙들 (readMmi가 만든 연주자 id, 차례대로) */
+export interface MmiScoreGroup {
+  readonly name: string;
+  readonly players: readonly string[];
+}
+
+/** 노래 칸에서 읽은 트랙만 든 연주자 ('○○ 노래') */
+function songOnly(song: Song, playerId: string): boolean {
+  const own = song.tracks.filter((t) => t.playerId === playerId);
+  return own.length > 0 && own.every((t) => t.mmiSong);
+}
+
+/** 여러 마비꼬 트랙 이름이 '이름 1'·'이름 2'처럼 같은 이름에 번호만 다르면 그 이름 (BiNote가 저장할 때 붙인 번호), 아니면 첫 이름 */
+function groupName(names: readonly string[]): string {
+  if (names.length < 2) return names[0] ?? "";
+  const bases = names.map((n) => /^(.*\S)\s+\d+$/.exec(n)?.[1]);
+  return bases[0] !== undefined && bases.every((b) => b === bases[0]) ? bases[0] : names[0]!;
+}
+
+/**
+ * 가져오기 권장 묶기: 3MLE 열기처럼 마비꼬 트랙을 차례로 화음 수(기본 6)까지 BiNote 악보 하나에 모은다.
+ * 넘치면 새 악보를 시작하고, 노래 칸 트랙('○○ 노래')은 따로 악보 하나로 둔다. 트랙이 없는 마비꼬 트랙은 뺀다
+ */
+export function recommendedMmiGroups(song: Song, chordsPerScore: number | ((instrument: string) => number) = 6): MmiScoreGroup[] {
+  /** 악보 화음 수는 악보 악기(첫 마비꼬 트랙 악기)로 정한다 (오르골 등은 프로필의 악기별 화음 수) */
+  const limitOf = (player: Player) => Math.max(1, typeof chordsPerScore === "number" ? chordsPerScore : chordsPerScore(player.instrument.canonical));
+  const groups: { players: string[]; count: number; limit: number }[] = [];
+  let open: { players: string[]; count: number; limit: number } | undefined;
+  for (const player of song.players) {
+    const count = song.tracks.filter((t) => t.playerId === player.id).length;
+    if (count === 0) continue;
+    if (songOnly(song, player.id)) {
+      // 노래 칸은 따로 두되, 앞 악보는 이어서 모은다 (readMmi는 '○○ 노래'를 그 마비꼬 트랙 바로 뒤에 둔다)
+      groups.push({ players: [player.id], count, limit: limitOf(player) });
+      continue;
+    }
+    if (open && open.count + count <= open.limit) {
+      open.players.push(player.id);
+      open.count += count;
+    } else {
+      open = { players: [player.id], count, limit: limitOf(player) };
+      groups.push(open);
+    }
+  }
+  const nameOf = (id: string) => song.players.find((p) => p.id === id)?.name ?? id;
+  return groups.map((g) => ({ name: groupName(g.players.map(nameOf)), players: g.players }));
+}
+
+/**
+ * 마비꼬 트랙(readMmi의 연주자)을 고른 대로 BiNote 악보로 모은다. 악보 악기는 첫 마비꼬 트랙 악기이고,
+ * 다른 악기의 마비꼬 트랙에서 온 트랙은 그 악기를 트랙 악기로 둔다 (3MLE 열기와 같다). 트랙 순서는 악보 차례대로.
+ * 어느 묶음에도 없는 마비꼬 트랙의 트랙은 가져오지 않는다
+ */
+export function groupMmiPlayers(song: Song, groups: readonly MmiScoreGroup[]): Song {
+  const byId = new Map(song.players.map((p) => [p.id, p]));
+  const players: Player[] = [];
+  const tracks: Track[] = [];
+  const used = new Set<string>();
+  for (const group of groups) {
+    const members = group.players.filter((id) => !used.has(id) && byId.has(id));
+    members.forEach((id) => used.add(id));
+    const own = members.flatMap((id) => song.tracks.filter((t) => t.playerId === id));
+    if (own.length === 0) continue;
+    const first = byId.get(members[0]!)!;
+    const player: Player = { ...first, name: group.name.trim() || first.name };
+    players.push(player);
+    for (const track of own) {
+      const inst = trackInstrument(song, track);
+      const same = inst.canonical === player.instrument.canonical && inst.program === player.instrument.program;
+      const { instrument: _own, ...rest } = track;
+      tracks.push({ ...rest, playerId: player.id, ...(same ? {} : { instrument: inst }) });
+    }
+  }
+  return { ...song, players, tracks };
+}
+
 /** mml-track 하나에 들어갈 트랙: 멜로디·화음1·화음2(최대 3)와 노래 칸. 노래 칸만 쓴 mml-track이면 parts가 비어 있다 */
 interface MmiEntry {
   readonly name: string;
@@ -275,8 +351,13 @@ function mmiVerbatim(song: Song, entries: readonly MmiEntry[]): Map<string, stri
 }
 
 export interface WriteMmiOptions {
-  /** 내보낼 트랙 (곡 트랙 순서는 그대로). 없으면 모든 트랙 */
+  /** 내보낼 트랙 (곡 트랙 순서는 그대로). 없으면 모든 트랙. layout을 주면 쓰지 않는다 */
   readonly trackIds?: readonly string[];
+  /**
+   * 직접 묶은 mml-track (저장 창의 직접 묶기). 주면 자동 묶기(mmiEntries) 대신 이 순서·이름·칸대로 쓰고, 여기 없는 트랙은 내보내지 않는다.
+   * 칸이 3개를 넘거나 곡에 없는 트랙은 빼고, 트랙이 하나도 없는 mml-track은 쓰지 않는다
+   */
+  readonly layout?: readonly MmiLayoutEntry[];
 }
 
 /**
@@ -296,6 +377,27 @@ export interface MmiLayoutEntry {
   readonly parts: readonly string[];
   /** 노래 칸 트랙 */
   readonly song?: string;
+}
+
+/** 직접 묶은 모양을 mml-track으로. 한 트랙은 한 칸에만 (먼저 나온 칸) */
+function layoutEntries(song: Song, layout: readonly MmiLayoutEntry[]): MmiEntry[] {
+  const byId = new Map(song.tracks.map((t) => [t.id, t]));
+  const used = new Set<string>();
+  const take = (id: string | undefined) => {
+    const track = id === undefined || used.has(id) ? undefined : byId.get(id);
+    if (track) used.add(track.id);
+    return track;
+  };
+  const out: MmiEntry[] = [];
+  for (const entry of layout) {
+    const parts = entry.parts.slice(0, 3).map(take).filter((t): t is Track => !!t);
+    const sung = take(entry.song);
+    const head = parts[0] ?? sung;
+    if (!head) continue;
+    const player = song.players.find((p) => p.id === head.playerId) ?? { id: head.playerId, name: entry.name, instrument: trackInstrument(song, head) };
+    out.push({ name: entry.name, player, parts, ...(sung ? { song: sung } : {}) });
+  }
+  return out;
 }
 
 /** 고른 트랙을 .mmi로 쓸 때 mml-track으로 묶이는 모양. writeMmi와 같은 규칙(연주자마다, 악기·팬·보이기가 같은 트랙 3개씩) */
@@ -353,7 +455,16 @@ export function writeMmi(whole: Song, options: WriteMmiOptions = {}): { text: st
     diagnostics.push({ level: "warning", code: "instrument-no-program", params: { instrument: inst.canonical, program: 0 }, span: [0, 0], where: entry.name });
     return 0;
   };
-  const entries = mmiEntries(song);
+  const entries = options.layout ? layoutEntries(song, options.layout) : mmiEntries(song);
+  if (options.layout) {
+    // mml-track 하나는 악기·팬·보이기가 하나라 첫 칸 트랙 값을 쓴다. 다른 값의 트랙을 함께 넣었으면 알린다
+    const key = (t: Track) => `${trackInstrument(song, t).program ?? -1}|${t.mix?.pan ?? 64}|${t.mix?.visible ?? true}`;
+    for (const entry of entries) {
+      const head = entry.parts[0] ?? entry.song!;
+      const odd = entry.parts.filter((t) => key(t) !== key(head));
+      if (odd.length > 0) diagnostics.push({ level: "warning", code: "mmi-mixed-track", params: { count: odd.length }, span: [0, 0], where: entry.name });
+    }
+  }
   const verbatim = mmiVerbatim(song, entries);
 
   let tempoWritten = false;

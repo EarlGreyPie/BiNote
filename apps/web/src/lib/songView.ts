@@ -42,6 +42,9 @@ export interface SongViewReset {
   readonly offgridOpen: false;
   /** 악보책 나누기 결과, 글자 수 줄이기 결과 글 */
   readonly split: undefined;
+  /** 악보책 나누기에서 고정한 자르는 자리, 글자 수 맞추기 창 (옛 곡 위치) */
+  readonly splitFixed: readonly [];
+  readonly fitOpen: undefined;
   readonly compactNote: "";
   /** MML로 내보내기 창에서 복사한 트랙 표시 (옛 트랙 id) */
   readonly exportCopied: undefined;
@@ -77,6 +80,8 @@ export function freshSongView(viewGen: number): SongViewReset {
     songInfoOpen: false,
     offgridOpen: false,
     split: undefined,
+    splitFixed: [],
+    fitOpen: undefined,
     compactNote: "",
     exportCopied: undefined,
   };

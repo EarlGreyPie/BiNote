@@ -6,6 +6,7 @@ import { optimizeMml } from "./optimizer.js";
 import { parseMml } from "./parser.js";
 import { placeTempo, placeTempoByScore, type TempoMove } from "./tempo-placement.js";
 import { bpmBefore, padScore, scoreEnd, tempoBefore } from "./score-end.js";
+import { pitchlessForOutput } from "./pitchless.js";
 import { audibleTempo, gameReadyText, gameSource, sameTempo, shortestWriting, spliceText, surgicalSource, tempoTokens } from "./tempo-text.js";
 
 /** 트랙마다 게임에 넣을 글. 트랙은 고치면 새 객체가 되므로, 같은 트랙·같은 템포 자리면 다시 쓰지 않는다 */
@@ -71,6 +72,8 @@ export function gameScores(
 ): GameScore[] {
   const moved = new Map<string, TempoMove[]>();
   const profile = getProfile(song.meta.profileId);
+  // 높이와 상관없는 타악기(큰북·심벌즈)는 한 높이로 쓴다 (게임에 넣을 글에만)
+  song = pitchlessForOutput(song, profile);
   const lengths = profile.length;
   const placed = placeTempoByScore({ ...song, tempo: withoutDefaultStart(audibleTempo(song.tempo)) }, maxChords, moved);
   const chunks = scoreChunks(song, maxChords);
@@ -164,6 +167,7 @@ export function gamePaste(
   options: GamePasteOptions,
 ): GamePaste {
   const profile = getProfile(song.meta.profileId);
+  song = pitchlessForOutput(song, profile);
   const lengths = profile.length;
   const order = song.tracks.map((t) => t.id);
   const trackIds = order.filter((id) => selected.includes(id));

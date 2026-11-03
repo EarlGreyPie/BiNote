@@ -11,6 +11,7 @@ import {
   type GameProfile,
   type InstrumentRef,
   type LengthLimit,
+  type Marker,
   type Note,
   type Player,
   type Rat,
@@ -504,10 +505,13 @@ function assemble(
     if (prev && cmp(prev.at, at) === 0) timeSig[timeSig.length - 1] = { at, beats: sig.beats, unit: sig.unit };
     else if (!prev || prev.beats !== sig.beats || prev.unit !== sig.unit) timeSig.push({ at, beats: sig.beats, unit: sig.unit });
   }
+  // 마커는 템포·박자처럼 격자에 맞춰 둔다 (keepTiming·exact면 자리 그대로)
+  const markers: Marker[] = (analysis.markers ?? []).map((m, i) => ({ id: `m${i + 1}`, at: snap(m.at), label: m.label }));
   const song: Song = {
     ...emptySong({ title, author: "", profileId: profile.id }),
     tempo: songTempo,
     timeSig,
+    markers,
     players,
     tracks,
   };

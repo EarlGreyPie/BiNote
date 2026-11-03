@@ -1,7 +1,7 @@
-import { add, cmp, eq, type GameProfile, type Note, type Song } from "@mmlce/core";
+import { add, cmp, eq, type GameProfile, type Note, type Rat, type Song } from "@mmlce/core";
 import { distributeChords } from "./distribute.js";
 import { settleDistributed } from "./edit.js";
-import { splitSong, type SplitResult } from "./split.js";
+import { splitSong, type SplitOptions, type SplitResult } from "./split.js";
 
 /**
  * 악보책 권 수 줄이기. 권 수는 가장 긴 채널이 정하므로, 같은 악기 트랙끼리 음을 옮겨
@@ -22,7 +22,7 @@ export interface FewerBooks {
 /** 권마다 다시 적는 머리(템포·옥타브·길이)와 끝 쉼표 몫을 어림해 한도에서 뺀다 */
 const SHARES = [0.95, 0.88, 0.8];
 
-export function fewerBooks(song: Song, profile: GameProfile, books: number, locked?: ReadonlySet<string>): FewerBooks | undefined {
+export function fewerBooks(song: Song, profile: GameProfile, books: number, locked?: ReadonlySet<string>, fixed?: readonly Rat[]): FewerBooks | undefined {
   if (books < 2) return undefined;
   const target = books - 1;
   for (const share of SHARES) {
@@ -34,7 +34,7 @@ export function fewerBooks(song: Song, profile: GameProfile, books: number, lock
     const compacted = settleDistributed(song, spread.song, profile, locked);
     if (compacted.kept) continue;
     const next = compacted.song;
-    const parts = splitSong(next, profile).parts.length;
+    const parts = splitSong(next, profile, fixed?.length ? { fixed } : {}).parts.length;
     if (parts <= target) return { from: books, to: parts, limit, moved: spread.moved };
   }
   return undefined;
@@ -57,6 +57,10 @@ export interface PlanOptions {
   /** 잠근 트랙 id: 화음 분산에서 음을 빼지도 넣지도 않는다 */
   readonly locked?: ReadonlySet<string>;
   readonly onProgress?: (progress: BookProgress) => void;
+  /** 사용자가 고정한 자르는 자리 (SplitOptions.fixed). 권 수를 셀 때도 늘 지킨다 */
+  readonly fixed?: readonly Rat[];
+  /** 권 끝마다 다른 자리도 찾는다 (SplitOptions.choices). 마지막에 고른 곡을 나눌 때만 찾는다 */
+  readonly choices?: boolean;
 }
 
 /** 음을 옮겨 권을 줄인 내용. from이 없으면 옮기기 전 권 수는 세지 않았다 (옮겨서 한 권에 들어간 경우) */
@@ -86,6 +90,9 @@ export function planBooks(song: Song, profile: GameProfile, options: PlanOptions
   const report = (stage: BookStage) => (fraction: number) => options.onProgress?.({ stage, fraction });
   const limit = profile.charLimitPerScore;
   const locked = options.locked;
+  // 고정 자리는 권 수를 셀 때도 지킨다 (화음을 옮겨 본 곡도 같은 자리에서 자른다)
+  const base: SplitOptions = options.fixed?.length ? { fixed: options.fixed } : {};
+  const choices = options.choices === true;
   const room = spread ? roomFor(song, locked) : undefined;
   const distribute = (channel?: number) => distributeChords(song, profile, { ...(channel === undefined ? {} : { limit: channel }), ...(locked ? { locked } : {}) });
   // 음을 옮긴 곡을 글자 수 줄이기로 다시 쓰고 게임 소리를 확인한다 (화음 분산 명령과 같게, settleDistributed).
@@ -104,13 +111,13 @@ export function planBooks(song: Song, profile: GameProfile, options: PlanOptions
     const one = distribute();
     if (one.moved > 0 && one.over.length === 0) {
       const next = compact.apply(one.song);
-      const result = next && splitSong(next, profile);
+      const result = next && splitSong(next, profile, base);
       if (next && result && !result.needed) return { song: next, result, spread: { to: 1, limit, moved: one.moved } };
     }
   }
 
   // 2) 그대로 나눠 권 수를 센다 (꼼꼼히는 마지막에 고른 곡에만)
-  let plan: BookPlan = { song, result: splitSong(song, profile, { onProgress: report("split") }) };
+  let plan: BookPlan = { song, result: splitSong(song, profile, { ...base, choices, onProgress: report("split") }) };
   const books = plan.result.parts.length;
 
   // 3) 음을 옮겨 권이 줄면 옮긴 곡을 쓴다. 2권부터 한 권 적게까지 차례로 해 본다 (한 권은 1)에서 해 봤다)
@@ -134,7 +141,7 @@ export function planBooks(song: Song, profile: GameProfile, options: PlanOptions
         if (target < books - 1 && moved.over.length > 0) continue;
         const next = compact.apply(moved.song);
         if (!next) continue;
-        const result = splitSong(next, profile);
+        const result = splitSong(next, profile, base);
         if (result.parts.length < plan.result.parts.length) {
           plan = { song: next, result, spread: { from: books, to: result.parts.length, limit: channel, moved: moved.moved } };
         }
@@ -145,11 +152,18 @@ export function planBooks(song: Song, profile: GameProfile, options: PlanOptions
   }
 
   // 4) 꼼꼼히: 고른 곡을 꼼꼼히 다시 나눈다 (권이 줄어드는 자리를 더 찾아본다)
+  /** 지금 plan.result가 다른 자리를 찾은 나누기인지 */
+  let found = plan.song === song;
   if (options.thorough && plan.result.parts.length > 1) {
-    const result = splitSong(plan.song, profile, { thorough: true, onProgress: report("thorough") });
+    const result = splitSong(plan.song, profile, { ...base, choices, thorough: true, onProgress: report("thorough") });
     if (result.parts.length <= plan.result.parts.length) {
+      found = true;
       plan = { ...plan, result, ...(plan.spread ? { spread: { ...plan.spread, to: result.parts.length } } : {}) };
     }
+  }
+  // 화음을 옮긴 곡으로 바꿨으면 그 곡에서 다른 자리를 다시 찾는다 (옮겨 볼 때는 찾지 않았다)
+  if (choices && !found && plan.result.needed) {
+    plan = { ...plan, result: splitSong(plan.song, profile, { ...base, choices }) };
   }
   return plan;
 }

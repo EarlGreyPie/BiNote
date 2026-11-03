@@ -4,13 +4,16 @@ import { loadStored, saveStored } from "./persist";
  * 악보책 나누기 방식 (이 브라우저에 기억). 나누기 창에서 바꾼다.
  * spread: 나누기 전에 같은 악기 트랙끼리 화음을 고르게 나눈다 (기본 켬. 끄면 악보책 나누기만)
  * thorough: 꼼꼼히 나누기. 곡이 길어도 정확한 최소 권 수를 찾는다 (기본 끔, 오래 걸린다)
+ * preview: 피아노롤 위에 예상 분할 위치를 보인다 (보기 메뉴·글자 수 맞추기 창, 기본 끔)
  */
 const SPREAD = "mmlce.splitSpread";
 const THOROUGH = "mmlce.splitThorough";
+const PREVIEW = "mmlce.splitPreview";
 
 export const splitPrefs = $state({
   spread: loadStored(SPREAD, (raw) => raw !== "0"),
   thorough: loadStored(THOROUGH, (raw) => raw === "1"),
+  preview: loadStored(PREVIEW, (raw) => raw === "1"),
 });
 
 export function setSplitSpread(on: boolean): void {
@@ -21,4 +24,9 @@ export function setSplitSpread(on: boolean): void {
 export function setSplitThorough(on: boolean): void {
   splitPrefs.thorough = on;
   saveStored(THOROUGH, on ? "1" : "0");
+}
+
+export function setSplitPreview(on: boolean): void {
+  splitPrefs.preview = on;
+  saveStored(PREVIEW, on ? "1" : "0");
 }

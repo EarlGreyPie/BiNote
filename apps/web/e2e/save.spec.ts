@@ -130,3 +130,57 @@ test("마비꼬로 저장 창에서 뺀 트랙은 .mmi에 들어가지 않는다
   expect(text.match(/^mml-track=.*$/gm)).toEqual(["mml-track=MML@t120l8cdefgab>c,,;"]);
   expect(errors).toEqual([]);
 });
+
+test("마비꼬로 저장 직접 묶기: 마비꼬 트랙을 더해 트랙을 나눠 넣는다", async ({ page }, testInfo) => {
+  const errors = watchErrors(page);
+  await openApp(page);
+  await pasteAsNewSong(page, SAMPLE_MML);
+  await menu(page, "파일", /다른 형식으로 저장/);
+  await page.getByRole("menuitem", { name: /마비꼬로 저장/ }).click();
+  const dialog = page.locator("dialog[open]").filter({ hasText: "마비꼬(.mmi)로 저장" });
+  await dialog.getByLabel("직접 묶기").check();
+  await dialog.getByRole("button", { name: "마비꼬 트랙 더하기" }).click();
+  await dialog.getByRole("combobox", { name: "연주자 1-2 넣을 곳" }).selectOption({ label: "트랙 2" });
+  await dialog.getByRole("textbox", { name: "마비꼬 트랙 이름" }).nth(1).fill("반주");
+  await expect(dialog.getByText("마비꼬 트랙 2개로 저장")).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("mmi-manual.png") });
+  const download = page.waitForEvent("download");
+  await dialog.getByRole("button", { name: "마비꼬로 저장" }).click();
+  const path = testInfo.outputPath("manual.mmi");
+  await (await download).saveAs(path);
+  const text = readFileSync(path, "utf8");
+  expect(text.match(/^mml-track=.*$/gm)).toEqual(["mml-track=MML@t120l8cdefgab>c,,;", "mml-track=MML@o3l2ceg,,;"]);
+  expect(text).toContain("name=반주\n");
+  expect(errors).toEqual([]);
+});
+
+test("마비꼬 가져오기 창: 마비꼬 트랙 둘을 악보 하나로 모아 연다", async ({ page }, testInfo) => {
+  const errors = watchErrors(page);
+  await openApp(page);
+  const mmi = ["[mml-score]", "tempo=0T120", "mml-track=MML@t120c4,e4,g4;", "name=악보 1 1", "program=21", "mml-track=MML@c1,,;", "name=악보 1 2", "program=0"].join("\n");
+  const chooser = page.waitForEvent("filechooser");
+  await page.getByRole("button", { name: "악보 열기", exact: true }).click();
+  await (await chooser).setFiles({ name: "둘.mmi", mimeType: "text/plain", buffer: Buffer.from(mmi) });
+  const dialog = page.locator("dialog[open]").filter({ hasText: "마비꼬(.mmi) 가져오기" });
+  await expect(dialog.getByText("BiNote 악보 1개로 열기")).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("mmi-import.png") });
+  await dialog.getByRole("button", { name: "열기", exact: true }).click();
+  await expect(trackTabs(page)).toHaveCount(4);
+  expect(errors).toEqual([]);
+});
+
+test("마비꼬 가져오기 창: 어긋난 길이가 있는 마비꼬 트랙에 수를 미리 보여 주고, 열면 어긋난 길이 창이 뜬다", async ({ page }) => {
+  const errors = watchErrors(page);
+  await openApp(page);
+  const mmi = ["[mml-score]", "tempo=0T120", "mml-track=MML@l64d+e21g8c4,,;", "name=꼬임", "program=0", "mml-track=MML@c1,,;", "name=반듯", "program=0"].join("\n");
+  const chooser = page.waitForEvent("filechooser");
+  await page.getByRole("button", { name: "악보 열기", exact: true }).click();
+  await (await chooser).setFiles({ name: "꼬임.mmi", mimeType: "text/plain", buffer: Buffer.from(mmi) });
+  const dialog = page.locator("dialog[open]").filter({ hasText: "마비꼬(.mmi) 가져오기" });
+  await expect(dialog.locator("li").filter({ hasText: "꼬임" }).getByText("어긋난 길이 1곳")).toBeVisible();
+  await expect(dialog.locator("li").filter({ hasText: "반듯" }).getByText(/어긋난 길이/)).toHaveCount(0);
+  await expect(dialog.getByText("어긋난 길이가 1곳 있습니다.", { exact: false })).toBeVisible();
+  await dialog.getByRole("button", { name: "열기", exact: true }).click();
+  await expect(page.locator("dialog[open]").filter({ hasText: "어긋난 길이 찾기" })).toBeVisible();
+  expect(errors).toEqual([]);
+});

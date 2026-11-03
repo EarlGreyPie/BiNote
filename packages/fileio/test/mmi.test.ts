@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { rat } from "@mmlce/core";
-import { mmiLayout, readMmi, readProject, writeMmi, writeProject } from "../src/index.js";
+import { groupMmiPlayers, mmiLayout, readMmi, readProject, recommendedMmiGroups, writeMmi, writeProject } from "../src/index.js";
 
 const SAMPLE = [
   "[mml-score]",
@@ -334,5 +334,103 @@ describe("writeMmi 트랙 고르기", () => {
     const lowered = { ...a, tracks: a.tracks.map(({ mml: _mml, ...t }) => ({ ...t, notes: t.notes.map((n) => ({ ...n, pitch: 5 })) })) };
     const { diagnostics } = writeMmi(lowered);
     expect(diagnostics.filter((d) => d.code === "pitch-unwritable")).toHaveLength(1);
+  });
+});
+
+describe("writeMmi 직접 묶기 (layout)", () => {
+  const SIX = [
+    "[mml-score]",
+    "tempo=0T120",
+    "mml-track=MML@t120c4,d4,e4;",
+    "name=A",
+    "program=21",
+    "mml-track=MML@f4,g4,a4;",
+    "name=B",
+    "program=0",
+  ].join("\n");
+
+  it("이름·순서·칸을 고른 대로 쓰고, 고르지 않은 트랙은 뺀다", () => {
+    const a = readMmi(SIX).song;
+    const [c, d, e, f, , gA] = a.tracks.map((t) => t.id) as [string, string, string, string, string, string];
+    const { text } = writeMmi(a, { layout: [{ name: "둘째", parts: [f, c] }, { name: "첫째", parts: [e], song: d }] });
+    expect(text.match(/^name=.*$/gm)).toEqual(["name=둘째", "name=첫째"]);
+    const back = readMmi(text).song;
+    expect(back.tracks.map((t) => [t.name, t.notes.map((n) => n.pitch)])).toEqual([
+      ["둘째 멜로디", [65]],
+      ["둘째 화음1", [60]],
+      ["첫째 멜로디", [64]],
+      ["첫째 노래", [62]],
+    ]);
+    // 첫 칸 트랙의 악기(류트 0)를 쓰고, 악기가 다른 트랙(피아노 c)을 함께 넣었다고 알린다
+    expect(text).toContain("name=둘째\nprogram=0\n");
+    expect(writeMmi(a, { layout: [{ name: "둘째", parts: [f, c] }] }).diagnostics.filter((x) => x.code === "mmi-mixed-track")).toEqual([
+      { level: "warning", code: "mmi-mixed-track", params: { count: 1 }, span: [0, 0], where: "둘째" },
+    ]);
+    expect(gA).toBeDefined();
+  });
+
+  it("칸 3개를 넘는 트랙·두 번 넣은 트랙·빈 mml-track은 쓰지 않는다", () => {
+    const a = readMmi(SIX).song;
+    const ids = a.tracks.map((t) => t.id);
+    const { text } = writeMmi(a, { layout: [{ name: "X", parts: [ids[0]!, ids[1]!, ids[2]!, ids[3]!] }, { name: "Y", parts: [ids[0]!] }, { name: "Z", parts: [] }] });
+    expect(text.match(/^name=.*$/gm)).toEqual(["name=X"]);
+    expect(readMmi(text).song.tracks).toHaveLength(3);
+  });
+});
+
+describe("마비꼬 가져오기 악보 묶기", () => {
+  // BiNote가 6트랙 악보 하나를 저장한 꼴: 피아노 3 + 피아노 1 + 류트 1 + 노래
+  const SAVED = [
+    "[mml-score]",
+    "tempo=0T120",
+    "mml-track=MML@t120c4,d4,e4;",
+    "name=악보 1 1",
+    "program=21",
+    "mml-track=MML@f4,,,g4;",
+    "name=악보 1 2",
+    "program=21",
+    "songProgram=5",
+    "mml-track=MML@a4,,;",
+    "name=악보 1 3",
+    "program=0",
+    "mml-track=MML@b4,c4,d4;",
+    "name=다른 곡",
+    "program=21",
+  ].join("\n");
+
+  it("권장: 차례로 화음 수까지 한 악보로 모으고, 노래 칸은 따로, 번호만 다른 이름은 원래 이름으로", () => {
+    const a = readMmi(SAVED).song;
+    const groups = recommendedMmiGroups(a, 6);
+    expect(groups.map((g) => [g.name, g.players.length])).toEqual([
+      ["악보 1", 3],
+      ["악보 1 2 노래", 1],
+      ["다른 곡", 1],
+    ]);
+    const b = groupMmiPlayers(a, groups);
+    expect(b.players.map((p) => [p.name, p.instrument.canonical])).toEqual([
+      ["악보 1", "piano"],
+      ["악보 1 2 노래", a.players.find((p) => p.name === "악보 1 2 노래")!.instrument.canonical],
+      ["다른 곡", "piano"],
+    ]);
+    const first = b.tracks.filter((t) => t.playerId === b.players[0]!.id);
+    expect(first.map((t) => t.notes[0]!.pitch)).toEqual([60, 62, 64, 65, 69]);
+    // 류트 마비꼬 트랙에서 온 트랙만 트랙 악기를 둔다
+    expect(first.map((t) => t.instrument?.canonical)).toEqual([undefined, undefined, undefined, undefined, "lute"]);
+  });
+
+  it("화음 수를 넘으면 새 악보, 악기별 화음 수 함수도 받는다", () => {
+    const a = readMmi(SAVED).song;
+    expect(recommendedMmiGroups(a, 3).map((g) => g.players.length)).toEqual([1, 2, 1, 1]);
+    expect(recommendedMmiGroups(a, (inst) => (inst === "piano" ? 4 : 6)).map((g) => g.players.length)).toEqual([2, 1, 2]);
+  });
+
+  it("고른 묶음대로: 빠진 마비꼬 트랙은 가져오지 않고, 다시 저장하면 같은 음", () => {
+    const a = readMmi(SAVED).song;
+    const ids = a.players.map((p) => p.id);
+    const b = groupMmiPlayers(a, [{ name: "둘", players: [ids.at(-1)!, ids[0]!] }]);
+    expect(b.players.map((p) => p.name)).toEqual(["둘"]);
+    expect(b.tracks.map((t) => t.notes[0]!.pitch)).toEqual([71, 60, 62, 60, 62, 64]);
+    const back = readMmi(writeMmi(b).text).song;
+    expect(back.tracks.map((t) => t.notes[0]!.pitch)).toEqual([71, 60, 62, 60, 62, 64]);
   });
 });

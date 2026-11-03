@@ -72,6 +72,9 @@
     projectFromObject,
     ProjectError,
     writeMmi,
+    type WriteMmiOptions,
+    groupMmiPlayers,
+    recommendedMmiGroups,
     writeProject,
     type FileDiagnostic,
   } from "@mmlce/fileio";
@@ -237,6 +240,8 @@
   import MasterVolume from "./lib/MasterVolume.svelte";
   import AddScoreDialog from "./lib/AddScoreDialog.svelte";
   import MmiExportDialog from "./lib/MmiExportDialog.svelte";
+  import MmiImportDialog from "./lib/MmiImportDialog.svelte";
+  import { mmiPrefs } from "./lib/mmiPrefs.svelte";
   import SongInfoDialog from "./lib/SongInfoDialog.svelte";
   import { setSongInfo, songInfoOf, type SongInfo } from "./lib/songInfo";
   import HelpPopover from "./lib/HelpPopover.svelte";
@@ -290,14 +295,13 @@
   import KeymapDialog from "./lib/KeymapDialog.svelte";
   import AboutDialog from "./lib/AboutDialog.svelte";
   import ReleaseNotesDialog from "./lib/ReleaseNotesDialog.svelte";
-  import SplitPanel from "./lib/SplitPanel.svelte";
-  import { setSplitSpread, setSplitThorough, splitPrefs } from "./lib/splitPrefs.svelte";
+  import FitDialog from "./lib/FitDialog.svelte";
+  import { bookMarks, withFixed, type BookMark, type FitTab } from "./lib/splitView";
+  import { setSplitPreview, setSplitSpread, setSplitThorough, splitPrefs } from "./lib/splitPrefs.svelte";
   import { playPrefs, setPlayCountIn, setPlayMetronome, setPlaySpeed } from "./lib/playPrefs.svelte";
   import { PLAY_SPEEDS } from "./lib/playSpeed";
   import OutputPanel from "./lib/OutputPanel.svelte";
   import OptimizePreview from "./lib/OptimizePreview.svelte";
-  import SpreadDialog from "./lib/SpreadDialog.svelte";
-  import MergeDialog from "./lib/MergeDialog.svelte";
   import { outputRows, previewRows, tempoAdvice, type TempoAdvice } from "./lib/output";
   import { brokenRewrittenTracks, changedTrackIds, tempoConvertPlan, type TempoConvertOutcome } from "./lib/tempoConvert";
   import { midiStepLength, stepCursorFor, notesEnd, placeChord, previousVolume, volumeForVelocity } from "./lib/midiInput";
@@ -1188,6 +1192,24 @@
 
   /** 나누기 결과. song은 나눌 때의 곡(바뀌면 지운다), plan.song은 실제로 나눈 곡(화음을 고르게 나눴으면 옮긴 곡) */
   let split = $state.raw<{ song: Song; plan: BookPlan; locked: string } | undefined>(undefined);
+  /** 악보책 나누기에서 고정한 자르는 자리 (이 곡을 여는 동안만. 바꾸면 다시 나눈다) */
+  let splitFixed = $state.raw<readonly Rat[]>([]);
+  /** 나누기에 실패한 곡 (글자 수 맞추기 창이 같은 곡을 거듭 나누지 않게) */
+  let splitFailed = $state.raw<Song | undefined>(undefined);
+  /** 글자 수 맞추기 창: 연 칸과 화음 분산 칸에서 처음 고를 보내는 트랙 */
+  let fitOpen = $state<{ tab: FitTab; source?: string | undefined } | undefined>(undefined);
+  function openFit(tab: FitTab, source?: string) {
+    fitOpen = { tab, ...(source ? { source } : {}) };
+  }
+  /** 자르는 자리를 고정하거나 풀고 다시 나눈다 */
+  function fixCut(at: Rat, on: boolean) {
+    splitFixed = withFixed(splitFixed, at, on);
+    void runSplit();
+  }
+  function unfixAll() {
+    splitFixed = [];
+    void runSplit();
+  }
   /** 잠금 상태 비교용 */
   const lockKey = (ids: Iterable<string>) => [...ids].sort().join("\n");
   /** 나누는 중이면 단계와 진행률 (0~1). 계산은 Web Worker에서 한다 */
@@ -1234,10 +1256,6 @@
     optimizing = { before: song, after: r.song, ...(r.kept ? { kept: r.kept } : {}) };
   }
 
-  /** 화음 분산 창 (곡 메뉴·MML로 내보내기 창). source = 처음 고를 보내는 트랙 */
-  let spreadOpen = $state<{ source?: string | undefined } | undefined>(undefined);
-  /** 화음 병합 창 (곡 메뉴) */
-  let mergeOpen = $state(false);
 
   /** 분산 창의 [빈 트랙 더하기]: 그 연주자 마지막 트랙 뒤에 빈 트랙 (실행 취소 한 칸) */
   function addSpreadTrack(playerId: string) {
@@ -1303,7 +1321,16 @@
     split = undefined;
     splitProgress = { stage: splitPrefs.spread ? "spread" : "split", fraction: 0 };
     const token = ++splitToken;
-    const request = { song: target, profile: $state.snapshot(profile) as GameProfile, spread: splitPrefs.spread, thorough: splitPrefs.thorough, locked: [...lockedIds] };
+    splitFailed = undefined;
+    const request = {
+      song: target,
+      profile: $state.snapshot(profile) as GameProfile,
+      spread: splitPrefs.spread,
+      thorough: splitPrefs.thorough,
+      locked: [...lockedIds],
+      fixed: [...splitFixed],
+      choices: true,
+    };
     const locked = lockKey(request.locked);
     splitLocked = locked;
     const plan = await splitRunner.run(request, (p) => {
@@ -1315,6 +1342,7 @@
     splitProgress = undefined;
     // 계산이 실패했으면 진단 정보에 남긴다 (나누기 표는 비어 있는 채로)
     if (!plan && splitRunner.lastError) errorLog.note("split", splitRunner.lastError);
+    if (!plan && song === target) splitFailed = target;
     // 계산하는 동안 잠금이 바뀌었으면 옛 잠금으로 옮긴 결과이므로 버리고 다시 나눈다
     if (plan && song === target && lockKey(lockedIds) !== locked) return void runSplit();
     if (plan && song === target) {
@@ -1330,7 +1358,7 @@
     if (books < 2) return;
     fewer = { song: target, value: "checking" };
     const locked = lockKey(lockedIds);
-    const value = await booksRunner.run({ song: target, profile: $state.snapshot(profile) as GameProfile, books, locked: [...lockedIds] });
+    const value = await booksRunner.run({ song: target, profile: $state.snapshot(profile) as GameProfile, books, locked: [...lockedIds], fixed: [...splitFixed] });
     // 잠금이 바뀌었으면 쓰지 않는다 (다시 나누면서 새로 계산한다)
     if (fewer?.song === target && lockKey(lockedIds) === locked) fewer = { song: target, value };
   }
@@ -1357,6 +1385,52 @@
     untrack(() => {
       const stale = (split && split.song === song && split.locked !== now) || (splitTarget && splitTarget === song && splitLocked !== now);
       if (stale) void runSplit();
+    });
+  });
+  /**
+   * 피아노롤 위 예상 분할 위치 (보기 메뉴). 나누기 창 결과가 지금 곡 것이면 그것을 쓰고, 아니면 고친 뒤 잠깐 쉬었을 때
+   * 뒤(Web Worker)에서 빠른 나누기로 다시 나눠 본다 (꼼꼼히 나누기는 하지 않는다). 다시 세는 동안은 앞 결과를 그대로 보인다
+   */
+  let previewSplit = $state.raw<{ song: Song; key: string; marks: BookMark[] } | undefined>(undefined);
+  const previewRunner = splitJob();
+  let previewToken = 0;
+  $effect(() => {
+    const on = splitPrefs.preview;
+    const s = song;
+    const fixed = splitFixed;
+    const spread = splitPrefs.spread;
+    const locked = [...lockedIds];
+    if (!on || !s) {
+      previewToken++;
+      previewRunner.cancel();
+      return;
+    }
+    // 곡이 같아도 잠금·고정 자리·분산 설정이 바뀌면 나누는 자리가 달라지므로 그 값까지 함께 견준다
+    const key = previewKey(spread, locked, fixed);
+    if (untrack(() => (split?.song === s && split.locked === lockKey(locked)) || (previewSplit?.song === s && previewSplit.key === key))) return;
+    const token = ++previewToken;
+    const timer = setTimeout(async () => {
+      const plan = await previewRunner.run({ song: s, profile: $state.snapshot(profile) as GameProfile, spread, thorough: false, locked, fixed: [...fixed] });
+      if (token === previewToken && plan) previewSplit = { song: s, key, marks: bookMarks(plan.result) };
+    }, SPLIT_PREVIEW_DELAY_MS);
+    return () => clearTimeout(timer);
+  });
+  /** 롤 미리보기를 다시 셀지 견주는 값: 나누기 입력 가운데 곡 밖에 있는 것 */
+  function previewKey(spread: unknown, locked: readonly string[], fixed: readonly Rat[]): string {
+    return JSON.stringify([spread, lockKey(locked), fixed.map((r) => `${r.n}/${r.d}`)]);
+  }
+  /** 피아노롤에 그릴 자르는 자리 */
+  const rollBooks = $derived.by((): readonly BookMark[] | undefined => {
+    if (!splitPrefs.preview || !song) return undefined;
+    if (split?.song === song) return bookMarks(split.plan.result);
+    return previewSplit?.marks;
+  });
+  // 글자 수 맞추기 창의 악보책 나누기 칸을 보는 동안은 곡이 바뀌면(칸에서 적용·실행 취소) 다시 나눈다
+  $effect(() => {
+    const now = song;
+    const want = fitOpen?.tab === "split";
+    untrack(() => {
+      if (want && now && split?.song !== now && splitTarget !== now && splitFailed !== now) void runSplit();
     });
   });
   // 나누는 동안 곡이 바뀌면 (편집·열기) 계산을 멈춘다: 결과가 옛 곡 것이라 쓸 수 없다
@@ -1423,6 +1497,12 @@
     }
     try {
       const result = await openScore(file);
+      // 마비꼬 .mmi: 마비꼬 트랙마다 넣을 악보를 고르는 창을 먼저 연다 (권장 설정으로 바로 열게 해 두었으면 창 없이 모은다)
+      if (!result.editor && /\.mmi$/i.test(file.name)) {
+        if (mmiPrefs.importQuick) openMmi(groupMmiPlayers(result.song, recommendedMmiGroups(result.song, mmiChordsOf(result.song))), file.name, handle);
+        else mmiImport = { song: result.song, name: file.name, handle };
+        return;
+      }
       const state = result.editor ? parseEditorState(result.editor, result.song) : undefined;
       openSong(result.song, file.name, handle, { recorded: state });
       if (result.editor && state) {
@@ -1433,6 +1513,19 @@
     } catch (e) {
       error = e instanceof ProjectError ? `${file.name}: ${diag(e)}` : t("ui.openFailed", { name: file.name });
     }
+  }
+
+  /** 마비꼬 가져오기 창에 띄운 곡 (readMmi로 읽은 그대로, 마비꼬 트랙 하나 = 연주자 하나) */
+  let mmiImport = $state<{ song: Song; name: string; handle?: FileSystemFileHandle | undefined } | undefined>();
+  /** 곡 프로필의 악기별 악보 화음 수 */
+  function mmiChordsOf(opened: Song): (instrument: string) => number {
+    const p = getProfile(opened.meta.profileId);
+    return (instrument) => maxChordsOf(p, instrument);
+  }
+  /** 마비꼬 트랙을 악보로 모은 곡을 연다 (3MLE처럼 어긋난 길이 찾기를 이어서 띄운다) */
+  function openMmi(grouped: Song, name: string, handle?: FileSystemFileHandle) {
+    openSong(grouped, name, handle);
+    offerOffgrid(grouped);
   }
 
   /** 실험실: MusicXML(.musicxml·.xml, 압축 .mxl)을 MIDI 가져오기 창으로 연다 */
@@ -1715,6 +1808,8 @@
   const UPDATE_SAVE_WAIT_MS = 15_000;
   /** 고친 뒤 이만큼 쉬면 내보낼 때 글자 수를 다시 센다 */
   const EXPORT_CHARS_DELAY_MS = 300;
+  /** 피아노롤 예상 분할 위치: 고친 뒤 이만큼 쉬면 다시 나눠 본다 (ms) */
+  const SPLIT_PREVIEW_DELAY_MS = 1200;
 
   /**
    * 새 판으로 바꾸기 전: 화면 입력을 막고, 편집 중인 입력을 넣고 자동 보존한다. 막은 뒤라 기다리는 동안
@@ -1966,8 +2061,7 @@
     tupletOpen = false;
     addScoreOpen = false;
     optimizing = undefined;
-    spreadOpen = undefined;
-    mergeOpen = false;
+    fitOpen = undefined;
     outputOpen = false;
   }
 
@@ -2100,6 +2194,9 @@
     meterOpen = fresh.meterOpen;
     songInfoOpen = fresh.songInfoOpen;
     split = fresh.split;
+    previewSplit = undefined;
+    splitFixed = fresh.splitFixed;
+    fitOpen = fresh.fitOpen;
     compactNote = fresh.compactNote;
     exportCopied = fresh.exportCopied;
     Object.assign(viewMemory, emptyViewMemory());
@@ -4173,10 +4270,12 @@
     {
       label: t("ui.menuFitChars"),
       items: [
-        { label: t("ui.distribute") + "…", title: t("ui.distributeHelp"), disabled: !song, run: () => (spreadOpen = {}) },
-        { label: t("ui.merge") + "…", title: t("ui.mergeHelp"), disabled: !song, run: () => (mergeOpen = true) },
+        // 분산·병합·나누기는 글자 수 맞추기 창의 그 칸을 연다. MML 글 정리는 게임 글자 수를 바꾸지 않아 창 밖에 둔다
+        { label: t("ui.distribute") + "…", title: t("ui.distributeHelp"), disabled: !song, run: () => openFit("spread") },
+        { label: t("ui.merge") + "…", title: t("ui.mergeHelp"), disabled: !song, run: () => openFit("merge") },
+        { label: t("ui.split") + "…", disabled: !song, run: () => openFit("split") },
+        { separator: true },
         { label: t("ui.compact") + "…", title: t("ui.compactHelp"), disabled: !song, run: compact },
-        { label: t("ui.split") + "…", disabled: !song || splitting, run: runSplit },
       ],
     },
   ]);
@@ -4604,6 +4703,7 @@
     { label: t("ui.verticalRoll"), title: t("ui.verticalRollHelp"), checked: orientation === "vertical", hint: keyOf("view.orientation"), run: () => run("view.orientation") },
     { separator: true },
     { label: t("ui.events"), title: t("ui.eventsHelp"), checked: showEvents, run: () => (showEvents = !showEvents) },
+    { label: t("ui.splitPreview"), title: t("ui.splitPreviewHelp"), checked: splitPrefs.preview, run: () => setSplitPreview(!splitPrefs.preview) },
     { label: t("ui.noteList"), title: t("ui.noteListHelp"), checked: noteListOpen, run: () => (noteListOpen = !noteListOpen) },
     { label: t("ui.pauseMark"), title: t("ui.pauseMarkHelp"), checked: pauseMark, run: togglePauseMark },
     { label: t("ui.pickBackground"), title: t("ui.pickBackgroundHelp"), checked: pickBackground, run: togglePickBackground },
@@ -4768,12 +4868,15 @@
   }
 
   function saveMmi() {
-    if (song) mmiExportOpen = true;
+    if (!song) return;
+    // 권장 설정으로 바로 저장하게 해 두었으면 창 없이 자동 묶기·모든 트랙으로
+    if (mmiPrefs.exportQuick) writeMmiFile({});
+    else mmiExportOpen = true;
   }
 
-  function writeMmiFile(trackIds: string[]) {
+  function writeMmiFile(options: WriteMmiOptions) {
     if (!song) return;
-    const result = writeMmi(song, { trackIds });
+    const result = writeMmi(song, options);
     void store(new TextEncoder().encode(result.text), `${baseName()}.mmi`);
     notices = result.diagnostics;
     offerUtf8 = false;
@@ -5022,7 +5125,7 @@
   function onKeydown(event: KeyboardEvent) {
     // 편집기가 이미 처리한 키(편집기 안 실행 취소 등)는 건드리지 않는다
     if (picking && !event.defaultPrevented) return pickingKey(event);
-    if (event.defaultPrevented || showKeymap || paste || midi || transposing || arpeggio || slide || grace || trill || labDialog || reverbDialog || voicing || settings || meterOpen || songInfoOpen || eventEdit || addScoreOpen || mmiExportOpen || recoverOpen || outputOpen || optimizing || spreadOpen || mergeOpen || event.isComposing) return;
+    if (event.defaultPrevented || showKeymap || paste || midi || transposing || arpeggio || slide || grace || trill || labDialog || reverbDialog || voicing || settings || meterOpen || songInfoOpen || eventEdit || addScoreOpen || mmiExportOpen || recoverOpen || outputOpen || optimizing || fitOpen || event.isComposing) return;
     // 위 목록에 없는 대화 상자라도 열려 있으면 뒤의 곡에 단축키를 보내지 않는다
     if (document.querySelector("dialog[open]")) return;
     const target = event.target as HTMLElement | null;
@@ -5200,10 +5303,10 @@
     { label: t("ui.addTrackMenu"), title: t("ui.addTrackHelp"), disabled: !activePlayer, run: addTrackToPlayer },
     { label: t("ui.addScoreMenu"), title: t("ui.addPlayerHelp"), run: () => (addScoreOpen = true) },
     { separator: true },
-    { label: t("ui.distribute") + "…", title: t("ui.distributeHelp"), run: () => (spreadOpen = {}) },
-    { label: t("ui.merge") + "…", title: t("ui.mergeHelp"), run: () => (mergeOpen = true) },
+    { label: t("ui.distribute") + "…", title: t("ui.distributeHelp"), run: () => openFit("spread") },
+    { label: t("ui.merge") + "…", title: t("ui.mergeHelp"), run: () => openFit("merge") },
+    { label: t("ui.split") + "…", run: () => openFit("split") },
     { label: t("ui.compact") + "…", title: t("ui.compactHelp"), run: compact },
-    { label: t("ui.split") + "…", disabled: splitting, run: runSplit },
     { label: t("ui.outputMenu"), title: t("ui.outputMenuHelp"), run: openOutput },
   ]);
 
@@ -5655,6 +5758,16 @@
 {#if addScoreOpen}
   <AddScoreDialog initial="piano" onadd={addNewPlayer} onclose={() => (addScoreOpen = false)} />
 {/if}
+{#if mmiImport}
+  {@const pending = mmiImport}
+  <MmiImportDialog
+    song={pending.song}
+    chords={getProfile(pending.song.meta.profileId).maxChordsPerPlayer}
+    chordsOf={mmiChordsOf(pending.song)}
+    onopen={(groups) => openMmi(groupMmiPlayers(pending.song, groups), pending.name, pending.handle)}
+    onclose={() => (mmiImport = undefined)}
+  />
+{/if}
 {#if mmiExportOpen && song}
   <MmiExportDialog {song} onsave={writeMmiFile} onclose={() => (mmiExportOpen = false)} />
 {/if}
@@ -5936,6 +6049,7 @@
           rate={playback.rate}
           {cursor}
           {loop}
+          books={rollBooks}
           oncursor={(t) => (cursor = t)}
           onseek={seek}
           {showEvents}
@@ -6095,35 +6209,6 @@
                 />
               </div>
             {/if}
-            {#if split && split.song === song}
-              <div class="split-wrap">
-                <SplitPanel
-                  song={split.plan.song}
-                  result={split.plan.result}
-                  spread={split.plan.spread}
-                  limit={profile.charLimitPerScore}
-                  maxChords={chordsOf}
-                  pasteLimit={profile.maxChordsPerPlayer}
-                  fewer={fewer?.song === split.song ? fewer.value : undefined}
-                  onfewer={applyFewer}
-                  spreadOn={splitPrefs.spread}
-                  thoroughOn={splitPrefs.thorough}
-                  onspread={(on) => {
-                    setSplitSpread(on);
-                    void runSplit();
-                  }}
-                  onthorough={(on) => {
-                    setSplitThorough(on);
-                    void runSplit();
-                  }}
-                  onclose={() => {
-                    booksRunner.cancel();
-                    fewer = undefined;
-                    split = undefined;
-                  }}
-                />
-              </div>
-            {/if}
           {/snippet}
         </TrackPane>
       {/if}
@@ -6172,28 +6257,51 @@
     onclose={() => (optimizing = undefined)}
   />
 {/if}
-{#if spreadOpen && song}
-  <SpreadDialog
+{#if fitOpen && song}
+  <FitDialog
     {song}
-    {colors}
     {profile}
+    {colors}
     locked={lockedIds}
-    initialSource={spreadOpen.source}
+    {activeTrackId}
+    chars={exportCount?.song === song ? exportCount.chars : undefined}
+    {chordsOf}
+    tab={fitOpen.tab}
+    ontab={(tab) => fitOpen && (fitOpen = { ...fitOpen, tab })}
+    spreadSource={fitOpen.source}
     where={scoreLabel}
     {newScoreOnAdd}
     onseek={seekTo}
     onaddtrack={addSpreadTrack}
-    onsplit={() => {
-      spreadOpen = undefined;
-      outputOpen = false;
+    onapply={applyChordTool}
+    onclose={() => {
+      fitOpen = undefined;
+      booksRunner.cancel();
+      fewer = undefined;
+    }}
+    split={split && split.song === song ? split.plan : undefined}
+    {splitProgress}
+    splitError={splitFailed === song ? t("ui.splitFailed") : undefined}
+    fewer={split && fewer?.song === split.song ? fewer.value : undefined}
+    onfewer={applyFewer}
+    spreadOn={splitPrefs.spread}
+    thoroughOn={splitPrefs.thorough}
+    onspread={(on) => {
+      setSplitSpread(on);
       void runSplit();
     }}
-    onapply={applyChordTool}
-    onclose={() => (spreadOpen = undefined)}
+    onthorough={(on) => {
+      setSplitThorough(on);
+      void runSplit();
+    }}
+    fixed={splitFixed}
+    cursor={editCursor()}
+    onfix={fixCut}
+    onunfixall={unfixAll}
+    previewOn={splitPrefs.preview}
+    onpreview={setSplitPreview}
+    progressLabel={(p) => t(SPLIT_STAGE[p.stage])}
   />
-{/if}
-{#if mergeOpen && song}
-  <MergeDialog {song} {colors} {profile} locked={lockedIds} {activeTrackId} where={scoreLabel} onseek={seekTo} onapply={applyChordTool} onclose={() => (mergeOpen = false)} />
 {/if}
 {#if output}
   <OutputPanel
@@ -6207,8 +6315,8 @@
     ontrack={(id) => (activeTrackId = id)}
     onseek={seekTo}
     onconvert={convertAdviceTempo}
-    ondistribute={(source) => (spreadOpen = { source })}
-    onsplit={runSplit}
+    ondistribute={(source) => openFit("spread", source)}
+    onsplit={() => openFit("split")}
     onchecks={() => (statusPanel = "checks")}
     onclose={() => (outputOpen = false)}
   />
