@@ -1,4 +1,4 @@
-import { emptySong, getProfile, PROFILES, trackInstrument, ZERO, type Player, type Song, type TempoEvent, type Track } from "@mmlce/core";
+import { emptySong, getProfile, mul, PROFILES, rat, trackInstrument, ZERO, type Player, type Rat, type Song, type TempoEvent, type Track } from "@mmlce/core";
 import { bpmBefore, optimizeMml, padScore, placeTempoByScore, scoreEnd, scoreTrackIds, songChordsPerScore, type TempoMove } from "@mmlce/mml";
 import { encodeCp949 } from "./cp949.js";
 import { channelToTrack, idMaker, instrumentFromProgram, mergeTempo, type ChannelTempo, verbatimTexts, type FileDiagnostic } from "./common.js";
@@ -173,6 +173,14 @@ function tempoByTrack(song: Song): { placed: TempoEvent[][]; moved: number } {
   return { placed: song.tracks.map((t) => byScore.get(t.id) ?? []), moved: [...moved.values()].reduce((sum, list) => sum + list.length, 0) };
 }
 
+/** 3MLE가 길이를 세는 틱 (TimeBase, 4분음표 하나) */
+const THREEMLE_TPQN = 960;
+
+/** 3MLE 틱(온음표 3840칸)에 정수로 떨어지는지. 5·7·9연음 등은 3MLE가 틱을 버려 셈해 조금씩 밀린다 */
+function onThreeMleGrid(at: Rat): boolean {
+  return mul(at, rat(THREEMLE_TPQN * 4)).d === 1;
+}
+
 /** 곡을 3MLE 파일 문자열로 쓴다. 바이트로 바꿀 때는 encode3mle를 쓴다. */
 export function write3mle(song: Song, options: Write3mleOptions = {}): { text: string; diagnostics: FileDiagnostic[] } {
   const diagnostics: FileDiagnostic[] = [];
@@ -219,6 +227,11 @@ export function write3mle(song: Song, options: Write3mleOptions = {}): { text: s
       const padded = padScore(ks.map((k) => bodies[k]!), end, bpmBefore(song.tempo, end), profile.length, undefined, profile.charLimitPerScore);
       ks.forEach((k, j) => (bodies[k] = padded[j]!));
     }
+  }
+  for (const track of song.tracks) {
+    // 글은 정확한 길이 그대로 쓰지만, 3MLE는 틱 정수로 셈해 그 프로그램 안에서만 밀린다 (게임은 정확히 셈한다, 모바일 실측)
+    const offGrid = track.notes.filter((n) => !onThreeMleGrid(n.start) || !onThreeMleGrid(n.dur)).length;
+    if (offGrid > 0) diagnostics.push({ level: "warning", code: "3mle-off-grid", params: { count: offGrid }, span: [0, 0], where: track.name });
   }
   song.tracks.forEach((track, index) => {
     const body = bodies[index]!;

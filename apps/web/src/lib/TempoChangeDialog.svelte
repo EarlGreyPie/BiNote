@@ -13,7 +13,11 @@
     tempoRange: { readonly min: number; readonly max: number };
     /** 반복 구간이면 구간 뒤는 그대로 둔다는 안내를 보인다 */
     loop: boolean;
-    onapply: (change: TempoChange) => void;
+    /**
+     * 바꾼다. keepTime이면 음 길이·박자표를 템포와 같은 배율로 함께 맞춰 실제 시간을 지킨다.
+     * 바꾸지 못했으면 그 까닭을 돌려주고 창은 열어 둔다
+     */
+    onapply: (change: TempoChange, keepTime: boolean) => string | undefined;
     onclose: () => void;
   }
 
@@ -27,12 +31,16 @@
   const first = bpms[0] ?? 120;
   let mode = $state<Mode>("set");
   let value = $state(first);
+  /** 실제 시간 지키기: 음 길이도 함께 맞춘다 (창을 열 때마다 끔) */
+  let keepTime = $state(false);
+  let failed = $state("");
   $effect(() => {
     dialog.showModal();
   });
 
   function pick(m: Mode) {
     mode = m;
+    failed = "";
     value = m === "set" ? first : m === "add" ? 0 : 100;
   }
 
@@ -43,7 +51,11 @@
 
   function apply() {
     if (!valid || !changes) return;
-    onapply({ mode, value });
+    const why = onapply({ mode, value }, keepTime);
+    if (why) {
+      failed = why;
+      return;
+    }
     dialog.close();
   }
 
@@ -65,7 +77,7 @@
   <div class="row">
     {#if mode === "set"}t{/if}
     <!-- svelte-ignore a11y_autofocus -->
-    <input class="num" type="number" step="1" min={mode === "add" ? -998 : 1} max={mode === "scale" ? 1000 : 999} bind:value {onkeydown} autofocus />
+    <input class="num" type="number" step="1" min={mode === "add" ? -998 : 1} max={mode === "scale" ? 1000 : 999} bind:value oninput={() => (failed = "")} {onkeydown} autofocus />
     {#if mode === "scale"}%{/if}
   </div>
   {#if valid && bpms.length > 0}
@@ -74,7 +86,13 @@
     </p>
   {/if}
   {#if out > 0}<p class="warn">{t("ui.tempoChangeOut", { n: out, min: tempoRange.min, max: tempoRange.max })}</p>{/if}
-  {#if loop}<p class="muted">{t("ui.tempoChangeEdge")}</p>{/if}
+  <label class="keep" title={t("ui.tempoChangeKeepTimeHelp")}>
+    <input type="checkbox" bind:checked={keepTime} onchange={() => (failed = "")} />
+    {t("ui.tempoChangeKeepTime")}
+  </label>
+  {#if keepTime}<p class="muted">{t("ui.tempoChangeKeepTimeHelp")}</p>{/if}
+  {#if loop}<p class="muted">{t(keepTime ? "ui.tempoChangeKeepTimeEdge" : "ui.tempoChangeEdge")}</p>{/if}
+  {#if failed}<p class="warn">{failed}</p>{/if}
   <div class="actions">
     <span class="spacer"></span>
     <button onclick={() => dialog.close()}>{t("ui.cancel")}</button>
@@ -124,6 +142,12 @@
   }
   .muted {
     margin: 6px 0 0;
+  }
+  .keep {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 10px;
   }
   .actions {
     display: flex;

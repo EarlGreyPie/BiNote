@@ -760,6 +760,13 @@
     return placeClip(clip, cursor?.at ?? clip.origin, label);
   }
 
+  /** 복사한 음을 복사한 원래 자리에 트랙 나눔 그대로 붙인다 (제자리에 붙여넣기). 타브 커서는 보지 않는다 */
+  export function pasteInPlace(label: string): Rat | undefined {
+    const clip = noteClipboard.clip;
+    if (!clip || !player || tracks.length === 0) return undefined;
+    return placeClip(clip, clip.origin, label);
+  }
+
   /**
    * 고른 음을 트랙 나눔 그대로 바로 뒤(고른 음의 첫 시작부터 마지막 끝까지 길이만큼 뒤)에 한 벌 더 놓는다.
    * 붙여넣기와 같이 놓은 음을 고르고 커서를 놓은 끝으로 옮긴다. 앱 클립보드는 건드리지 않는다. 고른 음이 없으면 false

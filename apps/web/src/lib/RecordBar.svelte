@@ -33,6 +33,9 @@
     addTracks: boolean;
     canAdd: boolean;
     onaddtracks: (on: boolean) => void;
+    /** 화음이 악보 한도를 넘칠 때: 가운데 음부터 빼기 / 다음 악보로 넘기기 */
+    overflow: "middle" | "spill";
+    onoverflow: (overflow: "middle" | "spill") => void;
     /** 덧녹음 / 바꿔 녹음 (친 마디의 녹음할 트랙 음을 비우고 넣기) */
     mode: "overdub" | "replace";
     onmode: (mode: "overdub" | "replace") => void;
@@ -44,7 +47,7 @@
     onclose: () => void;
   }
 
-  let { recording, canRecord, silent, connected, grid, grids, ongrid, speed, speeds, onspeed, metronome, onmetronome, targets, ontarget, addTracks, canAdd, onaddtracks, mode, onmode, result, onrecord, onstop, onconnect, onclose }: Props = $props();
+  let { recording, canRecord, silent, connected, grid, grids, ongrid, speed, speeds, onspeed, metronome, onmetronome, targets, ontarget, addTracks, canAdd, onaddtracks, overflow, onoverflow, mode, onmode, result, onrecord, onstop, onconnect, onclose }: Props = $props();
 
   const gridLabel = (n: number) => (n % 3 === 0 ? t("ui.midiRecordGridTuplet", { n: (n / 3) * 2 }) : t("ui.midiRecordGridNote", { n }));
   const keep = (e: Event) => e.preventDefault();
@@ -77,11 +80,21 @@
     {/each}
   </span>
   <label title={canAdd ? t("ui.midiRecordAddTracksHelp") : t("ui.midiRecordCannotAdd")}>
-    <input type="checkbox" checked={addTracks && canAdd} disabled={recording !== undefined || !canAdd} onchange={(e) => {
+    <input type="checkbox" checked={addTracks && canAdd} disabled={recording !== undefined || !canAdd || overflow === "spill"} onchange={(e) => {
         onaddtracks(e.currentTarget.checked);
         e.currentTarget.blur();
       }} />
     {t("ui.midiRecordAddTracks")}
+  </label>
+  <label title={t("ui.midiRecordOverflowHelp")}>
+    {t("ui.midiRecordOverflow")}
+    <select value={overflow} disabled={recording !== undefined} onchange={(e) => {
+        onoverflow(e.currentTarget.value === "spill" ? "spill" : "middle");
+        e.currentTarget.blur();
+      }}>
+      <option value="middle">{t("ui.midiRecordOverflowMiddle")}</option>
+      <option value="spill">{t("ui.midiRecordOverflowSpill")}</option>
+    </select>
   </label>
   <label title={t("ui.midiRecordModeHelp")}>
     <select value={mode} disabled={recording !== undefined} onchange={(e) => {

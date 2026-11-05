@@ -10,13 +10,24 @@ import type { TakeNote } from "./midiRecord";
 /** 덧녹음: 곡에 있던 음은 두고 그 자리는 다음 트랙에 / 바꿔 녹음: 친 마디의 녹음 트랙 음을 비우고 넣는다 */
 export type RecordMode = "overdub" | "replace";
 
+/**
+ * 화음이 악보 한도를 넘칠 때: 가운데 음부터 빼기(맨 위·맨 아래 음을 지킨다) /
+ * 다음 악보로 넘기기(연주자 끝에 트랙을 더해, 한도를 넘는 트랙은 다음 악보가 된다. 게임에서는 다른 연주자가 같이 친다)
+ */
+export type RecordOverflow = "middle" | "spill";
+
+/** 다음 악보로 넘길 때 더 만들 수 있는 악보 수 (넘친 트랙이 끝없이 생기지 않게) */
+export const SPILL_SCORES = 3;
+
 /** 녹음이 넣을 곳 (녹음을 시작할 때 정해 두고 끝까지 쓴다) */
 export interface RecordTarget {
   readonly playerId: string;
   /** 녹음할 트랙. 이 순서대로 화음의 높은 음부터 넣는다 (악보 안 트랙 순서) */
   readonly trackIds: readonly string[];
-  /** 모자랄 때 더할 수 있는 새 트랙 수 (트랙 더하기를 끄면 0) */
+  /** 모자랄 때 더할 수 있는 새 트랙 수 (트랙 더하기를 끄면 0. 다음 악보로 넘기면 한도를 넘어 더 많다) */
   readonly room: number;
+  /** 다음 악보로 넘기기를 켰는지 (켜면 room이 악보 한도에 묶이지 않는다) */
+  readonly spill: boolean;
   /** 트랙 더하기를 켜면 더할 수 있는지 (그 연주자의 마지막 악보이고 악보 트랙 한도가 남았는지) */
   readonly canAdd: boolean;
   /** 고르지 않아 저절로 정했는지 (고른 트랙과 그 뒤 트랙들) */
@@ -30,7 +41,9 @@ export interface RecordTarget {
  * - armed에 이 악보 트랙이 있으면 그 트랙들 (잠긴 트랙은 뺀다)
  * - 없으면 고른 트랙과 그 뒤 트랙들 (잠긴 트랙은 뺀다. 예전 녹음과 같은 규칙)
  * 트랙이 모자랄 때는 addTracks가 켜져 있고 그 악보가 연주자의 마지막 악보일 때만 악보 트랙 한도(limit)까지 더한다
- * (앞 악보에 트랙을 더하면 뒤 악보로 넘어가서)
+ * (앞 악보에 트랙을 더하면 뒤 악보로 넘어가서).
+ * spill(다음 악보로 넘기기)을 켜면 악보와 상관없이 연주자 끝에 트랙을 더한다: 마지막 악보의 남은 자리에 더해
+ * 한도 limit개 악보 SPILL_SCORES개만큼 더 (새 트랙은 늘 연주자 끝에 붙어, 한도를 넘으면 다음 악보가 된다)
  */
 export function recordTarget(
   song: Song,
@@ -40,6 +53,7 @@ export function recordTarget(
   locked: ReadonlySet<string>,
   limit: number,
   addTracks: boolean,
+  spill = false,
 ): RecordTarget | undefined {
   const active = song.tracks.find((t) => t.id === activeTrackId);
   if (!active) return undefined;
@@ -50,7 +64,15 @@ export function recordTarget(
   const trackIds = auto ? ids.slice(ids.indexOf(active.id)).filter((id) => !locked.has(id)) : chosen;
   const lastOfPlayer = !group || groups.filter((g) => g.playerId === group.playerId).at(-1) === group;
   const free = lastOfPlayer ? Math.max(0, limit - ids.length) : 0;
-  return { playerId: active.playerId, trackIds, room: addTracks ? free : 0, canAdd: free > 0, auto, groupTrackIds: ids };
+  const room = spill ? spillRoom(groups, active.playerId, limit) : addTracks ? free : 0;
+  return { playerId: active.playerId, trackIds, room, spill, canAdd: free > 0, auto, groupTrackIds: ids };
+}
+
+/** 다음 악보로 넘길 때 더할 수 있는 새 트랙 수: 연주자 마지막 악보의 남은 자리 + 한도 limit개 악보 SPILL_SCORES개 */
+function spillRoom(groups: readonly ScoreGroup[], playerId: string, limit: number): number {
+  const last = groups.filter((g) => g.playerId === playerId).at(-1);
+  const left = last ? Math.max(0, limit - last.trackIds.length) : limit;
+  return left + Math.max(1, limit) * SPILL_SCORES;
 }
 
 /**
@@ -70,7 +92,7 @@ export function liveTarget(song: Song, groups: readonly ScoreGroup[], target: Re
   const group = mine.reduce<ScoreGroup | undefined>((best, g) => (count(g) > (best ? count(best) : 0) ? g : best), undefined) ?? mine.at(-1);
   const trackIds = group ? present.filter((id) => group.trackIds.includes(id)) : [];
   const last = group !== undefined && mine.at(-1) === group;
-  const free = last ? Math.max(0, limit - group.trackIds.length) : 0;
+  const free = target.spill ? spillRoom(groups, target.playerId, limit) : last ? Math.max(0, limit - group.trackIds.length) : 0;
   return { ...target, trackIds, room: Math.min(target.room, free), groupTrackIds: group?.trackIds ?? [] };
 }
 
@@ -151,7 +173,9 @@ export function clearRange(notes: readonly Note[], from: Rat, to: Rat): { notes:
 
 /**
  * 격자에 맞춘 녹음 음을 녹음 트랙에 나눈다. 같은 시각에 친 음은 높은 음부터 그 자리가 빈 첫 트랙에 (트랙은 한 번에 한 음),
- * 트랙이 모자라면 새 트랙(room까지), 그래도 없으면 빠진다.
+ * 트랙이 모자라면 새 트랙(room까지), 그래도 없으면 빠진다. 빠지는 음은 가운데 음부터다:
+ * 먼저 같은 시각 화음을 맨 위·맨 아래·그다음 위·그다음 아래 순서로 넣어 볼 음을 정하고(바깥 음을 지킨다),
+ * 정한 음만 다시 높은 음부터 트랙에 나눈다 (트랙 순서는 높은 음부터 그대로). 시험에서 빠진 음도 나눈 뒤 자리가 있으면 넣는다.
  * - 덧녹음: 곡에 있던 음은 지우지 않고 그 자리는 찬 것으로 본다
  * - 바꿔 녹음: 친 마디(replaceRange)의 녹음 트랙 음을 먼저 비운다
  * - 같은 트랙의 앞 녹음 음이 격자 한 칸 이하로만 겹치면(이어 치기에서 조금 늦게 뗀 것) 앞 음을 끊고 같은 트랙에 넣는다.
@@ -180,9 +204,52 @@ export function assignTake(
   const volumeBase = lanes[0]?.base ?? [];
   for (let k = 0; k < target.room; k++) lanes.push({ trackId: undefined, base: [], added: [] });
   const stamp = Date.now().toString(36);
+  const byStart = (a: TakeNote, b: TakeNote) => cmp(a.start, b.start);
+  // 1) 바깥 음 먼저 넣어 보고 빠질 음을 정한다 (트랙은 비워 둔 채 시험으로만)
+  const trial = placeNotes(lanes.map((l) => ({ ...l, added: [] })), outerFirst([...take].sort(byStart)), grid, target.playerId, stamp, volumeBase, volumeOf);
+  const out = new Set(trial.dropped);
+  // 2) 남은 음만 높은 음부터 트랙에 나눈다
+  const kept = [...take].filter((n) => !out.has(n)).sort((a, b) => byStart(a, b) || b.pitch - a.pitch);
+  const placed = placeNotes(lanes, kept, grid, target.playerId, stamp, volumeBase, volumeOf);
+  // 3) 시험에서 빠진 음도 실제로 나눈 트랙에 자리가 있으면 넣는다. 시험과 실제는 넣는 순서가 달라,
+  //    시험에서만 자리가 막힌 음(덧녹음의 곡 음 때문에)을 화음이 넘치지 않았는데 빼지 않으려고
+  const retry = placeNotes(placed.lanes, trial.dropped, grid, target.playerId, `${stamp}b`, volumeBase, volumeOf);
+  const dropped = [...retry.dropped, ...placed.dropped].sort((a, b) => byStart(a, b) || b.pitch - a.pitch);
+  for (const lane of retry.lanes) lane.added.sort((a, b) => cmp(a.start, b.start));
+  return { lanes: retry.lanes, dropped, cleared, range };
+}
+
+type Lane = { trackId: string | undefined; base: readonly Note[]; added: Note[] };
+
+/** 시각순으로 정렬된 음을 같은 시각끼리 맨 위·맨 아래·그다음 위·그다음 아래 순서로 */
+function outerFirst(sorted: readonly TakeNote[]): TakeNote[] {
+  const out: TakeNote[] = [];
+  for (let i = 0; i < sorted.length; ) {
+    let j = i + 1;
+    while (j < sorted.length && cmp(sorted[j]!.start, sorted[i]!.start) === 0) j++;
+    const chord = sorted.slice(i, j).sort((a, b) => b.pitch - a.pitch);
+    for (let lo = 0, hi = chord.length - 1; lo <= hi; lo++, hi--) {
+      out.push(chord[lo]!);
+      if (hi !== lo) out.push(chord[hi]!);
+    }
+    i = j;
+  }
+  return out;
+}
+
+/** 주어진 순서대로 음을 그 자리가 빈 첫 트랙에 넣는다 (lanes를 바꾼다) */
+function placeNotes(
+  lanes: Lane[],
+  notes: readonly TakeNote[],
+  grid: Rat,
+  playerId: string,
+  stamp: string,
+  volumeBase: readonly Note[],
+  volumeOf: (track: readonly Note[], at: Rat, velocity: number) => number,
+): { lanes: Lane[]; dropped: TakeNote[] } {
   const dropped: TakeNote[] = [];
   let serial = 0;
-  for (const n of [...take].sort((a, b) => cmp(a.start, b.start) || b.pitch - a.pitch)) {
+  for (const n of notes) {
     const stop = end(n);
     const fits = (lane: (typeof lanes)[number]) => {
       if (lane.base.some((o) => overlaps(o, n.start, stop))) return false;
@@ -199,7 +266,7 @@ export function assignTake(
     }
     pick.added = pick.added.map((o) => (overlaps(o, n.start, stop) ? { ...o, dur: sub(n.start, o.start) } : o));
     pick.added.push({
-      id: `${pick.trackId ?? `${target.playerId}.r`}.rec${stamp}${serial++}`,
+      id: `${pick.trackId ?? `${playerId}.r`}.rec${stamp}${serial++}`,
       start: n.start,
       dur: n.dur,
       pitch: n.pitch,
@@ -207,7 +274,7 @@ export function assignTake(
       tie: "none",
     });
   }
-  return { lanes, dropped, cleared, range };
+  return { lanes, dropped };
 }
 
 /** 넣을 바꿈: 곡에 있는 트랙의 바뀐 뒤 음 전체와, 더할 새 트랙의 음 (setTracksNotesAddingTracks에 그대로 넘긴다) */

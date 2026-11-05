@@ -63,3 +63,31 @@ test("롤에 연필로 음을 찍고 실행 취소(Ctrl+Z)로 되돌린다", asy
   await expect(trackEditor(page)).toHaveText("t120l8cdefgab>c");
   expect(await exportMml(page)).toBe(SAMPLE_EXPORT);
 });
+
+test("트랙 단추를 누른 뒤에도 Ctrl+A·X·V가 화면 글이 아니라 음을 고르고 잘라 붙인다", async ({ page }) => {
+  // 단추를 누르면 초점이 단추에 남는다. 그래도 단축키는 롤 음으로 가야 한다 (화면 글 전체 고르기·복사로 새지 않게)
+  await trackTabs(page).first().click();
+  await page.keyboard.press("Control+A");
+  expect(await page.evaluate(() => getSelection()?.toString() ?? "")).toBe("");
+  await page.keyboard.press("Control+X");
+  await expect(noteCount(page)).toHaveText("음 0개");
+  await trackTabs(page).first().click();
+  await page.keyboard.press("Control+V");
+  await expect(noteCount(page)).toHaveText("음 8개");
+  expect(await exportMml(page)).toBe(SAMPLE_EXPORT);
+});
+
+test("제자리에 붙여넣기(Ctrl+Shift+V)는 재생 커서가 아니라 복사한 원래 자리에 붙인다", async ({ page }) => {
+  await trackTabs(page).first().click();
+  await page.keyboard.press("Control+A");
+  await page.keyboard.press("Control+C");
+  // 재생 커서를 곡 끝으로 옮겨도 제자리 붙여넣기는 원래 자리(첫 마디)에 붙는다
+  await focusRoll(page);
+  await page.keyboard.press("End");
+  await trackTabs(page).nth(1).click();
+  await page.keyboard.press("Control+Shift+V");
+  await expect(page.getByText(/^음 9개$/).first()).toBeVisible();
+  // 둘째 트랙의 앞 두 음(c2 e2)은 붙인 음과 겹쳐 지워지고 g2만 남는다
+  await expect(noteCount(page)).toHaveText("음 9개");
+  expect(await exportMml(page)).toBe("MML@l8cdefgab>c,l8cdefgabb+<g2;");
+});

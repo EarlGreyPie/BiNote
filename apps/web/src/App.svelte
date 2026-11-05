@@ -125,6 +125,7 @@
     setTempos,
     changeTempos,
     changeTemposResult,
+    changeTemposKeepTimeResult,
     rampTempos,
     rampTemposResult,
     convertTempoResult,
@@ -197,7 +198,7 @@
   import TapBar from "./lib/TapBar.svelte";
   import RecordBar from "./lib/RecordBar.svelte";
   import { MidiRecorder, quantizeTake, RecordFlow, type RecordJob, type RecordStatus, type TakeKey } from "./lib/midiRecord";
-  import { assignTake, liveTarget, planChanges, recordTarget, takeGhosts, type RecordGhost, type RecordMode, type RecordTarget } from "./lib/recordPlan";
+  import { assignTake, liveTarget, planChanges, recordTarget, takeGhosts, type RecordGhost, type RecordMode, type RecordOverflow, type RecordTarget } from "./lib/recordPlan";
   import { alignBarTempo, attackStarts, boundToSong, tempoOutOfRange, barStart, bpmAt, nearestBar, nearestBeat, offIntervals, onsetNear, pairBarTempo, previousBar, snapTaps, tapMarks, tapTempos, type BarDragMode, type TapReview, type TapUnit } from "./lib/tempoSync";
   import SongChecks from "./lib/SongChecks.svelte";
   import TrackPane from "./lib/TrackPane.svelte";
@@ -304,7 +305,7 @@
   import OutputPanel from "./lib/OutputPanel.svelte";
   import OptimizePreview from "./lib/OptimizePreview.svelte";
   import { outputRows, previewRows, tempoAdvice, type TempoAdvice } from "./lib/output";
-  import { brokenRewrittenTracks, changedTrackIds, tempoConvertPlan, type TempoConvertOutcome } from "./lib/tempoConvert";
+  import { brokenRewrittenTracks, changedTrackIds, tempoConvertFailedText, tempoConvertPlan, type TempoConvertOutcome } from "./lib/tempoConvert";
   import { midiStepLength, stepCursorFor, notesEnd, placeChord, previousVolume, volumeForVelocity } from "./lib/midiInput";
   import { fillEditorTracks, oldestEditor, parseEditorCount, parseEditorMax, swapIntoEditors } from "./lib/editors";
   import { melodyTrackIds, peakPolyphony, scoreGroups, soundingAt, trackColors, type ColorScheme } from "./lib/scores";
@@ -2487,16 +2488,17 @@
   const recordPrefs = $state(
     loadStored(RECORD_KEY, (raw) => {
       try {
-        const v = raw ? (JSON.parse(raw) as { grid?: number; speed?: number; metronome?: boolean; mode?: string; addTracks?: boolean }) : {};
+        const v = raw ? (JSON.parse(raw) as { grid?: number; speed?: number; metronome?: boolean; mode?: string; addTracks?: boolean; overflow?: string }) : {};
         return {
           grid: RECORD_GRIDS.includes(v.grid as (typeof RECORD_GRIDS)[number]) ? (v.grid as number) : 16,
           speed: typeof v.speed === "number" && v.speed >= 0 && v.speed < RECORD_SPEEDS.length ? Math.floor(v.speed) : 0,
           metronome: v.metronome !== false,
           mode: (v.mode === "replace" ? "replace" : "overdub") as RecordMode,
           addTracks: v.addTracks !== false,
+          overflow: (v.overflow === "spill" ? "spill" : "middle") as RecordOverflow,
         };
       } catch {
-        return { grid: 16, speed: 0, metronome: true, mode: "overdub" as RecordMode, addTracks: true };
+        return { grid: 16, speed: 0, metronome: true, mode: "overdub" as RecordMode, addTracks: true, overflow: "middle" as RecordOverflow };
       }
     }),
   );
@@ -2521,7 +2523,7 @@
     const track = s.tracks.find((tr) => tr.id === trackId);
     return maxChordsOf(profile, s.players.find((p) => p.id === track?.playerId)?.instrument.canonical);
   };
-  const recordTargetNow = $derived(song ? recordTarget(song, groups, activeTrackId, recordArmed, lockedIds, recordLimitOf(song, activeTrackId), recordPrefs.addTracks) : undefined);
+  const recordTargetNow = $derived(song ? recordTarget(song, groups, activeTrackId, recordArmed, lockedIds, recordLimitOf(song, activeTrackId), recordPrefs.addTracks, recordPrefs.overflow === "spill") : undefined);
   /** 녹음 줄에 보일 트랙 단추: 고른 트랙이 든 악보의 트랙들 (악보 안 번호와 이름) */
   const recordTargets = $derived.by(() => {
     const target = recordTargetNow;
@@ -2625,8 +2627,18 @@
       return;
     }
     const command = setTracksNotesAddingTracks(job.target.playerId, changes, newTracks, (n) => t("ui.newTrackName", { n }), t("ui.labMidiRecord"), instrument);
+    const scoresOf = (song: Song) => {
+      const limitOf = (playerId: string) => maxChordsOf(profile, song.players.find((p) => p.id === playerId)?.instrument.canonical);
+      return scoreGroups(song, limitOf).filter((g) => g.playerId === job.target.playerId).length;
+    };
+    const scoresBefore = scoresOf(s);
     if (!commit(command)) return;
-    recordResult = t("ui.midiRecordDone", { n: notes.length - dropped }) + (dropped > 0 ? " · " + t("ui.midiChordFull", { limit, n: dropped }) : "");
+    // 다음 악보로 넘겼으면 악보가 몇 개 늘었는지 알린다 (게임에서는 다른 연주자가 같이 쳐야 한다)
+    const grown = history ? scoresOf(history.song) - scoresBefore : 0;
+    recordResult =
+      t("ui.midiRecordDone", { n: notes.length - dropped }) +
+      (grown > 0 ? " · " + t("ui.midiRecordSpilled", { n: grown }) : "") +
+      (dropped > 0 ? " · " + t("ui.midiChordFull", { limit, n: dropped }) : "");
   }
   // 정지·다른 재생(자리 옮기기 등)이면 녹음을 끝내고 넣는다
   $effect(() => {
@@ -3169,10 +3181,11 @@
     };
     return { from, to, bpms, scope: to ? t("ui.tempoChangeRange", { from: where(from), to: where(to) }) : t("ui.tempoChangeSong") };
   });
-  function changeAllTempos(change: TempoChange) {
+  function changeAllTempos(change: TempoChange, keepTime: boolean): string | undefined {
     const target = tempoChangeTarget;
-    if (!target) return;
+    if (!target) return undefined;
     const before = history?.song;
+    if (keepTime) return changeAllTemposKeepTime(change, target.from, target.to);
     const failed = before ? changeTemposResult(before, change, target.from, target.to).failed : [];
     runIfChanged(changeTempos(change, target.from, target.to, t("ui.tempoChange")));
     // 경계 템포를 넣지 못한 악보는 원문을 그대로 두었으니 알려 준다
@@ -3180,6 +3193,39 @@
       const reasons = [...new Set(failed.flatMap((f) => f.reasons))].map((r) => t(r === "n-note" ? "ui.tempoEdgeNNote" : "ui.tempoEdgeLength"));
       error = t("ui.tempoChangeFailed", { scores: failed.map((f) => f.score + 1).join(", "), reasons: reasons.join(", ") });
     }
+    return undefined;
+  }
+
+  /**
+   * 템포 한꺼번에 바꾸기 + 실제 시간 지키기: 템포 조각마다 음 길이·박자표를 같은 배율로 맞춘다 (실행 취소 한 칸).
+   * 내보내기 창의 '실제 시간 지키며 바꾸기'(convertAdviceTempo)와 같은 검사를 지난다. 바꾸지 못하면 까닭을 돌려준다
+   */
+  function changeAllTemposKeepTime(change: TempoChange, from: Rat, to: Rat | undefined): string | undefined {
+    const before = history?.song;
+    if (!before || picking) return undefined;
+    let result: ReturnType<typeof changeTemposKeepTimeResult>;
+    try {
+      result = changeTemposKeepTimeResult(before, change, from, to);
+    } catch (e) {
+      if (!(e instanceof RangeError)) throw e;
+      return t("ui.rangeEdit");
+    }
+    if (result.failed.length > 0) return tempoConvertFailedText(before, result.failed, profile.length.max, t);
+    if (result.song === before) return undefined;
+    const broken = brokenRewrittenTracks(before, result.song);
+    if (broken.length > 0) return t("ui.outputTempoConvertBroken", { names: broken.join(", ") });
+    const locked = lockedNames(changedTrackIds(before, result.song));
+    if (locked && !confirm(t("ui.outputTempoConvertLocked", { names: locked }))) return "";
+    const was = error;
+    error = "";
+    const next = commit(replaceSong(t("ui.tempoChange"), result.song));
+    // 음 자리를 늘이거나 줄이므로 악보책 고정 자리는 풀고, 실행 취소하면 되돌린다
+    if (next && next !== before) keepFixedAcross([]);
+    if (next) {
+      if (!error) error = was;
+      return undefined;
+    }
+    return error || t("ui.rangeEdit");
   }
 
   /**
@@ -4215,6 +4261,7 @@
     { label: t("ui.cut"), hint: keyOf("edit.cut"), disabled: !song, run: () => run("edit.cut") },
     { label: t("ui.copy"), hint: keyOf("edit.copy"), disabled: !song, run: () => run("edit.copy") },
     { label: t("ui.pasteNotes"), title: t("ui.pasteNotesHelp"), hint: keyOf("edit.paste"), disabled: !song || !noteClipboard.clip, run: () => run("edit.paste") },
+    { label: t("ui.pasteInPlace"), title: t("ui.pasteInPlaceHelp"), hint: keyOf("edit.pasteInPlace"), disabled: !song || !noteClipboard.clip, run: () => run("edit.pasteInPlace") },
     { label: t("ui.duplicateNotes"), title: t("ui.duplicateNotesHelp"), hint: keyOf("edit.duplicate"), disabled: !song, run: () => run("edit.duplicate") },
     { separator: true },
     // 한 음 고치기는 모두 단축키가 있어 하위 메뉴로 묶는다
@@ -5040,11 +5087,16 @@
         return editor?.copySelection() ?? false;
       case "edit.cut":
         return editor?.cutSelection(t("ui.cut")) ?? false;
-      case "edit.paste": {
+      case "edit.paste":
+      case "edit.pasteInPlace": {
+        // 제자리에 붙여넣기: 커서를 보지 않고 복사한 원래 마디·박에 (다른 트랙에 같은 자리로 파트를 옮길 때)
+        const inPlace = command === "edit.pasteInPlace";
+        const label = t(inPlace ? "ui.pasteInPlace" : "ui.pasteNotes");
         if (viewMode === "tab") {
           // 타브: 타브 커서 자리(없으면 복사한 원래 자리)에 트랙 나눔 그대로. 커서는 타브가 붙인 끝으로 옮긴다
           if (!noteClipboard.clip) return false;
-          tab?.pasteAt(undefined, t("ui.pasteNotes"));
+          if (inPlace) tab?.pasteInPlace(label);
+          else tab?.pasteAt(undefined, label);
           return true;
         }
         // 여러 트랙에서 복사한 화음은 피아노롤의 트랙 하나에 겹쳐 붙일 수 없다 (음을 버리지 않게 붙이지 않는다)
@@ -5055,7 +5107,7 @@
         // 재생 커서가 있으면 그 자리, 없으면 복사한 원래 자리. 붙인 뒤 커서를 끝으로 옮겨 이어 붙이기 쉽게
         // 편집 커서는 분수로 써서 l7 같은 길이도 틈 없이 잇는다
         const before = history?.song;
-        const end = roll?.pasteAt(editCursor(), t("ui.pasteNotes"));
+        const end = roll?.pasteAt(inPlace ? undefined : editCursor(), label);
         // 붙이지 못했으면(검사가 거절, 잠근 트랙) 커서·고른 음을 옮기지 않는다 (붙여 보려 한 것은 처리한 것으로)
         if (end === undefined) return !!noteClipboard.clip;
         if (history?.song !== before) setCursor(end);
@@ -5125,8 +5177,8 @@
 
   const TEXT_INPUT = ".cm-editor, input, select, textarea, [contenteditable]";
   const TYPING = `${TEXT_INPUT}, button`;
-  // 글 입력 칸에서는 롤 음을 바꾸지 않는다 (Ctrl+A·C·X·V는 글 편집으로, Ctrl+[ ]는 그대로 둔다)
-  const TEXT_COMMANDS: ReadonlySet<CommandId> = new Set(["edit.selectAll", "edit.copy", "edit.cut", "edit.paste", "edit.lengthDouble", "edit.lengthHalf", "edit.dotToggle"]);
+  // 글 입력 칸에서는 롤 음을 바꾸지 않는다 (Ctrl+A·C·X·V는 글 편집으로, Ctrl+[ ]는 그대로 둔다). 단추에 초점이 있을 때는 음 편집으로 받는다
+  const TEXT_COMMANDS: ReadonlySet<CommandId> = new Set(["edit.selectAll", "edit.copy", "edit.cut", "edit.paste", "edit.pasteInPlace", "edit.lengthDouble", "edit.lengthHalf", "edit.dotToggle"]);
   // 글 입력 칸에서는 편집기 자기 동작(Ctrl+D 다음 같은 글 고르기, Ctrl+←→ 낱말 건너뛰기)으로 둔다. 버튼에 초점이 있을 때는 단축키로 받는다
   const EDITOR_KEY_COMMANDS: ReadonlySet<CommandId> = new Set(["edit.duplicate", "play.prevBar", "play.nextBar"]);
 
@@ -5187,7 +5239,9 @@
     if (target?.closest?.(TYPING) && !allowedWhileTyping(key)) return;
     const command = commandFor(bindings, key);
     if (!command) return;
-    if (TEXT_COMMANDS.has(command) && target?.closest?.(TYPING)) return;
+    // 글 입력 칸에서만 글 편집으로 넘긴다. 단추(트랙 이름·보기 단추 등)를 누른 뒤에는 초점이 단추에 남으므로
+    // 여기서 넘기면 Ctrl+A가 화면 글 전체를 고르고 Ctrl+C가 음 대신 화면 글을 복사한다
+    if (TEXT_COMMANDS.has(command) && target?.closest?.(TEXT_INPUT)) return;
     if (EDITOR_KEY_COMMANDS.has(command) && target?.closest?.(TEXT_INPUT)) return;
     // 글 입력 칸에 초점이 있으면 음·이벤트·트랙을 바꾸는 단축키(Alt+S·G·B·M·L·P, Alt+↑↓ 등)는 넘기지 않는다. 저장·재생·실행 취소는 그대로
     if (target?.closest?.(TEXT_INPUT) && /^(note|event|track)\.|^edit\.(transpose|volume|keyFit|keyLock)$/.test(command)) return;
@@ -5943,6 +5997,8 @@
         addTracks={recordPrefs.addTracks}
         canAdd={recordTargetNow?.canAdd ?? false}
         onaddtracks={(on) => setRecordPref({ addTracks: on })}
+        overflow={recordPrefs.overflow}
+        onoverflow={(overflow) => setRecordPref({ overflow })}
         mode={recordPrefs.mode}
         onmode={(mode) => setRecordPref({ mode })}
         result={recordResult}

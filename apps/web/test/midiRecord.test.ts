@@ -71,13 +71,13 @@ describe("녹음 음 트랙에 나누기", () => {
     expect(same(notes[0]!.dur, r(1, 4))).toBe(true);
   });
 
-  it("화음은 높은 음부터 트랙을 나누고, 모자라면 한도까지 트랙을 더하고 넘치면 센다", () => {
+  it("화음은 높은 음부터 트랙을 나누고, 모자라면 한도까지 트랙을 더하고 넘치면 가운데 음부터 빼고 센다", () => {
     const s = song(1);
     const take = [60, 64, 67, 72].map((p) => tn(p, r(0), r(1, 4)));
     const out = placeTake(s, take);
     expect(out.changes[0]!.notes.map((n) => n.pitch)).toEqual([72]);
-    expect(out.newTracks.map((t) => t.map((n) => n.pitch))).toEqual([[67], [64]]);
-    expect(out.dropped).toBe(1);
+    expect(out.newTracks.map((t) => t.map((n) => n.pitch))).toEqual([[67], [60]]);
+    expect(out.assign.dropped.map((n) => n.pitch)).toEqual([64]);
   });
 
   it("길게 누른 화음 위 선율: 선율은 고른 트랙, 받친 음은 다음 트랙", () => {
@@ -104,6 +104,69 @@ describe("녹음 음 트랙에 나누기", () => {
   });
 });
 
+
+describe("화음이 한도를 넘칠 때", () => {
+  it("가운데 음부터 빼: 8음 화음을 3트랙에 넣으면 맨 위·맨 아래와 그다음 위 음이 남는다", () => {
+    const s = song(1);
+    const take = [48, 52, 55, 60, 64, 67, 72, 76].map((p) => tn(p, r(0), r(1, 4)));
+    const out = placeTake(s, take);
+    expect([out.changes[0]!.notes.map((n) => n.pitch), ...out.newTracks.map((t) => t.map((n) => n.pitch))]).toEqual([[76], [72], [48]]);
+    expect(out.dropped).toBe(5);
+  });
+
+  it("덧녹음: 시험 순서에서만 자리가 막힌 음은 화음이 넘치지 않으면 빼지 않는다", () => {
+    // 둘째 트랙 1에 곡 음. 0에 72·64·48(48은 짧게), 1/2에 60. 바깥 음 먼저 넣는 시험에선 48이 둘째 트랙에 가 60이 막히지만,
+    // 높은 음부터 나누면 48이 셋째 트랙에 가고 60은 그 뒤 빈자리에 들어간다
+    const s = song(3, { 1: [{ id: "x", start: r(1), dur: r(1, 4), pitch: 50, vol: 8, tie: "none" }] });
+    const take = [tn(72, r(0), r(1)), tn(64, r(0), r(1)), tn(48, r(0), r(1, 4)), tn(60, r(1, 2), r(1))];
+    const out = placeTake(s, take, { addTracks: false });
+    expect(out.dropped).toBe(0);
+    const pitches = out.assign.lanes.flatMap((l) => l.added.map((n) => n.pitch)).sort((a, b) => a - b);
+    expect(pitches).toEqual([48, 60, 64, 72]);
+  });
+
+  it("길게 누른 베이스 위에 화음을 쳐도 베이스는 남고 새 화음의 가운데 음이 빠진다", () => {
+    const s = song(3);
+    const take = [tn(36, r(0), r(1)), ...[60, 64, 67].map((p) => tn(p, r(1, 4), r(1, 4)))];
+    const out = placeTake(s, take);
+    const pitches = out.changes.map((c) => c.notes.map((n) => n.pitch));
+    expect(pitches).toEqual([[36], [67], [60]]);
+    expect(out.assign.dropped.map((n) => n.pitch)).toEqual([64]);
+  });
+
+  it("다음 악보로 넘기면 빠지는 음 없이 연주자 끝에 트랙을 더한다 (한도를 넘는 트랙은 다음 악보)", () => {
+    const s = song(1);
+    const take = [48, 52, 55, 60, 64, 67, 72, 76].map((p) => tn(p, r(0), r(1, 4)));
+    const target = recordTarget(s, scoreGroups(s, 3), "t0", undefined, new Set(), 3, true, true)!;
+    expect(target.spill).toBe(true);
+    expect(target.room).toBe(2 + 3 * 3);
+    const assign = assignTake(s, target, take, G, "overdub", vol);
+    expect(assign.dropped).toEqual([]);
+    const plan = planChanges(assign);
+    expect(plan.changes[0]!.notes.map((n) => n.pitch)).toEqual([76]);
+    expect(plan.newTracks.map((t) => t.map((n) => n.pitch))).toEqual([[72], [67], [64], [60], [55], [52], [48]]);
+  });
+
+  it("다음 악보로 넘기면 연주자의 앞 악보에서 녹음해도, 트랙 더하기를 꺼도 더할 수 있다", () => {
+    const s = song(4);
+    const groups = scoreGroups(s, 3);
+    const front = recordTarget(s, groups, "t0", undefined, new Set(), 3, false, true)!;
+    // 마지막 악보(t3)의 남은 자리 2 + 악보 3개
+    expect(front.room).toBe(2 + 9);
+    const live = liveTarget(s, groups, front, new Set(), 3);
+    expect(live.room).toBe(front.room);
+    // 녹음 중 트랙이 하나 더 생기면 남은 자리만큼 준다
+    const grown = { ...s, tracks: [...s.tracks, { ...s.tracks[0]!, id: "t4", notes: [] }] };
+    expect(liveTarget(grown, scoreGroups(grown, 3), front, new Set(), 3).room).toBe(1 + 9);
+  });
+
+  it("넘기기를 끄면 예전처럼 그 악보 한도까지만", () => {
+    const s = song(4);
+    const off = recordTarget(s, scoreGroups(s, 3), "t0", undefined, new Set(), 3, true, false)!;
+    expect(off.spill).toBe(false);
+    expect(off.room).toBe(0);
+  });
+});
 
 describe("녹음할 트랙 고르기 (recordTarget)", () => {
   it("고르지 않으면 고른 트랙과 그 뒤 트랙들(잠긴 트랙 빼고), 한도까지 더할 수 있다", () => {
@@ -141,7 +204,7 @@ describe("녹음할 트랙 고르기 (recordTarget)", () => {
     const on = placeTake(s, take, { armed: new Set(["t0", "t2"]) });
     expect(on.changes.map((c) => [c.trackId, c.notes.map((n) => n.pitch)])).toEqual([
       ["t0", [67]],
-      ["t2", [64]],
+      ["t2", [60]],
     ]);
     // t1을 고르지 않았고 악보 트랙이 한도(3)라 더할 수 없다
     expect(on.newTracks).toEqual([]);
@@ -261,7 +324,7 @@ describe("미리 보기 = 넣는 것", () => {
     const committed = [...out.changes.flatMap((c) => c.notes), ...out.newTracks.flat()];
     expect(placed.map((g) => g.pitch).sort()).toEqual(committed.map((x) => x.pitch).sort());
     expect(placed.find((g) => g.pitch === 72)!.color).toBe("#123456");
-    expect(ghosts.filter((g) => g.kind === "dropped").map((g) => g.pitch)).toEqual([60]);
+    expect(ghosts.filter((g) => g.kind === "dropped").map((g) => g.pitch)).toEqual([64]);
     expect(ghosts.filter((g) => g.kind === "cleared").map((g) => g.pitch)).toEqual([40]);
   });
 });

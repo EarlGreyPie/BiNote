@@ -26,6 +26,7 @@ export const COMMANDS = [
   "edit.copy",
   "edit.cut",
   "edit.paste",
+  "edit.pasteInPlace",
   "edit.duplicate",
   "edit.lengthDouble",
   "edit.lengthHalf",
@@ -96,6 +97,8 @@ const COMMON: Bindings = {
   "edit.copy": ["Ctrl+C"],
   "edit.cut": ["Ctrl+X"],
   "edit.paste": ["Ctrl+V"],
+  // 복사한 원래 마디·박에 붙이기 (다른 트랙에 같은 자리로 파트를 옮길 때)
+  "edit.pasteInPlace": ["Ctrl+Shift+V"],
   // 고른 음을 바로 뒤에 한 벌 더 (FL·Ableton의 Ctrl+D). 클립보드는 건드리지 않는다
   "edit.duplicate": ["Ctrl+D"],
   "edit.lengthDouble": ["Ctrl+]"],

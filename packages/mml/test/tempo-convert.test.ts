@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { add, barAt, cmp, emptySong, measureStart, mul, normalizeTempo, rat, type Rat, type Song } from "@mmlce/core";
-import { convertTempo, convertTempoResult, gameScores, mergeTies, parseMml, parseTrackText, songChordsPerScore, textEnd, trackSource } from "../src/index.js";
+import { changeTemposKeepTimeResult, convertTempo, convertTempoResult, gameScores, mergeTies, parseMml, parseTrackText, songChordsPerScore, textEnd, trackSource } from "../src/index.js";
 
 /** 원문마다 연주자를 따로 둔 곡 */
 function songOf(texts: string[]): Song {
@@ -267,6 +267,51 @@ describe("convertTempoResult: 실제 시간 유지 템포 변환", () => {
     const song = { ...base, tracks: [low, base.tracks[1]!], tempo: [{ at: rat(0), bpm: 120 }, { at: rat(1, 64), bpm: 300 }, { at: rat(1, 32), bpm: 120 }] };
     const r = convertTempoResult(song, rat(1, 2), rat(1, 64), rat(1, 32));
     expect(r.failed).toEqual([{ kind: "tempo", at: rat(1, 64), bpm: 150 }]);
+    expect(r.song).toBe(song);
+  });
+});
+
+describe("changeTemposKeepTimeResult: 템포 한꺼번에 바꾸기 (실제 시간 지키기)", () => {
+  it("t120을 t60으로 바꾸면 음 길이를 반으로 줄인다 (4분음표 → 8분음표). 실제 시간은 그대로다", () => {
+    const song = songOf(["t120 c8d8e4 f2"]);
+    const r = changeTemposKeepTimeResult(song, { mode: "set", value: 60 });
+    expect(r.failed).toEqual([]);
+    expect(r.song.tempo).toEqual([{ at: rat(0), bpm: 60 }]);
+    expect(r.song.tracks[0]!.notes.map((n) => n.dur)).toEqual([rat(1, 16), rat(1, 16), rat(1, 8), rat(1, 4)]);
+    expect(heard(r.song)).toEqual(heard(song));
+  });
+
+  it("템포가 여럿이면 조각마다 제 배율로 맞춘다 (% 모드)", () => {
+    const song = songOf(["t100 c4d4e4f4 t150 g4a4b4c4"]);
+    const r = changeTemposKeepTimeResult(song, { mode: "scale", value: 200 });
+    expect(r.failed).toEqual([]);
+    expect(r.song.tempo).toEqual([{ at: rat(0), bpm: 200 }, { at: rat(2), bpm: 300 }]);
+    expect(r.song.tracks[0]!.notes.every((n) => cmp(n.dur, rat(1, 2)) === 0)).toBe(true);
+    expect(r.song.tracks[0]!.notes.map((n) => n.start)[4]).toEqual(rat(2));
+    expect(heard(r.song)).toEqual(heard(song));
+  });
+
+  it("모두 한 값으로 맞추면 조각마다 배율이 다르다", () => {
+    const song = songOf(["t60 c4d4e4f4 t240 g4a4b4c4"]);
+    const r = changeTemposKeepTimeResult(song, { mode: "set", value: 120 });
+    expect(r.failed).toEqual([]);
+    expect(r.song.tempo.map((e) => e.bpm).every((b) => b === 120)).toBe(true);
+    expect(r.song.tracks[0]!.notes.map((n) => n.dur)).toEqual([...Array(4).fill(rat(1, 2)), ...Array(4).fill(rat(1, 8))]);
+    expect(heard(r.song)).toEqual(heard(song));
+  });
+
+  it("반복 구간만 바꾸면 구간 뒤는 원래 템포로 밀린다", () => {
+    const song = songOf(["t120 c4d4e4f4 g4a4b4c4 d4e4f4g4"]);
+    const r = changeTemposKeepTimeResult(song, { mode: "set", value: 60 }, rat(1), rat(2));
+    expect(r.failed).toEqual([]);
+    expect(r.song.tempo).toEqual([{ at: rat(0), bpm: 120 }, { at: rat(1), bpm: 60 }, { at: rat(3, 2), bpm: 120 }]);
+    expect(heard(r.song)).toEqual(heard(song));
+  });
+
+  it("게임 음 길이로 정확히 쓸 수 없으면 곡을 바꾸지 않고 까닭을 알린다", () => {
+    const song = songOf(["t120 c64d64e64f64"]);
+    const r = changeTemposKeepTimeResult(song, { mode: "set", value: 100 });
+    expect(r.failed.length).toBeGreaterThan(0);
     expect(r.song).toBe(song);
   });
 });

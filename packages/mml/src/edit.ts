@@ -1662,6 +1662,42 @@ export function convertTempo(scale: Rat, from: Rat = ZERO, to?: Rat, label = "�
 }
 
 /**
+ * 템포 한꺼번에 바꾸기를 실제 시간을 지키며 한다. 구간 [from, to)를 템포 지도로 나눠(구간 처음 자리, 구간 안 템포마다)
+ * 조각마다 템포를 changedBpm으로 바꾸고, 그 조각의 음 길이·자리·박자표를 (바꾼 템포 / 원래 템포)배로 함께 맞춘다
+ * (convertTempoResult를 조각마다). 들리는 빠르기는 그대로이고, 구간 뒤는 늘거나 준 만큼 밀린다.
+ * 뒤 조각부터 바꿔서 앞 조각의 자리는 바꾸기 전 곡 자리 그대로다 (거절 자리도 바꾸기 전 곡 기준).
+ * 한 조각이라도 거절하면 곡을 바꾸지 않는다. rounded는 이 경로에서 생기지 않는다 (바꾼 템포가 처음부터 정수)
+ */
+export function changeTemposKeepTimeResult(song: Song, change: TempoChange, from: Rat = ZERO, to?: Rat): TempoConvertResult {
+  const unchanged: TempoConvertResult = { song, failed: [], rounded: [] };
+  if (to !== undefined && cmp(to, from) <= 0) return unchanged;
+  const map = normalizeTempo(song.tempo);
+  const startBpm = map.filter((e) => cmp(e.at, from) <= 0).at(-1)?.bpm ?? DEFAULT_BPM;
+  const inside = map.filter((e) => cmp(e.at, from) > 0 && (to === undefined || cmp(e.at, to) < 0));
+  const pieces: { at: Rat; bpm: number; end: Rat | undefined }[] = [];
+  [{ at: from, bpm: startBpm }, ...inside].forEach((e, k, all) => pieces.push({ at: e.at, bpm: e.bpm, end: all[k + 1]?.at ?? to }));
+  let cur = song;
+  const failed: TempoConvertFailure[] = [];
+  for (const p of [...pieces].reverse()) {
+    const target = changedBpm(p.bpm, change);
+    if (target === p.bpm) continue;
+    const r = convertTempoResult(cur, rat(target, p.bpm), p.at, p.end);
+    if (r.failed.length > 0) {
+      failed.push(...r.failed);
+      continue;
+    }
+    cur = r.song;
+  }
+  if (failed.length > 0) return { song, failed, rounded: [] };
+  return { song: cur, failed: [], rounded: [] };
+}
+
+/** changeTemposKeepTimeResult를 실행 취소 한 칸 명령으로 */
+export function changeTemposKeepTime(change: TempoChange, from: Rat = ZERO, to?: Rat, label = "템포 한꺼번에 바꾸기"): Command {
+  return songCommand(label, (song) => changeTemposKeepTimeResult(song, change, from, to).song);
+}
+
+/**
  * 악보 하나에서 e.at에 e.bpm이 울리게 한다. 그 자리까지 그 악보 글(원문 t와 출력기가 원문 없는 트랙에 쓸 t)의
  * 마지막 템포가 이미 e.bpm이면 그대로 둔다. 뒤에 같은 값 t가 있어도 그 자리를 채운 것으로 보지 않는다.
  * 아니면 원문 하나에 t를 끼운다: 그 자리에서 시작하는 음·쉼표 앞, 없으면 그 자리에 걸친 쉼표를 둘로 나눠 사이에,

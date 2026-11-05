@@ -236,3 +236,21 @@ describe("저장하고 다시 열어도 같은 빠르기 템포가 늘지 않는
     expect(read3mle(file(["t100c4t100d4"])).song.tempo.map((e) => e.bpm)).toEqual([100, 100]);
   });
 });
+
+describe("잇단음 (3MLE는 4분음표 960틱 정수로 셈함)", () => {
+  const withBody = (body: string) => SAMPLE.replace("t100 l8 cdef t120 g4", body);
+  it("960틱에 안 떨어지는 음을 트랙마다 세어 알리고, 길이는 정확히 쓴다", () => {
+    const a = read3mle(withBody("l36 cdefgabcd c4")).song;
+    const plain = { ...a, tracks: a.tracks.map(({ mml: _mml, ...t }) => t) };
+    for (const song of [a, plain]) {
+      const { text, diagnostics } = write3mle(song);
+      expect(diagnostics.filter((d) => d.code === "3mle-off-grid")).toMatchObject([{ params: { count: 9 }, where: "오른손" }]);
+      const back = read3mle(text).song;
+      expect(back.tracks[0]!.notes.map((n) => [n.start, n.dur])).toEqual(a.tracks[0]!.notes.map((n) => [n.start, n.dur]));
+    }
+  });
+  it("셋잇단·5잇단은 960틱에 떨어져 알리지 않는다", () => {
+    const a = read3mle(withBody("l12 cdefga l20 cdefg l24 c")).song;
+    expect(write3mle(a).diagnostics.filter((d) => d.code === "3mle-off-grid")).toEqual([]);
+  });
+});
