@@ -130,3 +130,13 @@ export function headsInBars(notes: readonly Note[], timeSig: readonly TimeSigEve
   }
   return out;
 }
+
+/**
+ * 마디 범위 안에서 시작하는 & 사슬의 음 id 전부 (사슬 첫 음이 범위 안이면 뒤 마디로 이어진 음까지).
+ * 앞 마디에서 이어 들어온 사슬은 넣지 않는다. 음정 변환처럼 사슬을 통째로 바꿔야 하는 편집에 쓴다
+ */
+export function chainsInBars(notes: readonly Note[], timeSig: readonly TimeSigEvent[], ranges: readonly BarRange[]): Set<string> {
+  const out = new Set<string>();
+  for (const chain of tieChains(notes)) if (inBars(ranges, barAt(timeSig, chain[0]!.start))) for (const n of chain) out.add(n.id);
+  return out;
+}

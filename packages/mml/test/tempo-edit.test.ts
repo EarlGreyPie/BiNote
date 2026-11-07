@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { emptySong, History, MOBILE_PROFILE, normalizeTempo, rat, type Song } from "@mmlce/core";
-import { changedBpm, changeTempos, changeTemposResult, compactSong, fillScoreTempo, keepScoreTempo, moveTempo, parseMml, parseTrackText, scoresMissingTempo, removeTempoAt, setTempoAt, setTempos, setTrackText, tempoChangeTargets, tempoInsertOffset, tempoMismatch, trackSource } from "../src/index.js";
+import { barSpans, changedBpm, changeTempos, changeTemposInSpans, changeTemposKeepTimeInSpans, changeTemposKeepTimeInSpansResult, changeTemposResult, tempoChangeTargetsInSpans, compactSong, fillScoreTempo, keepScoreTempo, moveTempo, parseMml, parseTrackText, scoresMissingTempo, removeTempoAt, setTempoAt, setTempos, setTrackText, tempoChangeTargets, tempoInsertOffset, tempoMismatch, trackSource } from "../src/index.js";
 import { moveTrackToNewPlayer, setPlayerInstrument, shiftTrack } from "../src/structure.js";
 
 /** 원문들로 곡을 만든다. null이면 원문 없는(음만 있는) 트랙 */
@@ -566,5 +566,98 @@ describe("곡 처음 t를 적지 않은 곡 (기본 t120)", () => {
     expect(texts(next)[0]).toBe("t100c4c4t90c4");
     expect(next.tempo).toEqual([{ at: rat(0), bpm: 100 }, { at: rat(1, 2), bpm: 90 }]);
     expect(mirrored(next)).toBe(true);
+  });
+});
+
+describe("고른 마디만 템포 바꾸기 (여러 구간)", () => {
+  const bars = (s: Song, ranges: [number, number][]) => barSpans(s, ranges);
+
+  it("2-3마디만 t90으로 바꾸면 4마디부터 원래 템포로 돌아간다", () => {
+    const s = songOf("t120 c1 d1 e1 f1 g1");
+    const next = changeTemposInSpans({ mode: "set", value: 90 }, bars(s, [[2, 3]])).apply(s);
+    expect(next.tempo).toEqual([{ at: rat(0), bpm: 120 }, { at: rat(1), bpm: 90 }, { at: rat(3), bpm: 120 }]);
+    expect(texts(next)).toEqual(["t120 c1 t90d1 e1 t120f1 g1"]);
+    expect(mirrored(next)).toBe(true);
+  });
+
+  it("떨어진 마디 둘(2, 4)을 따로 바꾸고 사이 마디는 그대로 둔다", () => {
+    const s = songOf("t120 c1 d1 e1 f1 g1");
+    const spans = bars(s, [[2, 2], [4, 4]]);
+    expect(tempoChangeTargetsInSpans(s, spans)).toEqual([120, 120]);
+    const next = changeTemposInSpans({ mode: "add", value: 10 }, spans).apply(s);
+    expect(normalizeTempo(next.tempo)).toEqual([
+      { at: rat(0), bpm: 120 },
+      { at: rat(1), bpm: 130 },
+      { at: rat(2), bpm: 120 },
+      { at: rat(3), bpm: 130 },
+      { at: rat(4), bpm: 120 },
+    ]);
+    expect(mirrored(next)).toBe(true);
+  });
+
+  it("겹치거나 붙은 구간은 하나로 보고 ±BPM을 한 번만 더한다", () => {
+    const s = songOf("t120 c1 d1 e1 f1 g1");
+    const next = changeTemposInSpans({ mode: "add", value: 10 }, [[rat(1), rat(3)], [rat(2), rat(4)], [rat(4), rat(5)]]).apply(s);
+    expect(normalizeTempo(next.tempo)).toEqual([{ at: rat(0), bpm: 120 }, { at: rat(1), bpm: 130 }]);
+  });
+
+  it("구간 안에 있던 템포도 같은 규칙으로 바꾸고, 구간 밖 템포는 건드리지 않는다", () => {
+    const s = songOf("t120 c1 t100 d1 e1 t80 f1 g1");
+    const next = changeTemposInSpans({ mode: "scale", value: 50 }, bars(s, [[2, 3]])).apply(s);
+    expect(normalizeTempo(next.tempo)).toEqual([{ at: rat(0), bpm: 120 }, { at: rat(1), bpm: 50 }, { at: rat(3), bpm: 80 }]);
+    expect(texts(next)).toEqual(["t120 c1 t50 d1 e1 t80 f1 g1"]);
+  });
+
+  it("실제 시간 지키기: 뒤 구간부터 바꿔 2마디·4마디 음 길이가 반이 되고 사이 마디는 그대로 밀린다", () => {
+    const s = songOf("t120 c1 d1 e1 f1 g1");
+    const r = changeTemposKeepTimeInSpansResult(s, { mode: "scale", value: 50 }, bars(s, [[2, 2], [4, 4]]));
+    expect(r.failed).toEqual([]);
+    const notes = r.song.tracks[0]!.notes.map((n) => [n.start, n.dur]);
+    expect(notes).toEqual([
+      [rat(0), rat(1)],
+      [rat(1), rat(1, 2)],
+      [rat(3, 2), rat(1)],
+      [rat(5, 2), rat(1, 2)],
+      [rat(3), rat(1)],
+    ]);
+    expect(normalizeTempo(r.song.tempo)).toEqual([
+      { at: rat(0), bpm: 120 },
+      { at: rat(1), bpm: 60 },
+      { at: rat(3, 2), bpm: 120 },
+      { at: rat(5, 2), bpm: 60 },
+      { at: rat(3), bpm: 120 },
+    ]);
+  });
+
+  it("실제 시간 지키기에서 한 구간이라도 거절하면 곡을 바꾸지 않는다", () => {
+    const s = songOf("t120 c1 d1 e1 f1 g1");
+    // t120 → t100이면 온음표가 5/6이 되어 게임 음 길이로 정확히 쓸 수 없다
+    const r = changeTemposKeepTimeInSpansResult(s, { mode: "set", value: 100 }, bars(s, [[2, 2], [4, 4]]));
+    expect(r.failed.length).toBeGreaterThan(0);
+    expect(r.song).toBe(s);
+  });
+
+  it("실행 취소 한 칸으로 여러 구간이 한꺼번에 돌아가고, 다시 하면 같은 곡이 된다", () => {
+    const s = songOf("t120 c1 d1 e1 f1 g1");
+    const h = new History(s);
+    h.run(changeTemposInSpans({ mode: "set", value: 90 }, bars(s, [[2, 2], [4, 4]])));
+    const changed = h.song;
+    expect(changed).not.toBe(s);
+    h.undo();
+    expect(h.song).toBe(s);
+    h.redo();
+    expect(h.song.tempo).toEqual(changed.tempo);
+    expect(texts(h.song)).toEqual(texts(changed));
+    const k = new History(s);
+    k.run(changeTemposKeepTimeInSpans({ mode: "scale", value: 50 }, bars(s, [[3, 3]])));
+    expect(k.song).not.toBe(s);
+    k.undo();
+    expect(k.song).toBe(s);
+  });
+
+  it("곡 끝 뒤 마디만 고르면 구간이 없고 곡은 그대로다", () => {
+    const s = songOf("t120 c1 d1");
+    expect(bars(s, [[5, 8]])).toEqual([]);
+    expect(changeTemposInSpans({ mode: "set", value: 90 }, []).apply(s)).toBe(s);
   });
 });

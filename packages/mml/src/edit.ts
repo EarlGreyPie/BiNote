@@ -1697,6 +1697,76 @@ export function changeTemposKeepTime(change: TempoChange, from: Rat = ZERO, to?:
   return songCommand(label, (song) => changeTemposKeepTimeResult(song, change, from, to).song);
 }
 
+/** 템포를 바꿀 구간 [from, to) (to가 없으면 곡 끝까지) */
+export type TempoSpan = readonly [Rat, Rat | undefined];
+
+/**
+ * 여러 구간을 앞에서부터 차례로, 겹치거나 붙은 구간은 하나로 (±BPM이 두 번 더해지지 않게).
+ * 끝이 없는(곡 끝까지) 구간 뒤는 모두 그 안이다
+ */
+function tidySpans(spans: readonly TempoSpan[]): TempoSpan[] {
+  const sorted = spans.filter(([a, b]) => b === undefined || cmp(b, a) > 0).sort((x, y) => cmp(x[0], y[0]));
+  const out: [Rat, Rat | undefined][] = [];
+  for (const [a, b] of sorted) {
+    const prev = out[out.length - 1];
+    if (prev && (prev[1] === undefined || cmp(a, prev[1]) <= 0)) {
+      if (prev[1] !== undefined && (b === undefined || cmp(b, prev[1]) > 0)) prev[1] = b;
+      continue;
+    }
+    out.push([a, b]);
+  }
+  return out;
+}
+
+/** 여러 구간(고른 마디들)에서 바뀔 템포 값. 미리보기용으로 구간마다 tempoChangeTargets를 모은다 */
+export function tempoChangeTargetsInSpans(song: Song, spans: readonly TempoSpan[]): readonly number[] {
+  return tidySpans(spans).flatMap(([from, to]) => tempoChangeTargets(song, from, to).bpms);
+}
+
+/**
+ * 고른 마디들만 템포 한꺼번에 바꾸기: 구간마다 changeTemposResult를 앞에서부터 차례로 (시간을 옮기지 않으니 자리는 그대로).
+ * 구간 처음에 바꾼 템포, 구간 끝에 원래 템포를 넣으므로 구간 밖 빠르기는 그대로다. 넣지 못한 악보는 모아서 알린다
+ */
+export function changeTemposInSpansResult(song: Song, change: TempoChange, spans: readonly TempoSpan[]): TempoChangeResult {
+  const failures = new Map<number, Set<TempoEdgeFailure>>();
+  let cur = song;
+  for (const [from, to] of tidySpans(spans)) {
+    const r = changeTemposResult(cur, change, from, to);
+    for (const f of r.failed) failures.set(f.score, new Set([...(failures.get(f.score) ?? []), ...f.reasons]));
+    cur = r.song;
+  }
+  return { song: cur, failed: [...failures].sort(([a], [b]) => a - b).map(([score, reasons]) => ({ score, reasons: [...reasons] })) };
+}
+
+/** changeTemposInSpansResult를 실행 취소 한 칸 명령으로 */
+export function changeTemposInSpans(change: TempoChange, spans: readonly TempoSpan[], label = "템포 한꺼번에 바꾸기"): Command {
+  return songCommand(label, (song) => changeTemposInSpansResult(song, change, spans).song);
+}
+
+/**
+ * 고른 마디들만 템포 바꾸기 + 실제 시간 지키기: 뒤 구간부터 changeTemposKeepTimeResult (앞 구간 자리는 바꾸기 전 곡 그대로).
+ * 한 구간이라도 거절하면 곡을 바꾸지 않고, 거절 자리는 모두 바꾸기 전 곡 기준이다
+ */
+export function changeTemposKeepTimeInSpansResult(song: Song, change: TempoChange, spans: readonly TempoSpan[]): TempoConvertResult {
+  const failed: TempoConvertFailure[] = [];
+  let cur = song;
+  for (const [from, to] of tidySpans(spans).reverse()) {
+    const r = changeTemposKeepTimeResult(cur, change, from, to);
+    if (r.failed.length > 0) {
+      failed.push(...r.failed);
+      continue;
+    }
+    cur = r.song;
+  }
+  if (failed.length > 0) return { song, failed, rounded: [] };
+  return { song: cur, failed: [], rounded: [] };
+}
+
+/** changeTemposKeepTimeInSpansResult를 실행 취소 한 칸 명령으로 */
+export function changeTemposKeepTimeInSpans(change: TempoChange, spans: readonly TempoSpan[], label = "템포 한꺼번에 바꾸기"): Command {
+  return songCommand(label, (song) => changeTemposKeepTimeInSpansResult(song, change, spans).song);
+}
+
 /**
  * 악보 하나에서 e.at에 e.bpm이 울리게 한다. 그 자리까지 그 악보 글(원문 t와 출력기가 원문 없는 트랙에 쓸 t)의
  * 마지막 템포가 이미 e.bpm이면 그대로 둔다. 뒤에 같은 값 t가 있어도 그 자리를 채운 것으로 보지 않는다.

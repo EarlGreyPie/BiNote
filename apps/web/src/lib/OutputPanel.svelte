@@ -76,7 +76,11 @@
     justCopied = 0;
     const ids = trackIdsOf(row);
     if (ids.every((id) => chosen.includes(id))) picked = chosen.filter((id) => !ids.includes(id));
-    else picked = [...chosen, ...ids.filter((id) => !chosen.includes(id))];
+    else {
+      const added = [...chosen, ...ids.filter((id) => !chosen.includes(id))];
+      // 순서를 손으로 바꾸지 않았으면 곡 순서로 붙인다. 미리 체크된 트랙(고친 트랙 등)이 앞에 남아 채널 순서가 바뀌지 않게
+      picked = reordered ? added : songOrder(added);
+    }
   }
   const scoreRoom = (row: OutputRow) => chosen.length + trackIdsOf(row).filter((id) => !chosen.includes(id)).length <= pickLimit;
 

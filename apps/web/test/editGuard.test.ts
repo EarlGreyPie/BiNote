@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { attenuateChordVolumes, defaultLengthLimit, History, MOBILE_PROFILE, planGhost, planHarmonic, planLabClear, planReverbBatch, planReverbStamp, rat, type Command, type Note, type Rat, type Song } from "@mmlce/core";
-import { addPlayer, addTrack, applyPlan, barSpans, canWriteExactly, deleteBars, deleteTime, duplicateTrack, distributeSong, findOffgrid, findSpreadSpans, fixOffgrid, insertTime, mergeTracksSong, newSong, parseTrackText, planMergeTracks, planMoveNotes, rampTempos, referenceShiftForDelete, referenceShiftForInsert, removeTrack, setMeter, setTrackText, setTempoAt, setTempos, setTracksNotes, spreadSong } from "@mmlce/mml";
+import { addPlayer, addTrack, applyPlan, barSpans, canWriteExactly, changeTemposInSpans, changeTemposKeepTimeInSpans, deleteBars, deleteTime, duplicateTrack, distributeSong, findOffgrid, findSpreadSpans, fixOffgrid, insertTime, mergeTracksSong, newSong, parseTrackText, planMergeTracks, planMoveNotes, rampTempos, referenceShiftForDelete, referenceShiftForInsert, removeTrack, setMeter, setTrackText, setTempoAt, setTempos, setTracksNotes, spreadSong } from "@mmlce/mml";
 import { pairBarTempo, tapTempos } from "../src/lib/tempoSync";
 import { newOutOfRangeTrack, newUnwritableTrack } from "../src/lib/writable";
 import { attenuationOptions, CHORD_ATT_DEFAULTS } from "../src/lib/chordAttPrefs";
@@ -107,6 +107,37 @@ describe("모든 편집은 실행 취소 기록 한 곳에서 쓸 수 없는 길
       expect(h.refused).toBe(false);
       expect(h.song.tracks.map((tr) => tr.notes)).toEqual(s.tracks.map((tr) => tr.notes));
     }
+  });
+
+  it("고른 마디만 템포 바꾸기는 검사를 지나고, 실제 시간 지키기에서 쓸 수 없는 길이가 생기면 거절, 실행 취소 한 번에 돌아간다", () => {
+    const s = song([note("a", [0, 1], [1, 1]), note("b", [1, 1], [1, 1], 64), note("c", [2, 1], [1, 1], 67)], [note("d", [1, 1], [1, 48], 60)]);
+    const h = guarded(s);
+    const spans = barSpans(s, [[2, 2]]);
+    h.run(changeTemposInSpans({ mode: "set", value: 90 }, spans));
+    expect(h.refused).toBe(false);
+    expect(h.song.tracks.map((tr) => tr.notes)).toEqual(s.tracks.map((tr) => tr.notes));
+    expect(h.song.tempo.map((e) => e.bpm)).toEqual([90, 120]);
+    h.undo();
+    expect(h.song).toBe(s);
+    // 2마디를 반 템포로 + 실제 시간: 1/48 음이 1/96이 되어 쓸 수 없으니 곡은 그대로다
+    const g = guarded(s);
+    g.run(setTrackText("t1", "t120 c1 d1 e1"));
+    g.run(setTrackText("t2", "r1 c48"));
+    const odd = g.song;
+    expect(g.run(changeTemposKeepTimeInSpans({ mode: "scale", value: 50 }, barSpans(odd, [[2, 2]])))).toBe(odd);
+    // 1/48 음이 없으면 같은 곡이 바뀐다 (위 거절이 그 음 때문임을 확인)
+    const plain = g.run(setTrackText("t2", "r1"));
+    expect(g.run(changeTemposKeepTimeInSpans({ mode: "scale", value: 50 }, barSpans(plain, [[2, 2]])))).not.toBe(plain);
+    // 4분음표 격자 곡(원문 있는 트랙)은 된다
+    const k = guarded(s);
+    k.run(setTrackText("t1", "t120 c1 d1 e1"));
+    k.run(setTrackText("t2", "r1"));
+    const ok = k.song;
+    k.run(changeTemposKeepTimeInSpans({ mode: "scale", value: 50 }, barSpans(ok, [[2, 2]])));
+    expect(k.refused).toBe(false);
+    expect(k.song.tracks[0]!.notes.map((n) => n.dur)).toEqual([rat(1), rat(1, 2), rat(1)]);
+    k.undo();
+    expect(k.song).toBe(ok);
   });
 
   it("점점 느리게·빠르게는 템포만 바꾸고(음 가운데면 &로 나눠도 소리는 같다) 검사를 지나며, 실행 취소 한 번에 돌아간다", () => {

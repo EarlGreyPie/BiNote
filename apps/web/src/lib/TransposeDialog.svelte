@@ -14,24 +14,36 @@
 </script>
 
 <script lang="ts">
+  import { parseBarList, type BarRange } from "@mmlce/core";
   import { t } from "./i18n.svelte";
 
   interface Props {
     /** 고를 수 있는 범위와 이름 */
     scopes: readonly { readonly id: TransposeScope; readonly label: string }[];
     initialScope: TransposeScope;
-    check: (scope: TransposeScope, semitones: number) => TransposeCheck;
-    onapply: (scope: TransposeScope, semitones: number) => void;
+    /** 반복 구간이 걸친 마디 [첫, 끝]. 반복 구간이 없으면 undefined */
+    loopBars?: BarRange | undefined;
+    /** bars: 옮길 마디 범위 (undefined면 모든 마디). 고른 음 범위에는 쓰지 않는다 */
+    check: (scope: TransposeScope, semitones: number, bars: readonly BarRange[] | undefined) => TransposeCheck;
+    onapply: (scope: TransposeScope, semitones: number, bars: readonly BarRange[] | undefined) => void;
     onclose: () => void;
   }
 
-  let { scopes, initialScope, check, onapply, onclose }: Props = $props();
+  let { scopes, initialScope, loopBars, check, onapply, onclose }: Props = $props();
 
   let dialog: HTMLDialogElement;
   // svelte-ignore state_referenced_locally
   let scope = $state<TransposeScope>(initialScope);
   let semitones = $state(0);
-  const result = $derived(check(scope, semitones));
+  // 마디: 모든 마디 / 선택 마디(반복 구간) / 적은 마디 (볼륨 일괄 조정과 같다)
+  let barMode = $state<"all" | "loop" | "typed">("all");
+  let barText = $state("");
+  const typedBars = $derived(parseBarList(barText));
+  const bars = $derived<readonly BarRange[] | undefined>(
+    scope === "selection" || barMode === "all" ? undefined : barMode === "loop" ? (loopBars ? [loopBars] : []) : (typedBars ?? []),
+  );
+  const barSpan = (b: BarRange) => (b[0] === b[1] ? `${b[0]}` : `${b[0]}-${b[1]}`);
+  const result = $derived(check(scope, semitones, bars));
 
   $effect(() => {
     dialog.showModal();
@@ -43,7 +55,7 @@
 
   function apply() {
     if (semitones === 0 || result.invalid || result.count === 0) return;
-    onapply(scope, semitones);
+    onapply(scope, semitones, bars);
     dialog.close();
   }
 </script>
@@ -55,6 +67,25 @@
       <label><input type="radio" name="scope" value={s.id} bind:group={scope} /> {s.label}</label>
     {/each}
   </div>
+  {#if scope !== "selection"}
+    <div class="row">
+      <span>{t("ui.volumeBars")}</span>
+      <label><input type="radio" name="transpose-bars" value="all" bind:group={barMode} /> {t("ui.volumeBarsAll")}</label>
+      <label title={loopBars ? undefined : t("ui.volumeBarsNoLoop")}>
+        <input type="radio" name="transpose-bars" value="loop" bind:group={barMode} disabled={!loopBars} />
+        {loopBars ? t("ui.volumeBarsLoop", { bars: barSpan(loopBars) }) : t("ui.volumeBarsLoopNone")}
+      </label>
+      <label><input type="radio" name="transpose-bars" value="typed" bind:group={barMode} /> {t("ui.volumeBarsTyped")}</label>
+      {#if barMode === "typed"}
+        <input class="bars" type="text" inputmode="text" placeholder={t("ui.volumeBarsPlaceholder")} bind:value={barText} aria-label={t("ui.volumeBarsTyped")} />
+      {/if}
+    </div>
+    {#if barMode === "typed" && barText.trim() !== "" && !typedBars}
+      <p class="warn">{t("ui.volumeBarsInvalid")}</p>
+    {:else if barMode !== "all"}
+      <p class="muted">{t("ui.transposeBarsHelp")}</p>
+    {/if}
+  {/if}
   <div class="row">
     <button onclick={() => nudge(-12)}>{t("ui.octaveDown")}</button>
     <button onclick={() => nudge(-1)}>−1</button>
@@ -113,6 +144,9 @@
   }
   input[type="number"] {
     width: 4.5em;
+  }
+  .bars {
+    width: 9em;
   }
   .spacer {
     flex: 1;

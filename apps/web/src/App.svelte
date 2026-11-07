@@ -3,6 +3,7 @@
   import {
     add,
     cmp,
+    eq,
     sub,
     DEFAULT_BPM,
     normalizeTempo,
@@ -22,6 +23,7 @@
     barBeatAt,
     barsOfRange,
     headsInBars,
+    chainsInBars,
     type BarRange,
     meterAt,
     keyAt,
@@ -123,14 +125,15 @@
     removeTempoAt,
     moveTempo,
     setTempos,
-    changeTempos,
-    changeTemposResult,
-    changeTemposKeepTimeResult,
+    changeTemposInSpans,
+    changeTemposInSpansResult,
+    changeTemposKeepTimeInSpansResult,
+    tempoChangeTargetsInSpans,
+    type TempoSpan,
     rampTempos,
     rampTemposResult,
     convertTempoResult,
     type TempoRamp,
-    tempoChangeTargets,
     type TempoChange,
     fillScoreTempo,
     keepScoreTempo,
@@ -254,7 +257,7 @@
   import { setTuplet, tupletPrefs } from "./lib/tupletPrefs.svelte";
   import EventDialog from "./lib/EventDialog.svelte";
   import type { EventChanges } from "./lib/eventChanges";
-  import TempoChangeDialog from "./lib/TempoChangeDialog.svelte";
+  import TempoChangeDialog, { type TempoTarget } from "./lib/TempoChangeDialog.svelte";
   import TempoRampDialog from "./lib/TempoRampDialog.svelte";
   import OffgridDialog from "./lib/OffgridDialog.svelte";
   import FoldReviewDialog from "./lib/FoldReviewDialog.svelte";
@@ -327,6 +330,7 @@
     type KeymapSettings,
   } from "./lib/keymap";
   import { nextBarStart, prevBarStart, songEnd } from "./lib/editNav";
+  import { spanOf } from "./lib/multiTrack";
   import { applyUpdate, checkSpace, checkStorage, pwa, requestPersistentStorage } from "./lib/pwa.svelte";
   import { guideUrl } from "./lib/links";
   import { clampRollShare, maxRollShare, paneMinHeight, ROLL_SHARE_MAX, ROLL_SHARE_MIN } from "./lib/paneSplit";
@@ -340,6 +344,7 @@
   import { parseGraceMade, type GraceChoice } from "./lib/graceOptions";
   import { parseTrillMade, type TrillChoice } from "./lib/trillOptions";
   import { VIDEO_DEFAULTS, exactTime, tempoChanges, lengthsFor, noteLengthOf, stepNoteLength, type BackgroundVideo, type EventKind, type EventLabel, type EventRef, type NoteLength, type Orientation, type RollTool } from "./lib/roll";
+  import { loopEnds } from "./lib/loopRange";
 
 
   const engine = new Engine();
@@ -971,6 +976,20 @@
     return cursorExact && toFloat(cursorExact) === cursor ? cursorExact : asRat(cursor);
   }
   let loop = $state<readonly [number, number] | undefined>(undefined);
+  /**
+   * 반복 구간을 잡을 때의 격자로 맞춘 분수 끝점. 그 뒤 격자를 바꾸면 화면 소수(loop)를 새 격자로 되돌릴 수 없어
+   * 1/960로 반올림되고, 마디선이 1/960에 안 맞는 곡(실제 시간 지키며 t140→t120 등)에서는 고른 마디 밖 마디까지 걸린다.
+   * 그래서 잡을 때 분수를 기억하고, loop가 그 값 그대로면 이 분수를 쓴다 (editCursor와 같은 방식)
+   */
+  let loopExact = $state.raw<readonly [Rat, Rat] | undefined>(undefined);
+  function setLoop(range: readonly [number, number] | undefined) {
+    loop = range;
+    if (range) loopExact = [asRat(range[0]), asRat(range[1])];
+  }
+  /** 편집에 쓸 반복 구간 (분수). 없으면 undefined */
+  function loopRat(): readonly [Rat, Rat] | undefined {
+    return loopEnds(loop, loopExact, asRat);
+  }
   /** 이번 재생을 시작한 곡 시각(초). position은 여기서부터 흐른 시간 */
   const playing = $derived(playback.playing);
   // 실험실 "재생 중 고친 것 바로 듣기": 재생 중에 곡이 바뀌면(악기·세기·음, 되돌리기 포함) 멈추지 않고 이어 붙인다
@@ -2195,6 +2214,7 @@
     cursor = fresh.cursor;
     cursorExact = fresh.cursorExact;
     loop = fresh.loop;
+    loopExact = undefined;
     loopStash = fresh.loopStash;
     tabCursor = fresh.tabCursor;
     pickedEvent = fresh.pickedEvent;
@@ -2224,6 +2244,9 @@
     compactNote = fresh.compactNote;
     exportCopied = fresh.exportCopied;
     Object.assign(viewMemory, emptyViewMemory());
+    // 여러 트랙 복사본은 트랙 id로 제 트랙을 찾는다. 다른 곡도 트랙 id가 t1, t2…라 엉뚱한 트랙에 붙으므로 버린다
+    // (한 트랙 복사본은 지금 고른 트랙에 붙으니 다른 곡으로 옮기는 데 그대로 쓴다)
+    if (noteClipboard.clip?.trackIds) noteClipboard.clip = undefined;
   }
 
   /** 빈 악보로 시작한다. 고친 내용이 있으면 먼저 묻는다 */
@@ -3166,28 +3189,50 @@
     runIfChanged(setTempos([], tempoClearTargets, t("ui.tempoClear")));
   }
 
-  /** 템포 한꺼번에 바꾸기: 반복 구간이 있으면 그 안, 없으면 곡 전체 (실행 취소 한 칸) */
+  /**
+   * 템포 한꺼번에 바꾸기: 곡 전체 · 선택 마디(반복 구간이 걸친 마디) · 반복 구간 그대로 · 적은 마디 (실행 취소 한 칸).
+   * 고른 마디 밖 빠르기는 그대로다 (구간 처음에 바꾼 템포, 끝에 원래 템포)
+   */
   let tempoChangeOpen = $state(false);
-  const tempoChangeTarget = $derived.by(() => {
+  /** 창에 보일 반복 구간: 걸친 마디, 마디선에 맞지 않으면 그 구간 마디:박 표시 */
+  const tempoChangeLoop = $derived.by(() => {
     const s = song;
-    if (!s) return undefined;
-    const from = loop ? asRat(loop[0]) : rat(0);
-    const to = loop ? asRat(loop[1]) : undefined;
-    // 실제로 고칠 지도 템포·원문 t와 같은 목록 (겹쳐 쓴 t도 범위 밖으로 센다)
-    const bpms = tempoChangeTargets(s, from, to).bpms;
+    const r = loopRat();
+    if (!s || !r) return undefined;
+    const [from, to] = r;
+    const bars = barsOfRange(s.timeSig, from, to);
+    const aligned = eq(measureStart(s.timeSig, from), from) && eq(measureStart(s.timeSig, to), to);
     const where = (at: Rat) => {
       const { bar, beat } = barBeatAt(s.timeSig, at);
       return `${bar}:${Number.isInteger(beat) ? beat : beat.toFixed(2)}`;
     };
-    return { from, to, bpms, scope: to ? t("ui.tempoChangeRange", { from: where(from), to: where(to) }) : t("ui.tempoChangeSong") };
+    return { bars, range: aligned ? undefined : `${where(from)} ~ ${where(to)}` };
   });
-  function changeAllTempos(change: TempoChange, keepTime: boolean): string | undefined {
-    const target = tempoChangeTarget;
-    if (!target) return undefined;
+  /** 고른 자리를 템포 구간 [from, to)로. 곡 끝 뒤 마디만 적었으면 빈 목록 */
+  function tempoSpansOf(s: Song, target: TempoTarget): TempoSpan[] {
+    if (target.kind === "all") return [[rat(0), undefined]];
+    if (target.kind === "loop") {
+      const r = loopRat();
+      return r ? [[r[0], r[1]]] : [];
+    }
+    const bars = target.kind === "loopBars" ? (tempoChangeLoop ? [tempoChangeLoop.bars] : []) : target.bars;
+    return barSpans(s, bars);
+  }
+  function tempoChangeBpms(target: TempoTarget): readonly number[] {
+    const s = song;
+    if (!s) return [];
+    const spans = tempoSpansOf(s, target);
+    // 실제로 고칠 지도 템포·원문 t와 같은 목록 (겹쳐 쓴 t도 범위 밖으로 센다)
+    return spans.length === 0 ? [] : tempoChangeTargetsInSpans(s, spans);
+  }
+  function changeAllTempos(change: TempoChange, keepTime: boolean, target: TempoTarget): string | undefined {
     const before = history?.song;
-    if (keepTime) return changeAllTemposKeepTime(change, target.from, target.to);
-    const failed = before ? changeTemposResult(before, change, target.from, target.to).failed : [];
-    runIfChanged(changeTempos(change, target.from, target.to, t("ui.tempoChange")));
+    if (!before) return undefined;
+    const spans = tempoSpansOf(before, target);
+    if (spans.length === 0) return t("ui.tempoChangeNoBars");
+    if (keepTime) return changeAllTemposKeepTime(change, spans);
+    const failed = changeTemposInSpansResult(before, change, spans).failed;
+    runIfChanged(changeTemposInSpans(change, spans, t("ui.tempoChange")));
     // 경계 템포를 넣지 못한 악보는 원문을 그대로 두었으니 알려 준다
     if (failed.length > 0) {
       const reasons = [...new Set(failed.flatMap((f) => f.reasons))].map((r) => t(r === "n-note" ? "ui.tempoEdgeNNote" : "ui.tempoEdgeLength"));
@@ -3200,12 +3245,12 @@
    * 템포 한꺼번에 바꾸기 + 실제 시간 지키기: 템포 조각마다 음 길이·박자표를 같은 배율로 맞춘다 (실행 취소 한 칸).
    * 내보내기 창의 '실제 시간 지키며 바꾸기'(convertAdviceTempo)와 같은 검사를 지난다. 바꾸지 못하면 까닭을 돌려준다
    */
-  function changeAllTemposKeepTime(change: TempoChange, from: Rat, to: Rat | undefined): string | undefined {
+  function changeAllTemposKeepTime(change: TempoChange, spans: readonly TempoSpan[]): string | undefined {
     const before = history?.song;
     if (!before || picking) return undefined;
-    let result: ReturnType<typeof changeTemposKeepTimeResult>;
+    let result: ReturnType<typeof changeTemposKeepTimeInSpansResult>;
     try {
-      result = changeTemposKeepTimeResult(before, change, from, to);
+      result = changeTemposKeepTimeInSpansResult(before, change, spans);
     } catch (e) {
       if (!(e instanceof RangeError)) throw e;
       return t("ui.rangeEdit");
@@ -3241,9 +3286,9 @@
       const { bar, beat } = barBeatAt(s.timeSig, at);
       return `${bar}:${Number.isInteger(beat) ? beat : beat.toFixed(2)}`;
     };
-    if (loop) {
-      const from = asRat(loop[0]);
-      const to = asRat(loop[1]);
+    const r = loopRat();
+    if (r) {
+      const [from, to] = r;
       return { from, to, scope: t("ui.tempoChangeRange", { from: where(from), to: where(to) }) };
     }
     if (selectedNotes.length === 0) return undefined;
@@ -4255,6 +4300,7 @@
     { label: t("ui.redo"), hint: keyOf("edit.redo"), disabled: !canRedo, run: redo },
     { separator: true },
     { label: t("ui.selectAll"), title: t("ui.selectHelp"), hint: keyOf("edit.selectAll"), disabled: !song, run: () => run("edit.selectAll") },
+    { label: t("ui.selectTracks"), title: t("ui.selectTracksHelp"), hint: keyOf("edit.selectTracks"), disabled: !song || viewMode !== "roll", run: () => run("edit.selectTracks") },
     { label: t("cmd.edit.selectBefore"), hint: keyOf("edit.selectBefore"), disabled: !song || viewMode !== "roll", run: () => run("edit.selectBefore") },
     { label: t("cmd.edit.selectAfter"), hint: keyOf("edit.selectAfter"), disabled: !song || viewMode !== "roll", run: () => run("edit.selectAfter") },
     { label: t("ui.deleteNotes"), hint: keyOf("note.delete"), disabled: !song, run: () => run("note.delete") },
@@ -4313,7 +4359,7 @@
           run: clearTempos,
         },
         {
-          label: (loop ? t("ui.tempoChangeLoop") : t("ui.tempoChange")) + "…",
+          label: t("ui.tempoChange") + "…",
           title: t("ui.tempoChangeHelp"),
           disabled: !song,
           run: () => (tempoChangeOpen = true),
@@ -4421,8 +4467,21 @@
   }
 
   /** 범위에 드는 트랙과 그 안에서 옮길 음 */
-  function transposeTargets(scope: TransposeScope): { track: Track; notes: readonly Note[] }[] {
+  /**
+   * 음정 변환할 트랙과 음. bars가 있으면(고른 음 범위는 빼고) 그 마디 안에서 시작하는 & 사슬만, 뒤 마디로 이어진 음까지 함께
+   * (앞 마디에서 이어 들어온 사슬은 그대로 둔다. 사슬 가운데서 높이가 바뀌면 이어지지 않는다). 옮길 음이 없는 트랙은 뺀다
+   */
+  function transposeTargets(scope: TransposeScope, bars?: readonly BarRange[]): { track: Track; notes: readonly Note[] }[] {
     if (!song) return [];
+    if (bars && scope !== "selection") {
+      const timeSig = song.timeSig;
+      return transposeTargets(scope)
+        .map(({ track }) => {
+          const ids = chainsInBars(track.notes, timeSig, bars);
+          return { track, notes: track.notes.filter((n) => ids.has(n.id)) };
+        })
+        .filter((x) => x.notes.length > 0);
+    }
     const active = song.tracks.find((tr) => tr.id === activeTrackId);
     // 고른 음: 피아노롤·타브 모두 (타브는 화음 여러 줄을 함께 고를 수 있어 트랙마다 나눈다)
     if (scope === "selection") {
@@ -4440,11 +4499,11 @@
     return [...new Set(ids)].filter((id) => lockedIds.has(id)).map(trackLabel).join(", ");
   }
 
-  function checkTranspose(scope: TransposeScope, semitones: number): TransposeCheck {
+  function checkTranspose(scope: TransposeScope, semitones: number, bars?: readonly BarRange[]): TransposeCheck {
     let count = 0;
     let folded = 0;
     let invalid = false;
-    for (const { track, notes } of transposeTargets(scope)) {
+    for (const { track, notes } of transposeTargets(scope, bars)) {
       count += notes.length;
       const moved = transposeNotes(notes, semitones);
       if (!moved) invalid = true;
@@ -4456,10 +4515,10 @@
     return { count, invalid, folded };
   }
 
-  function applyTranspose(scope: TransposeScope, semitones: number) {
+  function applyTranspose(scope: TransposeScope, semitones: number, bars?: readonly BarRange[]) {
     if (!history) return;
     const label = t("ui.transpose");
-    const targets = transposeTargets(scope);
+    const targets = transposeTargets(scope, bars);
     // 잠근 트랙이 끼면 묻고, 그래도 하겠다면 잠근 트랙까지 바꾼다
     const locked = lockedNames(targets.map(({ track }) => track.id));
     if (locked && !confirm(t("ui.transposeLockedConfirm", { names: locked }))) return;
@@ -4472,7 +4531,7 @@
       const picked = new Set(notes.map((n) => n.id));
       const moved = transposeNotes(notes, semitones);
       if (!moved) return [];
-      if (scope !== "selection") return [{ trackId: track.id, notes: moved }];
+      if (scope !== "selection" && !bars) return [{ trackId: track.id, notes: moved }];
       const byId = new Map(moved.map((n) => [n.id, n]));
       return [{ trackId: track.id, notes: track.notes.map((n) => (picked.has(n.id) ? byId.get(n.id)! : n)) }];
     });
@@ -5030,6 +5089,7 @@
         return editor?.glueSelected() ?? false;
       case "note.delete":
         if (pickedEvent && viewMode === "roll" && showEvents) return deletePicked();
+        if (viewMode === "roll" && roll?.deleteTracks(t("ui.deleteNotes"))) return true;
         return editor?.editSelected(() => null, "음 지우기") ?? false;
       case "note.octaveUp":
         return editor?.editSelected((n) => (n.pitch + 12 <= 127 ? { ...n, pitch: n.pitch + 12 } : n), "옥타브 올리기") ?? false;
@@ -5100,7 +5160,7 @@
           return true;
         }
         // 여러 트랙에서 복사한 화음은 피아노롤의 트랙 하나에 겹쳐 붙일 수 없다 (음을 버리지 않게 붙이지 않는다)
-        if (noteClipboard.clip && clipOverlaps(noteClipboard.clip)) {
+        if (noteClipboard.clip && !noteClipboard.clip.trackIds && clipOverlaps(noteClipboard.clip)) {
           error = t("ui.pasteChordRoll");
           return true;
         }
@@ -5118,6 +5178,17 @@
         if (!song) return false;
         editor?.duplicateSelection(t("ui.duplicateNotes"));
         return true;
+      case "edit.selectTracks": {
+        // 롤에서만: 반복 구간(없으면 고른 음이 걸친 시간)에서 시작하는 모든 트랙 음
+        if (viewMode !== "roll" || !roll) return false;
+        const span = loop ?? spanOf(roll.selection());
+        if (!span) {
+          error = t("ui.selectTracksNoRange");
+          return true;
+        }
+        if (!roll.selectRange(span[0], span[1])) error = t("ui.selectTracksEmpty");
+        return true;
+      }
       case "edit.selectBefore":
       case "edit.selectAfter": {
         // 롤에서만: 편집 커서(없으면 고른 첫 음 시작) 앞·뒤 음
@@ -5642,7 +5713,7 @@
       { id: "song", label: t("ui.scopeSong") },
     ]}
     initialScope={keyFitOpen.scope}
-    loopBars={loop ? barsOfRange(song.timeSig, asRat(loop[0]), asRat(loop[1])) : undefined}
+    loopBars={loop ? barsOfRange(song.timeSig, ...loopRat()!) : undefined}
     check={checkKeyFit}
     onapply={applyKeyFit}
     onclose={() => (keyFitOpen = undefined)}
@@ -5657,7 +5728,7 @@
     ]}
     initialScope={volumeOpen.scope}
     initialVol={volumeOpen.vol}
-    loopBars={song && loop ? barsOfRange(song.timeSig, asRat(loop[0]), asRat(loop[1])) : undefined}
+    loopBars={song && loop ? barsOfRange(song.timeSig, ...loopRat()!) : undefined}
     {profile}
     held={fadeOn()}
     check={checkVolume}
@@ -5667,7 +5738,7 @@
 {/if}
 {#if deleteBarsOpen && song}
   <DeleteBarsDialog
-    loopBars={loop ? barsOfRange(song.timeSig, asRat(loop[0]), asRat(loop[1])) : undefined}
+    loopBars={loop ? barsOfRange(song.timeSig, ...loopRat()!) : undefined}
     check={(bars) => checkDeleteBars(song!, bars)}
     referencePlan={(bars) => deleteReferencePlan(song!, barSpans(song!, bars))}
     videoPlan={(bars) => deleteVideoPlan(song!, barSpans(song!, bars))}
@@ -5684,7 +5755,7 @@
     ]}
     initialScope={chordAttOpen.scope}
     initial={chordAttOpen.prefs}
-    loopBars={song && loop ? barsOfRange(song.timeSig, asRat(loop[0]), asRat(loop[1])) : undefined}
+    loopBars={song && loop ? barsOfRange(song.timeSig, ...loopRat()!) : undefined}
     {profile}
     check={checkChordAtt}
     onapply={applyChordAtt}
@@ -5705,6 +5776,7 @@
       { id: "song", label: t("ui.scopeSong") },
     ]}
     initialScope={transposing.scope}
+    loopBars={song && loop ? barsOfRange(song.timeSig, ...loopRat()!) : undefined}
     check={checkTranspose}
     onapply={applyTranspose}
     onclose={() => (transposing = undefined)}
@@ -5788,12 +5860,12 @@
     onclose={() => (eventEdit = undefined)}
   />
 {/if}
-{#if tempoChangeOpen && tempoChangeTarget}
+{#if tempoChangeOpen && song}
   <TempoChangeDialog
-    scope={tempoChangeTarget.scope}
-    bpms={tempoChangeTarget.bpms}
+    loopBars={tempoChangeLoop?.bars}
+    loopRange={tempoChangeLoop?.range}
+    bpmsOf={tempoChangeBpms}
     tempoRange={profile.tempo}
-    loop={tempoChangeTarget.to !== undefined}
     onapply={changeAllTempos}
     onclose={() => (tempoChangeOpen = false)}
   />
@@ -6117,6 +6189,12 @@
           noteDur={newNoteDur}
           {playhead}
           onnotes={editNotes}
+          onnotesmany={(changes, label) => {
+            // 여러 트랙을 바꾸는 명령은 잠근 트랙이 하나라도 끼면 통째로 하지 않는다 (타브와 같다)
+            if (!history || picking || changes.length === 0 || !changes.every((c) => editable(c.trackId))) return false;
+            return commit(setTracksNotes(changes, label)) !== undefined;
+          }}
+          onmissingtracks={() => (error = t("ui.pasteTracksMissing"))}
           ontrim={(loss) => flash(overlapNotice(loss, t) ?? "")}
           onselecttrack={(id) => (activeTrackId = id)}
           onpicknote={pickNote}
@@ -6140,7 +6218,7 @@
           oncursor={(t) => (cursor = t)}
           onseek={seek}
           {showEvents}
-          onloop={(r) => (loop = r)}
+          onloop={setLoop}
           tool={rollTool}
           onreverb={stampReverb}
           {selectMove}
@@ -6206,7 +6284,7 @@
           {loop}
           onseek={seek}
           onplaycursor={(at) => (cursor = at)}
-          onloop={(r) => (loop = r)}
+          onloop={setLoop}
           onevent={openEvent}
           oncursor={(at) => (tabCursor = at)}
           onalign={(a) => (tabAlign = a)}

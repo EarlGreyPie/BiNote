@@ -205,18 +205,28 @@ export function assignTake(
   for (let k = 0; k < target.room; k++) lanes.push({ trackId: undefined, base: [], added: [] });
   const stamp = Date.now().toString(36);
   const byStart = (a: TakeNote, b: TakeNote) => cmp(a.start, b.start);
+  const highFirst = [...take].sort((a, b) => byStart(a, b) || b.pitch - a.pitch);
+  // 0) 높은 음부터 그대로 나눠 다 들어가면 그것을 쓴다. 가운데 음 빼기는 정말 넘칠 때만
+  //    (바깥 음 먼저 시험은 트랙 배치가 달라, 덧녹음의 곡 음 때문에 넘치지 않는 화음에서도 음을 뺄 수 있다)
+  const plain = placeNotes(lanes.map((l) => ({ ...l, added: [] })), highFirst, grid, target.playerId, stamp, volumeBase, volumeOf);
+  if (plain.dropped.length === 0) {
+    for (const lane of plain.lanes) lane.added.sort((a, b) => cmp(a.start, b.start));
+    return { lanes: plain.lanes, dropped: [], cleared, range };
+  }
   // 1) 바깥 음 먼저 넣어 보고 빠질 음을 정한다 (트랙은 비워 둔 채 시험으로만)
   const trial = placeNotes(lanes.map((l) => ({ ...l, added: [] })), outerFirst([...take].sort(byStart)), grid, target.playerId, stamp, volumeBase, volumeOf);
   const out = new Set(trial.dropped);
   // 2) 남은 음만 높은 음부터 트랙에 나눈다
-  const kept = [...take].filter((n) => !out.has(n)).sort((a, b) => byStart(a, b) || b.pitch - a.pitch);
+  const kept = highFirst.filter((n) => !out.has(n));
   const placed = placeNotes(lanes, kept, grid, target.playerId, stamp, volumeBase, volumeOf);
   // 3) 시험에서 빠진 음도 실제로 나눈 트랙에 자리가 있으면 넣는다. 시험과 실제는 넣는 순서가 달라,
   //    시험에서만 자리가 막힌 음(덧녹음의 곡 음 때문에)을 화음이 넘치지 않았는데 빼지 않으려고
   const retry = placeNotes(placed.lanes, trial.dropped, grid, target.playerId, `${stamp}b`, volumeBase, volumeOf);
   const dropped = [...retry.dropped, ...placed.dropped].sort((a, b) => byStart(a, b) || b.pitch - a.pitch);
-  for (const lane of retry.lanes) lane.added.sort((a, b) => cmp(a.start, b.start));
-  return { lanes: retry.lanes, dropped, cleared, range };
+  // 바깥 음을 지키려다 더 많이 빠지면 높은 음부터 나눈 쪽을 쓴다 (넣을 수 있는 음을 버리지 않게)
+  const best = dropped.length > plain.dropped.length ? { lanes: plain.lanes, dropped: plain.dropped } : { lanes: retry.lanes, dropped };
+  for (const lane of best.lanes) lane.added.sort((a, b) => cmp(a.start, b.start));
+  return { lanes: best.lanes, dropped: best.dropped, cleared, range };
 }
 
 type Lane = { trackId: string | undefined; base: readonly Note[]; added: Note[] };

@@ -134,6 +134,15 @@ describe("화음이 한도를 넘칠 때", () => {
     expect(out.assign.dropped.map((n) => n.pitch)).toEqual([64]);
   });
 
+  it("덧녹음에서 곡 음이 한 트랙 뒤쪽을 막아도, 높은 음부터 나눠 다 들어가면 가운데 음을 빼지 않는다", () => {
+    const base: Note = { id: "x", start: r(7, 16), dur: r(3, 16), pitch: 40, vol: 8, tie: "none" };
+    const s = song(3, { 2: [base] });
+    const take = [tn(72, r(5, 16), r(2, 16)), tn(64, r(5, 16), r(3, 16)), tn(48, r(5, 16), r(1, 16))];
+    const out = placeTake(s, take, { addTracks: false });
+    expect(out.dropped).toBe(0);
+    expect(out.changes.map((c) => c.notes.filter((n) => n.id !== "x").map((n) => n.pitch))).toEqual([[72], [64], [48]]);
+  });
+
   it("다음 악보로 넘기면 빠지는 음 없이 연주자 끝에 트랙을 더한다 (한도를 넘는 트랙은 다음 악보)", () => {
     const s = song(1);
     const take = [48, 52, 55, 60, 64, 67, 72, 76].map((p) => tn(p, r(0), r(1, 4)));

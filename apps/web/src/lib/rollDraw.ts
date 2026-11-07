@@ -69,6 +69,8 @@ export interface RollDrawOptions {
   /** MIDI 건반 녹음 중 친 음 (트랙과 상관없이 높이대로 녹음 색 테두리로) */
   readonly ghost?: readonly GhostNote[] | undefined;
   readonly selected: ReadonlySet<string>;
+  /** 여러 트랙을 함께 고를 때 다른 트랙에서 고른 음 (고른 트랙 음과 같은 고리로 그린다) */
+  readonly wide?: ReadonlySet<string> | undefined;
   /** Ctrl+끌기 고르기 상자 (시간·높이) */
   readonly box: { readonly t0: number; readonly p0: number; readonly t1: number; readonly p1: number } | undefined;
   readonly head: number | undefined;
@@ -435,7 +437,7 @@ export function drawRoll(canvas: HTMLCanvasElement, o: RollDrawOptions): void {
         else g.fillText(label, r.x + 2, r.y + r.h - 3);
       }
       // 고른 음: 음 색은 그대로 두고, 음 밖으로 2px 띄운 얇은 둥근 고리 (글자색이라 어느 트랙 색에서나 보인다)
-      if (isActive && selected.has(n.id)) {
+      if ((isActive && selected.has(n.id)) || o.wide?.has(n.id)) {
         const pad = 2;
         g.lineWidth = 1.5;
         g.strokeStyle = o.css("--text");

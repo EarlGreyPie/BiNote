@@ -1,4 +1,4 @@
-import { expect, exportMml, focusRoll, noteCount, openApp, pasteAsNewSong, SAMPLE_MML, test, trackEditor, trackTabs } from "./fixtures";
+import { expect, exportMml, focusRoll, menu, noteCount, openApp, pasteAsNewSong, SAMPLE_MML, test, trackEditor, trackTabs } from "./fixtures";
 
 // MML@ 붙여넣기 → 트랙 생김 → 내보내기 글, 음 편집 → 실행 취소
 
@@ -90,4 +90,53 @@ test("제자리에 붙여넣기(Ctrl+Shift+V)는 재생 커서가 아니라 복�
   // 둘째 트랙의 앞 두 음(c2 e2)은 붙인 음과 겹쳐 지워지고 g2만 남는다
   await expect(noteCount(page)).toHaveText("음 9개");
   expect(await exportMml(page)).toBe("MML@l8cdefgab>c,l8cdefgabb+<g2;");
+});
+
+test("피아노롤에서 여러 트랙을 함께 골라 잘라 내고 원래 자리·커서 자리에 트랙마다 붙인다", async ({ page }) => {
+  await trackTabs(page).first().click();
+  // 첫 트랙 음을 모두 고르고(첫 마디), 그 시간에서 시작하는 모든 트랙 음으로 넓힌다 (Alt+A)
+  await page.keyboard.press("Control+A");
+  await page.keyboard.press("Alt+A");
+  await page.keyboard.press("Control+X");
+  // 첫 트랙은 모두, 둘째 트랙은 첫 마디에서 시작한 c2 e2가 빠지고 g2만 남는다
+  await expect(noteCount(page)).toHaveText("음 0개");
+  await trackTabs(page).nth(1).click();
+  await expect(noteCount(page)).toHaveText("음 1개");
+  // 제자리에 붙이면 트랙마다 원래 트랙·자리로 돌아온다
+  await page.keyboard.press("Control+Shift+V");
+  await expect(noteCount(page)).toHaveText("음 3개");
+  expect(await exportMml(page)).toBe(SAMPLE_EXPORT);
+});
+
+test("여러 트랙 복사본은 다른 곡을 열면 버려서, 같은 트랙 id를 가진 다른 곡 트랙에 붙지 않는다", async ({ page }) => {
+  await trackTabs(page).first().click();
+  await page.keyboard.press("Control+A");
+  await page.keyboard.press("Alt+A");
+  await page.keyboard.press("Control+C");
+  // 다른 곡을 연다 (트랙 id는 또 t1, t2)
+  await menu(page, "파일", /^MML@ 붙여넣기/);
+  const dialog = page.locator("dialog[open]");
+  await dialog.locator("textarea").fill("MML@l1c,l1<c;");
+  await dialog.getByRole("button", { name: "새 곡으로 열기" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(trackTabs(page)).toHaveCount(2);
+  const before = await exportMml(page);
+  await trackTabs(page).first().click();
+  await page.keyboard.press("Control+Shift+V");
+  await page.keyboard.press("Control+V");
+  expect(await exportMml(page)).toBe(before);
+  await expect(page.getByRole("button", { name: "실행 취소" })).toBeDisabled();
+});
+
+test("고친 트랙만 미리 체크된 내보내기 창에서 악보를 체크하면 채널이 곡 순서대로 들어간다", async ({ page }) => {
+  // 한 번 모두 복사해 두면, 다음에는 고친 트랙만 미리 체크된다
+  expect(await exportMml(page)).toBe(SAMPLE_EXPORT);
+  await trackTabs(page).nth(1).click();
+  await expect(trackTabs(page).nth(1)).toHaveAttribute("aria-selected", "true");
+  await focusRoll(page);
+  await page.keyboard.press("Control+A");
+  await page.keyboard.press("Shift+ArrowUp");
+  await expect(trackEditor(page)).toHaveText("l2ceg");
+  // 악보 체크로 나머지를 더해도 고친 둘째 트랙이 첫 채널로 오지 않는다
+  expect(await exportMml(page)).toBe("MML@l8cdefgab>c,l2ceg;");
 });

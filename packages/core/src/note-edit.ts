@@ -323,6 +323,11 @@ export interface NoteClip {
    * 없으면 트랙 하나 (notes가 한 층)
    */
   readonly layers?: readonly (readonly Note[])[];
+  /**
+   * 층마다 복사해 온 트랙 id (피아노롤에서 여러 트랙을 함께 고른 경우, layers와 같은 순서).
+   * 있으면 피아노롤은 층을 제 트랙에 붙인다. 타브는 보지 않고 층 순서대로 붙인다
+   */
+  readonly trackIds?: readonly string[];
 }
 
 /**

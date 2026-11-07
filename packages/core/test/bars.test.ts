@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { barAt, barBeatAt, barsOfRange, changeVolumes, headsInBars, inBars, MOBILE_PROFILE, parseBarList, rat, volumeSpan, type Note } from "../src/index.js";
+import { barAt, barBeatAt, barsOfRange, chainsInBars, changeVolumes, headsInBars, inBars, MOBILE_PROFILE, parseBarList, rat, volumeSpan, type Note } from "../src/index.js";
 
 describe("마디 번호 (분수로 정확히)", () => {
   it("박자표가 없으면 4/4, 마디선 위는 그 마디", () => {
@@ -79,5 +79,18 @@ describe("마디만 볼륨 바꾸기", () => {
   it("여러 범위와 끝까지", () => {
     const picked = headsInBars(notes, [], parseBarList("1, 3-")!);
     expect([...picked].sort()).toEqual(["a", "b", "c", "d", "i"]);
+  });
+});
+
+describe("마디만 음정 변환할 음 (& 사슬째)", () => {
+  const n = (id: string, q: number, tie: Note["tie"] = "none"): Note => ({ id, start: rat(q, 4), dur: rat(1, 4), pitch: 60, vol: 8, tie });
+  // 1마디: a b c d(&), 2마디: e(d에서 이어짐) f g(&), 3마디: h(g에서 이어짐) i
+  const notes = [n("a", 0), n("b", 1), n("c", 2), n("d", 3, "next"), n("e", 4), n("f", 5), n("g", 7, "next"), n("h", 8), n("i", 9)];
+
+  it("범위 안에서 시작하는 사슬은 뒤 마디로 이어진 음까지, 앞에서 이어 들어온 사슬은 빼서 높이가 끊기지 않는다", () => {
+    expect([...chainsInBars(notes, [], [[2, 2]])].sort()).toEqual(["f", "g", "h"]);
+    expect([...chainsInBars(notes, [], [[1, 1]])].sort()).toEqual(["a", "b", "c", "d", "e"]);
+    expect([...chainsInBars(notes, [], parseBarList("3-")!)].sort()).toEqual(["i"]);
+    expect(chainsInBars(notes, [], [[9, 12]]).size).toBe(0);
   });
 });

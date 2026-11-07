@@ -55,6 +55,7 @@
   import { LaneGesture } from "./laneGesture.svelte";
   import { tabEventPrefs } from "./tabEventPrefs.svelte";
   import { scaledPx } from "./uiScaleNow.svelte";
+  import { clipTracks, idsInRange, pasteTracks, removeFromTracks } from "./multiTrack";
   import { EDGE_SPEED, edgeScroll, freeDivision, notesBeside } from "./editNav";
   import type { BookMark } from "./splitView";
   import { agreeSpeed, fallShift, fallSpeed, rowDiff, sameFrame, SPEED_FRAME_GAP, SPEED_FRAME_WIDTH, SPEED_PICK_GAP, SPEED_RETRY_AFTER, SPEED_ROW_SCALE, speedBand, speedPairTimes, speedPickLost, speedPickPress, speedPickWheel, toGray } from "./videoSpeed";
@@ -126,6 +127,10 @@
     /** 한 번 부를 때마다 실행 취소 한 칸 */
     /** 곡에 넣지 못했으면 false를 돌려준다 (붙여넣기는 그때 고른 음을 그대로 둔다) */
     onnotes: (trackId: string, notes: Note[], label: string) => boolean | void;
+    /** 여러 트랙을 한 번에 바꾼다 (실행 취소 한 칸). 여러 트랙 고르기의 잘라내기·지우기·붙여넣기가 쓴다. 넣지 못했으면 false */
+    /** 여러 트랙에서 복사한 음을 붙이려는데 복사해 온 트랙이 지금 롤에 없을 때 */
+    onmissingtracks?: () => void;
+    onnotesmany?: (changes: readonly { trackId: string; notes: readonly Note[] }[], label: string) => boolean;
     onselecttrack: (trackId: string) => void;
     /** 음을 눌러 골랐을 때 (MML 글에서 그 자리를 보여 준다). 두 번 누르면 focus = true */
     onpicknote?: (trackId: string, note: Note, focus: boolean) => void;
@@ -231,7 +236,7 @@
     onlanetoggle?: ((trackId: string) => void) | undefined;
   }
 
-  let { cursor, loop, books, oncursor, onloop, song: fullSong, ghost = [], activeTrackId, orientation, division, playhead, onnotes, onselecttrack, onpicknote, ontrim, onpreview, onseek, showEvents = false, video = $bindable(), videoPlay = $bindable(false), speedStep = $bindable(0), onspeedpicked, fitOnLoad = false, onvideoready, pitchRange = [12, 119], wave, look, themeKey = "", seconds, rate = 1, colors, tool = "pen", onreverb, noteDur, volume, onvolume, lightKeys = false, keyLock = false, canonicalOf, memory, onmemory, work, visibleTrackIds, selectMove = false, locked, pickOthers = true, onevent, oneventmove, onalignbar, bardragtext, onwaveoffset, pickedEvent, onpickevent, ontempowheel, laneTrackIds, melodyIds, onvolumes, onclearlane, onlanetoggle }: Props =
+  let { cursor, loop, books, oncursor, onloop, song: fullSong, ghost = [], activeTrackId, orientation, division, playhead, onnotes, onnotesmany, onmissingtracks, onselecttrack, onpicknote, ontrim, onpreview, onseek, showEvents = false, video = $bindable(), videoPlay = $bindable(false), speedStep = $bindable(0), onspeedpicked, fitOnLoad = false, onvideoready, pitchRange = [12, 119], wave, look, themeKey = "", seconds, rate = 1, colors, tool = "pen", onreverb, noteDur, volume, onvolume, lightKeys = false, keyLock = false, canonicalOf, memory, onmemory, work, visibleTrackIds, selectMove = false, locked, pickOthers = true, onevent, oneventmove, onalignbar, bardragtext, onwaveoffset, pickedEvent, onpickevent, ontempowheel, laneTrackIds, melodyIds, onvolumes, onclearlane, onlanetoggle }: Props =
     $props();
 
   /** 레이어: 고른 트랙이 든 보기만 그리고 다루는 곡 (나머지 트랙은 롤에서 보이지도 눌리지도 않는다) */
@@ -315,7 +320,16 @@
   let selected = $state.raw<ReadonlySet<string>>(new Set());
   /** Ctrl+끌기로 그리는 고르기 상자 (시간·높이) */
   /** 상자 고르기. from이 있으면 음 위에서 시작한 것: 문턱(x0·y0에서 8px)을 넘게 끌기 전에는 그 음 고르기를 지킨다 */
-  let boxing = $state.raw<{ t0: number; p0: number; t1: number; p1: number; from?: { id: string; x0: number; y0: number } } | undefined>(undefined);
+  let boxing = $state.raw<{ t0: number; p0: number; t1: number; p1: number; from?: { id: string; x0: number; y0: number }; all?: boolean } | undefined>(undefined);
+
+  /**
+   * 여러 트랙 고르기: 다른 트랙에서 함께 고른 음. wideFor가 지금 selected와 같은 Set일 때만 살아 있어,
+   * 고르기를 바꾸는 다른 동작(누르기·상자·모두 고르기·트랙 바꾸기)을 하면 저절로 풀린다
+   */
+  let wide = $state.raw<ReadonlySet<string>>(new Set());
+  let wideFor = $state.raw<ReadonlySet<string> | undefined>(undefined);
+  const wideOn = $derived(wide.size > 0 && wideFor === selected);
+  const wideShown = $derived(wideOn ? wide : undefined);
 
   function selectOnly(id: string | undefined) {
     selected = new Set(id ? [id] : []);
@@ -716,6 +730,9 @@
     const own = new Set(active?.notes.map((n) => n.id) ?? []);
     const kept = [...selected].filter((x) => own.has(x));
     if (kept.length !== selected.size) selected = new Set(kept);
+    // 여러 트랙 고르기는 트랙을 바꾸면 늘 푼다 (고른 트랙에 든 음이 없어 selected가 그대로여도)
+    wide = new Set();
+    wideFor = undefined;
   });
   /** 고른 트랙에서 고른 음들 (시작 순) */
   const selectedNotes = $derived(active ? active.notes.filter((n) => selected.has(n.id)) : []);
@@ -886,6 +903,7 @@
       loss: dragLoss,
       ghost,
       selected,
+      wide: wideShown,
       box: boxing?.from ? undefined : boxing,
       head,
       division,
@@ -1139,7 +1157,8 @@
     }
     if (e.button !== 0) return;
     const at = pointer(e);
-    if (eraser && at.time !== undefined && !inRuler(e)) {
+    // Ctrl+Alt+끌기는 지우개에서도 여러 트랙 고르기 (지우지 않는다)
+    if (eraser && at.time !== undefined && !inRuler(e) && !(e.altKey && (e.ctrlKey || e.metaKey))) {
       host.focus();
       erasing = true;
       eraseAt(e);
@@ -1201,6 +1220,12 @@
       // 울림 찍기: 누른 음을 누른 자리(격자)부터 작아지는 조각으로 쪼갠다. 음 밖을 누르면 아무것도 안 한다
       const own = hitNear(active.notes, at.time, at.pitch, e);
       if (own) onreverb?.(active.id, own.id, snapNearest(at.time, division));
+      return;
+    }
+    if (e.altKey && active && (tool === "select" || e.ctrlKey || e.metaKey) && !hitNear(active.notes, at.time, at.pitch, e)) {
+      // 여러 트랙 고르기: 고르기 도구에서 Alt+끌기(다른 도구는 Ctrl+Alt+끌기). 높이와 상관없이 끈 시간 안의 모든 트랙 음
+      boxing = { t0: at.time, p0: 0, t1: at.time, p1: 127, all: true };
+      canvas.setPointerCapture(e.pointerId);
       return;
     }
     if ((e.ctrlKey || e.metaKey) && active) {
@@ -1356,7 +1381,8 @@
       const from = boxing.from;
       if (from && Math.hypot(e.clientX - from.x0, e.clientY - from.y0) < 8) return;
       const at = pointer(e);
-      boxing = { t0: boxing.t0, p0: boxing.p0, t1: at.time ?? boxing.t1, p1: at.pitch };
+      // 문턱을 넘겼으니 누르기 표시(from)는 떼어 상자 고르기로 (from이 남으면 놓을 때 상자를 무시한다)
+      boxing = { t0: boxing.t0, p0: boxing.p0, t1: at.time ?? boxing.t1, p1: boxing.all ? boxing.p1 : at.pitch, ...(boxing.all ? { all: true } : {}) };
       return;
     }
     if (!drag) return;
@@ -1524,6 +1550,11 @@
       // 음을 누르기만 했으면 그 음 고르기 그대로
       if (!active || b.from) return;
       const [t0, t1] = b.t0 < b.t1 ? [b.t0, b.t1] : [b.t1, b.t0];
+      // 여러 트랙 고르기(Alt+끌기로 시작했거나 Alt를 누른 채 놓음): 높이와 상관없이 그 시간 안에서 시작하는 모든 트랙 음
+      if (b.all || e.altKey) {
+        selectRange(t0, t1);
+        return;
+      }
       const [p0, p1] = b.p0 < b.p1 ? [b.p0, b.p1] : [b.p1, b.p0];
       selected = new Set(
         active.notes
@@ -1584,8 +1615,50 @@
     return true;
   }
 
+  /** 여러 트랙 고르기에 든 모든 음 id (고른 트랙 음 + 다른 트랙 음) */
+  function wideIds(): Set<string> {
+    return new Set([...selected, ...wide]);
+  }
+
+  /**
+   * 롤에 보이는 모든 트랙에서 [from, to) 안에 시작하는 음을 고른다 (화면 위치, 온음표 단위). 높이는 보지 않는다.
+   * 고른 트랙 음은 보통 고르기로, 다른 트랙 음은 함께 고른 음으로 둔다. 고를 음이 없으면 false
+   */
+  export function selectRange(from: number, to: number): boolean {
+    const ids = idsInRange(song.tracks, from, to);
+    const own = new Set(active?.notes.map((n) => n.id) ?? []);
+    const mine = new Set([...ids].filter((id) => own.has(id)));
+    wide = new Set([...ids].filter((id) => !own.has(id)));
+    selected = mine;
+    wideFor = mine;
+    return ids.size > 0;
+  }
+
+  /** 여러 트랙을 함께 고른 상태인지 */
+  export function selectingTracks(): boolean {
+    return wideOn;
+  }
+
+  /** 함께 고른 여러 트랙의 음을 모두 지운다 (실행 취소 한 칸). 여러 트랙 고르기가 아니면 false */
+  export function deleteTracks(label: string): boolean {
+    if (!wideOn || !onnotesmany) return false;
+    const changes = removeFromTracks(song.tracks, wideIds());
+    if (changes.length > 0 && onnotesmany(changes, label)) {
+      wide = new Set();
+      selected = new Set();
+    }
+    return true;
+  }
+
   /** 고른 음을 앱 클립보드에 복사한다. 고른 음이 없으면 false */
   export function copySelection(): boolean {
+    if (wideOn) {
+      // 여러 트랙: 트랙 나눔과 트랙 id를 함께 담아, 붙일 때 제 트랙에 들어가게
+      const many = clipTracks(song.tracks, wideIds());
+      if (!many) return false;
+      noteClipboard.clip = many;
+      return true;
+    }
     const clip = clipNotes(selectedNotes);
     if (!clip) return false;
     noteClipboard.clip = clip;
@@ -1594,6 +1667,7 @@
 
   /** 고른 음을 복사하고 지운다 */
   export function cutSelection(label: string): boolean {
+    if (wideOn) return copySelection() && deleteTracks(label);
     return copySelection() && editSelected(() => null, label);
   }
 
@@ -1606,7 +1680,30 @@
     const clip = noteClipboard.clip;
     if (!clip) return undefined;
     const from = at === undefined ? clip.origin : typeof at === "number" ? snapNearest(at, 3840) : at;
+    if (clip.trackIds) return placeTracks(clip, from, label);
     return placeClip(clip, from, "p", label);
+  }
+
+  /**
+   * 여러 트랙에서 복사한 음을 층마다 복사해 온 제 트랙의 from에 놓고, 놓은 음을 여러 트랙 고르기로 고른다.
+   * 복사해 온 트랙이 지금 없거나(지웠거나 레이어에 안 보임) 넣지 못하면 undefined
+   */
+  function placeTracks(clip: NoteClip, from: Rat, label: string): Rat | undefined {
+    if (!onnotesmany) return undefined;
+    const done = pasteTracks(song.tracks, clip, from, freshIds("p"));
+    if (!done) {
+      onmissingtracks?.();
+      return undefined;
+    }
+    if (!onnotesmany(done.changes, label)) return undefined;
+    noteTrim(true, done.loss);
+    const own = new Set(done.changes.find((c) => c.trackId === active?.id)?.notes.map((n) => n.id) ?? []);
+    const mine = new Set([...done.pasted].filter((id) => own.has(id)));
+    wide = new Set([...done.pasted].filter((id) => !own.has(id)));
+    selected = mine;
+    wideFor = mine;
+    reveal(toFloat(from));
+    return done.end;
   }
 
   /** 음 묶음을 고른 트랙의 from에 새 id로 놓고 놓은 음을 고른다. 놓은 끝 위치, 못 놓았으면 undefined */

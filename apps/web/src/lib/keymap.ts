@@ -23,6 +23,7 @@ export const COMMANDS = [
   "edit.selectAll",
   "edit.selectBefore",
   "edit.selectAfter",
+  "edit.selectTracks",
   "edit.copy",
   "edit.cut",
   "edit.paste",
@@ -94,6 +95,8 @@ const COMMON: Bindings = {
   // 편집 커서 앞·뒤 음 모두 고르기 (Shift+Home / End는 글 칸 밖에서만 받는다)
   "edit.selectBefore": ["Shift+Home"],
   "edit.selectAfter": ["Shift+End"],
+  // 반복 구간(없으면 고른 음이 걸친 시간)의 모든 트랙 음 고르기 (피아노롤)
+  "edit.selectTracks": ["Alt+A"],
   "edit.copy": ["Ctrl+C"],
   "edit.cut": ["Ctrl+X"],
   "edit.paste": ["Ctrl+V"],
