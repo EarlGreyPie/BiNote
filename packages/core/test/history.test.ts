@@ -4,6 +4,94 @@ import { emptySong, findOverlaps, History, rat, replaceSong, type Command, type 
 const meta = { title: "t", author: "EarlGreyPie", profileId: "mobile" };
 
 describe("History", () => {
+  it("실행 취소 뒤 곧바로 다시 실행하면 명령을 다시 계산하지 않고 취소 전의 곡 그대로 돌아온다", () => {
+    const a = emptySong(meta);
+    let applied = 0;
+    // 부를 때마다 새 객체를 만드는 명령 (음 목록을 새로 만드는 편집처럼)
+    const rename: Command = {
+      label: "rename",
+      apply: (song) => {
+        applied++;
+        return { ...song, meta: { ...song.meta, title: "b" } };
+      },
+      invert: (before) => ({ label: "rename", apply: () => before, invert: () => rename }),
+    };
+    const h = new History(a);
+    const b = h.run(rename);
+    const c = h.run(rename);
+    expect(applied).toBe(2);
+    expect(h.undo()).toBe(b);
+    expect(h.undo()).toBe(a);
+    expect(h.redo()).toBe(b);
+    expect(h.redo()).toBe(c);
+    expect(applied).toBe(2);
+  });
+
+  it("실행 취소와 다시 실행 사이에 음소거를 바꿔도 다시 실행은 취소 전의 음 그대로 돌아오고, 바꾼 음소거는 남는다", () => {
+    const track = (id: string): Track => ({ id, playerId: "p1", name: id, color: "#000", role: "free", mute: false, solo: false, notes: [], spelling: {} });
+    const a = { ...emptySong(meta), tracks: [track("t1"), track("t2")] };
+    let applied = 0;
+    // 부를 때마다 음 목록을 새 객체로 만드는 편집
+    const edit = (id: string): Command => {
+      const command: Command = {
+        label: id,
+        apply: (song) => {
+          applied++;
+          return { ...song, tracks: song.tracks.map((t) => (t.id === id ? { ...t, notes: [...t.notes, { id: `${id}.${t.notes.length}`, start: rat(0), dur: rat(1, 4), pitch: 60, vol: 8, tie: "none" as const }] } : t)) };
+        },
+        invert: (before) => ({ label: id, apply: () => before, invert: () => command }),
+      };
+      return command;
+    };
+    const h = new History(a);
+    const b = h.run(edit("t1"));
+    const c = h.run(edit("t2"));
+    expect(applied).toBe(2);
+    h.undo();
+    h.undo();
+    // 기록 밖 상태: 트랙 2 끄기
+    const muted = h.amend({ ...h.song, tracks: h.song.tracks.map((t) => (t.id === "t2" ? { ...t, mute: true } : t)) });
+    expect(muted.tracks[1]!.mute).toBe(true);
+    const r1 = h.redo();
+    const r2 = h.redo();
+    // 명령을 다시 계산하지 않았고, 음 목록은 취소 전과 같은 객체다 (그 곡을 기준으로 세운 뒤 단계가 낡지 않는다)
+    expect(applied).toBe(2);
+    expect(r1.tracks[0]!.notes).toBe(b.tracks[0]!.notes);
+    expect(r2.tracks[0]!.notes).toBe(c.tracks[0]!.notes);
+    expect(r2.tracks[1]!.notes).toBe(c.tracks[1]!.notes);
+    expect(r1.tracks[1]!.mute).toBe(true);
+    expect(r2.tracks[1]!.mute).toBe(true);
+    expect(h.canRedo).toBe(false);
+  });
+
+  it("맨 위 두 단계를 한 칸으로 묶으면 실행 취소·다시 실행 한 번에 두 단계가 함께 오간다", () => {
+    const a = emptySong(meta);
+    const title = (to: string): Command => {
+      const command: Command = {
+        label: to,
+        apply: (song) => ({ ...song, meta: { ...song.meta, title: to } }),
+        invert: (before) => ({ label: to, apply: () => before, invert: () => command }),
+      };
+      return command;
+    };
+    const h = new History(a);
+    expect(h.mergeLast()).toBe(false);
+    h.run(title("b"));
+    expect(h.mergeLast()).toBe(false);
+    h.run(title("c"));
+    const d = h.run(title("d"));
+    expect(h.mergeLast()).toBe(true);
+    // c와 d가 한 칸: 한 번에 b로, 다시 실행 한 번에 d로
+    expect(h.undo().meta.title).toBe("b");
+    expect(h.redo()).toBe(d);
+    expect(h.undo().meta.title).toBe("b");
+    expect(h.undo()).toBe(a);
+    expect(h.canUndo).toBe(false);
+    expect(h.redo().meta.title).toBe("b");
+    expect(h.redo().meta.title).toBe("d");
+    expect(h.canRedo).toBe(false);
+  });
+
   it("검사가 거절한 명령은 곡도 기록도 바꾸지 않는다. unchecked는 검사를 건너뛴다", () => {
     const a = emptySong(meta);
     const b = { ...a, meta: { ...meta, title: "b" } };

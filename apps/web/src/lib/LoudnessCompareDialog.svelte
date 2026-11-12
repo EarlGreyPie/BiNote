@@ -300,7 +300,7 @@
     inset: auto 16px 40px auto;
     margin: 0;
     width: min(460px, calc(100vw - 32px));
-    max-height: calc(100vh - 80px);
+    max-height: calc(100dvh - 80px);
     overflow: auto;
     z-index: 40;
     background: var(--panel);
@@ -318,7 +318,7 @@
     margin: auto;
     width: min(640px, calc(100vw - 32px));
     height: fit-content;
-    max-height: calc(100vh - 32px);
+    max-height: calc(100dvh - 32px);
   }
   .panel.big header {
     cursor: default;

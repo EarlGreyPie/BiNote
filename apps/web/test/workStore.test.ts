@@ -109,3 +109,88 @@ describe("workStore (자동 보존 저장소)", () => {
     expect(await store.saveWork(work("a", 3))).toBe("saved");
   });
 });
+
+/** localStorage 흉내 (시험 환경에는 없다) */
+function fakeStash(limit = Infinity) {
+  const map = new Map<string, string>();
+  return {
+    map,
+    get length() {
+      return map.size;
+    },
+    key: (i: number) => [...map.keys()][i] ?? null,
+    getItem: (k: string) => map.get(k) ?? null,
+    setItem: (k: string, v: string) => {
+      if (v.length > limit) throw new DOMException("full", "QuotaExceededError");
+      map.set(k, v);
+    },
+    removeItem: (k: string) => void map.delete(k),
+  };
+}
+
+describe("급히 적어 둔 작업 (문서가 내려갈 때)", () => {
+  it("급히 적어 둔 작업을 다음에 열 때 저장소로 옮기고 자리를 비운다", async () => {
+    const store = await freshStore();
+    const stash = fakeStash();
+    expect(store.stashWork(work("a", 1000, '{"song":"고친 것"}'), stash)).toBe(true);
+    expect(await store.listWorks()).toEqual([]);
+    expect(await store.adoptStashedWorks(stash)).toBe(1);
+    expect((await store.loadWork("a"))?.project).toBe('{"song":"고친 것"}');
+    expect(stash.map.size).toBe(0);
+    // 다시 불러도 할 일이 없다
+    expect(await store.adoptStashedWorks(stash)).toBe(0);
+  });
+
+  it("저장소의 기록이 더 오래됐으면 덮어쓰고, 같거나 더 새것이면 급히 적은 것을 버린다", async () => {
+    const store = await freshStore();
+    const stash = fakeStash();
+    await store.saveWork(work("a", 1000, "old"));
+    store.stashWork(work("a", 2000, "new"), stash);
+    expect(await store.adoptStashedWorks(stash)).toBe(1);
+    expect((await store.loadWork("a"))?.project).toBe("new");
+
+    await store.saveWork(work("b", 3000, "saved"));
+    store.stashWork(work("b", 2500, "stale"), stash);
+    expect(await store.adoptStashedWorks(stash)).toBe(0);
+    expect((await store.loadWork("b"))?.project).toBe("saved");
+    expect(stash.map.size).toBe(0);
+  });
+
+  it("작업마다 하나씩 남고, 알 수 없는 글은 버린다. 다른 열쇠는 건드리지 않는다", async () => {
+    const store = await freshStore();
+    const stash = fakeStash();
+    store.stashWork(work("a", 1000, "a1"), stash);
+    store.stashWork(work("a", 2000, "a2"), stash);
+    store.stashWork(work("b", 1500, "b1"), stash);
+    stash.map.set("mmlce-work-stash:broken", "{not json");
+    stash.map.set("mmlce-work-stash:other", JSON.stringify(work("mismatch", 1, "x")));
+    stash.map.set("mmlce.settings", "keep");
+    expect(await store.adoptStashedWorks(stash)).toBe(2);
+    expect((await store.listWorks()).map((w) => w.id)).toEqual(["a", "b"]);
+    expect((await store.loadWork("a"))?.project).toBe("a2");
+    expect([...stash.map.keys()]).toEqual(["mmlce.settings"]);
+  });
+
+  it("옮기는 사이 다른 탭이 더 새것을 급히 적으면 그것은 지우지 않고, 다음에 옮긴다", async () => {
+    const store = await freshStore();
+    const stash = fakeStash();
+    store.stashWork(work("a", 1000, "old"), stash);
+    // 옮기기는 급히 적은 글을 읽은 뒤 저장소 트랜잭션을 기다린다. 그사이 고치던 탭이 다시 급히 적는다
+    const adopting = store.adoptStashedWorks(stash);
+    store.stashWork(work("a", 2000, "new"), stash);
+    expect(await adopting).toBe(1);
+    expect((await store.loadWork("a"))?.project).toBe("old");
+    expect(stash.map.get("mmlce-work-stash:a")).toContain('"new"');
+    // 다음에 열 때 새것이 옮겨진다
+    expect(await store.adoptStashedWorks(stash)).toBe(1);
+    expect((await store.loadWork("a"))?.project).toBe("new");
+    expect(stash.map.size).toBe(0);
+  });
+
+  it("공간이 모자라 적지 못하면 false를 돌려주고 예외를 내지 않는다", async () => {
+    const store = await freshStore();
+    expect(store.stashWork(work("a", 1000, "x".repeat(100)), fakeStash(10))).toBe(false);
+    expect(store.stashWork(work("a", 1000), undefined)).toBe(false);
+    expect(await store.adoptStashedWorks(undefined)).toBe(0);
+  });
+});

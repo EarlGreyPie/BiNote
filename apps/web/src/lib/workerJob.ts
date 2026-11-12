@@ -18,6 +18,7 @@ export type JobReply<Res, P = number> =
  * 워커를 못 쓰는 곳(시험 환경 등)이나 워커가 실패하면 화면 쪽에서 local로 계산한다.
  * local은 진행률을 자주 알려야 한다: 취소된 뒤에는 그 콜백이 예외를 던져 계산을 멈춘다.
  * 실패해 undefined로 끝나면 그 까닭을 lastError에 남긴다 (워커가 알린 오류와 화면 쪽 오류를 함께).
+ * 요청을 워커로 넘기지 못했을 때(복사할 수 없는 값)는 값만 남긴 사본으로 다시 보내고, 그것도 안 되면 화면 쪽에서 계산한다.
  * 워커가 실패한 일 자체도 최근 오류(진단 정보)에 "worker:이름"으로 적는다. 화면 쪽 계산이 대신 해내도 남아서,
  * 어느 기기에서 워커가 안 돌아 무거운 계산이 화면 쪽으로 넘어왔는지 신고로 알 수 있다
  */
@@ -26,6 +27,8 @@ export class WorkerJob<Req, Res, P = number> {
   private seq = 0;
   private pending: { id: number; done: (result: Res | undefined) => void } | undefined;
   private failure: string | undefined;
+  /** 요청을 넘기지 못한 까닭 가운데 이미 최근 오류에 적은 글. 같은 까닭은 한 번만 적는다 */
+  private notedPost: string | undefined;
 
   constructor(
     private readonly makeWorker: (() => Worker) | undefined,
@@ -100,7 +103,26 @@ export class WorkerJob<Req, Res, P = number> {
         this.report.log.note(`worker:${this.report.name}`, reason);
         this.fallBack(local);
       };
-      worker.postMessage({ id, request } satisfies JobRequest<Req>);
+      try {
+        worker.postMessage({ id, request } satisfies JobRequest<Req>);
+      } catch (e) {
+        // 요청을 워커로 넘기지 못했다: 요청 안에 복사할 수 없는 값이 있다 (화면 상태의 Proxy가 곡에 섞여 들어갔을 때 DataCloneError).
+        // 그대로 두면 이 계산이 끝나지 않아 나누기 창이 "계산하는 중"에 멈추고 미리보기도 뜨지 않는다.
+        // 까닭은 최근 오류에 남기고(어디서 섞였는지 찾을 수 있게), 값만 남긴 사본으로 한 번 더 보낸다. 그것도 안 되면 화면 쪽에서 계산한다
+        // 같은 까닭은 한 번만 적는다: 곡을 고칠 때마다 다시 보내므로, 번번이 적으면 열 줄뿐인 최근 오류에서 다른 기록을 밀어낸다
+        const reason = errorText(e);
+        workerError = `worker: ${reason}`;
+        if (this.notedPost !== reason) {
+          this.notedPost = reason;
+          this.report.log.note(`worker:${this.report.name}`, e);
+        }
+        try {
+          worker.postMessage({ id, request: plainCopy(request) } satisfies JobRequest<Req>);
+          workerError = undefined;
+        } catch {
+          this.fallBack(local);
+        }
+      }
     });
   }
 
@@ -138,6 +160,20 @@ export class WorkerJob<Req, Res, P = number> {
     this.worker = undefined;
     setTimeout(local, 0);
   }
+}
+
+/**
+ * 배열과 보통 객체를 속까지 새로 만든 사본 (Proxy를 거쳐 읽은 값만 남는다). 그 밖의 값(숫자·글자·ArrayBuffer·Map 등)은 그대로 둔다.
+ * 워커로 보낼 요청에 화면 상태의 Proxy가 섞였을 때 쓴다 (Proxy는 구조적 복사가 되지 않는다)
+ */
+export function plainCopy<T>(value: T): T {
+  if (Array.isArray(value)) return value.map(plainCopy) as T;
+  if (value === null || typeof value !== "object") return value;
+  const proto: unknown = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) return value;
+  const copy: Record<string, unknown> = {};
+  for (const key of Object.keys(value)) copy[key] = plainCopy((value as Record<string, unknown>)[key]);
+  return copy as T;
 }
 
 /** 취소된 화면 쪽 계산을 멈추려고 진행률 콜백이 던진다 */

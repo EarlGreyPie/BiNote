@@ -110,6 +110,7 @@ export async function saveWork(record: WorkRecord): Promise<WorkSaveResult> {
       };
     });
     if (swept) sweptOnce = true;
+    dropStash(record.id, record.savedAt);
     return "saved";
   } catch (e) {
     return isQuotaError(e) ? "quota" : "failed";
@@ -137,9 +138,128 @@ export async function loadWork(id: string): Promise<WorkRecord | undefined> {
 }
 
 export async function forgetWork(id: string): Promise<void> {
+  dropStash(id);
   try {
     await run("readwrite", (s) => s.delete(id));
   } catch {
     // 무시
   }
+}
+
+/**
+ * 급히 적어 두는 자리. 새로고침·탭 닫기로 문서가 내려갈 때는 IndexedDB를 여는 동안 문서가 사라져
+ * 방금 고친 것(자동 보존이 쉬는 1.5초 안의 편집)이 적히지 못한다. 그때는 곧바로 끝나는 localStorage에 적어 두고,
+ * 다음에 앱을 열 때 자동 보존 저장소로 옮긴다(adoptStashedWorks). 작업마다 하나씩, 저장소로 옮겨지거나
+ * 더 새 기록이 적히면 지운다
+ */
+const STASH_PREFIX = "mmlce-work-stash:";
+
+function defaultStash(): Storage | undefined {
+  try {
+    return typeof localStorage !== "undefined" ? localStorage : undefined;
+  } catch {
+    // 저장소가 막힌 브라우저 (사생활 보호 설정 등)
+    return undefined;
+  }
+}
+
+/** 작업을 급히 적어 둔다 (기다리지 않는다). 적었으면 true. 공간이 모자라거나 막혀 있으면 false */
+export function stashWork(record: WorkRecord, stash: Pick<Storage, "setItem"> | undefined = defaultStash()): boolean {
+  try {
+    if (!stash) return false;
+    stash.setItem(STASH_PREFIX + record.id, JSON.stringify(record));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 급히 적어 둔 것을 지운다. upTo를 주면 그 시각까지의 것만 (더 나중에 급히 적은 것은 아직 저장소에 없다) */
+function dropStash(id: string, upTo?: number, stash: Pick<Storage, "getItem" | "removeItem"> | undefined = defaultStash()): void {
+  try {
+    if (!stash) return;
+    const key = STASH_PREFIX + id;
+    if (upTo !== undefined) {
+      const text = stash.getItem(key);
+      if (text === null) return;
+      const at = stashedRecord(text)?.savedAt;
+      if (at !== undefined && at > upTo) return;
+    }
+    stash.removeItem(key);
+  } catch {
+    // 무시
+  }
+}
+
+function stashedRecord(text: string): WorkRecord | undefined {
+  try {
+    const r = JSON.parse(text) as Partial<WorkRecord> | null;
+    if (!r || typeof r.id !== "string" || typeof r.project !== "string" || typeof r.savedAt !== "number" || !Number.isFinite(r.savedAt)) return undefined;
+    return {
+      id: r.id,
+      savedAt: r.savedAt,
+      fileName: typeof r.fileName === "string" ? r.fileName : "",
+      title: typeof r.title === "string" ? r.title : "",
+      trackCount: typeof r.trackCount === "number" ? r.trackCount : 0,
+      noteCount: typeof r.noteCount === "number" ? r.noteCount : 0,
+      project: r.project,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * 급히 적어 둔 작업을 자동 보존 저장소로 옮긴다. 저장소에 같은 작업의 더 새 기록이 있으면 버린다
+ * (문서가 내려가기 전에 저장이 끝났거나, 그 탭이 살아남아 더 고친 경우). 옮긴 수를 돌려준다.
+ * 저장소에 적지 못한 것과, 옮기는 사이 다른 탭이 더 새로 적은 것은 남겨 두어 다음에 다시 옮긴다
+ */
+export async function adoptStashedWorks(stash: Pick<Storage, "length" | "key" | "getItem" | "removeItem"> | undefined = defaultStash()): Promise<number> {
+  if (!stash) return 0;
+  const keys: string[] = [];
+  try {
+    for (let i = 0; i < stash.length; i++) {
+      const key = stash.key(i);
+      if (key?.startsWith(STASH_PREFIX)) keys.push(key);
+    }
+  } catch {
+    return 0;
+  }
+  let adopted = 0;
+  for (const key of keys) {
+    let record: WorkRecord | undefined;
+    let text: string | null;
+    try {
+      text = stash.getItem(key);
+      record = text === null ? undefined : stashedRecord(text);
+    } catch {
+      continue;
+    }
+    if (record && key === STASH_PREFIX + record.id) {
+      const rec = record;
+      let wrote = false;
+      try {
+        // 견주기와 적기를 한 트랜잭션에서 한다 (그사이 다른 탭이 더 새 기록을 적어도 덮지 않게)
+        await run("readwrite", (s) => {
+          const had = s.get(rec.id) as IDBRequest<WorkRecord | undefined>;
+          had.onsuccess = () => {
+            if (had.result && had.result.savedAt >= rec.savedAt) return;
+            s.put(rec);
+            wrote = true;
+          };
+        });
+      } catch {
+        continue;
+      }
+      if (wrote) adopted++;
+    }
+    try {
+      // 방금 읽은 그 글일 때만 지운다. 저장소에 적는 것을 기다리는 사이, 그 작업을 고치고 있는 다른 탭이
+      // 더 새것을 급히 적었을 수 있다. 그것까지 지우면 그 탭이 저장을 끝내기 전에 닫힐 때 고친 것이 사라진다
+      if (stash.getItem(key) === text) stash.removeItem(key);
+    } catch {
+      // 무시
+    }
+  }
+  return adopted;
 }

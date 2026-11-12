@@ -254,3 +254,24 @@ describe("잇단음 (3MLE는 4분음표 960틱 정수로 셈함)", () => {
     expect(write3mle(a).diagnostics.filter((d) => d.code === "3mle-off-grid")).toEqual([]);
   });
 });
+
+describe("3MLE 파일에 들어가지 않는 것 알리기", () => {
+  it("곡 중간 박자표 바뀜과 마커는 파일에 들어가지 않아 저장할 때 알린다", () => {
+    const a = read3mle(SAMPLE).song;
+    expect(write3mle(a).diagnostics.filter((d) => d.code.startsWith("3mle-") && d.code.endsWith("-dropped"))).toEqual([]);
+    const first = a.timeSig[0] ?? { at: rat(0), beats: 4, unit: 4 };
+    const song = {
+      ...a,
+      timeSig: [first, { at: rat(2), beats: 3, unit: 4 }, { at: rat(5), beats: 4, unit: 4 }],
+      markers: [{ id: "m1", at: rat(1), label: "여기부터" }],
+    };
+    const out = write3mle(song);
+    expect(out.diagnostics).toMatchObject([
+      { code: "3mle-meter-dropped", params: { count: 2 } },
+      { code: "3mle-markers-dropped", params: { count: 1 } },
+    ]);
+    // 파일에는 처음 박자표만
+    expect(out.text).toContain(`TimeSignatureNN=${first.beats}`);
+    expect(read3mle(out.text).song.timeSig).toHaveLength(1);
+  });
+});

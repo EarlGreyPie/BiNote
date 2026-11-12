@@ -4,6 +4,8 @@
 
   /** 카포 0~24 (파일에 적을 수 있는 범위와 같다) */
   const CAPOS = Array.from({ length: 25 }, (_, c) => c);
+  /** 박자표 위 숫자로 고를 수 있는 값 (박자 넣기 창·changeMeter와 같은 1-32) */
+  const METER_BEATS = Array.from({ length: 32 }, (_, b) => b + 1);
 
   /** 새 음 길이 이름 (타브 숫자판도 쓴다) */
   export function lengthLabel(l: LengthName): string {
@@ -243,7 +245,11 @@
   <!-- 박자 칸: 피아노롤은 재생 커서, 타브는 타브 커서가 든 마디부터 바꾼다 -->
   <span class="field" title={t("ui.meterHelp")}>
     <span class="muted">{t("ui.meter")}</span>
-    <input class="num" type="number" min="1" max="32" value={meter.beats} onchange={(e) => onmeter(Number(e.currentTarget.value), meter.unit)} />
+    <!-- 글 칸이 아니라 고르기 칸으로 둔다: 아이패드에서 애플펜슬로 보기(롤·타브) 위쪽을 누르면 손글씨 입력(Scribble)이
+         바로 위의 글 칸을 잡아 ".4" 같은 글을 써넣었다. 웹에서는 그 기능을 끌 방법이 없어, 받아 적을 글 칸을 두지 않는다 -->
+    <select value={meter.beats} aria-label={t("ui.meter")} onchange={(e) => onmeter(Number(e.currentTarget.value), meter.unit)}>
+      {#each METER_BEATS as b (b)}<option value={b}>{b}</option>{/each}
+    </select>
     /
     <select value={meter.unit} onchange={(e) => onmeter(meter.beats, Number(e.currentTarget.value))}>
       {#each METER_UNITS as u (u)}<option value={u}>{u}</option>{/each}
@@ -390,7 +396,7 @@
       </select>
     </label>
     {#if onretune}
-      <button title={t("ui.retuneHelp")} onclick={onretune}>{t("ui.retune")}…</button>
+      <button title={`${t("ui.retune")}: ${t("ui.retuneHelp")}`} onclick={onretune}>{t("ui.retuneButton")}…</button>
     {/if}
     {@render meterField()}
     {@render keyLockField()}

@@ -610,6 +610,9 @@
   }
   .packs-list :global(.pack) {
     display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 8px;
   }
   .primary {
     justify-self: start;

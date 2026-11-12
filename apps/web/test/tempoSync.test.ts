@@ -211,3 +211,35 @@ describe("영상 마디·탭 템포 안전장치 (GPT 검수 B-02·B-03)", () =>
     expect([ran, stale]).toEqual([1, 3]);
   });
 });
+
+describe("탭 템포가 게임 범위를 넘을 때", () => {
+  // 3/4, 마디마다 탭. 4번째 마디가 영상 실수로 0.37초(t490)로 찍히고 앞 마디가 그만큼 길다
+  const sig = [{ at: rat(0), beats: 3, unit: 4 }];
+  const taps = [0, 1, 2, 3.567, 3.934, 4.934, 5.934];
+  const range = MOBILE_PROFILE.tempo;
+
+  it("통째로 버리지 않고 범위 밖 마디만 끝값으로 넣고 그 자리를 알린다", () => {
+    const plan = tapTempos([], sig, rat(0), taps, { range })!;
+    expect(plan).toBeDefined();
+    expect(plan.set.every((e) => e.bpm >= range.min && e.bpm <= range.max)).toBe(true);
+    // 4번째 마디(2.25 온음표)가 t488. 끝값 t255로 넣으면 모자란 시간을 다음 마디가 받다가 그 마디도 넘쳐 끝값, 그다음에서 맞춘다
+    expect(plan.clamped?.map((c) => [c.at.n / c.at.d, c.bpm])).toEqual([
+      [2.25, 488],
+      [3, 272],
+    ]);
+    expect(tempoOutOfRange(plan, range)).toBeUndefined();
+  });
+
+  it("남은 시간은 다음 마디가 받아서 그 뒤 탭 자리는 그대로 맞는다", () => {
+    const plan = tapTempos([], sig, rat(0), taps, { range })!;
+    // 범위 밖 마디 앞(4번째 마디 시작)은 그대로, 받아 낸 뒤(마지막 탭 자리)도 탭 시각에 맞는다 (반올림 오차 안)
+    expect(Math.abs(positionToSeconds(plan.set, rat(9, 4)) - taps[3]!)).toBeLessThan(0.02);
+    expect(Math.abs(positionToSeconds(plan.set, rat(9, 2)) - taps[6]!)).toBeLessThan(0.02);
+  });
+
+  it("range가 없으면 전처럼 계산한 값 그대로 (범위 검사는 부르는 쪽)", () => {
+    const plan = tapTempos([], sig, rat(0), taps)!;
+    expect(plan.clamped).toBeUndefined();
+    expect(tempoOutOfRange(plan, range)).toBe(488);
+  });
+});

@@ -255,8 +255,8 @@ Switch with the Piano roll/Tab button (Alt+T). The tab gathers the tracks of the
 - `L`: tie to the note right after with & · `(5)` held · `5/7` slide. If nothing follows, adds the same pitch for the new-note length, tied (an eighth + L rings as a quarter)
 - Chord notes at the same spot go into free tracks of the same score
 - You can choose a tuning (Standard, Drop D, DADGAD, Nashville, Baritone and more) and a capo
-- If you entered a tab under the wrong tuning, use **Change tuning, keep tab…** next to the tuning. It keeps every string and fret number and changes the pitches to the new tuning (capo included). One undo restores the tuning too. For a songbook tuning marked "up 1/2 step", pick the same tuning with capo 1
-- For a tuning not in the list, choose **Custom…** in the tuning box and set the open note and octave of each string. String 1 is the highest string (top line of the tab); for strings tuned an octave up, as in Nashville tuning, just enter that octave. You can load a preset and edit it, move every string at once with **All down a half step / All up a half step**, and change the number of strings (1-12). A custom tuning is saved per score in the .mme file. Use this for "down 1/2 step" tunings that a capo cannot make (for example partial Nashville baritone down a half step, A♭ D♭ G♭ B E♭ A♭). To keep the tab numbers you already entered, choose **Custom** in **Change tuning, keep tab…**
+- If you entered a tab under the wrong tuning, use **Retune…** next to the tuning. It keeps every string and fret number and changes the pitches to the new tuning (capo included). One undo restores the tuning too. For a songbook tuning marked "up 1/2 step", pick the same tuning with capo 1
+- For a tuning not in the list, choose **Custom…** in the tuning box and set the open note and octave of each string. String 1 is the highest string (top line of the tab); for strings tuned an octave up, as in Nashville tuning, just enter that octave. You can load a preset and edit it, move every string at once with **All down a half step / All up a half step**, and change the number of strings (1-12). A custom tuning is saved per score in the .mme file. Use this for "down 1/2 step" tunings that a capo cannot make (for example partial Nashville baritone down a half step, A♭ D♭ G♭ B E♭ A♭). To keep the tab numbers you already entered, choose **Custom** in **Retune…**
 - On a PC (mouse) the zoom buttons are in the top toolbar (after Input v), as in the piano roll; on touch screens they are in the strip below the tab (next to the time scroll bar). Narrower/wider bars (⇆−/+) set the bar width, and **Fit whole song** in the PC toolbar fits the whole song on screen (when the toolbar is narrow, `A−` / `A+` and the fretboard position are in the ⋯ menu)
 - Turn on Settings → Display → **Note volume numbers** to add a `v` row at the bottom of the fretboard (below the × marks) that shows the volume of the selected track's notes, with the same rules as the piano roll. Numbers of selected notes are shown darker. Turn it off to remove the row
 - Use `A−` / `A+` to change the tab size (string spacing and text), and the **fretboard position** button next to them (⤒ / ↕ / ⤓) to place the fretboard at the top, middle, or bottom of the area when there is spare height. Each click goes top → middle → bottom (middle by default), and the choice is remembered in this browser. The same position is kept while the fret pad is open (within the height left above the pad), and the pad's top row has the same fretboard position button
@@ -587,7 +587,7 @@ The song you are editing is kept in this browser automatically (latest 10). Afte
 
 When a new version is out, a "A new version is ready" bar appears. Click **Reload** and BiNote waits for the autosave of your current song to finish, then switches to the new version. If the autosave fails, it does not switch and tells you with **Not autosaved** in the status bar; in that case save as a project (.mme) and click again. For important work, saving as .mme before clicking is safer. You can also close the notice and keep working.
 
-The app checks for a new version each time it opens, and if it stays open for a long time it checks again at most once an hour when you come back to the window. To check right away, use **?** → **Check for updates** in the top bar.
+The app checks for a new version each time it opens, and if it stays open for a long time it checks again at most once an hour when you come back to the window. To check right away, open **?** → **About BiNote** in the top bar and press **Check for updates**.
 
 ---
 
@@ -630,7 +630,7 @@ The app checks for a new version each time it opens, and if it stays open for a 
 
 At the bottom are the version info and links to the guide and **About BiNote**.
 
-The **?** menu next to Settings (⚙) in the top bar has Guide, Shortcuts, Check for updates and About BiNote. The **About BiNote** window shows the version, checks for updates and links to the source code, licenses and problem reports. **Copy diagnostics** copies information to attach when you report a problem (section 16). You can also open this guide from Help in the status bar.
+The **?** menu next to Settings (⚙) in the top bar has Guide, Shortcuts, What's new in this version and About BiNote. The **About BiNote** window shows the version, checks for updates and links to the source code, licenses and problem reports. **Copy diagnostics** copies information to attach when you report a problem (section 16). You can also open this guide from Help in the status bar.
 
 ---
 

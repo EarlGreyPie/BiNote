@@ -70,10 +70,13 @@
     tupletLength?: NoteLength | undefined;
     /** 새 음 → 잇단음…: 잇단음 정하기 창을 연다 */
     ontuplet?: () => void;
-    /** 타브에서 음을 넣거나 지울 때 (실행 취소 한 칸) */
-    onedit?: (changes: TabEdit["changes"], label: string) => void;
-    /** 빈 트랙이 없어 이 악보에 트랙을 더해 음을 넣을 때 (실행 취소 한 칸) */
-    onnewtrack?: (track: NonNullable<TabEdit["newTrack"]>, label: string) => void;
+    /**
+     * 타브에서 음을 넣거나 지울 때 (실행 취소 한 칸). digit: 프렛 숫자 입력이면 "first", 두 자리 프렛의 둘째 숫자가
+     * 첫 숫자로 넣은 음을 바꾸는 것이면 "join" (앱이 앞 칸과 묶어 12 같은 두 자리 프렛도 실행 취소 한 번이 되게 한다)
+     */
+    onedit?: (changes: TabEdit["changes"], label: string, digit?: "first" | "join") => void;
+    /** 빈 트랙이 없어 이 악보에 트랙을 더해 음을 넣을 때 (실행 취소 한 칸). digit은 onedit과 같다 */
+    onnewtrack?: (track: NonNullable<TabEdit["newTrack"]>, label: string, digit?: "first" | "join") => void;
     /** 악보 트랙이 한도까지 차서 화음 음을 더 넣지 못했을 때 */
     onfull?: (limit: number) => void;
     /** 이 악보가 가질 수 있는 트랙 수 (게임 한도) */
@@ -225,6 +228,8 @@
   onMount(() => () => {
     oncursor?.(undefined);
     cancelBandPress();
+    dropPress();
+    endPadGuard();
   });
 
   // 보던 자리·확대·커서를 앱에 알린다 (휠·스크롤바·확대·따라가기 등 어느 길로 바뀌어도)
@@ -367,7 +372,7 @@
     return undefined;
   }
 
-  function apply(edit: TabEdit, label: string, string?: number) {
+  function apply(edit: TabEdit, label: string, string?: number, digit?: "first" | "join") {
     if (edit.full) {
       onfull?.(maxTracks);
       return;
@@ -379,8 +384,8 @@
     const shown = shownStrings(events);
     const stamp = (notes: readonly Note[]): Note[] =>
       pinShownStrings(notes, shown).map((n) => (id && string !== undefined && n.id === id && n.tabString !== string ? { ...n, tabString: string } : n));
-    if (edit.newTrack) onnewtrack?.({ ...edit.newTrack, notes: stamp(edit.newTrack.notes) }, label);
-    else onedit?.(edit.changes.map((c) => ({ ...c, notes: stamp(c.notes) })), label);
+    if (edit.newTrack) onnewtrack?.({ ...edit.newTrack, notes: stamp(edit.newTrack.notes) }, label, digit);
+    else onedit?.(edit.changes.map((c) => ({ ...c, notes: stamp(c.notes) })), label, digit);
   }
 
   /**
@@ -404,7 +409,8 @@
       apply(edit, "타브 입력");
       return undefined;
     }
-    apply(edit, "타브 입력", cursor.string);
+    // 둘째 숫자가 첫 숫자로 넣은 음을 바꾸는 것이면 앞 칸과 한 칸으로 묶게 알린다
+    apply(edit, "타브 입력", cursor.string, byId ? "join" : "first");
     if (edit.noteId) lastFretNote = { id: edit.noteId, at: cursor.at, string: cursor.string };
     onpreview?.(pitch);
     // 잠근 트랙이면 앱이 곡을 바꾸지 않으므로 커서도 넘기지 않는다
@@ -556,17 +562,83 @@
     pinch.up(e);
   }
 
+  /**
+   * 손가락·펜으로 지판 칸을 누르는 동안: 누르기 바로 전의 커서·숫자판·고르기와, 이 누르기가 닫혀 있던 숫자판을 여는지.
+   * 둘째 손가락이 닿아 두 손가락 확대가 되면 그대로 되돌린다 (확대만 했는데 커서가 찍히고 숫자판이 열리거나, 골라 둔 음이
+   * 풀리지 않게). 숫자판은 누를 때가 아니라 손가락을 뗄 때 연다: 누르는 동안 지판이 밀려 올라가면 둘째 손가락이 지판을
+   * 벗어나 확대가 되지 않았다
+   */
+  let pressUndo:
+    | { pointerId: number; opens: boolean; cursor: typeof cursor; touchPad: boolean; anchor: Rat | undefined; selected: ReadonlySet<string>; selecting: boolean; digits: string }
+    | undefined;
+  /** 누르기가 지판 밖에서 끝나도(펜을 끌고 나가 뗌) 알 수 있게 창에서 듣는다 */
+  function onPressEnd(e: PointerEvent) {
+    if (e.pointerId === pressUndo?.pointerId) endPress();
+  }
+  /** 누르기를 잊는다 (숫자판은 열지 않는다) */
+  function dropPress() {
+    pressUndo = undefined;
+    window.removeEventListener("pointerup", onPressEnd, true);
+    window.removeEventListener("pointercancel", onPressEnd, true);
+  }
+  /** 손가락·펜을 뗐다: 닫혀 있던 숫자판을 이제 연다 */
+  function endPress() {
+    const press = pressUndo;
+    if (!press) return;
+    dropPress();
+    if (!press.opens || !cursor) return;
+    touchPad = true;
+    padGuard = true;
+    clearTimeout(padGuardTimer);
+    window.addEventListener("click", onGuardClick, true);
+    // 누르기(click)가 오지 않는 때(길게 누름·끌기)에도 풀리게
+    padGuardTimer = setTimeout(endPadGuard, 350);
+  }
+  /**
+   * 숫자판을 연 바로 그 누르기의 click이 지나갈 때까지 숫자판과 그 위 시간 스크롤이 누르기를 받지 않게 한다.
+   * 숫자판이 손가락 아래에 그려지면 그 자리의 단추(지우기·닫기·시간 스크롤 등)가 같은 누르기로 눌렸다
+   */
+  let padGuard = $state(false);
+  let padGuardTimer: ReturnType<typeof setTimeout> | undefined;
+  function endPadGuard() {
+    window.removeEventListener("click", onGuardClick, true);
+    clearTimeout(padGuardTimer);
+    padGuard = false;
+  }
+  /** 연 누르기의 click이 왔다: 이 click이 다 지나간 다음에 푼다 (곧바로 이어 누르는 숫자 단추는 받게) */
+  function onGuardClick() {
+    window.removeEventListener("click", onGuardClick, true);
+    clearTimeout(padGuardTimer);
+    padGuardTimer = setTimeout(endPadGuard, 0);
+  }
+
   function onpointerdown(e: PointerEvent) {
     if (pinch.down(e, point(e))) {
       // 두 손가락이면 마디 번호 줄·파형 띠 끌기, 변속 줄 누르기는 그만두고 확대·축소
       marking = undefined;
       cancelBandPress();
       waveDrag = undefined;
+      // 첫 손가락이 지판 칸에 둔 커서·숫자판·고르기도 되돌린다
+      if (pressUndo) {
+        const was = pressUndo;
+        dropPress();
+        cursor = was.cursor;
+        touchPad = was.touchPad;
+        anchor = was.anchor;
+        selected = was.selected;
+        selecting = was.selecting;
+        digits = was.digits;
+        // 되돌린 커서로는 화면을 옮기지 않는다 (커서 따라가기가 키보드로 옮긴 것으로 보지 않게)
+        followedAt = was.cursor?.at;
+        placedByPointer = false;
+      }
       pinchStart = { pxPerWhole, start };
       canvas.setPointerCapture(e.pointerId);
       return;
     }
     if (pinch.active || e.button !== 0) return;
+    // 앞 누르기가 끝을 알리지 않고 사라졌으면 여기서 잊는다
+    dropPress();
     host.focus();
     const rect = canvas.getBoundingClientRect();
     const px = e.clientX - rect.left;
@@ -613,14 +685,23 @@
     const { at, string } = tabCellAt(start + (px - LEFT) / pxPerWhole, py, TOP, gap, tuning.strings.length, division);
     // Shift+누르기: 커서(없으면 누른 자리)에서 누른 자리까지 고르고, 끌면 범위를 넓힌다. 숫자판 고르기를 켰으면 Shift 없이도
     const extend = (e.shiftKey && e.pointerType === "mouse") || selecting;
+    const anchorBefore = anchor;
     if (extend) {
       anchor ??= cursor?.at ?? at;
       if (e.shiftKey && e.pointerType === "mouse") {
         dragSelect = true;
         canvas.setPointerCapture(e.pointerId);
       }
-    } else clearSelection();
-    touchPad = padByMouse || e.pointerType === "touch" || e.pointerType === "pen" || touchPad;
+    }
+    const touch = e.pointerType === "touch" || e.pointerType === "pen";
+    if (touch) {
+      pressUndo = { pointerId: e.pointerId, opens: !padOpen, cursor, touchPad, anchor: anchorBefore, selected, selecting, digits };
+      window.addEventListener("pointerup", onPressEnd, true);
+      window.addEventListener("pointercancel", onPressEnd, true);
+      // 닫혀 있던 숫자판은 손가락을 뗄 때 연다 (endPress)
+      if (!padOpen) touchPad = false;
+    } else touchPad = padByMouse || touchPad;
+    if (!extend) clearSelection();
     placedByPointer = true;
     cursor = { at, string };
     if (extend) selectTo(at);
@@ -1508,7 +1589,7 @@
   {#if padOpen}
     <!-- 프렛 숫자판: 화면 키보드가 없는 터치 기기에서 타브 입력.
          좁은 화면에서도 지판이 보이게 높이를 줄이고, 닫기는 맨 윗줄 오른쪽에 늘 둔다 -->
-    <div class="pad" role="group" aria-label={t("ui.fretPad")}>
+    <div class="pad" class:guard={padGuard} role="group" aria-label={t("ui.fretPad")}>
       <div class="pad-top">
         <div class="moves">
           <button title={t("ui.fretPadLeft")} onclick={() => moveCursor("left")}><Icon name="chevron-left" fixed /></button>
@@ -1572,8 +1653,9 @@
       </div>
     </div>
   {/if}
-  <!-- 시간 스크롤 (휠과 같음)과 확대·축소. 숫자판을 띄운 동안은 지판 자리를 위해 숨긴다 -->
-  <div class="tools" hidden={padOpen}>
+  <!-- 시간 스크롤 (휠과 같음)과 확대·축소. 숫자판을 띄운 동안은 지판 자리를 위해 시간 스크롤만 남겨 숫자판 위에 둔다
+       (터치로는 휠이 없어, 숫자판을 내리지 않고도 곡을 옆으로 옮길 수 있어야 한다) -->
+  <div class="tools" class:pad-open={padOpen} class:guard={padGuard}>
   <input
     class="scroll"
     type="range"
@@ -1704,6 +1786,8 @@
   .pad {
     /* 숫자판 폭으로 프렛 줄 수를 정한다 (아래 @container) */
     container-type: inline-size;
+    /* 시간 스크롤 줄(.tools)보다 아래에 둔다 */
+    order: 1;
     /* 남는 높이만 쓰고, 넘치면 숫자판 안에서 굴린다 (지판 칸은 canvas-wrap의 min-height로 지킨다) */
     flex: 0 1 auto;
     min-height: 0;
@@ -1714,7 +1798,14 @@
     display: grid;
     /* 칸이 내용 폭만큼 늘어나 닫기 버튼이 화면 밖으로 밀리지 않게 */
     grid-template-columns: minmax(0, 1fr);
+    /* 높이가 모자라면 줄을 누르지 않고 숫자판 안에서 굴린다 (가로로 굴리는 음표 입력판 줄이 혼자 눌려 사라졌다) */
+    grid-auto-rows: max-content;
     gap: 6px;
+  }
+  /* 숫자판을 연 바로 그 누르기는 받지 않는다 (padGuard) */
+  .pad.guard,
+  .tools.guard {
+    pointer-events: none;
   }
   .pad-top {
     /* 숫자판을 굴려도 이동 버튼과 닫기는 늘 위에 보인다 */
@@ -1737,6 +1828,10 @@
     overflow-x: auto;
     scrollbar-width: none;
     white-space: nowrap;
+  }
+  /* scrollbar-width를 모르는 사파리(18.2 전)에서도 스크롤 막대를 숨긴다 */
+  .moves::-webkit-scrollbar {
+    display: none;
   }
   .moves > * {
     flex: none;
@@ -1775,6 +1870,7 @@
     gap: 3px;
     max-width: 760px;
     overflow-x: auto;
+    overflow-y: hidden;
   }
   .lengths button {
     flex: 1 0 auto;
@@ -1820,8 +1916,16 @@
     min-width: 44px;
     padding-inline: 8px;
   }
-  .tools[hidden] {
+  /* 숫자판이 떠 있으면 시간 스크롤만 남기고, 지판과 숫자판 사이(숫자판 위)에 둔다 */
+  .tools.pad-open {
+    padding: 2px 8px;
+    border-top: 1px solid var(--line);
+  }
+  .tools.pad-open > :global(:not(.scroll)) {
     display: none;
+  }
+  .tools.pad-open .scroll {
+    opacity: 1;
   }
   .tools {
     display: flex;

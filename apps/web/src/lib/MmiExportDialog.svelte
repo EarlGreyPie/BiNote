@@ -230,7 +230,7 @@
 <style>
   dialog {
     width: min(520px, calc(100vw - 32px));
-    max-height: calc(100vh - 32px);
+    max-height: calc(100dvh - 32px);
     background: var(--panel);
     color: var(--text);
     border: 1px solid var(--line);

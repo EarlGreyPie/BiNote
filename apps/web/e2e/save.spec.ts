@@ -107,6 +107,20 @@ test("새로고침 뒤 지난 작업에서 고치던 곡을 되살린다", async
   await expect(page.getByRole("button", { name: "실행 취소" })).toBeDisabled();
 });
 
+test("고치자마자 새로고침해도 그 편집이 지난 작업에 남는다", async ({ page }) => {
+  // 자동 보존은 고친 뒤 1.5초 쉬어야 적는다. 그 전에 새로고침하면 문서가 내려가며 급히 적어 둔 것을 다음에 열 때 옮긴다
+  const edited = await pasteAndEdit(page);
+  await page.reload();
+  await expect(page.getByText(/악보가 없습니다/)).toBeVisible();
+  await expect(page.getByRole("heading", { name: "지난 작업" })).toBeVisible();
+  await expect(page.getByText(/트랙 2 · 음 11/)).toBeVisible();
+  await page.getByRole("button", { name: "되살리기" }).click();
+  await expect(trackEditor(page)).toHaveText("l8t120>cdefgab>c");
+  expect(await exportMml(page)).toBe(edited);
+  // 옮긴 뒤에는 급히 적어 둔 자리가 비어 있다
+  expect(await page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith("mmlce-work-stash:")))).toEqual([]);
+});
+
 test("마비꼬로 저장 창에서 뺀 트랙은 .mmi에 들어가지 않는다", async ({ page }, testInfo) => {
   const errors = watchErrors(page);
   await openApp(page);

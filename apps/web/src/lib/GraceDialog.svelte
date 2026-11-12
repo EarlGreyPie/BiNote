@@ -67,7 +67,8 @@
 
   let dialog: HTMLDialogElement;
   // svelte-ignore state_referenced_locally
-  let choice = $state<GraceChoice>(initial ?? loadStored(GRACE_KEY, (raw) => parseGraceChoice(parseJson(raw))));
+  // 통째로만 바꾼다($state.raw): 이 값(안의 offsets 배열까지)이 만든 기록에 실려 곡 안으로 들어가므로 Proxy가 아니어야 한다
+  let choice = $state.raw<GraceChoice>(initial ?? loadStored(GRACE_KEY, (raw) => parseGraceChoice(parseJson(raw))));
   function set(change: Partial<GraceChoice>) {
     choice = { ...choice, ...change };
     saveStored(GRACE_KEY, JSON.stringify(choice));

@@ -57,7 +57,8 @@
 </script>
 
 <dialog bind:this={dialog} {onclose} aria-labelledby="retune-title">
-  <h2 id="retune-title">{t("ui.retune")}</h2>
+  <h2 id="retune-title">{t("ui.retuneButton")}</h2>
+  <p class="sub">{t("ui.retuneSub")}</p>
   <p class="muted">{t("ui.retuneHelp")}</p>
   <div class="row">
     <label>
@@ -107,8 +108,14 @@
     background: rgb(0 0 0 / 0.4);
   }
   h2 {
-    margin: 0 0 8px;
+    margin: 0 0 2px;
     font-size: 1.05rem;
+  }
+  /* 제목 아래 한 줄: 이 창이 하는 일 (도구줄 단추는 짧게 "튜닝 변경"만 적는다) */
+  .sub {
+    margin: 0 0 8px;
+    font-size: 0.9rem;
+    font-weight: 600;
   }
   .row,
   footer {

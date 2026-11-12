@@ -198,6 +198,10 @@
     white-space: nowrap;
     scrollbar-width: none;
   }
+  /* scrollbar-width를 모르는 사파리(18.2 전)에서도 스크롤 막대를 숨긴다 */
+  .strip::-webkit-scrollbar {
+    display: none;
+  }
   .chip {
     display: inline-flex;
     align-items: center;

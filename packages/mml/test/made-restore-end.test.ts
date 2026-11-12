@@ -94,3 +94,63 @@ describe("트랙 접기로 베이스를 옮겨 비운 트랙의 끝 쉼표를 �
     expect(h.song.tracks.map((t) => t.notes.map((x) => x.pitch))).toEqual(song.tracks.map((t) => t.notes.map((x) => x.pitch)));
   });
 });
+
+describe("만들기 전까지 실행 취소한 뒤 다시 실행 (가상환경 회귀 확인 A5)", () => {
+  const base: ArpOptions = {
+    source: "together", chord: "major", style: "roll", order: "up", step: rat(1, 16), octaves: 1, repeat: false,
+    clearChordTracks: true, range: { low: 0, high: 127 }, maxTracks: 6, fold: 4,
+  };
+  const pitches = (s: Song) => s.tracks.map((t) => t.notes.map((x) => x.pitch));
+  it("만들기 → 원래대로 → 실행 취소 2번 → 다시 실행 2번이면 원래대로까지 돌아온다", () => {
+    const song = songOf(["o4a2", "o4f2", "o3d2"]);
+    let k = 0;
+    const r = planArpeggio(song, "t1", song.tracks[0]!.notes, base, () => `n${++k}`);
+    const h = new History(song);
+    h.run(madeCommand(setNotesAndAddTracks("p1", r.changes, r.newTracks, (n) => `t${n}`, "아르페지오"), { tool: "arpeggio", options: {}, trackId: "t1", picked: song.tracks[0]!.notes.map((x) => x.id) }));
+    const made = h.song;
+    const plan = restoreMade(made, [made.made!.at(-1)!.id]);
+    if (!plan.ok) throw new Error(plan.reason);
+    h.run(restoreMadeCommand(plan, "원래대로"));
+    const restored = h.song;
+    expect(pitches(restored)).toEqual(pitches(song));
+    h.undo();
+    expect(h.song).toBe(made);
+    h.undo();
+    expect(pitches(h.song)).toEqual(pitches(song));
+    h.redo();
+    expect(pitches(h.song)).toEqual(pitches(made));
+    // 전에는 여기서 아무 일도 하지 않았다 (만들기를 다시 실행하며 음 목록이 새 객체가 되어, 되돌리기 계획이 낡은 것으로 보였다)
+    h.redo();
+    expect(pitches(h.song)).toEqual(pitches(song));
+    expect(h.song.made).toBeUndefined();
+    expect(h.canRedo).toBe(false);
+    // 다시 실행 취소해도 빈 단계가 없다
+    h.undo();
+    expect(pitches(h.song)).toEqual(pitches(made));
+  });
+
+  it("실행 취소한 사이에 트랙을 꺼도(기록 밖 상태) 다시 실행 2번이면 원래대로까지 돌아오고, 끈 것은 남는다", () => {
+    const song = songOf(["o4a2", "o4f2", "o3d2"]);
+    let k = 0;
+    const r = planArpeggio(song, "t1", song.tracks[0]!.notes, base, () => `n${++k}`);
+    const h = new History(song);
+    h.run(madeCommand(setNotesAndAddTracks("p1", r.changes, r.newTracks, (n) => `t${n}`, "아르페지오"), { tool: "arpeggio", options: {}, trackId: "t1", picked: song.tracks[0]!.notes.map((x) => x.id) }));
+    const made = h.song;
+    const plan = restoreMade(made, [made.made!.at(-1)!.id]);
+    if (!plan.ok) throw new Error(plan.reason);
+    h.run(restoreMadeCommand(plan, "원래대로"));
+    h.undo();
+    // 만든 모습에서 한 번, 만들기 전에서 한 번 끈다
+    h.amend({ ...h.song, tracks: h.song.tracks.map((t) => (t.id === "t2" ? { ...t, mute: true } : t)) });
+    h.undo();
+    h.amend({ ...h.song, tracks: h.song.tracks.map((t) => (t.id === "t3" ? { ...t, solo: true } : t)) });
+    h.redo();
+    expect(pitches(h.song)).toEqual(pitches(made));
+    expect(h.song.made).toHaveLength(1);
+    h.redo();
+    expect(h.song.made).toBeUndefined();
+    expect(h.song.tracks.map((t) => t.notes.map((x) => x.id))).toEqual(song.tracks.map((t) => t.notes.map((x) => x.id)));
+    expect(h.song.tracks.find((t) => t.id === "t3")!.solo).toBe(true);
+    expect(h.canRedo).toBe(false);
+  });
+});

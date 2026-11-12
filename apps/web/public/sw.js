@@ -45,9 +45,11 @@ self.addEventListener("activate", (event) => {
 
 // 담아 둔 것은 지금 판 캐시에서 먼저 찾는다. 시작 페이지처럼 여러 판에 같은 주소로 든 파일은 caches.match가
 // 먼저 만든 옛 캐시에서 꺼내 옛 판이 열릴 수 있다. 옛 캐시는 지금 판에 없는 파일(옛 탭이 부르는 옛 판 파일)을 찾을 때만 쓴다.
-// 화면 열기는 주소의 ?뒤를 보지 않는다: 공유받은 뒤 여는 ./?share-target도 연결 없이 담아 둔 ./로 열린다
+// 화면 열기는 주소의 ?뒤를 보지 않는다: 공유받은 뒤 여는 ./?share-target도 연결 없이 담아 둔 ./로 열린다.
+// 응답의 Vary 헤더는 보지 않는다: 서버가 Vary: Origin을 붙이면, 설치할 때 담은 것(Origin 없이 받음)을
+// 스크립트·스타일 요청(Origin을 붙여 보냄)으로는 찾지 못해 연결 없이 빈 화면이 됐다. 앱 파일은 요청 헤더에 따라 달라지지 않는다
 function fromCache(request) {
-  const options = request.mode === "navigate" ? { ignoreSearch: true } : undefined;
+  const options = request.mode === "navigate" ? { ignoreSearch: true, ignoreVary: true } : { ignoreVary: true };
   return caches
     .open(CACHE)
     .then((cache) => cache.match(request, options))

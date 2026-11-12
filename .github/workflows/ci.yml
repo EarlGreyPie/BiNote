@@ -21,7 +21,12 @@ jobs:
       # 화면 연기 시험 (점검 S40): 위에서 만든 dist를 vite preview로 띄워 Chromium으로 돈다
       - name: Playwright Chromium 설치
         working-directory: apps/web
-        run: pnpm exec playwright install --with-deps chromium
+        # 러너가 우분투 패키지(글꼴 등)를 받지 못하는 날이 있다. 그때는 시험을 돌리지도 못하고 멈추므로 브라우저만 받아 이어 간다
+        run: |
+          pnpm exec playwright install --with-deps chromium || {
+            echo "::warning::시스템 패키지를 받지 못해 Chromium만 받습니다 (글꼴이 달라 화면 시험 결과가 다를 수 있음)"
+            pnpm exec playwright install chromium
+          }
       - name: 화면 연기 시험 (e2e)
         run: pnpm --filter @mmlce/web e2e
       - name: 실패한 시험 기록 올리기

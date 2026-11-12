@@ -24,7 +24,8 @@ import { previewPitch } from "./instrumentRange";
 import { PreviewVoices } from "./previewVoices";
 import { preparePlay } from "./playPlan";
 import type { WavRequest } from "./jobs";
-import { audioLag, CLOCK_STOP_SLACK, clockMoves, clockStats, FROZEN_MS, isTouchWebKit, needsRebuild, settlesWithin, staleAfterReturn, type ClockPair } from "./audioHealth";
+import { nextSynthLag, SynthClock, synthLagOf, type ClockPing } from "./synthClock";
+import { audioLag, CLOCK_STOP_SLACK, LATENCY_JUMP, clockMoves, clockStats, FROZEN_MS, isTouchWebKit, needsRebuild, settlesWithin, staleAfterReturn, type ClockPair } from "./audioHealth";
 
 /** CC 0 = 뱅크 선택(MSB) */
 const BANK_SELECT = 0;
@@ -52,6 +53,18 @@ const ALL_SOUND_OFF = 120;
 const RESUME_TIMEOUT = 800;
 /** 깨운 뒤 오디오 시계가 흐르는지 보는 시간(ms) */
 const CLOCK_TIMEOUT = 400;
+
+/** 신스 시계를 물어볼 때 쓰는 채널(재생이 쓰지 않는 드럼 채널)과 컨트롤러(뜻이 없는 번호). 값은 물음마다 바꿔 답을 가린다 */
+const PING_CHANNEL = 9;
+const PING_CONTROLLER = 119;
+/** 신스 시계 답을 기다리는 최대 시간(ms) */
+const PING_TIMEOUT = 80;
+/** 한 번 잴 때 물어보는 횟수 */
+const PING_COUNT = 3;
+/** 답을 하나도 못 받은 재기가 이만큼 이어지면 그 오디오에서는 더 재지 않는다 */
+const PING_GIVE_UP = 3;
+/** 신스 시계 뒤처짐이 이만큼(초) 넘게 바뀌면 오디오 상태 칸에 남긴다 */
+const SYNTH_LAG_NOTE = 0.02;
 
 /** 브라우저가 알려 주는 출력 지연(초). 모르는 브라우저는 0 */
 function reportedLatency(context: AudioContext): number {
@@ -99,6 +112,8 @@ export class Engine {
   private interrupted = false;
   /** 소리를 처음 낼 때 브라우저가 알려 준 출력 지연(초). 돌아온 뒤 크게 늘었으면 오디오를 새로 만든다 */
   private latencyBefore = 0;
+  /** 오디오 상태 칸에 마지막으로 남긴 출력 지연(초) */
+  private latencyNoted = 0;
   /** 아이패드·아이폰인지 (화면 잠금 뒤 오디오를 새로 만들지 정할 때 쓴다) */
   private readonly touchWebKit = typeof navigator !== "undefined" && isTouchWebKit(navigator.userAgent, navigator.maxTouchPoints ?? 0);
   /** 마지막 심장 박동(1초마다 부르는 타이머)에서 읽은 시계. 오디오 시계가 멈췄었는지 보려고 */
@@ -107,6 +122,17 @@ export class Engine {
   private readonly events: string[] = [];
   /** 오디오를 새로 만든 횟수 (처음 만든 것 빼고) */
   private rebuilds = 0;
+  /** 신스 시계 맞추기 (synthClock.ts). 오디오를 새로 만들면 새로 둔다 */
+  private synthClock = new SynthClock();
+  /** 신스 시계를 물어보고 기다리는 답: 물음 값 → 답 받기 */
+  private pings = new Map<number, (synthTime: number) => void>();
+  private pingId = 0;
+  /** 마지막 재기: 받은 답 수와 잰 값(초). 오디오 상태 칸에 보여 준다 */
+  private lastPing: { answers: number; measured: number | undefined } | undefined;
+  /** 답을 하나도 못 받은 재기가 이어진 횟수 */
+  private pingMisses = 0;
+  /** 신스 시계를 재는 중 (겹쳐 재지 않는다) */
+  private measuring: Promise<void> | undefined;
   /** 오디오를 새로 만드는 중 */
   private reviving: Promise<WorkletSynthesizer> | undefined;
   /** 지금 신스를 버리면 풀리는 약속. 버린 신스의 응답을 기다리던 작업(팩 올리기 등)이 멈춰 있지 않게 한다 */
@@ -194,9 +220,19 @@ export class Engine {
     // 워크릿이 오류로 멈추면 그 뒤로 소리가 나지 않는다. 다음에 쓸 때 새로 만든다
     const node = (synth as unknown as { worklet?: AudioWorkletNode }).worklet;
     if (node) node.onprocessorerror = () => (this.broken = true);
+    // 신스가 보내는 답에는 신스 자기 시계가 실려 온다. 물어본 것(pingSynth)의 답을 여기서 받는다
+    node?.port.addEventListener("message", (e: MessageEvent) => {
+      const m = e.data as { type?: string; currentTime?: number; data?: { type?: string; data?: { channel?: number; controller?: number; value?: number } } } | undefined;
+      if (m?.type !== "eventCall" || m.data?.type !== "controllerChange" || typeof m.currentTime !== "number") return;
+      const cc = m.data.data;
+      if (cc?.channel !== PING_CHANNEL || cc.controller !== PING_CONTROLLER || cc.value === undefined) return;
+      this.pings.get(cc.value)?.(m.currentTime);
+    });
     // 소리를 낸 뒤 오디오가 멈추면(잠자기·다른 앱이 오디오를 가져감) 다음에 쓸 때 살아 있는지 확인한다
     context.onstatechange = () => {
       if (this.context === context) this.note(`audio ${context.state}`);
+      // 멈췄다 돌아온 오디오는 신스 시계를 다시 물어본다 (멈춘 동안 답이 없어 그만둔 재기를 다시 연다)
+      if (this.context === context) this.pingMisses = 0;
       if (this.context !== context || context.state === "running" || !this.warmed) return;
       this.suspect = true;
       if (document.visibilityState === "hidden") this.interrupted = true;
@@ -229,20 +265,25 @@ export class Engine {
         // 한 팩을 못 올려도 나머지 팩과 오디오는 살린다 (그 팩 악기만 소리가 나지 않는다)
       }
     }
+    const clock = new SynthClock();
+    this.synthClock = clock;
     const sink: LiveSink = {
       get currentTime() {
         return context.currentTime;
       },
       setGain: (channel, gain) => synth.midiChannels[channel]?.setSystemParameter("gain", gain),
-      setPatch(channel, bank, program, time) {
+      // 받은 시각은 오디오 시계이고, 신스는 자기 시계로 예약을 처리한다. 뒤처진 만큼 빼서 넣는다 (synthClock.ts)
+      setPatch(channel, bank, program, at) {
+        const time = clock.at(at);
         synth.controllerChange(channel, BANK_SELECT, bank, { time });
         synth.programChange(channel, program, { time });
       },
-      noteOn: (channel, note, velocity, time) => synth.noteOn(channel, note, velocity, { time }),
-      noteOff: (channel, note, time) => synth.noteOff(channel, note, { time }),
-      pitchBend: (channel, semitones, time) => synth.pitchWheel(channel, bendValue(semitones), { time }),
+      noteOn: (channel, note, velocity, at) => synth.noteOn(channel, note, velocity, { time: clock.on(channel, note, at) }),
+      noteOff: (channel, note, at) => synth.noteOff(channel, note, { time: clock.off(channel, note, at) }),
+      pitchBend: (channel, semitones, at) => synth.pitchWheel(channel, bendValue(semitones), { time: clock.at(at) }),
       // 라이브러리 pitchWheelRange는 값(데이터 엔트리)에 시각을 빼먹어 예약하면 범위가 안 바뀐다. 직접 RPN 0을 보낸다
-      setBendRange: (channel, semitones, time) => {
+      setBendRange: (channel, semitones, at) => {
+        const time = clock.at(at);
         synth.controllerChange(channel, 101, 0, { time });
         synth.controllerChange(channel, 100, 0, { time });
         synth.controllerChange(channel, 6, semitones, { time });
@@ -251,7 +292,7 @@ export class Engine {
         synth.controllerChange(channel, 100, 127, { time });
       },
       // All Sound Off(CC 120): 그 채널 음을 끝소리 없이 바로 끊는다. 신스 큐는 같은 시각이면 넣은 순서대로 처리한다
-      cut: (channel, time) => synth.controllerChange(channel, 120, 0, { time }),
+      cut: (channel, at) => synth.controllerChange(channel, 120, 0, { time: clock.cut(channel, at) }),
       silence: () => synth.stopAll(true),
     };
     this.player = new LivePlayer(sink);
@@ -306,8 +347,17 @@ export class Engine {
       this.suspect = true;
       this.hiddenMs = Math.max(this.hiddenMs, gap);
       this.note(`frozen ${(gap / 1000).toFixed(1)}s, audio ${c.state}`);
+      this.pingMisses = 0;
     }
     if (!this.warmed) return;
+    // 신스 시계가 뒤처졌는지도 본다 (재생 중에 벌어지면 그 뒤 음부터 바로잡는다)
+    if (c.state === "running") void this.measureSynthLag();
+    // 브라우저가 알려 주는 출력 지연이 크게 바뀌면 오디오 상태 칸에 남긴다 (블루투스 연결·출력 바뀜을 나중에 알아보려고)
+    const latency = reportedLatency(c);
+    if (Math.abs(latency - this.latencyNoted) > LATENCY_JUMP) {
+      this.note(`latency ${(this.latencyNoted * 1000).toFixed(0)}ms -> ${(latency * 1000).toFixed(0)}ms`);
+      this.latencyNoted = latency;
+    }
     const lag = audioLag(last, this.beat!);
     if (lag > CLOCK_STOP_SLACK) {
       // 벽시계는 갔는데 오디오 시계는 멈춰 있었다: 시스템이 오디오를 멈췄다 (다시 켜졌어도 밀릴 수 있음)
@@ -315,6 +365,57 @@ export class Engine {
       if (!this.interrupted) this.note(`audio clock stopped ${lag.toFixed(1)}s`);
       this.interrupted = true;
     }
+  }
+
+  /** 신스에 자기 시계를 한 번 물어본다. 답이 제때 오지 않으면 undefined */
+  private pingSynth(): Promise<ClockPing | undefined> {
+    const synth = this.synth;
+    const context = this.context;
+    if (!synth || !context) return Promise.resolve(undefined);
+    const id = (this.pingId = (this.pingId + 1) % 128);
+    return new Promise((resolve) => {
+      const done = (ping: ClockPing | undefined) => {
+        clearTimeout(timer);
+        if (this.pings.get(id) === answer) this.pings.delete(id);
+        resolve(ping);
+      };
+      const answer = (synthTime: number) => done({ sent, received: context.currentTime, synth: synthTime });
+      const timer = setTimeout(() => done(undefined), PING_TIMEOUT);
+      this.pings.set(id, answer);
+      const sent = context.currentTime;
+      try {
+        synth.controllerChange(PING_CHANNEL, PING_CONTROLLER, id);
+      } catch {
+        done(undefined);
+      }
+    });
+  }
+
+  /**
+   * 신스 시계가 오디오 시계보다 얼마나 뒤처졌는지 재서, 그 뒤 예약부터 그만큼 앞당겨 넣는다.
+   * 재생을 시작하기 바로 전과, 소리를 낸 뒤 1초마다 잰다. 잴 수 없으면 앞 값을 그대로 쓴다
+   */
+  private measureSynthLag(): Promise<void> {
+    this.measuring ??= (async () => {
+      const clock = this.synthClock;
+      const pings: ClockPing[] = [];
+      // 답이 없는 신스(멈췄거나 답을 보내지 않는 판)를 재생할 때마다 기다리지 않는다
+      if (this.pingMisses >= PING_GIVE_UP) return;
+      for (let i = 0; i < PING_COUNT; i++) {
+        const ping = await this.pingSynth();
+        if (!ping) break;
+        pings.push(ping);
+      }
+      if (clock !== this.synthClock) return;
+      this.pingMisses = pings.length > 0 ? 0 : this.pingMisses + 1;
+      const measured = synthLagOf(pings);
+      this.lastPing = { answers: pings.length, measured };
+      if (measured === undefined) return;
+      const next = nextSynthLag(clock.lag, measured);
+      if (Math.abs(next - clock.lag) > SYNTH_LAG_NOTE) this.note(`synth clock behind ${(next * 1000).toFixed(0)}ms`);
+      clock.lag = next;
+    })().finally(() => (this.measuring = undefined));
+    return this.measuring;
   }
 
   /** 오디오 상태 칸에 남길 일 (최근 12개) */
@@ -353,10 +454,12 @@ export class Engine {
         await new Promise((r) => setTimeout(r, 10));
       }
       const { rate, maxStepMs } = clockStats(samples);
+      await this.measureSynthLag();
       lines.push(
         `state: ${c.state}, sampleRate: ${c.sampleRate}, warmed: ${this.warmed}, suspect: ${this.suspect}, stale: ${this.stale()}`,
         `baseLatency: ${ms(c.baseLatency || 0)}, outputLatency: ${ms(c.outputLatency || 0)}, limiter: ${ms(this.limiterLag)}, syncOffset: ${ms(this.syncOffset)}`,
         `clock rate: ${rate.toFixed(4)}, max step: ${maxStepMs.toFixed(1)}ms`,
+        `synth clock behind: ${ms(this.synthClock.lag)} (compensated; measured ${this.lastPing?.measured === undefined ? "-" : ms(this.lastPing.measured)}, answers ${this.lastPing?.answers ?? 0}/${PING_COUNT})`,
       );
       if (typeof c.getOutputTimestamp === "function") {
         const ts = c.getOutputTimestamp();
@@ -408,6 +511,10 @@ export class Engine {
 
   /** 지금 오디오와 신스를 버린다. 재생 중이던 소리·원곡·미리듣기도 함께 끝난다 */
   private discard(): void {
+    // 버리는 오디오에서 읽어 둔 시각은 새 오디오와 견주지 않는다. 견주면 새로 만든 직후 "오디오 시계가 멈췄다"로 잘못 보고
+    // 다음 재생 때 또 새로 만들었다 (사운드팩을 재생마다 다시 올림)
+    // 벽시계 기준도 같이 비운다: 사운드팩을 올리느라 화면이 몇 초 멈춘 것을 "얼었다"(잠금·절전)로 보지 않게
+    this.beat = undefined;
     try {
       this.player?.stop();
     } catch {
@@ -438,6 +545,10 @@ export class Engine {
     this.interrupted = false;
     this.hiddenMs = 0;
     this.latencyBefore = 0;
+    this.synthClock = new SynthClock();
+    this.pings.clear();
+    this.pingMisses = 0;
+    this.lastPing = undefined;
     this.preparedVoices.clear();
     this.previewKey = "";
     this.packVersion++;
@@ -547,7 +658,7 @@ export class Engine {
     if (request !== this.playRequest || this.context !== context) return [];
     if (cold) await waitForClock(context);
     // 처음 소리를 낼 때의 출력 지연을 기억해 둔다 (돌아온 뒤 크게 늘었는지 보려고)
-    if (!this.warmed) this.latencyBefore = reportedLatency(context);
+    if (!this.warmed) this.latencyBefore = this.latencyNoted = reportedLatency(context);
     this.warmed = true;
     // 예열을 기다리는 사이 팩 구성이 바뀌면 패치를 다시 정하고, 시작 직전 악기별 음량은 최신 값으로 (preparePlay)
     let last: Unresolved[] = [];
@@ -560,7 +671,11 @@ export class Engine {
         this.playingPatches = patches;
         return { schedule, patches, unresolved };
       },
-      prepare: ({ schedule, patches }) => this.prepareVoices(schedule, patches),
+      // 신스 시계가 뒤처져 있으면 음이 재생선보다 그만큼 늦게 난다. 음을 준비한 뒤 시작 바로 전에 재서 맞춘다
+      prepare: async ({ schedule, patches }) => {
+        await this.prepareVoices(schedule, patches);
+        await this.measureSynthLag();
+      },
       packVersion: () => this.packVersion,
       // 기다리는 사이 정지나 다른 재생을 눌렀으면 이 재생은 시작하지 않는다
       cancelled: () => request !== this.playRequest,

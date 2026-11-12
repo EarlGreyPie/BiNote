@@ -42,7 +42,8 @@
 
   let dialog: HTMLDialogElement;
   // svelte-ignore state_referenced_locally
-  let choice = $state<SlideChoice>(initial ?? loadStored(SLIDE_KEY, (raw) => parseSlideChoice(parseJson(raw))));
+  // 통째로만 바꾼다($state.raw): 이 값이 만든 기록에 그대로 실려 곡 안으로 들어가므로 Proxy가 아니어야 한다
+  let choice = $state.raw<SlideChoice>(initial ?? loadStored(SLIDE_KEY, (raw) => parseSlideChoice(parseJson(raw))));
   function set(change: Partial<SlideChoice>) {
     choice = { ...choice, ...change };
     saveStored(SLIDE_KEY, JSON.stringify(choice));

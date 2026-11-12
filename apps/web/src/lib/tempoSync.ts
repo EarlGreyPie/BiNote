@@ -23,6 +23,8 @@ export interface TempoPlan {
   readonly set: readonly TempoEvent[];
   /** 지울 템포 위치 (탭 구간 안에 있던 것) */
   readonly remove: readonly Rat[];
+  /** 게임 템포 범위 밖이라 끝값으로 넣은 자리와 원래 계산한 bpm (tapTempos에 range를 줬을 때) */
+  readonly clamped?: readonly { readonly at: Rat; readonly bpm: number }[];
 }
 
 /**
@@ -118,16 +120,19 @@ export function tapMarks(timeSig: readonly TimeSigEvent[], first: Rat, count: nu
  * 간격마다 템포를 재고, 합쳐도 탭 자리가 slack(초) 안이면 한 묶음으로 합친다. 묶음 템포는 묶음 전체 길이 ÷ 전체 시간이다.
  * 게임 템포는 정수라 반올림하는데, 그 오차는 다음 묶음이 받는다 (묶음마다 실제로 닿은 시각부터 다음 탭 자리까지로 잰다).
  * 그래서 마디가 많아도 어긋남이 쌓이지 않는다. 앞과 같은 템포는 생략하고, 마지막 탭 자리부터는 원래 템포로 돌아간다.
- * 그 사이에 있던 템포는 지운다. 탭이 둘보다 적으면 undefined
+ * 그 사이에 있던 템포는 지운다. 탭이 둘보다 적으면 undefined.
+ * range(게임 템포 범위)를 주면 범위 밖 묶음은 끝값으로 넣고 clamped에 적는다. 모자라거나 남은 시간은
+ * 반올림 오차처럼 다음 묶음이 받으므로 그 뒤 마디는 탭 자리에 그대로 맞는다 (영상 마디 넘김이 한 번 튀었거나
+ * 탭 하나를 잘못 눌렀을 때, 전체를 버리지 않고 그 자리만 고치면 되게)
  */
 export function tapTempos(
   tempo: readonly TempoEvent[],
   timeSig: readonly TimeSigEvent[],
   first: Rat,
   taps: readonly number[],
-  options: { readonly slack?: number; readonly unit?: TapUnit } = {},
+  options: { readonly slack?: number; readonly unit?: TapUnit; readonly range?: { readonly min: number; readonly max: number } } = {},
 ): TempoPlan | undefined {
-  const { slack = 0, unit = "bar" } = options;
+  const { slack = 0, unit = "bar", range } = options;
   if (taps.length < 2) return undefined;
   const marks = tapMarks(timeSig, first, taps.length, unit);
   const last = marks.at(-1)!;
@@ -146,11 +151,14 @@ export function tapTempos(
     } else groups.push({ start: marks[i]!, end: i + 1, points: [[length, seconds]] });
   }
   const set: TempoEvent[] = [];
+  const clamped: { at: Rat; bpm: number }[] = [];
   let current = bpmAt(tempo, first);
   let reached = taps[0]!;
   for (const g of groups) {
     const [length] = g.points.at(-1)!;
-    const bpm = Math.max(1, Math.round((240 * length) / Math.max(0.05, taps[g.end]! - reached)));
+    const raw = Math.max(1, Math.round((240 * length) / Math.max(0.05, taps[g.end]! - reached)));
+    const bpm = range ? Math.min(range.max, Math.max(range.min, raw)) : raw;
+    if (bpm !== raw) clamped.push({ at: g.start, bpm: raw });
     if (bpm !== current) set.push({ at: g.start, bpm });
     current = bpm;
     reached += (240 * length) / bpm;
@@ -160,7 +168,7 @@ export function tapTempos(
   const remove = normalizeTempo(tempo)
     .map((e) => e.at)
     .filter((at) => cmp(at, first) > 0 && cmp(at, last) <= 0 && !set.some((s) => cmp(s.at, at) === 0));
-  return { set, remove };
+  return range ? { set, remove, clamped } : { set, remove };
 }
 
 /**

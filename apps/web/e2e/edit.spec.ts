@@ -140,3 +140,24 @@ test("고친 트랙만 미리 체크된 내보내기 창에서 악보를 체크�
   // 악보 체크로 나머지를 더해도 고친 둘째 트랙이 첫 채널로 오지 않는다
   expect(await exportMml(page)).toBe("MML@l8cdefgab>c,l2ceg;");
 });
+
+test("타브에서 두 자리 프렛(12)을 치면 실행 취소 한 번에 지워지고 다시 실행 한 번에 돌아온다", async ({ page }) => {
+  await page.getByRole("button", { name: "타브", exact: true }).click();
+  // 높은 E줄의 빈 칸(3마디 첫 박)을 눌러 커서를 둔다 (화면 1280x800 기준 자리)
+  await page.mouse.click(484, 208);
+  await page.keyboard.type("12", { delay: 120 });
+  await expect(noteCount(page)).toHaveText("음 9개");
+  // 12프렛(o5e)이 들어갔다. 첫 숫자로 넣은 1프렛(f)이 아니다
+  await expect(trackEditor(page)).toHaveText("l8t120cdefgab>cr1e16");
+
+  // 전에는 한 번 누르면 친 적 없는 1프렛 음이 남고, 두 번 눌러야 지워졌다
+  await page.keyboard.press("Control+Z");
+  await expect(noteCount(page)).toHaveText("음 8개");
+  await expect(trackEditor(page)).toHaveText("t120l8cdefgab>c");
+  await expect(page.getByRole("button", { name: "실행 취소" })).toBeDisabled();
+
+  await page.keyboard.press("Control+Y");
+  await expect(noteCount(page)).toHaveText("음 9개");
+  await expect(trackEditor(page)).toHaveText("l8t120cdefgab>cr1e16");
+  await expect(page.getByRole("button", { name: "다시 실행" })).toBeDisabled();
+});

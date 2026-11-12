@@ -168,7 +168,7 @@
 <style>
   dialog {
     width: min(640px, calc(100vw - 32px));
-    max-height: calc(100vh - 48px);
+    max-height: calc(100dvh - 48px);
     background: var(--panel);
     color: var(--text);
     border: 1px solid var(--line);

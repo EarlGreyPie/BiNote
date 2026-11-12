@@ -460,6 +460,8 @@ input[type="range"] {
 }
 .work.empty {
   grid-template-columns: minmax(0, 1fr);
+  /* 곡이 없을 때는 아래 편집기 자리(패널 아래 배치)를 비워 두지 않고 작업 칸 전체를 쓴다 */
+  grid-template-rows: minmax(0, 1fr);
   place-items: center;
 }
 .empty-start {
@@ -468,8 +470,14 @@ input[type="range"] {
   align-items: center;
   gap: 16px;
   width: 100%;
+  /* 지난 작업 목록이 길어 칸보다 커지면 위쪽(안내 글·새 악보 단추)이 잘리지 않고 이 안에서 스크롤한다 */
+  max-height: 100%;
+  overflow-y: auto;
   padding: 16px;
   box-sizing: border-box;
+}
+.empty-start > * {
+  flex-shrink: 0;
 }
 .empty-note {
   max-width: 36em;

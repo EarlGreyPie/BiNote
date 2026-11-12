@@ -45,6 +45,9 @@ export function t(key: MessageKey, params?: Params): string {
 }
 
 export function diag(d: { code: string; params?: Params }): string {
+  // 악기는 공통 ID(folk-guitar)로 오므로 화면 이름(포크 기타)으로 바꿔 보여 준다
+  const instrument = d.code === "instrument-no-program" ? d.params?.instrument : undefined;
+  if (typeof instrument === "string") return describeDiagnostic(i18n.locale, { ...d, params: { ...d.params, instrument: instrumentNameIn(i18n.locale, instrument) } });
   return describeDiagnostic(i18n.locale, d);
 }
 

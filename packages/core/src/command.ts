@@ -30,6 +30,12 @@ interface Entry {
    * 다시 실행은 앞 표시일 때만 뒤 튜닝·뒤 표시로 돌린다. 값이 같아도 그 사이 따로 고른 튜닝(새 표시)은 덮지 않는다
    */
   marks?: ReadonlyMap<string, { readonly before: number | undefined; readonly after: number }>;
+  /**
+   * 실행 취소한 단계가 기억하는 그때의 곡: from은 실행 취소한 뒤, to는 하기 전. 다시 실행할 때 지금 곡이 from이면
+   * (음소거·튜닝 같은 기록 밖 상태만 바뀐 곡 포함) 명령을 다시 계산하지 않고 to를 쓴다. 명령을 다시 계산하면 내용은 같아도 음 목록이 새 객체가 되어, 그 곡을 기준으로 세운
+   * 뒤 단계(만든 것 되돌리기·다시 고치기 계획)가 낡은 것으로 보고 아무 일도 하지 않았고, 저장한 곡과 같은지도 알아보지 못했다
+   */
+  undone?: { readonly from: Song; readonly to: Song };
 }
 
 /** 기록에 맡겨 둔 악보 튜닝과 그 표시 (History.tabMarks) */
@@ -179,9 +185,35 @@ export class History {
    */
   amend(next: Song): Song {
     for (const t of next.tracks) this.listening.set(t.id, { mute: t.mute, solo: t.solo });
+    // 음소거·튜닝은 다시 실행이 지금 값을 다시 얹는 상태라, 바뀌어도 실행 취소 때 기억한 곡은 그대로 쓸 수 있다
+    this.retarget(this.current, next);
     this.current = next;
     this.rememberTabs();
     return this.current;
+  }
+
+  /** 다시 실행할 다음 단계가 from에서 이어지게 기억해 두었으면 to에서 이어지게 고친다 (곡 내용은 같고 기록 밖 상태만 다른 객체) */
+  private retarget(from: Song, to: Song): void {
+    const top = this.redoStack[this.redoStack.length - 1];
+    if (top?.undone?.from === from) top.undone = { from: to, to: top.undone.to };
+  }
+
+  /**
+   * 맨 위 두 단계를 실행 취소 한 칸으로 묶는다. 한 동작이 편집 두 번으로 들어온 경우에 쓴다
+   * (타브의 두 자리 프렛: 첫 숫자로 넣은 음을 둘째 숫자가 바꾼다). 악보 튜닝을 함께 바꾸거나 악보를 지운 단계가
+   * 끼어 있으면 묶지 않는다. 묶었으면 true
+   */
+  mergeLast(): boolean {
+    const n = this.undoStack.length;
+    if (n < 2) return false;
+    const first = this.undoStack[n - 2]!;
+    const second = this.undoStack[n - 1]!;
+    for (const e of [first, second]) if (e.tabs || e.marks || e.removed || e.gone) return false;
+    const label = second.forward.label;
+    const forward: Command = { label, apply: (song) => second.forward.apply(first.forward.apply(song)), invert: () => backward };
+    const backward: Command = { label, apply: (song) => first.backward.apply(second.backward.apply(song)), invert: () => forward };
+    this.undoStack.splice(n - 2, 2, { forward, backward });
+    return true;
   }
 
   undo(): Song {
@@ -207,7 +239,9 @@ export class History {
     // 이 단계가 지운 악보가 돌아오면 지우기 전 튜닝·표시로 (그래야 그 앞 단계의 실행 취소가 표시를 알아본다)
     const was = new Set(this.current.players.map((p) => p.id));
     for (const [id, saved] of entry.removed ?? []) if (live.has(id) && !was.has(id)) this.restoreTab(id, saved);
+    const before = this.current;
     this.current = keepTabs(next, this.tabs);
+    entry.undone = { from: this.current, to: before };
     this.rememberTabs();
     this.redoStack.push(entry);
     return this.current;
@@ -224,7 +258,12 @@ export class History {
       this.tabs.set(id, after);
       this.tabMarks.set(id, mark.after);
     }
-    const next = keepTabs(keepListening(this.current, entry.forward.apply(this.current), this.listening), this.tabs);
+    // 실행 취소한 뒤의 곡에서 이어 가면 실행 취소 전의 곡을 그대로 돌려놓는다. 그사이 바뀐 음소거·튜닝은 아래에서 다시 얹는다
+    const memo = entry.undone?.from === this.current ? entry.undone.to : undefined;
+    delete entry.undone;
+    const next = keepTabs(keepListening(this.current, memo ?? entry.forward.apply(this.current), this.listening), this.tabs);
+    // 음소거·튜닝을 얹어 객체가 달라졌으면, 다음에 다시 실행할 단계도 이 곡에서 이어지게 한다
+    if (memo && next !== memo) this.retarget(memo, next);
     const removed = this.removedTabs(this.current, next);
     if (removed) entry.removed = removed;
     else delete entry.removed;

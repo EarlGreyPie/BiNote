@@ -3,7 +3,7 @@ import { emptySong, MOBILE_PROFILE, type Song } from "@mmlce/core";
 import { parseTrackText, planBooks, splitSong, type BookPlan, type BookProgress } from "@mmlce/mml";
 import { planSplit, splitJob, type SplitRequest } from "../src/lib/jobs";
 import { ErrorLog } from "../src/lib/diagnostics";
-import { serveJob, WorkerJob, type JobReply, type JobRequest, type WorkerScope } from "../src/lib/workerJob";
+import { plainCopy, serveJob, WorkerJob, type JobReply, type JobRequest, type WorkerScope } from "../src/lib/workerJob";
 type SplitReply = JobReply<BookPlan, BookProgress>;
 
 const profile = { ...MOBILE_PROFILE, charLimitPerScore: 40 };
@@ -218,6 +218,88 @@ describe("WorkerJob 실패 까닭", () => {
       "worker:split SyntaxError: bad module",
       "worker:transcribe TypeError: module workers unsupported",
     ]);
+  });
+
+  /** 실제 워커처럼 요청을 구조적 복사로 받는다: Proxy나 함수가 들어 있으면 postMessage가 DataCloneError를 던진다 */
+  class CloningWorker extends FakeWorker {
+    posts = 0;
+    override postMessage(message: JobRequest<SplitRequest>) {
+      this.posts++;
+      super.postMessage(structuredClone(message));
+    }
+  }
+
+  it("요청에 Proxy가 섞여 워커로 넘기지 못하면 값만 남긴 사본으로 다시 보낸다", async () => {
+    const log = new ErrorLog();
+    const made: CloningWorker[] = [];
+    const runner = new WorkerJob<SplitRequest, BookPlan, BookProgress>(
+      () => {
+        const w = new CloningWorker();
+        made.push(w);
+        return w as unknown as Worker;
+      },
+      () => {
+        throw new Error("화면 쪽 계산은 쓰지 않아야 한다");
+      },
+      { name: "split", log },
+    );
+    // 곡 안에 Proxy가 들어간 경우 (화면 상태에서 온 값을 그대로 곡에 넣었을 때): 음 길이와 곡 정보
+    const track = song.tracks[0]!;
+    const proxied: Song = {
+      ...song,
+      meta: new Proxy({ ...song.meta }, {}),
+      tracks: [{ ...track, notes: track.notes.map((n) => ({ ...n, dur: new Proxy({ ...n.dur }, {}) })) }],
+    };
+    expect(() => structuredClone(proxied)).toThrow();
+    const result = await runner.run({ ...request, song: proxied });
+    expect(result).toEqual(planBooks(song, profile, { spread: false }));
+    expect(runner.busy).toBe(false);
+    expect(runner.lastError).toBeUndefined();
+    // 같은 워커에 두 번 보냈고(처음은 실패), 까닭은 최근 오류에 남는다
+    expect(made).toHaveLength(1);
+    expect(made[0]!.posts).toBe(2);
+    expect(made[0]!.terminated).toBe(false);
+    expect(log.list().map((e) => `${e.where} ${e.message}`)).toEqual([expect.stringMatching(/^worker:split DataCloneError/)]);
+    // 곡을 고칠 때마다 다시 보내도 같은 까닭은 한 번만 적는다 (최근 오류의 다른 기록을 밀어내지 않게)
+    log.note("view:roll", new Error("다른 기록"));
+    expect(await runner.run({ ...request, song: proxied })).toEqual(result);
+    expect(made[0]!.posts).toBe(4);
+    expect(log.list().map((e) => `${e.where} ×${e.count}`)).toEqual(["worker:split ×1", "view:roll ×1"]);
+  });
+
+  it("값만 남긴 사본도 넘기지 못하면(함수 등) 멈추지 않고 화면 쪽에서 계산한다", async () => {
+    const log = new ErrorLog();
+    const made: CloningWorker[] = [];
+    const runner = new WorkerJob<SplitRequest, BookPlan, BookProgress>(
+      () => {
+        const w = new CloningWorker();
+        made.push(w);
+        return w as unknown as Worker;
+      },
+      planSplit,
+      { name: "split", log },
+    );
+    const broken = { ...song, meta: { ...song.meta, hook: () => 0 } } as Song;
+    const result = await runner.run({ ...request, song: broken });
+    expect(result!.result.parts.length).toBeGreaterThan(1);
+    expect(runner.busy).toBe(false);
+    expect(runner.lastError).toBeUndefined();
+    // 못 넘긴 워커는 버리고, 다음 요청은 새 워커로 간다
+    expect(made[0]!.terminated).toBe(true);
+    expect((await runner.run(request))!.result.parts.length).toBeGreaterThan(1);
+    expect(made).toHaveLength(2);
+  });
+
+  it("plainCopy는 배열과 보통 객체만 새로 만들고 나머지 값은 그대로 둔다", () => {
+    const buffer = new ArrayBuffer(4);
+    const when = new Date(0);
+    const inner = new Proxy({ n: 1, d: 4 }, {});
+    const list = new Proxy([inner], {});
+    const copy = plainCopy({ list, buffer, when, text: "a", none: undefined, nothing: null });
+    expect(copy).toEqual({ list: [{ n: 1, d: 4 }], buffer, when, text: "a", none: undefined, nothing: null });
+    expect(copy.buffer).toBe(buffer);
+    expect(copy.when).toBe(when);
+    expect(() => structuredClone(copy)).not.toThrow();
   });
 
   it("워커 안의 예외는 이름과 내용을 담아 답한다", async () => {

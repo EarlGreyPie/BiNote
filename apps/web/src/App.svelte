@@ -202,7 +202,7 @@
   import RecordBar from "./lib/RecordBar.svelte";
   import { MidiRecorder, quantizeTake, RecordFlow, type RecordJob, type RecordStatus, type TakeKey } from "./lib/midiRecord";
   import { assignTake, liveTarget, planChanges, recordTarget, takeGhosts, type RecordGhost, type RecordMode, type RecordOverflow, type RecordTarget } from "./lib/recordPlan";
-  import { alignBarTempo, attackStarts, boundToSong, tempoOutOfRange, barStart, bpmAt, nearestBar, nearestBeat, offIntervals, onsetNear, pairBarTempo, previousBar, snapTaps, tapMarks, tapTempos, type BarDragMode, type TapReview, type TapUnit } from "./lib/tempoSync";
+  import { alignBarTempo, attackStarts, boundToSong, barStart, bpmAt, nearestBar, nearestBeat, offIntervals, onsetNear, pairBarTempo, previousBar, snapTaps, tapMarks, tapTempos, type BarDragMode, type TapReview, type TapUnit, type TempoPlan } from "./lib/tempoSync";
   import SongChecks from "./lib/SongChecks.svelte";
   import TrackPane from "./lib/TrackPane.svelte";
   import type { TrackActions } from "./lib/trackActions";
@@ -228,7 +228,7 @@
   import { errorLog, errorText, watchUncaught } from "./lib/diagnostics";
   import ViewGuard from "./lib/ViewGuard.svelte";
   import NoteList from "./lib/NoteList.svelte";
-  import { forgetWork, listWorks, loadWork, newWorkId, saveWork, type WorkSaveResult, type WorkSummary } from "./lib/workStore";
+  import { adoptStashedWorks, forgetWork, listWorks, loadWork, newWorkId, saveWork, stashWork, type WorkRecord, type WorkSaveResult, type WorkSummary } from "./lib/workStore";
   import { WorkLocks } from "./lib/workLock";
   import { formatBytes, freeBytes } from "./lib/storageSpace";
   import { editorStateKey, keptFields, parseEditorState, projectWriteOptions, withTrackView, type EditorState, type KeptFields, type ReferenceFit, type TrackViewState, type VideoFit, keepOpenMedia, keptFit, videoFitOf, withVideoFit } from "./lib/projectEditor";
@@ -1160,6 +1160,20 @@
     return next;
   }
 
+  /** 타브 프렛 숫자 하나를 넣은 바로 뒤의 곡. 둘째 숫자가 이 곡에 이어 들어올 때만 앞 칸과 묶는다 (그사이 실행 취소나 다른 편집이 없었다) */
+  let tabDigitSong: Song | undefined;
+  /**
+   * 타브 편집을 넣는다. 두 자리 프렛(12 등)은 첫 숫자로 넣은 음을 둘째 숫자가 바꾸는 편집 두 번으로 들어오므로,
+   * 둘째 숫자는 앞 칸과 한 칸으로 묶는다. 묶지 않으면 실행 취소 한 번 뒤에 친 적 없는 1프렛 음이 남았다
+   */
+  function commitTabInput(command: Command, digit: "first" | "join" | undefined) {
+    const joins = digit === "join" && !!history && history.song === tabDigitSong;
+    tabDigitSong = undefined;
+    if (!commit(command) || !history) return;
+    if (joins) history.mergeLast();
+    else if (digit === "first") tabDigitSong = history.song;
+  }
+
   /** 곡에 넣었으면 true (잠근 트랙·영상 속도 재는 중·검사에서 거절되면 false) */
   function editNotes(trackId: string, notes: Note[], label: string): boolean {
     return !!(history && editable(trackId) && !picking && commit(setTrackNotes(trackId, notes, label)));
@@ -1559,7 +1573,8 @@
   }
 
   /** 마비꼬 가져오기 창에 띄운 곡 (readMmi로 읽은 그대로, 마비꼬 트랙 하나 = 연주자 하나) */
-  let mmiImport = $state<{ song: Song; name: string; handle?: FileSystemFileHandle | undefined } | undefined>();
+  // 통째로만 바꾼다($state.raw): 속까지 반응형이면 연 곡 전체가 Proxy가 된다
+  let mmiImport = $state.raw<{ song: Song; name: string; handle?: FileSystemFileHandle | undefined } | undefined>();
   /** 곡 프로필의 악기별 악보 화음 수 */
   function mmiChordsOf(opened: Song): (instrument: string) => number {
     const p = getProfile(opened.meta.profileId);
@@ -1971,7 +1986,8 @@
       () => flash(t("ui.autosaveRetryFailed")),
     );
   }
-  void refreshWorks();
+  // 지난번에 문서가 내려가며 급히 적어 둔 작업이 있으면 먼저 저장소로 옮기고 목록을 읽는다
+  void adoptStashedWorks().then(refreshWorks, refreshWorks);
   // 홈 화면에 설치해 쓰면 묻지 않고도 지속 공간을 주는 브라우저가 많다 (iPad 홈 화면 앱 등)
   if (typeof matchMedia !== "undefined" && matchMedia("(display-mode: standalone)").matches) void requestPersistentStorage();
   else void checkStorage();
@@ -1983,19 +1999,39 @@
   function flushAutosave(): Promise<void> {
     clearTimeout(autosaveTimer);
     autosaveTimer = undefined;
-    return autosaveQueue.flush(autosaveState(), ({ song: current, name }) => {
-      const record = {
-        id: workId,
-        savedAt: Date.now(),
-        fileName: name,
-        title: current.meta.title,
-        trackCount: current.tracks.length,
-        noteCount: current.tracks.reduce((sum, tr) => sum + tr.notes.length, 0),
-        project: writeProject(current, projectWriteOptions(editorState(), kept, APP_VERSION)),
-      };
+    return autosaveQueue.flush(autosaveState(), (state) => {
+      const record = workRecord(state);
       // 보낸 순서대로 적는다: 늦게 끝난 앞 저장이 뒤 저장을 덮지 않게
       return () => saveWork(record).then(noteAutosave);
     });
+  }
+
+  /** 자동 보존에 적을 기록 (지금 작업 id로) */
+  function workRecord({ song: current, name }: AutosaveState): WorkRecord {
+    return {
+      id: workId,
+      savedAt: Date.now(),
+      fileName: name,
+      title: current.meta.title,
+      trackCount: current.tracks.length,
+      noteCount: current.tracks.reduce((sum, tr) => sum + tr.notes.length, 0),
+      project: writeProject(current, projectWriteOptions(editorState(), kept, APP_VERSION)),
+    };
+  }
+
+  /**
+   * 문서가 내려가거나 가려질 때, 아직 적히지 않은 편집을 곧바로 끝나는 자리에 급히 적어 둔다.
+   * 새로고침·탭 닫기에서는 자동 보존 저장(IndexedDB)이 시작도 못 하고 문서가 사라질 수 있다.
+   * 저장이 끝나면 지워지고, 못 끝났으면 다음에 열 때 지난 작업으로 옮겨진다
+   */
+  function stashAutosave() {
+    const now = autosaveState();
+    if (!now || !(autosaved.dirty(now) || autosaved.pending)) return;
+    try {
+      stashWork(workRecord(now));
+    } catch {
+      // 기록을 만들지 못해도 아래 자동 보존은 그대로 한다
+    }
   }
 
   $effect(() => {
@@ -2017,6 +2053,7 @@
       }
       // 편집기에 아직 반영 안 된 입력까지
       flushAllEditors();
+      stashAutosave();
       flushAutosave().catch(() => {});
       // 아이패드·폰에서 앱을 나가면(홈으로, 다른 앱으로, 전원 버튼) 재생을 멈춘다. 그대로 두면 안 보이는 채로
       // 곡 끝까지 소리가 났다. PC는 다른 탭을 보며 들을 수 있게 둔다
@@ -2024,6 +2061,7 @@
     };
     const onpagehide = () => {
       flushAllEditors();
+      stashAutosave();
       flushAutosave().catch(() => {});
       stop();
     };
@@ -2750,7 +2788,8 @@
   const meterHere = $derived(song ? meterAt(song.timeSig, meterPos) : { at: rat(0), beats: 4, unit: 4 });
 
   // 템포·마커·박자 넣기·고치기 창 (이벤트 줄, Alt+B·Alt+M)
-  let eventEdit = $state<{ kind: EventKind; at: Rat; existing: boolean; id?: string } | undefined>(undefined);
+  // 통째로만 바꾼다($state.raw): 속까지 반응형이면 at이 Proxy가 되어 템포·마커·조표에 실려 곡 안으로 들어간다
+  let eventEdit = $state.raw<{ kind: EventKind; at: Rat; existing: boolean; id?: string } | undefined>(undefined);
   function openEvent(request: { label?: EventLabel; kind: EventKind; at: Rat; work?: number | undefined }) {
     // 곡을 다시 연 뒤 옛 보기가 늦게 보낸 요청(길게 누르기 타이머 등)은 버린다 (onmemory와 같은 보기 세대 검사)
     if (!song || !fromCurrentView(request.work, viewGen)) return;
@@ -3003,30 +3042,31 @@
    */
   function placeTaps(s: Song, list: readonly number[], first: Rat, unit: TapUnit, label: string, show: TapShow): Rat | undefined {
     const slack = TAP_SLACK[tapMerge] ?? 0;
-    const plan = tapTempos(s.tempo, s.timeSig, first, list, { slack, unit });
+    // 게임 템포 범위 밖 마디는 끝값으로 넣고 그 자리만 알린다 (전에는 하나라도 있으면 통째로 넣지 않아 다시 찍어야 했다)
+    const plan = tapTempos(s.tempo, s.timeSig, first, list, { slack, unit, range: profile.tempo });
     if (!plan) {
       show({ result: t("ui.tapFailed"), review: undefined });
-      return undefined;
-    }
-    // 게임 템포 범위 밖 값은 넣지 않는다 (영상 마디가 촘촘하거나 시작 마디를 잘못 고른 경우 등)
-    const outside = tempoOutOfRange(plan, profile.tempo);
-    if (outside !== undefined) {
-      show({ result: t("ui.tapOutOfRange", { bpm: outside, min: profile.tempo.min, max: profile.tempo.max }), review: undefined });
       return undefined;
     }
     const done = runIfChanged(setTempos(plan.set, plan.remove, label));
     // 파형 맞추기 제안은 지금 곡에만 쓴다 (그 뒤 다른 편집·다른 곡이면 옛 탭 시각으로 템포를 덮지 않는다)
     const base = history?.song;
     const where = barBeatAt(s.timeSig, first);
-    const result = done
-      ? t(unit === "bar" ? "ui.tapDone" : "ui.tapDoneBeats", { bar: where.bar, beat: where.beat, n: list.length - 1, undo: keyOf("edit.undo") ?? "" })
-      : t("ui.tapSame");
+    const result =
+      (done
+        ? t(unit === "bar" ? "ui.tapDone" : "ui.tapDoneBeats", { bar: where.bar, beat: where.beat, n: list.length - 1, undo: keyOf("edit.undo") ?? "" })
+        : t("ui.tapSame")) + clampedNote(plan);
     const marks = tapMarks(s.timeSig, first, list.length, unit);
-    // 간격이 튀는 자리는 알려만 준다 (고치지 않는다)
-    const flags = offIntervals(list, marks, TAP_FLAG[tapFlag] ?? 0).map((i) => {
-      const w = barBeatAt(s.timeSig, marks[i]!);
-      return { at: toFloat(marks[i]!), label: unit === "bar" ? t("ui.tapFlagBar", { bar: w.bar }) : t("ui.tapFlagBeat", { bar: w.bar, beat: w.beat }) };
-    });
+    // 간격이 튀는 자리는 알려만 준다 (고치지 않는다). 범위 밖이라 끝값으로 넣은 자리를 앞에 둔다
+    const flags = [
+      ...clampedFlags(s, plan, unit),
+      ...offIntervals(list, marks, TAP_FLAG[tapFlag] ?? 0)
+        .filter((i) => !plan.clamped?.some((c) => cmp(c.at, marks[i]!) === 0))
+        .map((i) => {
+          const w = barBeatAt(s.timeSig, marks[i]!);
+          return { at: toFloat(marks[i]!), label: unit === "bar" ? t("ui.tapFlagBar", { bar: w.bar }) : t("ui.tapFlagBeat", { bar: w.bar, beat: w.beat }) };
+        }),
+    ];
     // 파형 시작점 맞추기: 악보에 그 박 첫 음이 있는 탭만, 맞출지 물어본다
     let snap: TapReview["snap"];
     const window = TAP_SNAP[tapSnap] ?? 0;
@@ -3051,18 +3091,27 @@
     show({ result, review: flags.length > 0 || snap ? { flags, snap } : undefined });
     return marks.at(-1)!;
   }
+  /** 범위 밖이라 끝값으로 넣은 자리 안내 (없으면 빈 글) */
+  function clampedNote(plan: TempoPlan): string {
+    const n = plan.clamped?.length ?? 0;
+    return n > 0 ? " " + t("ui.tapClamped", { n, min: profile.tempo.min, max: profile.tempo.max }) : "";
+  }
+  /** 범위 밖이라 끝값으로 넣은 자리로 가는 단추 (계산한 템포를 같이 보여 준다) */
+  function clampedFlags(s: Song, plan: TempoPlan, unit: TapUnit): TapReview["flags"] {
+    return (plan.clamped ?? []).map((c) => {
+      const w = barBeatAt(s.timeSig, c.at);
+      const where = unit === "bar" ? t("ui.tapFlagBar", { bar: w.bar }) : t("ui.tapFlagBeat", { bar: w.bar, beat: w.beat });
+      return { at: toFloat(c.at), label: `${where} (t${c.bpm})` };
+    });
+  }
   /** 파형 시작점에 맞춘 탭 시각으로 다시 넣는다 (실행 취소 한 칸) */
   function applySnap(first: Rat, times: readonly number[], slack: number, unit: TapUnit, count: number, flags: TapReview["flags"], show: TapShow) {
     const s = history?.song;
     if (!s) return;
-    const plan = tapTempos(s.tempo, s.timeSig, first, times, { slack, unit });
-    const outside = plan && tempoOutOfRange(plan, profile.tempo);
-    if (outside !== undefined) {
-      show({ result: t("ui.tapOutOfRange", { bpm: outside, min: profile.tempo.min, max: profile.tempo.max }), review: flags.length > 0 ? { flags } : undefined });
-      return;
-    }
+    const plan = tapTempos(s.tempo, s.timeSig, first, times, { slack, unit, range: profile.tempo });
     const done = plan ? runIfChanged(setTempos(plan.set, plan.remove, t("ui.tapSnapLabel"))) : false;
-    show({ result: done ? t("ui.tapSnapDone", { n: count, undo: keyOf("edit.undo") ?? "" }) : t("ui.tapSame"), review: flags.length > 0 ? { flags } : undefined });
+    const all = plan ? [...clampedFlags(s, plan, unit), ...flags.filter((f) => !plan.clamped?.some((c) => Math.abs(toFloat(c.at) - f.at) < 1e-9))] : flags;
+    show({ result: (done ? t("ui.tapSnapDone", { n: count, undo: keyOf("edit.undo") ?? "" }) : t("ui.tapSame")) + (plan ? clampedNote(plan) : ""), review: all.length > 0 ? { flags: all } : undefined });
   }
   // 멈추면(끝까지 갔거나 정지·일시정지) 찍은 것을 넣는다
   $effect(() => {
@@ -4852,7 +4901,7 @@
     { label: t("ui.menuLanguage"), items: LOCALES.map((l) => ({ label: LOCALE_LABELS[l], checked: i18n.locale === l, run: () => setLocale(l) })) },
   ]);
 
-  /** 위 띠 ? 메뉴: 가이드북, 단축키, 업데이트 확인, BiNote 정보 */
+  /** 위 띠 ? 메뉴: 가이드북, 단축키, 이번 업데이트 내역, BiNote 정보 (업데이트 확인은 BiNote 정보 창에서) */
   const helpMenu: MenuItem[] = $derived([
     { label: t("ui.helpGuide"), run: () => window.open(guideUrl(i18n.locale), "_blank", "noopener") },
     { label: t("ui.keymap") + "…", hint: keyOf("view.keymap"), run: () => (showKeymap = true) },
@@ -6292,10 +6341,10 @@
           work={viewGen}
           onmemory={(place, tabZoom, work) => rememberView(viewMemory, work, viewGen, { place, tab: tabZoom })}
           bind:this={tab}
-          onedit={(changes, label) => {
+          onedit={(changes, label, digit) => {
             // 여러 트랙을 바꾸는 명령은 잠근 트랙이 하나라도 끼면 통째로 하지 않는다 (피아노롤과 같이 알리고 거절)
             if (!history || changes.length === 0 || !changes.every((c) => editable(c.trackId))) return;
-            commit(setTracksNotes(changes, label));
+            commitTabInput(setTracksNotes(changes, label), digit);
           }}
           onlayers={(changes, added, playerId, label) => {
             if (!history || !changes.every((c) => editable(c.trackId))) return false;
@@ -6304,10 +6353,10 @@
           onpastefull={(limit) => (error = t("ui.tabPasteFull", { limit }))}
           ondot={() => run("edit.dotToggle")}
           maxTracks={tabMaxTracks}
-          onnewtrack={({ playerId, notes, instrument }, label) => {
+          onnewtrack={({ playerId, notes, instrument }, label, digit) => {
             if (!history) return;
             const n = history.song.tracks.filter((tr) => tr.playerId === playerId).length + 1;
-            commit(addTrackWithNotes(playerId, t("ui.newTrackName", { n }), notes, label, instrument));
+            commitTabInput(addTrackWithNotes(playerId, t("ui.newTrackName", { n }), notes, label, instrument), digit);
           }}
           onfull={(limit) => (error = t("ui.tabChordFull", { limit }))}
           onpreview={(pitch) => {

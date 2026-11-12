@@ -193,6 +193,9 @@ export function write3mle(song: Song, options: Write3mleOptions = {}): { text: s
     : byScore!.placed;
   if (byScore && byScore.moved > 0) diagnostics.push({ level: "warning", code: "tempo-moved", params: { count: byScore.moved }, span: [0, 0], where: "" });
   const sig = song.timeSig[0];
+  // 이 파일에는 처음 박자표 하나만 적고 마커는 적지 않는다. 말없이 빠지지 않게 알린다
+  if (song.timeSig.length > 1) diagnostics.push({ level: "warning", code: "3mle-meter-dropped", params: { count: song.timeSig.length - 1 }, span: [0, 0], where: "" });
+  if (song.markers.length > 0) diagnostics.push({ level: "warning", code: "3mle-markers-dropped", params: { count: song.markers.length }, span: [0, 0], where: "" });
   const lines = [
     "[Settings]",
     `Encoding=${(options.encoding ?? "cp949") === "cp949" ? "ks_c_5601-1987" : "utf-8"}`,
