@@ -1,8 +1,7 @@
 import { add, clampFifths, cmp, type KeyEvent, div, emptySong, fitNotes, INSTRUMENTS, tieChains, removeNotes, replaceNotes, meterGrid, trackInstrument, rat, sub, ZERO, type Command, type InstrumentRef, type Note, type Player, type PlayerTab, samePlayerTab, type Rat, type Song, type Track, type TrackRole } from "@mmlce/core";
 import { keepTextEnd, setTracksNotes } from "./edit.js";
+import { newTrackColor } from "./track-color.js";
 
-/** 트랙 색 (3MLE·마비꼬와 비슷한 6색을 차례로) */
-const TRACK_COLORS = ["#4f8cff", "#ff7a59", "#2bb673", "#b061ff", "#f2b705", "#00b8d9"];
 
 /** 지금 곡에 없는 id (prefix + 지금 가장 큰 번호 + 1). 지운 트랙의 음소거 등은 History가 새 트랙에 물려주지 않는다 */
 function nextId(prefix: string, used: readonly string[]): string {
@@ -53,12 +52,12 @@ function withProgram(ref: InstrumentRef, programFor: ProgramForPack | undefined)
   return program === undefined ? rest : { ...rest, program };
 }
 
-function blankTrack(id: string, playerId: string, name: string, index: number): Track {
+function blankTrack(song: Pick<Song, "tracks">, id: string, playerId: string, name: string): Track {
   return {
     id,
     playerId,
     name,
-    color: TRACK_COLORS[index % TRACK_COLORS.length]!,
+    color: newTrackColor(song, playerId),
     role: "free",
     mute: false,
     solo: false,
@@ -78,7 +77,7 @@ export function newSong(options: { title?: string; playerName: string; trackName
     tempo: [],
     timeSig: [{ at: rat(0), beats: 4, unit: 4 }],
     players: [player],
-    tracks: [blankTrack("t1", player.id, options.trackName, 0)],
+    tracks: [blankTrack({ tracks: [] }, "t1", player.id, options.trackName)],
   };
 }
 
@@ -99,7 +98,7 @@ export function addPlayer(canonical: string, playerName: string, trackName: stri
     return {
       ...song,
       players: [...song.players, { id: playerId, name: playerName, instrument: instrumentRef(canonical) }],
-      tracks: [...song.tracks, blankTrack(trackId, playerId, trackName, song.tracks.length)],
+      tracks: [...song.tracks, blankTrack(song, trackId, playerId, trackName)],
     };
   });
 }
@@ -237,7 +236,7 @@ export function addTrack(playerId: string, trackName: string, label = "트랙 �
     const id = nextId("t", song.tracks.map((t) => t.id));
     const last = song.tracks.map((t) => t.playerId).lastIndexOf(playerId);
     const tracks = [...song.tracks];
-    tracks.splice(last + 1, 0, blankTrack(id, playerId, trackName, song.tracks.length));
+    tracks.splice(last + 1, 0, blankTrack(song, id, playerId, trackName));
     return { ...song, tracks };
   });
 }
@@ -421,7 +420,7 @@ export function duplicateTrack(trackId: string, name: string, label = "트랙 �
     });
     // 복제본은 색 고정을 물려받지 않는다 (원본과 같은 색이면 둘을 구분하지 못해서)
     const { colorPinned: _pin, ...base } = track;
-    const copy: Track = { ...base, id, name, color: TRACK_COLORS[song.tracks.length % TRACK_COLORS.length]!, mute: false, solo: false, notes };
+    const copy: Track = { ...base, id, name, color: newTrackColor(song, track.playerId), mute: false, solo: false, notes };
     const tracks = [...song.tracks];
     tracks.splice(index + 1, 0, copy);
     return { ...song, tracks };
@@ -724,7 +723,7 @@ export function planMoveNotes(song: Song, fromId: string, noteIds: ReadonlySet<s
     targetId = nextId("t", song.tracks.map((t) => t.id));
     const last = song.tracks.map((t) => t.playerId).lastIndexOf(from.playerId);
     const tracks = [...song.tracks];
-    tracks.splice(last + 1, 0, blankTrack(targetId, from.playerId, to.newTrackName, song.tracks.length));
+    tracks.splice(last + 1, 0, blankTrack(song, targetId, from.playerId, to.newTrackName));
     base = { ...song, tracks };
   }
   const chains = tieChains(from.notes).filter((c) => c.some((n) => noteIds.has(n.id)));

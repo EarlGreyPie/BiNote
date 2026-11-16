@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { emptySong, type Song } from "@mmlce/core";
-import { chainVolumes, hexColor, melodyTrackIds, peakPolyphony, scoreGroups, soundingAt, trackColors, visibleTrackIds } from "../src/lib/scores";
+import { chainVolumes, hexColor, keepShownColors, melodyTrackIds, peakPolyphony, scoreGroups, soundingAt, trackColors, visibleTrackIds } from "../src/lib/scores";
 
 function song(counts: number[]): Song {
   const base = emptySong({ title: "", author: "", profileId: "mobile" });
@@ -150,5 +150,35 @@ describe("chainVolumes", () => {
     const n = (id: string, start: number, vol: number, tie: "next" | "none") => ({ id, start: { n: start, d: 4 }, dur: { n: 1, d: 4 }, pitch: 60, vol, tie });
     const v = chainVolumes([n("a", 0, 0, "next"), n("b", 1, 12, "next"), n("c", 2, 9, "none"), n("d", 3, 9, "none")]);
     expect([...["a", "b", "c", "d"].map((id) => v.get(id))]).toEqual([0, 0, 0, 9]);
+  });
+});
+
+describe("keepShownColors (트랙마다 고정이 기본일 때 예전 곡 색 지키기)", () => {
+  it("예전 곡은 열 때 보이던 위치 색을 트랙에 정해 두어, 트랙마다 고정으로 봐도 위치 방식과 같은 색이다", () => {
+    // 만든 차례 색(곡 전체 순번)으로 저장된 두 악보 곡
+    const raw = song([3, 2]);
+    const created = ["#4f8cff", "#ff7a59", "#2bb673", "#b061ff", "#f2b705"];
+    const s: Song = { ...raw, tracks: raw.tracks.map((t, i) => ({ ...t, color: created[i]! })) };
+    const g = scoreGroups(s, 6);
+    const kept = keepShownColors(s, g);
+    expect(kept.colorsKept).toBe(true);
+    const stored = trackColors(kept, g, "stored");
+    const position = trackColors(s, g, "position");
+    for (const t of s.tracks) expect(stored.get(t.id)).toBe(position.get(t.id));
+  });
+
+  it("한 번 맞춘 곡은 다시 열어도 그대로이고, 트랙을 옮겨도 색이 따라간다", () => {
+    const s = keepShownColors(song([3]), scoreGroups(song([3]), 6));
+    expect(keepShownColors(s, scoreGroups(s, 6))).toBe(s);
+    const moved: Song = { ...s, tracks: [s.tracks[2]!, s.tracks[0]!, s.tracks[1]!] };
+    const before = trackColors(s, scoreGroups(s, 6), "stored");
+    const after = trackColors(moved, scoreGroups(moved, 6), "stored");
+    for (const t of s.tracks) expect(after.get(t.id)).toBe(before.get(t.id));
+  });
+
+  it("사용자가 고정한 색은 건드리지 않는다", () => {
+    const raw = song([2]);
+    const s: Song = { ...raw, tracks: raw.tracks.map((t, i) => (i === 1 ? { ...t, color: "#e04a8a", colorPinned: true } : t)) };
+    expect(keepShownColors(s, scoreGroups(s, 6)).tracks[1]!.color).toBe("#e04a8a");
   });
 });

@@ -1,6 +1,16 @@
 <script lang="ts" module>
-  import type { VolumeChange } from "@mmlce/core";
+  import type { BarRange, Rat, VolumeChange } from "@mmlce/core";
   import type { TransposeScope } from "./TransposeDialog.svelte";
+
+  /** 마디 경계가 아닌 한 칸 [start, end) (원곡 대조 셈여림의 마디·반 마디 칸). label은 보여 줄 칸 이름 (12, 12½) */
+  export interface VolumeSpan {
+    readonly start: Rat;
+    readonly end: Rat;
+    readonly label: string;
+  }
+  /** 바꿀 곳: 마디 범위들, 또는 한 칸 */
+  export type VolumeWhere = readonly BarRange[] | VolumeSpan;
+  export const isVolumeSpan = (w: VolumeWhere): w is VolumeSpan => !Array.isArray(w);
 
   /** 바꿔 보면 어떻게 되는지 (창에 미리 보여 준다). 소리 수는 & 사슬 하나를 한 음으로 센다 */
   export interface VolumeCheck {
@@ -19,7 +29,7 @@
 </script>
 
 <script lang="ts">
-  import { dbOfVolume, parseBarList, volumeForDb, type BarRange, type GameProfile } from "@mmlce/core";
+  import { dbOfVolume, parseBarList, volumeForDb, type GameProfile } from "@mmlce/core";
   import { t } from "./i18n.svelte";
 
   interface Props {
@@ -30,23 +40,29 @@
     initialVol: number;
     /** 반복 구간이 걸친 마디 [첫, 끝]. 반복 구간이 없으면 undefined */
     loopBars?: BarRange | undefined;
+    /** 원곡 대조 셈여림에서 연 칸. 있으면 "이 칸만"을 고른 채로 연다 */
+    cell?: VolumeSpan | undefined;
+    /** 처음 고를 방식과 값 (원곡 대조 셈여림의 제안: ±N) */
+    initialChange?: VolumeChange | undefined;
     /** 실험실 소리 줄어듦을 켰으면 긴 음 맞추기를 보인다 */
     held?: boolean;
-    /** bars: 바꿀 마디 범위 (undefined면 모든 마디). 고른 음 범위에는 쓰지 않는다 */
-    check: (scope: TransposeScope, change: VolumeChange, bars: readonly BarRange[] | undefined) => VolumeCheck;
-    onapply: (scope: TransposeScope, change: VolumeChange, bars: readonly BarRange[] | undefined) => void;
+    /** bars: 바꿀 마디 범위나 한 칸 (undefined면 모든 마디). 고른 음 범위에는 쓰지 않는다 */
+    check: (scope: TransposeScope, change: VolumeChange, bars: VolumeWhere | undefined) => VolumeCheck;
+    onapply: (scope: TransposeScope, change: VolumeChange, bars: VolumeWhere | undefined) => void;
     onclose: () => void;
   }
 
-  let { scopes, initialScope, profile, initialVol, loopBars, held = false, check, onapply, onclose }: Props = $props();
+  let { scopes, initialScope, profile, initialVol, loopBars, cell, initialChange, held = false, check, onapply, onclose }: Props = $props();
 
   let dialog: HTMLDialogElement;
   // svelte-ignore state_referenced_locally
   let scope = $state<TransposeScope>(initialScope);
-  let mode = $state<VolumeChange["kind"]>("set");
   // svelte-ignore state_referenced_locally
-  let vol = $state(initialVol);
-  let by = $state(0);
+  let mode = $state<VolumeChange["kind"]>(initialChange && initialChange.kind !== "held" ? initialChange.kind : "set");
+  // svelte-ignore state_referenced_locally
+  let vol = $state(initialChange?.kind === "set" ? initialChange.vol : initialVol);
+  // svelte-ignore state_referenced_locally
+  let by = $state(initialChange?.kind === "shift" ? initialChange.by : 0);
   let db = $state(-6);
   let maxUp = $state(3);
   const min = $derived(profile.volume.min);
@@ -54,12 +70,21 @@
   const change = $derived<VolumeChange>(
     mode === "set" ? { kind: "set", vol } : mode === "shift" ? { kind: "shift", by } : mode === "held" ? { kind: "held", maxUp } : { kind: "db", db },
   );
-  // 마디: 모든 마디 / 선택 마디(반복 구간) / 적은 마디
-  let barMode = $state<"all" | "loop" | "typed">("all");
+  // 마디: 모든 마디 / 선택 마디(반복 구간) / 적은 마디 / 원곡 대조 셈여림에서 연 한 칸
+  // svelte-ignore state_referenced_locally
+  let barMode = $state<"all" | "loop" | "typed" | "cell">(cell ? "cell" : "all");
   let barText = $state("");
   const typedBars = $derived(parseBarList(barText));
-  const bars = $derived<readonly BarRange[] | undefined>(
-    scope === "selection" || barMode === "all" ? undefined : barMode === "loop" ? (loopBars ? [loopBars] : []) : (typedBars ?? []),
+  const bars = $derived<VolumeWhere | undefined>(
+    scope === "selection" || barMode === "all"
+      ? undefined
+      : barMode === "cell"
+        ? (cell ?? [])
+        : barMode === "loop"
+          ? loopBars
+            ? [loopBars]
+            : []
+          : (typedBars ?? []),
   );
   const barSpan = (b: BarRange) => (b[0] === b[1] ? `${b[0]}` : `${b[0]}-${b[1]}`);
   const result = $derived(check(scope, change, bars));
@@ -98,6 +123,9 @@
         {loopBars ? t("ui.volumeBarsLoop", { bars: barSpan(loopBars) }) : t("ui.volumeBarsLoopNone")}
       </label>
       <label><input type="radio" name="bars" value="typed" bind:group={barMode} /> {t("ui.volumeBarsTyped")}</label>
+      {#if cell}
+        <label><input type="radio" name="bars" value="cell" bind:group={barMode} /> {t("ui.volumeBarsCell", { bar: cell.label })}</label>
+      {/if}
       {#if barMode === "typed"}
         <!-- svelte-ignore a11y_autofocus -->
         <input class="bars" type="text" inputmode="text" autofocus placeholder={t("ui.volumeBarsPlaceholder")} bind:value={barText} aria-label={t("ui.volumeBarsTyped")} />
@@ -105,6 +133,8 @@
     </div>
     {#if barMode === "typed" && barText.trim() !== "" && !typedBars}
       <p class="warn">{t("ui.volumeBarsInvalid")}</p>
+    {:else if barMode === "cell"}
+      <p class="muted small">{t("ui.volumeCellHelp")}</p>
     {:else if barMode !== "all"}
       <p class="muted small">{t("ui.volumeBarsHelp")}</p>
     {/if}

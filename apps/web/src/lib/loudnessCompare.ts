@@ -3,8 +3,11 @@ import {
   chainVolumes,
   cmp,
   dbOfVolume,
+  div,
   meterGrid,
+  mul,
   positionToSeconds,
+  rat,
   tieChains,
   toFloat,
   volumeForDb,
@@ -17,7 +20,8 @@ import {
 /**
  * 원곡 대조 셈여림 (실험실, 보기만): 마디마다 원곡이 얼마나 큰지와 지금 곡이 게임에서 얼마나 크게 날지를 견주어,
  * 원곡의 부풀고 가라앉는 모양을 따라가려면 몇 dB(몇 v)가 모자라거나 남는지 보여 준다. 곡은 바꾸지 않는다.
- * 섞인 녹음에서는 음 하나하나 세기를 뽑을 수 없어 마디 단위로만 본다
+ * 섞인 녹음에서는 음 하나하나 세기를 뽑을 수 없어 마디 단위로만 본다.
+ * 반 마디로 나눠 보기(halves)를 켜면 마디를 가운데 박에서 둘로 나눠 같은 셈을 한다 (더 잘게 보이지만 그만큼 더 흔들린다)
  */
 
 /** 원곡 소리 세기 요약: 1초를 perSecond 칸으로 나눈 칸마다 모노로 섞은 값의 평균 제곱(전력) */
@@ -38,6 +42,8 @@ export const SUGGEST_DB = 3;
 export interface BarLoudness {
   /** 마디 번호 (1부터) */
   readonly bar: number;
+  /** 반 마디로 나눠 볼 때만: 1 = 앞 반, 2 = 뒤 반. start·end도 그 반의 것이다 */
+  readonly half?: 1 | 2;
   readonly start: Rat;
   /** 다음 마디 시작 (마지막 마디는 곡 끝) */
   readonly end: Rat;
@@ -102,6 +108,49 @@ export function barStarts(timeSig: Song["timeSig"], end: Rat): Rat[] {
   return out;
 }
 
+/** 견줄 한 칸: 마디 하나, 또는 반 마디로 나눠 볼 때 그 반 */
+export interface BarSegment {
+  readonly bar: number;
+  readonly half?: 1 | 2;
+  /** 이 칸이 든 마디의 시작 (구간으로 거를 때 마디째 넣고 빼려고) */
+  readonly barStart: Rat;
+  readonly start: Rat;
+  readonly end: Rat;
+}
+
+/**
+ * 견줄 칸들. halves가 꺼져 있으면 마디마다 한 칸 (마지막 마디는 곡 끝까지).
+ * 켜면 마디를 가운데 박선에서 둘로 나눈다: 4/4는 2+2박, 6/8은 3+3, 박 수가 홀수면 앞이 한 박 길다 (3/4 → 2+1, 5/4 → 3+2).
+ * 한 박짜리 마디는 길이의 반에서 나눈다. 박자가 바뀌거나 곡이 끝나 가운데 전에 잘린 마디는 나누지 않고 앞 반 하나로 둔다
+ */
+export function barSegments(timeSig: Song["timeSig"], end: Rat, halves = false): BarSegment[] {
+  const sigs = [...timeSig].sort((a, b) => cmp(a.at, b.at));
+  const segments = sigs.length === 0 || cmp(sigs[0]!.at, ZERO) > 0 ? [{ at: ZERO, beats: 4, unit: 4 }, ...sigs] : sigs;
+  const out: BarSegment[] = [];
+  let bar = 0;
+  segments.forEach((sig, i) => {
+    const next = segments[i + 1]?.at;
+    const { beat, measure } = meterGrid(sig);
+    const beats = Math.round(toFloat(div(measure, beat)));
+    const first = beats >= 2 ? mul(beat, rat(Math.ceil(beats / 2))) : div(measure, rat(2));
+    for (let pos = sig.at; (!next || cmp(pos, next) < 0) && cmp(pos, end) < 0; pos = add(pos, measure)) {
+      bar++;
+      const full = add(pos, measure);
+      const cut = next && cmp(next, full) < 0 ? next : full;
+      const stop = cmp(end, cut) < 0 ? end : cut;
+      if (!halves) {
+        // 마지막 마디는 전처럼 곡 끝까지 (박자가 바뀌어 잘린 마디는 그 자리까지)
+        out.push({ bar, barStart: pos, start: pos, end: stop });
+        continue;
+      }
+      const mid = add(pos, first);
+      if (cmp(mid, stop) >= 0) out.push({ bar, half: 1, barStart: pos, start: pos, end: stop });
+      else out.push({ bar, half: 1, barStart: pos, start: pos, end: mid }, { bar, half: 2, barStart: pos, start: mid, end: stop });
+    }
+  });
+  return out;
+}
+
 /** 원곡 [from, to)초의 평균 전력. 원곡 밖으로 한 칸 넘게 벗어나면 undefined */
 function referenceMean(ref: ReferencePower, from: number, to: number): number | undefined {
   const a = Math.floor(from * ref.perSecond);
@@ -144,6 +193,7 @@ export function correlation(xs: readonly number[], ys: readonly number[]): numbe
  * - offsetSec: 원곡 시각 = 곡 시각 + offsetSec (원곡 동시재생의 어긋남)
  * - range: 이 곡 위치(온음표 단위) 안에서 시작하는 마디만 (반복 구간으로 박수 등을 뺄 때)
  * - warp: 템포 자동 맞추기(tempoAlign)로 찾은 곡 시각 → 원곡 시각. 있으면 offsetSec 대신 이것으로 원곡을 읽는다
+ * - halves: 마디를 둘로 나눠 반 마디마다 견준다 (barSegments). 음이 시작하지 않는 반(앞에서 이어 울리기만 하는 반)은 뺀다
  * 모든 트랙을 센다 (듣기 끄기·솔로와 상관없이 게임에서 나는 소리)
  */
 export function compareLoudness(
@@ -153,6 +203,7 @@ export function compareLoudness(
   profile: Pick<GameProfile, "volume" | "volumeCurve">,
   range?: readonly [number, number],
   warp?: (songSeconds: number) => number,
+  halves = false,
 ): LoudnessCompare {
   const refAt = warp ?? ((t: number) => t + offsetSec);
   // & 사슬 하나를 한 번 치는 소리로: 첫 음 시각에 첫 음 v로 치고 마지막 조각 끝 + 여운에서 끊는다
@@ -186,9 +237,10 @@ export function compareLoudness(
       });
     }
   }
-  const starts = barStarts(song.timeSig, end);
+  const segments = barSegments(song.timeSig, end, halves);
   interface Raw {
     readonly bar: number;
+    readonly half?: 1 | 2;
     readonly start: Rat;
     readonly end: Rat;
     readonly seconds: number;
@@ -199,12 +251,12 @@ export function compareLoudness(
   }
   const raws: Raw[] = [];
   let skipped = 0;
-  starts.forEach((start, i) => {
-    const at = toFloat(start);
+  segments.forEach((seg) => {
+    const { start, end: next } = seg;
+    const at = toFloat(seg.barStart);
     if (range && (at < range[0] - 1e-9 || at >= range[1] - 1e-9)) return;
     const t0 = positionToSeconds(song.tempo, start);
-    const t1 = positionToSeconds(song.tempo, starts[i + 1] ?? end);
-    const next = starts[i + 1] ?? end;
+    const t1 = positionToSeconds(song.tempo, next);
     const inBar = hits.filter((h) => cmp(h.start, start) >= 0 && cmp(h.start, next) < 0);
     const r0 = refAt(t0);
     const r1 = refAt(t1);
@@ -223,7 +275,7 @@ export function compareLoudness(
     }
     const melody = inBar.filter((h) => h.melody);
     const base = mean((melody.length > 0 ? melody : inBar).map((h) => h.vol));
-    raws.push({ bar: i + 1, start, end: next, seconds: t0, refSeconds: r0, reference: toDb(refPower), current: toDb(energy / (t1 - t0)), baseVol: base });
+    raws.push({ bar: seg.bar, ...(seg.half ? { half: seg.half } : {}), start, end: next, seconds: t0, refSeconds: r0, reference: toDb(refPower), current: toDb(energy / (t1 - t0)), baseVol: base });
   });
 
   // 두 줄의 폭을 맞춘다: 목표 = 계산 평균 + (원곡 − 원곡 평균) / 원곡 sd × 계산 sd
@@ -249,6 +301,7 @@ export function compareLoudness(
     }
     return {
       bar: r.bar,
+      ...(r.half ? { half: r.half } : {}),
       start: r.start,
       end: r.end,
       seconds: r.seconds,

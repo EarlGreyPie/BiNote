@@ -205,8 +205,23 @@ function cost(s: AlignFeatures, r: AlignFeatures, i: number, j: number): number 
   return 1 - dot + ONSET_WEIGHT * Math.abs(s.onset[i]! - r.onset[j]!);
 }
 
+/** 맞출 곡 구간: 첫 음 시작 칸부터 마지막 음 시작 칸 + 이만큼(초)까지. 그 밖(끝 음 여운·뒤쪽 쉼)은 가장자리 어긋남을 그대로 쓴다 */
+export const TAIL_SECONDS = 0.5;
+/**
+ * 확실히 나을 때만 옮기기: 어긋남이 0이 아닌 덩어리는 시작 자리만 맞춘 것보다 칸 평균 비용이 GAIN_MIN 넘게 낮고,
+ * 그 위에 비용이 GAIN_REL 비율 넘게 줄거나 소리 시작 겹침이 ONSET_RATIO배(+ ONSET_SLACK) 넘게 늘어야 남긴다
+ */
+const GAIN_MIN = 0.05;
+const GAIN_REL = 0.25;
+const ONSET_RATIO = 2;
+const ONSET_SLACK = 0.5;
+
 /**
  * 곡과 원곡을 맞춘다. offsetSec: 원곡 시각 = 곡 시각 + offsetSec (지금 맞춰 둔 시작 자리).
+ * - 곡 끝: 마지막 음의 여운은 원곡의 울림·페이드·잘린 끝과 맞출 근거가 없어서(소리 시작이 없음) 맞추는 데 쓰지 않는다.
+ *   여운을 원곡 소리 없는 곳과 맞추지 않으려고 길이 앞으로 끌려가 마지막 몇 마디가 거짓으로 어긋나 보이던 것을 막는다
+ * - 확실히 나을 때만: 맞춘 길에서 어긋남이 0이 아닌 덩어리마다 시작 자리만 맞춘 것과 견주어, 뚜렷이 낫지 않으면 그 덩어리는 시작 자리 그대로 둔다.
+ *   음이 원곡과 잘 안 맞는 곳(빠른 아르페지오 등)에서 DTW가 조금 싼 엉뚱한 자리로 흘러가도, 이미 음이 원곡에 맞는 곡은 흐려지지 않는다
  * 맞출 칸이 모자라면 undefined (그때는 시작 자리만 쓴다)
  */
 export function alignTempo(song: AlignFeatures, ref: AlignFeatures, offsetSec: number): TempoAlignment | undefined {
@@ -216,14 +231,23 @@ export function alignTempo(song: AlignFeatures, ref: AlignFeatures, offsetSec: n
   const band = Math.round(MAX_DRIFT_SECONDS / HOP_SECONDS);
   const width = 2 * band + 1;
   if (n < 3 || m < 3) return undefined;
-  // 칸 (i, j)는 줄 i의 band + j − (i + off) 자리. 띠 밖·원곡 밖은 Infinity
-  const total = new Float32Array(n * width).fill(Infinity);
+  // 맞출 칸 [i0, i1]: 첫 소리 시작부터 마지막 소리 시작 + TAIL_SECONDS
+  let i0 = 0;
+  while (i0 < n && song.onset[i0]! <= 0) i0++;
+  let last = n - 1;
+  while (last > 0 && song.onset[last]! <= 0) last--;
+  if (i0 >= n) [i0, last] = [0, n - 1];
+  const i1 = Math.min(n - 1, last + Math.round(TAIL_SECONDS / HOP_SECONDS));
+  const len = i1 - i0 + 1;
+  if (len < 3) return undefined;
+  // 칸 (i, j)는 줄 i − i0의 band + j − (i + off) 자리. 띠 밖·원곡 밖은 Infinity
+  const total = new Float32Array(len * width).fill(Infinity);
   // 0: (i−1, j−1), 1: (i−1, j−2) 원곡이 빨라짐, 2: (i−2, j−1) 원곡이 느려짐
-  const from = new Uint8Array(n * width);
-  const cell = (i: number, d: number) => i * width + d;
+  const from = new Uint8Array(len * width);
+  const cell = (i: number, d: number) => (i - i0) * width + d;
   const local = new Float32Array(width);
   const prevLocal = new Float32Array(width);
-  for (let i = 0; i < n; i++) {
+  for (let i = i0; i <= i1; i++) {
     for (let d = 0; d < width; d++) {
       const j = i + off + d - band;
       local[d] = j >= 0 && j < m ? cost(song, ref, i, j) : Infinity;
@@ -231,9 +255,9 @@ export function alignTempo(song: AlignFeatures, ref: AlignFeatures, offsetSec: n
     for (let d = 0; d < width; d++) {
       const c = local[d]!;
       if (c === Infinity) continue;
-      if (i === 0) {
+      if (i === i0) {
         // 시작은 띠 안 어디서나 (시작 자리에서 멀수록 조금 비싸게)
-        total[cell(0, d)] = c + STEP_PENALTY * Math.abs(d - band);
+        total[cell(i0, d)] = c + STEP_PENALTY * Math.abs(d - band);
         continue;
       }
       let best = total[cell(i - 1, d)]! + c;
@@ -242,7 +266,7 @@ export function alignTempo(song: AlignFeatures, ref: AlignFeatures, offsetSec: n
         const v = total[cell(i - 1, d - 1)]! + local[d - 1]! + c + STEP_PENALTY;
         if (v < best) [best, how] = [v, 1];
       }
-      if (i >= 2 && d + 1 < width) {
+      if (i >= i0 + 2 && d + 1 < width) {
         const v = total[cell(i - 2, d + 1)]! + prevLocal[d + 1]! + c + STEP_PENALTY;
         if (v < best) [best, how] = [v, 2];
       }
@@ -251,21 +275,21 @@ export function alignTempo(song: AlignFeatures, ref: AlignFeatures, offsetSec: n
     }
     prevLocal.set(local);
   }
-  // 끝도 띠 안 어디서나 가장 싼 곳
+  // 끝도 띠 안 어디서나 가장 싼 곳 (시작 자리에서 멀수록 조금 비싸게, 시작과 같이)
   let d = -1;
   let bestEnd = Infinity;
   for (let k = 0; k < width; k++) {
-    const v = total[cell(n - 1, k)]!;
+    const v = total[cell(i1, k)]! + STEP_PENALTY * Math.abs(k - band);
     if (v < bestEnd) [bestEnd, d] = [v, k];
   }
   if (d < 0) return undefined;
   // 거슬러 올라가며 칸마다 어긋남(칸) 기록. (i−2, j−1) 걸음은 사이 칸을 반 칸으로 메운다
   const drift = new Float32Array(n);
-  let alignedCost = 0;
-  for (let i = n - 1; i >= 0; ) {
+  const pathCost = new Float32Array(n);
+  for (let i = i1; i >= i0; ) {
     drift[i] = d - band;
-    alignedCost += cost(song, ref, i, i + off + d - band);
-    if (i === 0) break;
+    pathCost[i] = cost(song, ref, i, i + off + d - band);
+    if (i === i0) break;
     const how = from[cell(i, d)]!;
     if (how === 0) i -= 1;
     else if (how === 1) {
@@ -273,27 +297,70 @@ export function alignTempo(song: AlignFeatures, ref: AlignFeatures, offsetSec: n
       d -= 1;
     } else {
       drift[i - 1] = d - band + 0.5;
-      alignedCost += cost(song, ref, i - 1, Math.min(m - 1, i - 1 + off + d - band + 1));
+      pathCost[i - 1] = cost(song, ref, i - 1, Math.min(m - 1, i - 1 + off + d - band + 1));
       i -= 2;
       d += 1;
     }
   }
+  // 시작 자리만 맞춘 비용 (원곡 밖이면 Infinity: 그 자리는 맞춘 길이 언제나 낫다)
+  const plain = new Float32Array(n);
+  for (let i = i0; i <= i1; i++) {
+    const j = i + off;
+    plain[i] = j >= 0 && j < m ? cost(song, ref, i, j) : Infinity;
+  }
+  // 어긋남이 0이 아닌 칸이 이어진 덩어리마다, 덩어리 전체에서 뚜렷이 낫지 않으면 덩어리를 어긋남 0 (시작 자리 그대로)으로
+  const kept = new Float32Array(n);
+  for (let a = i0; a <= i1; ) {
+    if (drift[a] === 0) {
+      a++;
+      continue;
+    }
+    let b = a;
+    while (b + 1 <= i1 && drift[b + 1] !== 0) b++;
+    let gain = 0;
+    let plainSum = 0;
+    let outside = false;
+    // 소리 시작 겹침: 곡 온셋 × 원곡 온셋의 합
+    let onsetPlain = 0;
+    let onsetPath = 0;
+    for (let k = a; k <= b; k++) {
+      if (plain[k] === Infinity) outside = true;
+      else {
+        gain += plain[k]! - pathCost[k]!;
+        plainSum += plain[k]!;
+        onsetPlain += song.onset[k]! * ref.onset[k + off]!;
+      }
+      const jq = Math.max(0, Math.min(m - 1, k + off + Math.round(drift[k]!)));
+      onsetPath += song.onset[k]! * ref.onset[jq]!;
+    }
+    const count = b - a + 1;
+    // 비용이 뚜렷이 줄었거나, 비용은 조금 줄었어도 소리 시작이 훨씬 잘 겹치면 (원곡이 정말 밀린 곳)
+    const keep = outside || (gain / count > GAIN_MIN && (gain > GAIN_REL * plainSum || onsetPath >= ONSET_RATIO * onsetPlain + ONSET_SLACK));
+    if (keep) for (let k = a; k <= b; k++) kept[k] = drift[k]!;
+    a = b + 1;
+  }
+  // 맞춘 구간 밖은 가장자리 어긋남 그대로
+  for (let i = 0; i < i0; i++) kept[i] = kept[i0]!;
+  for (let i = i1 + 1; i < n; i++) kept[i] = kept[i1]!;
   let plainCost = 0;
   let plainCount = 0;
-  for (let i = 0; i < n; i++) {
+  let alignedCost = 0;
+  for (let i = i0; i <= i1; i++) {
     const j = i + off;
-    if (j < 0 || j >= m) continue;
-    plainCost += cost(song, ref, i, j);
-    plainCount++;
+    if (j >= 0 && j < m) {
+      plainCost += plain[i]!;
+      plainCount++;
+    }
+    alignedCost += kept[i] === drift[i] ? pathCost[i]! : cost(song, ref, i, Math.max(0, Math.min(m - 1, i + off + Math.round(kept[i]!))));
   }
   // 고르게 펴기 (이동 평균)
   const half = Math.round(SMOOTH_SECONDS / 2 / HOP_SECONDS);
   const smooth = new Float32Array(n);
   let sum = 0;
-  for (let i = 0; i < Math.min(n, half); i++) sum += drift[i]!;
+  for (let i = 0; i < Math.min(n, half); i++) sum += kept[i]!;
   for (let i = 0; i < n; i++) {
-    if (i + half < n) sum += drift[i + half]!;
-    if (i - half - 1 >= 0) sum -= drift[i - half - 1]!;
+    if (i + half < n) sum += kept[i + half]!;
+    if (i - half - 1 >= 0) sum -= kept[i - half - 1]!;
     const count = Math.min(n - 1, i + half) - Math.max(0, i - half) + 1;
     smooth[i] = sum / count;
   }
@@ -305,8 +372,8 @@ export function alignTempo(song: AlignFeatures, ref: AlignFeatures, offsetSec: n
     const dr = smooth[i]! + (smooth[k]! - smooth[i]!) * frac;
     return t + offsetSec + dr * HOP_SECONDS;
   };
-  // 비용 한 칸은 0(꼭 같음)-1.5. 1 − 평균을 맞는 정도로 본다
-  return { warp, plainScore: plainCount > 0 ? 1 - plainCost / plainCount : 0, alignedScore: 1 - alignedCost / n };
+  // 비용 한 칸은 0(꼭 같음)-1.5. 1 − 평균을 맞는 정도로 본다 (맞춘 구간 칸만)
+  return { warp, plainScore: plainCount > 0 ? 1 - plainCost / plainCount : 0, alignedScore: 1 - alignedCost / len };
 }
 
 /** 맞춤에 쓰는 것(템포·음 높이·자리·길이·&)만 담은 열쇠. v만 고쳤으면 같아서 다시 맞추지 않는다 */

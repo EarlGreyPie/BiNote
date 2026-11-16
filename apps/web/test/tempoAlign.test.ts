@@ -15,7 +15,7 @@ const RATE = 22050;
  * 곡 음표를 배음 셋 사인파로 합성한 원곡. 곡 시각 t의 음은 원곡 at(t)초에 친다 (템포 흔들림 흉내).
  * gainOf로 음마다 세기를 정한다
  */
-function render(s: Song, at: (t: number) => number, seconds: number, gainOf: (t: number) => number = () => 0.2): Float32Array {
+function render(s: Song, at: (t: number) => number, seconds: number, gainOf: (t: number) => number = () => 0.2, cut = Infinity): Float32Array {
   const out = new Float32Array(Math.round(seconds * RATE));
   const spb = 0.5; // t120 4분음표 0.5초
   for (const n of s.tracks[0]!.notes) {
@@ -31,11 +31,28 @@ function render(s: Song, at: (t: number) => number, seconds: number, gainOf: (t:
       out[a + i]! += g * env * (Math.sin(2 * Math.PI * f * x) + 0.5 * Math.sin(4 * Math.PI * f * x) + 0.3 * Math.sin(6 * Math.PI * f * x));
     }
   }
+  // cut초부터 원곡이 끊긴다 (영상이 마지막 음 여운 전에 끝남)
+  out.fill(0, Math.min(out.length, Math.round(cut * RATE)));
   return out;
 }
 
-// 높이가 고루 바뀌는 16마디 선율 (t120, 마디 2초)
+// 높이가 고루 바뀌는 18마디 선율 (t120, 마디 2초, 36초)
 const melody = "o4 l8 v10 " + "cegb>c<agf edcd efga gfed c4e4 g4>c4 <bagf edc<b> ".repeat(4);
+
+/** 곡 끝 (초, t120) */
+function endSeconds(s: Song): number {
+  return Math.max(...s.tracks[0]!.notes.map((n) => (toFloat(n.start) + toFloat(n.dur)) * 2));
+}
+
+/** 곡 음표마다 |warp(곡 시각) − 기대 원곡 시각| 중 가장 큰 값 */
+function worstAtNotes(s: Song, warp: (t: number) => number, expected: (t: number) => number): number {
+  let worst = 0;
+  for (const n of s.tracks[0]!.notes) {
+    const t = toFloat(n.start) * 2;
+    worst = Math.max(worst, Math.abs(warp(t) - expected(t)));
+  }
+  return worst;
+}
 
 describe("템포 자동 맞추기", () => {
   it("원곡이 중간에 늦어졌다 돌아와도 곡 시각마다 원곡 자리를 찾는다", () => {
@@ -73,6 +90,48 @@ describe("템포 자동 맞추기", () => {
     // 어긋남: 8마디(14초)에서 원곡이 1.2초 늦다
     expect(bar8(auto).drift).toBeCloseTo(1.2, 0);
     expect(bar8(plain).drift).toBe(0);
+  });
+
+  it("이미 음이 맞는 곡: 끝 음 여운 전에 원곡이 끊겨도 끝 마디를 앞으로 끌지 않는다", () => {
+    // 끝 음을 4초 끌고, 원곡은 그 여운 중간에서 끊긴다 (예전에는 끝 몇 마디가 1-2초 앞당겨 보였다)
+    for (const [tail, cutBefore] of [
+      ["c1&c1", 2],
+      ["c2 e2 g1&g1&g1", 3],
+    ] as const) {
+      const s = song(melody + tail);
+      const end = endSeconds(s);
+      const audio = render(s, (t) => t + 0.7, end + 4, undefined, end + 0.7 - cutBefore);
+      const a = alignTempo(songFeatures(s), referenceFeatures([audio], RATE), 0.7)!;
+      expect(worstAtNotes(s, a.warp, (t) => t + 0.7)).toBeLessThan(0.06);
+      expect(a.warp(end - 0.5)).toBeCloseTo(end - 0.5 + 0.7, 1);
+      // 셈여림 창의 마디별 어긋남도 끝 마디까지 0 가까이
+      const r = compareLoudness(s, computePower([audio], RATE), 0.7, MOBILE_PROFILE, undefined, a.warp);
+      for (const b of r.bars) expect(Math.abs(b.drift)).toBeLessThan(0.06);
+    }
+  });
+
+  it("이미 음이 맞는 곡: 원곡과 잘 안 맞는 구간이 있어도 그 구간을 엉뚱한 자리로 옮기지 않는다", () => {
+    // 원곡의 18-26초는 같은 박자에 음 높이만 다르다 (곡 음표로 만든 모양과 안 맞는 구간). 원곡과 곡 박자는 꼭 같다
+    const s = song(melody + "c1");
+    for (const shift of [3, 5, 6]) {
+      const other: Song = {
+        ...s,
+        tracks: [{ ...s.tracks[0]!, notes: s.tracks[0]!.notes.map((n) => (toFloat(n.start) * 2 >= 18 && toFloat(n.start) * 2 < 26 ? { ...n, pitch: n.pitch + shift } : n)) }],
+      };
+      const audio = render(other, (t) => t + 0.7, 38);
+      const a = alignTempo(songFeatures(s), referenceFeatures([audio], RATE), 0.7)!;
+      expect(worstAtNotes(s, a.warp, (t) => t + 0.7)).toBeLessThan(0.06);
+    }
+  });
+
+  it("원곡이 늦어진 채 끝나고 끝이 잘려도 끝까지 늦어진 자리를 따라간다", () => {
+    const s = song(melody + "c1&c1");
+    const end = endSeconds(s);
+    const at = (t: number) => t + 0.5 + (t < 8 ? 0 : t < 12 ? (t - 8) / 4 : 1);
+    const audio = render(s, at, end + 4, undefined, at(end) - 2);
+    const a = alignTempo(songFeatures(s), referenceFeatures([audio], RATE), 0.5)!;
+    expect(worstAtNotes(s, a.warp, at)).toBeLessThan(0.08);
+    expect(a.warp(end - 0.5)).toBeCloseTo(at(end - 0.5), 1);
   });
 
   it("v만 고치면 맞춤 열쇠가 같고, 음 자리를 고치면 달라진다", () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { emptySong, eq, getProfile, History, rat, type Song } from "@mmlce/core";
-import { cleanPieces, customOffgrid, findOffgrid, findTrackOffgrid, findTrackOffgridMabiicco, fixOffgrid, offgridMixed, offgridLengthText, parseOffgridLength, parseTrackText } from "../src/index.js";
+import { cleanPieces, customOffgrid, findOffgrid, findTrackOffgrid, findTrackOffgridMabiicco, fixOffgrid, mabiiccoTicks, offgridMixed, offgridLengthText, parseOffgridLength, parseTrackText } from "../src/index.js";
 
 const limit = getProfile("mobile").length;
 const find = (text: string) => findTrackOffgrid(text, limit).map((f) => f.edits.map((e) => `${e.from}→${e.to}`).join(" "));
@@ -221,6 +221,14 @@ describe("마비꼬 .mmi 트랙 (마비꼬가 다시 적은 길이를 원래 값
     expect(findM("l64c+d9c16<b8")).toEqual(["d9→d16&d32."]);
   });
 
+  it("/* */ 주석 안의 l은 길이로 읽지 않는다 (파서와 같게)", () => {
+    const plain = findM("l19c");
+    expect(plain).not.toEqual([]);
+    expect(findM("l19/* l21 */c")).toEqual(plain);
+    expect(findM("l19/* l21 */c").join()).not.toContain("32.");
+    expect(findM("l64d+e21g8c4/* l7")).toEqual(["e21→e32."]);
+  });
+
   it("l40 둘 + l20 + l10 넷 = 2분음표를 적은 l42 c c+ (예전 규칙은 l14 일곱으로 틀리게 고쳤다)", () => {
     expect(findM("l42cc+d20l10fgfg c4")).toEqual(["c→c40 c+→c+40"]);
     expect(find("l42cc+d20l10fgfg c4")).toEqual(["c→c14 c+→c+14 d20→d14 f→f14 g→g14 f→f14 g→g14"]);
@@ -240,7 +248,8 @@ describe("마비꼬 .mmi 트랙 (마비꼬가 다시 적은 길이를 원래 값
 
   it("짧게 맞추면 뒤가 맞지 않을 때는 같이 본다 (rrr4.r7 c8&c9)", () => {
     // 사이의 깔끔한 쉼표·음(r r r4. / c8)은 그대로 두고 칸에 안 맞는 토막만 고친다
-    expect(findM("l4c4rrr4.r7c8&c9r4g4rr")).toEqual(["r7→r8r64 c9→c16&c32."]);
+    // 마비꼬 틱으로 읽으면 r7 = 54틱, c9 = 42틱이라 자리마다 따로 정해진다 (2026-11-16)
+    expect(findM("l4c4rrr4.r7c8&c9r4g4rr")).toEqual(["r7→r8r64", "c9→c16&c32."]);
   });
 
   it("템포가 바뀌는 자리에서 자른 쉼표·음은 명령을 남기고 토막마다 고친다", () => {
@@ -262,6 +271,51 @@ describe("마비꼬 .mmi 트랙 (마비꼬가 다시 적은 길이를 원래 값
 
   it("어느 값인지 하나로 정해지지 않으면 짐작하지 않는다", () => {
     expect(findM("l7ccc l11cc c4")).toEqual([]);
+  });
+
+  describe("마비꼬 틱 그대로 되살리기 (r7·r19·g19.·d21)", () => {
+    const fixAll = (text: string) => {
+      const s = mabiicco(text);
+      return fixOffgrid(findOffgrid(s)).apply(s).tracks[0]!.mml!.text;
+    };
+
+    it("길이 숫자 하나를 마비꼬가 읽는 틱: 384 / 숫자를 버리고, 점은 앞에 더한 틱의 절반을 버려 더한다", () => {
+      expect([7, 19, 21, 9, 20, 29, 27].map((n) => mabiiccoTicks(n, 0))).toEqual([54, 20, 18, 42, 19, 13, 14]);
+      expect(mabiiccoTicks(19, 1)).toBe(30);
+      expect(mabiiccoTicks(20, 1)).toBe(28);
+      expect(mabiiccoTicks(5, 1)).toBe(114);
+      expect(mabiiccoTicks(4, 2)).toBe(168);
+    });
+
+    it("g19.g21 = 8분음표, r7 r16 d21 = 4분음표 (마비꼬에서 만든 악보의 한 마디)", () => {
+      const text = "l16frfrffrfv0f2v11g19.g21r8v10d+8r7rd21r8f+8";
+      expect(findM(text)).toEqual(["g19.→g16&g64", "g21→g32.", "r7→r8r64", "d21→d32."]);
+      // 고친 뒤에는 모든 음이 마비꼬 틱 자리(4분음표 96틱)에 놓인다
+      const starts = parseTrackText("t1", { text: fixAll(text) }).notes.map((n) => (n.start.n * 384) / n.start.d);
+      expect(starts).toEqual([0, 48, 96, 120, 168, 192, 384, 408, 414, 480, 606, 672]);
+    });
+
+    it("트랙 끝의 r19(20틱)도 그대로 적는다", () => {
+      expect(fixAll(`l16${"c".repeat(40)}c4.r19<a+32`)).toBe(`l16${"c".repeat(40)}c4.r32r48<a+32`);
+    });
+
+    it("16분 칸에 드물게 닿는 악보(점 16분 걸음)도 64분 칸마다 되살린다", () => {
+      const text = `l16.${"c".repeat(40)}f+5.&f+9c8&c32r5.r9c`;
+      expect(findM(text)).toEqual(["f+5.&f+9→f+4.&f+32", "r5.r9→r4.r32"]);
+    });
+
+    it("틱을 맞추려고 적은 잇단음은 잇단음으로: l20 넷 + c19 → l20 다섯, l27 다섯 + l29 둘 → l28 일곱", () => {
+      expect(findM("l20cdefg19 c4")).toEqual(["g19→g20"]);
+      expect(findM("l27cdefgl29ab c4")).toEqual(["c→c28 d→d28 e→e28 f→f28 g→g28 a→a28 b→b28"]);
+    });
+
+    it.each([
+      ["l7 일곱 (틱으로는 넷째에서 칸에 닿는다)", `l16${"c".repeat(64)}l7ccccccc c4`],
+      ["l5·l10 섞인 다섯잇단", `l16${"c".repeat(64)}c5c10c10c5c5c5 c4`],
+      ["붙임줄이 든 l10 다섯잇단", `l16${"c".repeat(64)}l10c&ccrc c4`],
+    ])("그대로 정확히 돌아오는 잇단음은 건드리지 않는다: %s", (_name, text) => {
+      expect(findM(text)).toEqual([]);
+    });
   });
 
   it("마비꼬 트랙만 마비꼬 규칙으로 찾는다", () => {
@@ -290,7 +344,9 @@ describe("마비꼬 .mmi 트랙 (마비꼬가 다시 적은 길이를 원래 값
   });
 
   it("사용자가 적은 길이는 묶음 안 고칠 길이가 모두 같을 때만 쓴다", () => {
-    const [mixed] = findOffgrid(mabiicco("l4c4rrr4.r7c8&c9r4g4rr"));
+    // r19(20틱) + c20.(28틱) = 8분음표: 한 묶음 안에서 고칠 길이가 서로 다르다
+    const [mixed] = findOffgrid(mabiicco(`l16${"c".repeat(40)}r19c20.c4`));
+    expect(mixed!.edits.map((e) => `${e.from}→${e.to}`)).toEqual(["r19→r32r48", "c20.→c24&c32"]);
     expect(offgridMixed(mixed!)).toBe(true);
     expect(customOffgrid(mixed!, "4", limit)).toBeUndefined();
     const [same] = findOffgrid(mabiicco("l42cc+d20l10fgfg c4"));

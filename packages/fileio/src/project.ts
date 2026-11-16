@@ -131,7 +131,7 @@ function known<T>(names: Record<Exclude<keyof T, "extras">, true>): ReadonlySet<
 }
 
 const FILE_KEYS = known<ProjectFile>({ format: true, version: true, minReader: true, app: true, savedAt: true, song: true, editor: true });
-const SONG_KEYS = known<Song>({ meta: true, tempo: true, timeSig: true, markers: true, keys: true, players: true, tracks: true, sources: true, made: true });
+const SONG_KEYS = known<Song>({ meta: true, tempo: true, timeSig: true, markers: true, keys: true, players: true, tracks: true, sources: true, made: true, colorsKept: true });
 const META_KEYS = known<SongMeta>({ title: true, author: true, profileId: true, memo: true });
 const TEMPO_KEYS = known<TempoEvent>({ at: true, bpm: true });
 const TIME_SIG_KEYS = known<TimeSigEvent>({ at: true, beats: true, unit: true });
@@ -540,7 +540,7 @@ function readSong(raw: Obj, diagnostics: FileDiagnostic[]): Song {
   }
 
   const made = readMade(raw.made, profile.volume);
-  return pruneMade({ meta, tempo, timeSig, markers, ...(keys.length > 0 ? { keys } : {}), players, tracks, sources, ...(made.length > 0 ? { made } : {}), ...withExtras(raw, SONG_KEYS) });
+  return pruneMade({ meta, tempo, timeSig, markers, ...(keys.length > 0 ? { keys } : {}), players, tracks, sources, ...(made.length > 0 ? { made } : {}), ...(raw.colorsKept === true ? { colorsKept: true } : {}), ...withExtras(raw, SONG_KEYS) });
 }
 
 /**

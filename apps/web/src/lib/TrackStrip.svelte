@@ -7,6 +7,7 @@
   import type { ScoreGroup } from "./scores";
   import type { TrackActions } from "./trackActions";
   import { movedTooFar } from "./longPress";
+  import { dragStarted, dropSpot, dropTargetAt, scoreRowId, type DropSpot } from "./trackDrag";
 
   /** 패널을 롤 아래에 둘 때(3MLE식) 편집기 위에 오는 32px 트랙 띠. 오른쪽 ▾로 구조 목록 전체를 팝오버로 */
   interface Props {
@@ -63,6 +64,13 @@
     if (popover && !root.contains(e.target as Node)) popover = false;
   }
   function onkeydown(e: KeyboardEvent) {
+    if (e.key === "Escape" && drag) {
+      // 끄는 중 Esc: 옮기지 않고 그만둔다
+      drag = undefined;
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     if (e.key === "Escape" && popover) {
       popover = false;
       e.stopPropagation();
@@ -99,12 +107,57 @@
   function pressMove(e: PointerEvent) {
     if (movedTooFar(pressAt, e)) release();
   }
+
+  /**
+   * 트랙 단추를 마우스로 끌어 옮기기: 다른 트랙 단추의 왼쪽 반에 놓으면 그 앞, 오른쪽 반이면 그 뒤,
+   * 접힌 악보 단추에 놓으면 그 악보 끝으로. 손가락·펜은 띠를 옆으로 굴려야 하므로 ▾ 목록의 손잡이로 끈다
+   */
+  let drag = $state<{ trackId: string; pointerId: number; over?: DropSpot | undefined } | undefined>(undefined);
+  let pending: { trackId: string; pointerId: number; clientX: number; clientY: number } | undefined;
+  let stripEl: HTMLDivElement;
+
+  function pillDown(e: PointerEvent, track: Track, playerId: string) {
+    press(e, track, playerId);
+    pending = e.pointerType === "mouse" && e.button === 0 && !drag ? { trackId: track.id, pointerId: e.pointerId, clientX: e.clientX, clientY: e.clientY } : undefined;
+  }
+
+  function pillMove(e: PointerEvent) {
+    pressMove(e);
+    if (pending && e.pointerId === pending.pointerId && !drag) {
+      // 단추 밖에서 마우스를 놓으면 pointerup이 여기 오지 않는다. 버튼이 안 눌린 채 돌아오면 남은 누름을 버린다
+      if ((e.buttons & 1) === 0) {
+        pending = undefined;
+        return;
+      }
+      if (!dragStarted(pending, e)) return;
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      drag = { trackId: pending.trackId, pointerId: pending.pointerId };
+      pending = undefined;
+      // 끌고 나서 손을 떼며 들어오는 click이 트랙을 고르지 않게
+      longPressed = true;
+    }
+    if (!drag || e.pointerId !== drag.pointerId) return;
+    const target = dropTargetAt(stripEl, e, "x");
+    drag = { ...drag, over: target && dropSpot(song.tracks, groups, drag.trackId, target) };
+  }
+
+  function pillUp(e: PointerEvent, cancel = false) {
+    release();
+    pending = undefined;
+    if (!drag || e.pointerId !== drag.pointerId) return;
+    const { trackId, over } = drag;
+    drag = undefined;
+    if (!cancel && over) actions.move(trackId, over.playerId, over.index);
+  }
+
+  /** 끄는 동안 놓지 못하는 악보 (트랙이 꽉 참) */
+  const dropBlocked = (playerId: string) => !!drag && actions.moveTargets(drag.trackId).find((x) => x.playerId === playerId)?.reason;
 </script>
 
 <svelte:window onpointerdown={onwindowpointerdown} {onkeydown} onresize={() => (popover = false)} />
 
 <div class="strip-wrap" bind:this={root}>
-  <div class="strip" role="tablist">
+  <div class="strip" class:dragging={!!drag} role="tablist" bind:this={stripEl}>
     {#each groups as g (g.number)}
       {@const player = playerOf(g.playerId)}
       {#if g.number === activeGroup}
@@ -117,15 +170,22 @@
               class="pill"
               class:on={id === activeTrackId}
               class:lane={!!actions.inLane?.(id)}
+              class:lifted={drag?.trackId === id}
+              class:drop-before={drag?.over?.rowId === id && !drag.over.after && drag.trackId !== id}
+              class:drop-after={drag?.over?.rowId === id && drag.over.after && drag.trackId !== id}
+              data-drop="track"
+              data-player={g.playerId}
+              data-track={id}
+              title={t("ui.trackGrip")}
               style:--track-color={colors.get(id) ?? track.color}
               role="tab"
               aria-selected={id === activeTrackId}
               onclick={(e) => takeClick() && ((e.ctrlKey || e.metaKey) && actions.toggleLane ? actions.toggleLane(id) : e.altKey && actions.openSecond ? actions.openSecond(id) : actions.select(id))}
               oncontextmenu={(e) => (e.preventDefault(), openMenu(e, track, g.playerId))}
-              onpointerdown={(e) => press(e, track, g.playerId)}
-              onpointerup={release}
-              onpointercancel={release}
-              onpointermove={pressMove}
+              onpointerdown={(e) => pillDown(e, track, g.playerId)}
+              onpointerup={(e) => pillUp(e)}
+              onpointercancel={(e) => pillUp(e, true)}
+              onpointermove={pillMove}
             >
               <span class="dot"></span>{k + 1}{#if actions.isMelody(id)}<span class="melody" title={t("ui.melodyTrack")}>♪</span>{/if} {track.name}
               {#if actions.viewOf(id).hidden}<span class="flag" title={t("ui.showTrack")}><Icon name="eye-off" size={12} /></span>{/if}
@@ -135,7 +195,14 @@
           {/if}
         {/each}
       {:else}
-        <button class="chip folded" onclick={() => g.trackIds[0] && actions.select(g.trackIds[0])}>
+        <button
+          class="chip folded"
+          class:drop-after={drag?.over?.rowId === scoreRowId(g.number) && !dropBlocked(g.playerId)}
+          class:drop-blocked={drag?.over?.rowId === scoreRowId(g.number) && !!dropBlocked(g.playerId)}
+          data-drop="score"
+          data-player={g.playerId}
+          data-score={g.number}
+          onclick={() => g.trackIds[0] && actions.select(g.trackIds[0])}>
           {t("ui.scoreN", { n: g.number })} {player ? instrumentLabel(player.instrument) : ""} ({g.trackIds.length})
         </button>
       {/if}
@@ -211,6 +278,25 @@
     border-radius: 12px;
     font-size: 12px;
     font-weight: 600;
+  }
+  .strip.dragging,
+  .strip.dragging .pill,
+  .strip.dragging .chip {
+    cursor: grabbing;
+  }
+  .pill.lifted {
+    opacity: 0.5;
+  }
+  .pill.drop-before {
+    box-shadow: -3px 0 0 var(--accent);
+  }
+  .pill.drop-after,
+  .chip.drop-after {
+    box-shadow: 3px 0 0 var(--accent);
+  }
+  .chip.drop-blocked {
+    box-shadow: inset 0 0 0 2px var(--danger);
+    cursor: not-allowed;
   }
   .chip.on {
     color: var(--muted);

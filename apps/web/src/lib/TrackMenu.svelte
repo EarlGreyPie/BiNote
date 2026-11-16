@@ -223,6 +223,14 @@
     {/if}
     <button role="menuitem" onclick={() => startRename("score")}>{t("ui.renameScore")}</button>
     <button role="menuitem" onclick={() => (picking = "score")}>{t("ui.scoreInstrumentMenu")}</button>
+    <!-- 여러 트랙을 하나씩 M으로 끄지 않게 (끄기·솔로라 실행 취소에 안 들어간다) -->
+    <hr />
+    {#if track}
+      {@const only = { kind: "only", trackId: track.id } as const}
+      <button role="menuitem" title={t("ui.onlyThisTrackHelp")} disabled={!actions.canListenAll(only)} onclick={() => run(() => actions.listenAll(only))}>{t("ui.onlyThisTrack")}</button>
+    {/if}
+    <button role="menuitem" disabled={!actions.canListenAll({ kind: "mute" })} onclick={() => run(() => actions.listenAll({ kind: "mute" }))}>{t("ui.muteAllTracks")}</button>
+    <button role="menuitem" title={t("ui.unmuteAllTracksHelp")} disabled={!actions.canListenAll({ kind: "unmute" })} onclick={() => run(() => actions.listenAll({ kind: "unmute" }))}>{t("ui.unmuteAllTracks")}</button>
   {/if}
 </div>
 

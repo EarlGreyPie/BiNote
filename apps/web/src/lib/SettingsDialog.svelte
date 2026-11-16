@@ -296,9 +296,9 @@
         <SettingGroup title={t("ui.settingGroupRollTab")}>
           <SettingRow label={t("ui.colorScheme")} for="set-colors" help={t("ui.colorSchemeHelp")}>
             <select id="set-colors" value={colorScheme} onchange={(e) => oncolorscheme(e.currentTarget.value as ColorScheme)}>
-              <option value="score">{t("ui.colorByScore")}</option>
-              <option value="position">{t("ui.colorByPosition")}</option>
               <option value="stored">{t("ui.colorStored")}</option>
+              <option value="position">{t("ui.colorByPosition")}</option>
+              <option value="score">{t("ui.colorByScore")}</option>
             </select>
           </SettingRow>
           <SettingRow label={t("ui.rollFlow")} for="set-rollflow" help={t("ui.rollFlowHelp")}>

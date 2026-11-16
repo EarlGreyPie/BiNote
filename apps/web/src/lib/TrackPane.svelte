@@ -134,6 +134,7 @@
             oninstrument={(canonical) => actions.trackInstrument(active.track.id, canonical)}
             onpack={(pack) => actions.trackPack(active.track.id, pack)}
             onlisten={(change) => actions.listen(active.track.id, change)}
+            onlistenall={actions.listenAll}
             {onedit}
             {onundo}
             {onredo}
@@ -167,6 +168,7 @@
               oninstrument={(canonical) => actions.trackInstrument(extra.track.id, canonical)}
               onpack={(pack) => actions.trackPack(extra.track.id, pack)}
               onlisten={(change) => actions.listen(extra.track.id, change)}
+              onlistenall={actions.listenAll}
               {onedit}
               {onundo}
               {onredo}

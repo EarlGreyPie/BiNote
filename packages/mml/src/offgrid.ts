@@ -405,6 +405,17 @@ export function customOffgrid(fix: OffgridFix, input: string, limit: LengthLimit
  *    가장 짧은 묶음에서, 덜 바꾸는 조합 하나만 받는다. 같은 정도로 맞는 조합이 둘 이상이면 짐작하지 않는다.
  *    그대로 둔 조합이 칸에 돌아오면 진짜 잇단음이라 건드리지 않는다.
  * 4. 앞 묶음을 고쳤다고 치고 뒤를 본다. 고칠 값이 없으면 그 뒤 자리를 새 기준으로 삼는다 (위 규칙과 같다).
+ *
+ * 0. (2026-11-16, 위 1~3보다 먼저) 마비꼬가 읽는 틱 그대로 되살리기.
+ *    마비꼬에서 만든 악보의 r7·r19·g19.·d21은 짐작할 값이 아니라 마비꼬 피아노 롤의 틱을 숫자 하나로 적은 것이다:
+ *    길이 N은 384 / N을 버린 틱, 점은 앞에 더한 틱의 절반을 버려 더한다 (r7 = 54틱 = r8r64, r19 = 20틱 = r32r48,
+ *    g19. = 30틱 = g16&g64, d21 = 18틱 = d32.). 올려 받은 마비꼬 파일 다섯에서 이 틱으로 읽으면 음이 모두 칸에 놓였다
+ *    (분수로 읽으면 음의 절반쯤이 칸 밖이고, 아래 1-3으로 모두 고친 뒤에도 네 파일에서 음의 4-52%가 마비꼬 자리와 달랐다).
+ *    그래서 깔끔한 자리에서 시작해 틱으로 더한 끝이 16분·셋잇단 8분 칸(또는 트랙 끝)에 닿는 묶음은 틱 값을 그대로 적는다.
+ *    트랙 전체를 틱으로 읽어 음이 거의 모두 64분·셋잇단 32분 칸에서 시작하면(마비꼬에서 만든 트랙) 그 칸에만 닿아도 된다.
+ *    - 묶음의 칸에 안 맞는 음이 서로 1틱 안쪽으로 같고 합이 잇단 숫자 하나로 떨어지면 잇단음으로 (19·19·19·19·20틱 → l20 다섯).
+ *    - 그대로 정확히 칸에 돌아오는 진짜 잇단음(l20 다섯, l7 일곱 등)과 틱으로는 칸에 닿지 않는 묶음(3MLE 글을 마비꼬로 옮겨 숫자가 바뀐
+ *      잇단음: l42 둘 + l20 + l10 넷)은 여기서 다루지 않고 위 1~3으로 넘긴다.
  */
 
 /** 마비꼬 트랙에서 원래 값 후보로 보는 잇단 숫자의 홀수 몫 */
@@ -589,6 +600,181 @@ function chunkEdit(text: string, els: readonly Element[], chunk: Chunk, pieces: 
 
 const onLanding = (p: Rat) => OFFGRID_LANDINGS.some((g) => g % p.d === 0);
 
+/** 마비꼬가 길이 숫자 하나를 읽는 틱 (온음표 384틱): 384 / 숫자를 버리고, 점마다 앞에 더한 틱의 절반을 버려 더한다 */
+export function mabiiccoTicks(length: number, dots: number): number {
+  let piece = Math.floor(OFFGRID_CLEAN / length);
+  let total = piece;
+  for (let k = 0; k < dots; k++) {
+    piece = Math.floor(piece / 2);
+    total += piece;
+  }
+  return total;
+}
+
+/** 틱으로 읽으면 칸에 놓이는 트랙에서 묶음을 끝내는 칸: 64분음표와 셋잇단 32분음표 */
+const MABIICCO_FINE: readonly number[] = [64, 48];
+/** 틱으로 읽은 음·쉼표 가운데 위 칸 밖에서 시작하는 것이 이 비율을 넘으면 마비꼬에서 만든 트랙으로 보지 않는다 */
+const MABIICCO_FINE_MISS = 0.03;
+
+/** 마비꼬 틱으로 읽었을 때 음·쉼표가 (거의) 모두 64분·셋잇단 32분 칸에서 시작하는 트랙인지: 마비꼬 피아노 롤에서 만든 트랙이다 */
+function tickConsistent(els: readonly Element[], ticks: readonly number[], base: Rat): boolean {
+  if (!isClean(base) || ticks.some((t) => !Number.isInteger(t))) return false;
+  let at = (base.n * OFFGRID_CLEAN) / base.d;
+  let miss = 0;
+  for (const t of ticks) {
+    if (MABIICCO_FINE.every((g) => at % (OFFGRID_CLEAN / g) !== 0)) miss++;
+    at += t;
+  }
+  return miss <= els.length * MABIICCO_FINE_MISS;
+}
+
+/** 요소마다 마비꼬가 읽는 틱. 숫자가 없으면 그 자리의 l 값을 쓴다 (파서와 같은 규칙). 읽을 수 없으면 NaN */
+function elementTicks(text: string, els: readonly Element[]): number[] {
+  // 파서처럼 /* */ 주석(닫히지 않으면 끝까지) 안의 l은 읽지 않는다: 자리를 지키려고 같은 길이의 빈칸으로 바꿔 찾는다
+  const live = text.replace(/\/\*(?:[\s\S]*?\*\/|[\s\S]*$)/g, (c) => " ".repeat(c.length));
+  const defaults = [...live.matchAll(/l(\d+)(\.*)/gi)].map((m) => ({ at: m.index, length: Number(m[1]), dots: m[2]!.length })).filter((d) => d.length >= 1);
+  let next = 0;
+  let current = { length: 4, dots: 0 };
+  return els.map((el) => {
+    while (next < defaults.length && defaults[next]!.at < el.span[0]) current = defaults[next++]!;
+    const own = /^(?:[a-g][+#-]*|r)(\d*)(\.*)$/i.exec(text.slice(...el.span));
+    const length = own?.[1] ? Number(own[1]) : current.length;
+    const dots = own && (own[1] || own[2]) ? own[2]!.length : current.dots;
+    return length >= 1 ? mabiiccoTicks(length, dots) : NaN;
+  });
+}
+
+/** 칸에 안 맞는 음들이 고르게 나눈 잇단음이면 그 잇단 숫자: 서로 이웃하고, 틱이 평균에서 1틱 안쪽이고, 합이 숫자 하나로 떨어질 때 */
+function tupletNumber(members: readonly { j: number; ticks: number }[], limit: LengthLimit): number | undefined {
+  if (members.length < 2) return undefined;
+  if (members.some((m, k) => k > 0 && m.j !== members[k - 1]!.j + 1)) return undefined;
+  const sum = members.reduce((s, m) => s + m.ticks, 0);
+  const n = (OFFGRID_CLEAN * members.length) / sum;
+  if (!Number.isInteger(n) || n < limit.min || n > limit.max || !niceTuplet(n)) return undefined;
+  return members.every((m) => Math.abs(m.ticks - sum / members.length) < 1) ? n : undefined;
+}
+
+/** i번 덩어리(깔끔한 자리 start에서 시작)부터 그대로 두면 창 안에서 정확히 칸에 돌아오는 덩어리 번호. 없으면 -1 */
+function exactReturn(chunks: readonly Chunk[], i: number, start: Rat): number {
+  const window = add(OFFGRID_WINDOW, chunks[i]!.value);
+  for (let j = i, p = start; j < chunks.length; j++) {
+    p = add(p, chunks[j]!.value);
+    if (cmp(sub(p, start), window) > 0) break;
+    if (isClean(p)) return j;
+  }
+  return -1;
+}
+
+/**
+ * i번 덩어리(깔끔한 자리 start에서 시작)부터 마비꼬 틱으로 읽어, 처음 착지 칸(또는 트랙 끝)에 닿는 묶음을 틱 값 그대로 다시 쓴다
+ * (위 설명의 0). 그대로 정확히 돌아오는 묶음, 틱으로 칸에 닿지 않는 묶음, 틱 값을 깔끔한 토막으로 쓸 수 없는 묶음은 undefined
+ */
+function scanMabiiccoTicks(
+  text: string,
+  els: readonly Element[],
+  chunks: readonly Chunk[],
+  ticks: readonly number[],
+  i: number,
+  start: Rat,
+  limit: LengthLimit,
+  /** 틱으로 읽으면 칸에 놓이는 트랙: 64분·셋잇단 32분 칸에만 닿아도 묶음을 끝낸다 (16분 칸에 드물게 닿는 악보도 되살리게) */
+  fine: boolean,
+): Exclude<MabiiccoScan, { exact: number } | undefined> | undefined {
+  const window = add(OFFGRID_WINDOW, chunks[i]!.value);
+  const lands = (p: Rat) => (fine ? MABIICCO_FINE.some((g) => g % p.d === 0) : onLanding(p));
+  const returnsAt = exactReturn(chunks, i, start);
+  const ticksOf = (chunk: Chunk) => chunk.ids.reduce((s, k) => s + (isClean(els[k]!.dur) ? (els[k]!.dur.n * OFFGRID_CLEAN) / els[k]!.dur.d : ticks[k]!), 0);
+  const done = (edits: OffgridEdit[], values: Map<number, Rat>, last: number, landing: Rat) => {
+    edits.sort((a, b) => a.span[0] - b.span[0]);
+    const firstChunk = Math.min(...values.keys());
+    const kind: OffgridFix["kind"] = edits.length > 1 ? "tuplet" : "single";
+    return { fix: { kind, pitch: els[chunks[firstChunk]!.ids[0]!]!.pitch, start, landing, edits }, firstChunk, last, values };
+  };
+  /** 덩어리들을 l 숫자 n 잇단음으로 고친다 (이미 그 값인 덩어리는 그대로) */
+  const asTuplet = (members: readonly { j: number }[], n: number, edits: OffgridEdit[], values: Map<number, Rat>): boolean => {
+    for (const o of members) {
+      values.set(o.j, rat(1, n));
+      if (eq(chunks[o.j]!.value, rat(1, n))) continue;
+      const edit = chunkEdit(text, els, chunks[o.j]!, [String(n)]);
+      if (!edit) return false;
+      edits.push(edit);
+    }
+    return true;
+  };
+  // 먼저 잇단음: 1틱 안쪽으로 같은 음이 이웃해 이어지고 합이 잇단 숫자 하나로 떨어지는 가장 짧은 묶음 (19·19·19·19·20틱 → l20 다섯)
+  const run: { j: number; ticks: number }[] = [];
+  for (let j = i; j < chunks.length && !chunks[j]!.clean && chunks[j]!.ids.length === 1; j++) {
+    const t = ticksOf(chunks[j]!);
+    if (!Number.isInteger(t) || run.some((o) => Math.abs(o.ticks - t) > 1)) break;
+    run.push({ j, ticks: t });
+    const n = tupletNumber(run, limit);
+    if (!n) continue;
+    const edits: OffgridEdit[] = [];
+    const values = new Map<number, Rat>();
+    if (!asTuplet(run, n, edits, values) || edits.length === 0) break;
+    return done(edits, values, j, add(start, rat(run.length, n)));
+  }
+  const odd: { j: number; ticks: number }[] = [];
+  let end = start;
+  for (let j = i; j < chunks.length; j++) {
+    const chunk = chunks[j]!;
+    if (chunk.clean) end = add(end, chunk.value);
+    else {
+      const sum = ticksOf(chunk);
+      if (!Number.isInteger(sum) || sum <= 0) return undefined;
+      odd.push({ j, ticks: sum });
+      end = add(end, rat(sum, OFFGRID_CLEAN));
+    }
+    if (cmp(sub(end, start), window) > 0) return undefined;
+    // 그대로 먼저 돌아오면 진짜 잇단음 (위 1~3이 본다)
+    if (returnsAt >= 0 && returnsAt <= j) return undefined;
+    if (!lands(end) && j < chunks.length - 1) continue;
+    const edits: OffgridEdit[] = [];
+    const values = new Map<number, Rat>();
+    /** 틱 값을 한두 토막으로 쓸 수 없는 덩어리 (13틱 등): 잇단음으로만 고칠 수 있다 */
+    const hard: { j: number; ticks: number }[] = [];
+    {
+      for (const o of odd) {
+        const chunk = chunks[o.j]!;
+        const value = rat(o.ticks, OFFGRID_CLEAN);
+        if (chunk.spread) {
+          // 사이에 명령이 끼었거나 깔끔한 토막이 섞인 덩어리: 칸에 안 맞는 토막마다 제 틱 값으로
+          for (const k of chunk.ids) {
+            const el = els[k]!;
+            if (isClean(el.dur)) continue;
+            const v = rat(ticks[k]!, OFFGRID_CLEAN);
+            const pieces = cleanPieces(v, limit) ?? greedyPieces(v, limit, 3);
+            const to = pieces && rewrite(text, el, pieces);
+            if (!to) return undefined;
+            edits.push({ span: el.span, from: text.slice(...el.span), to });
+          }
+          values.set(o.j, value);
+          continue;
+        }
+        const many = chunk.ids.length > 1;
+        const pieces = cleanPieces(value, limit) ?? (many ? greedyPieces(value, limit, Math.max(3, chunk.ids.length)) : undefined);
+        // 음 하나가 아주 짧은 두 토막(48&64 등)이었을 리는 없다 (위 1과 같다): 잇단음 쪽으로 본다.
+        // 마비꼬에서 만든 트랙은 틱이 곧 원래 값이라 짧은 두 토막도 그대로 적는다 (r20. = 28틱 = r24r32)
+        if (!pieces || (!fine && !many && pieces.length === 2 && cmp(noteLengthValue(...lengthOf(pieces[0]!)), rat(1, 16)) < 0)) {
+          hard.push(o);
+          continue;
+        }
+        const edit = chunkEdit(text, els, chunk, pieces);
+        if (!edit) return undefined;
+        edits.push(edit);
+        values.set(o.j, value);
+      }
+    }
+    if (hard.length > 0) {
+      const n = hard.every((o) => chunks[o.j]!.ids.length === 1) ? tupletNumber(hard, limit) : undefined;
+      if (!n || !asTuplet(hard, n, edits, values)) return undefined;
+    }
+    if (edits.length === 0) return undefined;
+    return done(edits, values, j, end);
+  }
+  return undefined;
+}
+
 /** 마비꼬 트랙 원문 하나에서 고칠 자리를 찾는다 (위 설명의 규칙) */
 export function findTrackOffgridMabiicco(text: string, limit: LengthLimit, offset?: Rat): Omit<OffgridFix, "trackId">[] {
   const parsed = parseMml(text);
@@ -597,7 +783,9 @@ export function findTrackOffgridMabiicco(text: string, limit: LengthLimit, offse
     ...parsed.rests.map((r) => ({ kind: "rest" as const, start: r.start, dur: r.dur, span: r.span })),
   ].sort((a, b) => a.span[0] - b.span[0]);
   const chunks = chunksOf(text, els);
+  const ticks = elementTicks(text, els);
   const base = offset ?? rat(0);
+  const fine = tickConsistent(els, ticks, base);
   const out: Omit<OffgridFix, "trackId">[] = [];
   try {
     let pos = base;
@@ -618,7 +806,17 @@ export function findTrackOffgridMabiicco(text: string, limit: LengthLimit, offse
         i++;
         continue;
       }
-      let found = scanMabiicco(text, els, chunks, i, here, limit);
+      // 칸에 안 맞는 음만 이어지다 그대로 돌아오는 묶음은 진짜 잇단음 (l7 일곱, l5·l10 섞인 다섯잇단):
+      // 틱이나 후보 값으로 먼저 칸에 닿아도 건드리지 않는다
+      const pure = exactReturn(chunks, i, here);
+      if (pure >= 0 && chunks.slice(i, pure + 1).every((c) => !c.clean)) {
+        for (let k = i; k <= pure; k++) advance(chunks[k]!.value, false);
+        i = pure + 1;
+        continue;
+      }
+      // 먼저 마비꼬 틱 그대로 (설명의 0). 안 되면 후보를 짐작한다 (1~3)
+      const byTicks = scanMabiiccoTicks(text, els, chunks, ticks, i, here, limit, fine);
+      let found: MabiiccoScan = byTicks ?? scanMabiicco(text, els, chunks, i, here, limit);
       if (found && "exact" in found) {
         // 진짜 잇단음: 그대로 돌아온 자리까지 넘긴다
         for (let k = i; k <= found.exact; k++) advance(chunks[k]!.value, false);
@@ -629,7 +827,7 @@ export function findTrackOffgridMabiicco(text: string, limit: LengthLimit, offse
         // 짧은 묶음으로 고친 뒤 바로 오는 칸에 안 맞는 덩어리를 고칠 수 없으면, 그 덩어리까지 넣은 긴 묶음으로 다시 본다
         // (r4.r7 c8&c9: 쉼표만 r3으로 맞추면 c8&c9가 맞지 않는다. 같이 보면 r7 → r8r64, c9 → c16&c32.)
         const next = found.last + 1;
-        if (next < chunks.length && !chunks[next]!.clean) {
+        if (!byTicks && next < chunks.length && !chunks[next]!.clean) {
           const after = scanMabiicco(text, els, chunks, next, found.fix.landing, limit);
           if (!after) {
             const longer = scanMabiicco(text, els, chunks, i, here, limit, next);

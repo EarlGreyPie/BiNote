@@ -55,7 +55,7 @@
   import { LaneGesture } from "./laneGesture.svelte";
   import { tabEventPrefs } from "./tabEventPrefs.svelte";
   import { scaledPx } from "./uiScaleNow.svelte";
-  import { clipTracks, idsInRange, pasteTracks, removeFromTracks } from "./multiTrack";
+  import { clipTracks, idsInRange, moveInTracks, pasteTracks, removeFromTracks } from "./multiTrack";
   import { EDGE_SPEED, edgeScroll, freeDivision, notesBeside } from "./editNav";
   import type { BookMark } from "./splitView";
   import { agreeSpeed, fallShift, fallSpeed, rowDiff, sameFrame, SPEED_FRAME_GAP, SPEED_FRAME_WIDTH, SPEED_PICK_GAP, SPEED_RETRY_AFTER, SPEED_ROW_SCALE, speedBand, speedPairTimes, speedPickLost, speedPickPress, speedPickWheel, toGray } from "./videoSpeed";
@@ -113,6 +113,8 @@
     books?: readonly BookMark[] | undefined;
     oncursor?: (time: number | undefined) => void;
     onloop?: (range: readonly [number, number] | undefined) => void;
+    /** 반복 구간 긋기 단추를 켰는지: 켜면 마디 번호 줄을 끌어 반복 구간을 정한다 (펜·손가락은 Shift가 없다) */
+    loopDraw?: boolean;
     /** 트랙 id → 화면 색. 없으면 트랙에 저장된 색 */
     colors?: ReadonlyMap<string, string>;
     song: Song;
@@ -223,7 +225,7 @@
     onpickevent?: (event: EventRef | undefined) => void;
     ontempowheel?: (at: Rat, step: number) => void;
     /** 파형 띠를 끌어 원곡 어긋남(초)을 바꾼다 */
-    onwaveoffset?: (seconds: number) => void;
+    onwaveoffset?: ((seconds: number) => void) | undefined;
     /** 음량 레인에 고른 트랙과 같이 그릴 트랙 (트랙 목록 Ctrl+클릭) */
     laneTrackIds?: readonly string[] | undefined;
     /** 멜로디 트랙 (여러 트랙에 그릴 때 그은 값을 그대로 받는다) */
@@ -236,7 +238,7 @@
     onlanetoggle?: ((trackId: string) => void) | undefined;
   }
 
-  let { cursor, loop, books, oncursor, onloop, song: fullSong, ghost = [], activeTrackId, orientation, division, playhead, onnotes, onnotesmany, onmissingtracks, onselecttrack, onpicknote, ontrim, onpreview, onseek, showEvents = false, video = $bindable(), videoPlay = $bindable(false), speedStep = $bindable(0), onspeedpicked, fitOnLoad = false, onvideoready, pitchRange = [12, 119], wave, look, themeKey = "", seconds, rate = 1, colors, tool = "pen", onreverb, noteDur, volume, onvolume, lightKeys = false, keyLock = false, canonicalOf, memory, onmemory, work, visibleTrackIds, selectMove = false, locked, pickOthers = true, onevent, oneventmove, onalignbar, bardragtext, onwaveoffset, pickedEvent, onpickevent, ontempowheel, laneTrackIds, melodyIds, onvolumes, onclearlane, onlanetoggle }: Props =
+  let { cursor, loop, loopDraw = false, books, oncursor, onloop, song: fullSong, ghost = [], activeTrackId, orientation, division, playhead, onnotes, onnotesmany, onmissingtracks, onselecttrack, onpicknote, ontrim, onpreview, onseek, showEvents = false, video = $bindable(), videoPlay = $bindable(false), speedStep = $bindable(0), onspeedpicked, fitOnLoad = false, onvideoready, pitchRange = [12, 119], wave, look, themeKey = "", seconds, rate = 1, colors, tool = "pen", onreverb, noteDur, volume, onvolume, lightKeys = false, keyLock = false, canonicalOf, memory, onmemory, work, visibleTrackIds, selectMove = false, locked, pickOthers = true, onevent, oneventmove, onalignbar, bardragtext, onwaveoffset, pickedEvent, onpickevent, ontempowheel, laneTrackIds, melodyIds, onvolumes, onclearlane, onlanetoggle }: Props =
     $props();
 
   /** 레이어: 고른 트랙이 든 보기만 그리고 다루는 곡 (나머지 트랙은 롤에서 보이지도 눌리지도 않는다) */
@@ -357,7 +359,20 @@
   type Grab = { t0: number; p0: number; x0: number; y0: number; slop: number; live: boolean };
   type Drag =
     | ({ mode: "create"; note: Note } & Grab)
-    | ({ mode: "move"; note: Note; original: Note; group: readonly Note[]; moved: readonly Note[] } & Grab)
+    | ({
+        mode: "move";
+        /** 잡은 음 (끄는 자리)과 그 원래 음. 여러 트랙 끌기에서는 다른 트랙의 음일 수 있다 (anchorOther) */
+        note: Note;
+        original: Note;
+        /** 고르는 트랙에서 함께 옮기는 음 (잡은 음 빼고): 원래 음과 끄는 자리 */
+        group: readonly Note[];
+        moved: readonly Note[];
+        /** 여러 트랙 끌기: 다른 트랙에서 함께 옮기는 음 (잡은 음 빼고)의 원래 음과 끄는 자리. 보통 끌기는 비어 있다 */
+        others: readonly Note[];
+        movedOthers: readonly Note[];
+        /** 잡은 음이 다른 트랙의 음이면 그 트랙 id */
+        anchorOther?: string;
+      } & Grab)
     | ({ mode: "resize"; note: Note; original: Note } & Grab);
   let drag = $state.raw<Drag | undefined>(undefined);
   let newId = 0;
@@ -865,10 +880,21 @@
     };
   });
 
+  /** 끄는 음 가운데 고르는 트랙의 음 (끄는 자리) */
+  function dragOwn(d: Drag): readonly Note[] {
+    if (d.mode !== "move") return [d.note];
+    return d.anchorOther === undefined ? [d.note, ...d.moved] : d.moved;
+  }
+  /** 여러 트랙 끌기에서 다른 트랙의 끄는 음 (끄는 자리). 보통 끌기는 빈 목록 */
+  function dragElse(d: Drag): readonly Note[] {
+    if (d.mode !== "move") return [];
+    return d.anchorOther === undefined ? d.movedOthers : [d.note, ...d.movedOthers];
+  }
+
   /** 고른 음 높이. 끄는 중이면 원래 자리 대신 끄는 자리 높이 */
   function heldPitches(): number[] {
     if (selectKeys.mode !== "select") return [];
-    const moving = drag ? (drag.mode === "move" ? [drag.note, ...drag.moved] : [drag.note]) : [];
+    const moving = drag ? dragOwn(drag) : [];
     const ids = new Set(moving.map((n) => n.id));
     return [...selectedNotes.filter((n) => !ids.has(n.id)), ...moving.filter((n) => drag?.mode !== "create" || selected.has(n.id))].map((n) => n.pitch);
   }
@@ -880,8 +906,20 @@
   /** 끄는 음을 지금 놓으면 고르는 트랙에서 잘리거나 지워질 음 (놓을 때 placeNote·replaceNotes와 같은 규칙) */
   const dragLoss = $derived.by((): PlaceLoss | undefined => {
     if (!drag || !active) return undefined;
-    const moving = drag.mode === "move" ? [drag.note, ...drag.moved] : [drag.note];
+    const moving = dragOwn(drag);
+    if (moving.length === 0) return undefined;
     const loss = placeLoss(active.notes, new Map(moving.map((n) => [n.id, n])));
+    return loss.cut.size + loss.removed.size > 0 ? loss : undefined;
+  });
+  /** 여러 트랙 끌기: 다른 트랙에서 같이 끄는 음 (id → 끄는 자리) */
+  const dragOthers = $derived.by((): ReadonlyMap<string, Note> | undefined => {
+    const moving = drag ? dragElse(drag) : [];
+    return moving.length > 0 ? new Map(moving.map((n) => [n.id, n])) : undefined;
+  });
+  /** 여러 트랙 끌기: 지금 놓으면 다른 트랙에서 잘리거나 지워질 음 */
+  const dragLossOthers = $derived.by((): PlaceLoss | undefined => {
+    if (!dragOthers || !active) return undefined;
+    const loss = moveInTracks(song.tracks.filter((t) => t.id !== active.id), dragOthers).loss;
     return loss.cut.size + loss.removed.size > 0 ? loss : undefined;
   });
 
@@ -899,8 +937,10 @@
       view,
       song,
       activeId: active?.id,
-      dragNotes: drag ? (drag.mode === "move" ? [drag.note, ...drag.moved] : [drag.note]) : [],
+      dragNotes: drag ? dragOwn(drag) : [],
       loss: dragLoss,
+      dragOthers,
+      lossOthers: dragLossOthers,
       ghost,
       selected,
       wide: wideShown,
@@ -1023,6 +1063,22 @@
 
   function hit(notes: readonly Note[], time: number, pitch: number): Note | undefined {
     return notes.find((n) => n.pitch === pitch && toFloat(n.start) <= time && time < toFloat(n.start) + toFloat(n.dur));
+  }
+
+  /** 다른 트랙의 음을 누르면 그 트랙과 그 음을 고른다 (설정에서 껐거나 잠근 트랙이면 하지 않는다). 골랐으면 true */
+  function pickOtherAt(time: number, pitch: number): boolean {
+    const other = pickOthers ? song.tracks.find((t) => t.id !== activeTrackId && !locked?.has(t.id) && hit(t.notes, time, pitch)) : undefined;
+    if (!other) return false;
+    onselecttrack(other.id);
+    const picked = hit(other.notes, time, pitch);
+    selectOnly(picked?.id);
+    if (picked) onpicknote?.(other.id, picked, false);
+    return true;
+  }
+
+  /** 여러 트랙 고르기에서 다른 트랙(롤에 보이는 트랙)의 고른 음 */
+  function wideNotes(): Note[] {
+    return song.tracks.filter((t) => t.id !== active?.id).flatMap((t) => t.notes.filter((n) => wide.has(n.id)));
   }
 
   const touchLike = (e: PointerEvent) => e.pointerType === "touch" || e.pointerType === "pen";
@@ -1197,6 +1253,13 @@
       canvas.setPointerCapture(e.pointerId);
       return;
     }
+    if (at.time !== undefined && inRuler(e) && loopDraw) {
+      // 반복 구간 긋기 단추를 켰으면 마디 번호 줄을 끌어 반복 구간 (Shift+끌기와 같다)
+      const t = toFloat(snapNearest(at.time, division));
+      marking = [t, t];
+      canvas.setPointerCapture(e.pointerId);
+      return;
+    }
     if (at.time !== undefined && inRuler(e)) {
       // 마디 번호 줄: 그 자리로 커서, 재생 중이면 거기서부터
       onseek?.(toFloat(snapNearest(at.time, division)));
@@ -1276,19 +1339,27 @@
         preview(own.pitch);
         const grab: Grab = { t0: at.time, p0: at.pitch, x0: e.clientX, y0: e.clientY, slop: touchLike(e) ? 8 : 3, live: false };
         // 고르기 도구(자물쇠 풀림)는 옮기기만 한다
-        drag = tool !== "select" && onResizeEdge(own, at.time, e) ? { mode: "resize", note: own, original: own, ...grab } : { mode: "move", note: own, original: own, group, moved: group, ...grab };
+        // 여러 트랙을 함께 고른 음 가운데 하나를 잡으면 다른 트랙의 고른 음도 함께 옮긴다
+        const others = wideOn && selected.has(own.id) ? wideNotes() : [];
+        drag = tool !== "select" && onResizeEdge(own, at.time, e) ? { mode: "resize", note: own, original: own, ...grab } : { mode: "move", note: own, original: own, group, moved: group, others, movedOthers: others, ...grab };
         canvas.setPointerCapture(e.pointerId);
         return;
       }
     }
-    const other = pickOthers ? song.tracks.find((t) => t.id !== activeTrackId && !locked?.has(t.id) && hit(t.notes, at.time!, at.pitch)) : undefined;
-    if (other) {
-      onselecttrack(other.id);
-      const picked = hit(other.notes, at.time, at.pitch);
-      selectOnly(picked?.id);
-      if (picked) onpicknote?.(other.id, picked, false);
-      return;
+    if (active && !activeLocked && wideOn && !(tool === "select" && !selectMove)) {
+      // 여러 트랙을 함께 고른 음 가운데 다른 트랙의 음을 잡아도 고른 음을 모두 함께 옮긴다.
+      // 끌지 않고 누르기만 하면 전처럼 그 트랙·그 음을 고른다 (onpointerup)
+      for (const t of song.tracks) {
+        if (t.id === active.id) continue;
+        const held = hit(t.notes, at.time, at.pitch);
+        if (!held || !wide.has(held.id)) continue;
+        const others = wideNotes().filter((n) => n.id !== held.id);
+        drag = { mode: "move", note: held, original: held, group: selectedNotes, moved: selectedNotes, others, movedOthers: others, anchorOther: t.id, t0: at.time, p0: at.pitch, x0: e.clientX, y0: e.clientY, slop: touchLike(e) ? 8 : 3, live: false };
+        canvas.setPointerCapture(e.pointerId);
+        return;
+      }
     }
+    if (pickOtherAt(at.time, at.pitch)) return;
     if (!active) return;
     if (tool === "select" || activeLocked) {
       // 고르기 도구: 빈 곳을 끌면 상자로 고르고, 그냥 누르면 고르기를 푼다 (음은 넣지 않는다)
@@ -1403,7 +1474,7 @@
       let dt = step;
       let dp = at.pitch - drag.p0;
       // 함께 옮기는 음이 0보다 앞이나 건반 밖으로 나가지 않게 막는다
-      const all = [o, ...drag.group];
+      const all = [o, ...drag.group, ...drag.others];
       const first = all.reduce((m, n) => (cmp(n.start, m) < 0 ? n.start : m), o.start);
       if (cmp(add(first, dt), rat(0)) < 0) dt = sub(rat(0), first);
       const pitches = all.map((n) => n.pitch);
@@ -1422,7 +1493,7 @@
       }
       // 옮기는 높이를 들려준다
       preview(shift(o).pitch);
-      drag = { ...drag, note: shift(o), moved: drag.group.map(shift) };
+      drag = { ...drag, note: shift(o), moved: drag.group.map(shift), movedOthers: drag.others.map(shift) };
     } else if (drag.mode === "resize") {
       // 격자 한 칸보다 짧던 음은 그 길이까지는 줄일 수 있다
       const floor = cmp(drag.original.dur, minimum) < 0 ? drag.original.dur : minimum;
@@ -1566,6 +1637,17 @@
     const d = drag;
     drag = undefined;
     if (!d || !active) return;
+    if (d.mode === "move" && (d.others.length > 0 || d.anchorOther !== undefined)) {
+      // 여러 트랙 끌기: 고른 음을 트랙마다 제 트랙에서 옮긴다 (실행 취소 한 칸). 잠근 트랙이 끼면 통째로 하지 않는다
+      if (cmp(d.original.start, d.note.start) === 0 && d.original.pitch === d.note.pitch) {
+        // 다른 트랙의 음을 끌지 않고 누르기만 했으면 전처럼 그 트랙·그 음을 고른다
+        if (d.anchorOther !== undefined && !d.live) pickOtherAt(d.t0, d.p0);
+        return;
+      }
+      const done = moveInTracks(song.tracks, new Map([d.note, ...d.moved, ...d.movedOthers].map((n) => [n.id, n])));
+      if (onnotesmany?.(done.changes, "음 옮기기")) noteTrim(true, done.loss);
+      return;
+    }
     if (d.mode === "move" && d.group.length > 0) {
       if (cmp(d.original.start, d.note.start) === 0 && d.original.pitch === d.note.pitch) return;
       const changes = new Map<string, Note | null>([d.note, ...d.moved].map((n) => [n.id, n]));
@@ -1849,9 +1931,9 @@
     }
     // 재는 중에는 화살표로 음을 옮기지 않는다 (Esc는 앱이 받아 재기를 그만둔다)
     if (speedStep !== 0) return;
-    if (!active || activeLocked || selectedNotes.length === 0 || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
-    // 화살표: 고른 음을 모두 반음·격자 한 칸씩 옮긴다
-    const notes = selectedNotes;
+    if (!active || activeLocked || (selectedNotes.length === 0 && !wideOn) || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+    // 화살표: 고른 음을 모두 반음·격자 한 칸씩 옮긴다. 여러 트랙을 함께 골랐으면 다른 트랙의 고른 음도 함께
+    const notes = wideOn ? [...selectedNotes, ...wideNotes()] : selectedNotes;
     const along = orientation === "horizontal" ? { fwd: "ArrowRight", back: "ArrowLeft", up: "ArrowUp", down: "ArrowDown" }
       : { fwd: "ArrowUp", back: "ArrowDown", up: "ArrowRight", down: "ArrowLeft" };
     const step = rat(1, division);
@@ -1868,6 +1950,12 @@
     else if (e.key === along.back && notes.every((n) => cmp(n.start, step) >= 0)) shift = (n) => ({ ...n, start: sub(n.start, step) });
     if (!shift) return;
     e.preventDefault();
+    if (wideOn) {
+      // 여러 트랙: 트랙마다 제 트랙에서 옮긴다 (실행 취소 한 칸). 잠근 트랙이 끼면 통째로 하지 않는다
+      const done = moveInTracks(song.tracks, new Map(notes.map((n) => [n.id, shift(n)])));
+      if (onnotesmany?.(done.changes, "음 옮기기")) noteTrim(true, done.loss);
+      return;
+    }
     const changes = new Map(notes.map((n) => [n.id, shift(n)]));
     const loss = placeLoss(active.notes, changes);
     noteTrim(onnotes(active.id, replaceNotes(active.notes, changes), "음 옮기기"), loss);

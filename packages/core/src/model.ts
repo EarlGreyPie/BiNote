@@ -205,6 +205,11 @@ export interface Song {
   readonly sources: readonly SourceRef[];
   /** 창으로 만든 기록 (만든 순서). 원래대로 되돌리기·다시 고치기에 쓴다 (made.ts, 프로젝트 파일에만 저장) */
   readonly made?: readonly MadeRecord[];
+  /**
+   * 트랙 색(color)을 트랙마다 정해 둔 곡이면 true (1.0.0-rc.3부터 곡을 열 때 붙인다).
+   * 없으면 예전 곡이라, 열 때 그때까지 보이던 색(악보 안 위치 색)으로 한 번 맞춘다
+   */
+  readonly colorsKept?: boolean;
   readonly extras?: Extras;
 }
 

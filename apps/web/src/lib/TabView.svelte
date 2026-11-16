@@ -116,6 +116,8 @@
     onplaycursor?: ((time: number | undefined) => void) | undefined;
     /** 마디 번호 줄을 끌어 정한 반복 구간 */
     onloop?: ((range: readonly [number, number] | undefined) => void) | undefined;
+    /** 반복 구간 긋기 단추를 켰는지: 펜·손가락은 이것을 켰을 때만 마디 번호 줄을 끌어 반복 구간을 정한다 (마우스는 늘) */
+    loopDraw?: boolean;
     /** 보기 → 커서 따라가기: 키보드·숫자판으로 커서가 화면 밖으로 나가면 화면을 넘긴다 */
     followCursor?: boolean;
     /** 보기를 바꾸기 전에 보던 자리와 지난번 타브 확대·커서 (만들 때 한 번만 읽는다) */
@@ -134,7 +136,7 @@
     themeKey?: string;
   }
 
-  let { song, ghost = [], themeKey = "", octaveKey, wave, onwaveoffset, activeTrackId, tuning, playhead, onunplayable, division, noteDur, noteLength, noteLengths = NOTE_LENGTHS, tupletLength, ontuplet, lengthLimit, onnotelength, onedit, onnewtrack, onfull, maxTracks = Infinity, onpreview, volume = $bindable(), volumeRange, colors, locked, laneTrackIds, onlanetoggle, onclearlane, melodyIds, padByMouse = false, onevent, oncursor, onlayers, onpastefull, ondot, onalign, memory, onmemory, work, followCursor = true, playCursor, loop, onseek, onplaycursor, onloop }: Props = $props();
+  let { song, ghost = [], themeKey = "", octaveKey, wave, onwaveoffset, activeTrackId, tuning, playhead, onunplayable, division, noteDur, noteLength, noteLengths = NOTE_LENGTHS, tupletLength, ontuplet, lengthLimit, onnotelength, onedit, onnewtrack, onfull, maxTracks = Infinity, onpreview, volume = $bindable(), volumeRange, colors, locked, laneTrackIds, onlanetoggle, onclearlane, melodyIds, padByMouse = false, onevent, oncursor, onlayers, onpastefull, ondot, onalign, memory, onmemory, work, followCursor = true, playCursor, loop, loopDraw = false, onseek, onplaycursor, onloop }: Props = $props();
 
   // 위쪽에 마디 번호 줄과 변속 줄 두 칸(위 칸 템포, 아래 칸 박자·마커), 원곡이 있으면 그 아래 파형 띠를 두고 그 아래에 첫 줄
   // 숫자판을 띄운 동안은 지판 자리를 위해 띠를 숨긴다 (도구 띠를 숨기는 것과 같은 규칙)
@@ -443,6 +445,11 @@
   let hoverCell = $state.raw<{ at: Rat; string: number } | undefined>(undefined);
   /** 마디 번호 줄을 누르고 끄는 중: [누른 자리, 지금 자리] (격자에 맞춘 시간) */
   let marking = $state.raw<[number, number] | undefined>(undefined);
+  /**
+   * 이번 마디 번호 줄 누르기가 끌어서 반복 구간을 만들 수 있는지. 펜·손가락은 반복 구간 긋기 단추를 켰을 때만:
+   * 아이패드에서 펜으로 누를 때 조금만 미끄러져도 반복 구간이 생겼다. 못 만들면 끌어도 누른 자리가 재생 위치
+   */
+  let markLoop = false;
   const rulerTime = (px: number) => toFloat(snapNearest(Math.max(0, start + (px - LEFT) / pxPerWhole), division));
   /**
    * 파형 띠의 빈 곳을 끌어 원곡을 앞뒤로 옮기기 (피아노롤과 같다). 문턱(마우스 3px·터치 8px)을 넘기 전에 떼면 그 자리가 재생 위치.
@@ -498,6 +505,7 @@
       return;
     }
     if (marking && e.buttons & 1) {
+      if (!markLoop) return;
       const t = rulerTime(point(e)[0]);
       if (t !== marking[1]) marking = [marking[0], t];
       return;
@@ -644,10 +652,11 @@
     const px = e.clientX - rect.left;
     const py = e.clientY - rect.top;
     if (px < LEFT) return;
-    // 맨 위 마디 번호 줄: 누르고 떼면 재생 위치, 끌면 반복 구간 (피아노롤 눈금자와 같다). 화면은 움직이지 않는다
+    // 맨 위 마디 번호 줄: 누르고 떼면 재생 위치, 끌면 반복 구간 (펜·손가락은 반복 구간 긋기 단추를 켰을 때만). 화면은 움직이지 않는다
     if (py < RULER && onseek) {
       const t = rulerTime(px);
       marking = [t, t];
+      markLoop = e.pointerType === "mouse" || loopDraw;
       canvas.setPointerCapture(e.pointerId);
       return;
     }
@@ -660,6 +669,8 @@
       } else if (onseek) {
         const t = rulerTime(px);
         marking = [t, t];
+        // 파형 띠(원곡 고정 등으로 끌 수 없을 때)는 누른 자리로 가기만 한다. 반복 구간은 긋기 단추를 켰을 때만
+        markLoop = loopDraw;
         canvas.setPointerCapture(e.pointerId);
       }
       return;

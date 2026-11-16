@@ -2,6 +2,7 @@ import type { Note, TimeSigEvent } from "./model.js";
 import { barAt, inBars, type BarRange } from "./meter.js";
 import type { GameProfile } from "./profile.js";
 import { applyVolumes, tieChains } from "./note-edit.js";
+import { cmp, type Rat } from "./rat.js";
 
 /**
  * 볼륨 일괄 조정 방식.
@@ -127,6 +128,19 @@ export function headsInBars(notes: readonly Note[], timeSig: readonly TimeSigEve
   for (const chain of tieChains(notes)) {
     const head = chain[0]!;
     if (inBars(ranges, barAt(timeSig, head.start))) out.add(head.id);
+  }
+  return out;
+}
+
+/**
+ * [start, end) 자리(온음표 단위) 안에서 시작하는 소리(& 사슬은 첫 음)의 id. headsInBars와 같은 규칙을 마디 대신 자리로 쓴다.
+ * 원곡 대조 셈여림의 반 마디 칸처럼 마디 경계가 아닌 범위를 고칠 때 쓴다
+ */
+export function headsInSpan(notes: readonly Note[], start: Rat, end: Rat): Set<string> {
+  const out = new Set<string>();
+  for (const chain of tieChains(notes)) {
+    const head = chain[0]!;
+    if (cmp(head.start, start) >= 0 && cmp(head.start, end) < 0) out.add(head.id);
   }
   return out;
 }

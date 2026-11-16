@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { changeVolumes, dbOfVolume, MOBILE_PROFILE, rat, volumeForDb, volumeSpan, type Note } from "../src/index.js";
+import { changeVolumes, dbOfVolume, headsInSpan, MOBILE_PROFILE, rat, volumeForDb, volumeSpan, type Note } from "../src/index.js";
 
 const note = (id: string, start: number, vol: number, tie: Note["tie"] = "none"): Note => ({ id, start: rat(start, 4), dur: rat(1, 4), pitch: 60, vol, tie });
 const vols = (notes: readonly Note[]) => notes.map((n) => `${n.id}${n.vol}`).join(" ");
@@ -77,5 +77,15 @@ describe("볼륨 일괄 조정", () => {
   it("v 범위: 사슬 첫 음만 센다", () => {
     expect(volumeSpan([note("a", 0, 9, "next"), { ...note("b", 1, 3) }, note("c", 2, 13)])).toEqual([9, 13]);
     expect(volumeSpan(base, new Set())).toBeUndefined();
+  });
+
+  it("자리 범위: [start, end) 안에서 시작하는 사슬 첫 음만, 앞에서 이어 들어온 사슬은 빼고 밖으로 이어지는 사슬은 넣는다", () => {
+    // 4분음표 자리 0..3. a&b는 0에서 시작해 1로 이어진다, c는 2, d&e는 3에서 시작해 4로 넘어간다
+    const notes = [note("a", 0, 9, "next"), note("b", 1, 9), note("c", 2, 10), note("d", 3, 11, "next"), note("e", 4, 11)];
+    // 반 마디 뒤 반 = 2/4..4/4
+    expect([...headsInSpan(notes, rat(1, 2), rat(1))]).toEqual(["c", "d"]);
+    // 1/4..2/4: b는 a에서 이어 들어온 음이라 넣지 않는다
+    expect([...headsInSpan(notes, rat(1, 4), rat(1, 2))]).toEqual([]);
+    expect([...headsInSpan(notes, rat(0), rat(1, 4))]).toEqual(["a"]);
   });
 });

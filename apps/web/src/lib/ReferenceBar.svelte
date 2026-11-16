@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from "./Icon.svelte";
   import { t } from "./i18n.svelte";
   import { clock } from "./time";
   import type { BarDragMode } from "./tempoSync";
@@ -17,9 +18,12 @@
     /** 파형 띠 마디선 끌기 방식 */
     barDragMode: BarDragMode;
     onbardrag: (mode: BarDragMode) => void;
+    /** 원곡 고정: 켜면 파형 띠 끌기·어긋남 칸·단추로 원곡을 옮기지 못한다 */
+    locked: boolean;
+    onlock: (on: boolean) => void;
   }
 
-  let { reference, onoffset, onvolume, onremove, showWave = $bindable(), tapOpen, ontaptempo, barDragMode, onbardrag }: Props = $props();
+  let { reference, onoffset, onvolume, onremove, showWave = $bindable(), tapOpen, ontaptempo, barDragMode, onbardrag, locked, onlock }: Props = $props();
 </script>
 
 <div class="video-bar">
@@ -27,13 +31,17 @@
   <span class="muted">{reference.name} · {clock(reference.duration)}</span>
   <label>
     {t("ui.referenceOffset")}
-    <input type="number" step="10" value={reference.offsetMs} onchange={(e) => onoffset(Number(e.currentTarget.value))} />
+    <input type="number" step="10" value={reference.offsetMs} disabled={locked} onchange={(e) => onoffset(Number(e.currentTarget.value))} />
   </label>
   <span class="nudge">
     {#each [-100, -10, 10, 100] as d (d)}
-      <button class="small" onclick={() => onoffset(reference.offsetMs + d)}>{d > 0 ? `+${d}` : d}</button>
+      <button class="small" disabled={locked} onclick={() => onoffset(reference.offsetMs + d)}>{d > 0 ? `+${d}` : d}</button>
     {/each}
   </span>
+  <button class="small" class:on={locked} title={t("ui.referenceLockHelp")} aria-pressed={locked} onclick={() => onlock(!locked)}>
+    <Icon name={locked ? "lock" : "lock-open"} />
+    {t("ui.referenceLock")}
+  </button>
   <label>
     {t("ui.referenceVolume")}
     <input type="range" min="0" max="1.5" step="0.05" value={reference.volume} oninput={(e) => onvolume(Number(e.currentTarget.value))} />

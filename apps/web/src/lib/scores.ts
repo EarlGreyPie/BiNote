@@ -60,7 +60,7 @@ export function visibleTrackIds(song: Song, groups: readonly ScoreGroup[], view:
  * 트랙 색 방식.
  * - position: 악보 안 위치마다 같은 색 (어느 악보든 1번 파랑, 2번 주황 …)
  * - score: 악보마다 색 계열, 같은 악보 안 트랙은 색조를 조금씩 돌리고 진하기를 번갈아 구분
- * - stored: 트랙마다 고정 색. 트랙을 만들 때 받은 색(파일에 저장됨)을 그대로 써서 순서를 바꿔도 색이 안 바뀐다
+ * - stored: 트랙마다 고정 색 (기본). 트랙을 만들 때 받은 색(파일에 저장됨)을 그대로 써서 순서를 바꾸거나 다른 악보로 옮겨도 색이 안 바뀐다
  * 어느 방식이든 사용자가 정한 색(colorPinned)이 있는 트랙은 그 색을 쓴다
  */
 export type ColorScheme = "position" | "score" | "stored";
@@ -115,6 +115,22 @@ export function trackColors(song: Song, groups: readonly ScoreGroup[], scheme: C
     });
   }
   return out;
+}
+
+/**
+ * 트랙마다 색을 정해 두지 않은 예전 곡(colorsKept 없음)을 열 때 한 번: 고정하지 않은 트랙의 색을
+ * 그때까지 기본으로 보이던 색(악보 안 위치 색)으로 맞추고 colorsKept를 붙인다.
+ * 그래서 트랙마다 고정 방식이 기본이 되어도 예전 곡은 열었을 때 보던 색 그대로 보이고, 그 뒤로는 트랙을 옮겨도 색이 그대로다
+ */
+export function keepShownColors(song: Song, groups: readonly ScoreGroup[]): Song {
+  if (song.colorsKept) return song;
+  const color = new Map<string, string>();
+  for (const g of groups) g.trackIds.forEach((id, k) => color.set(id, CREATED_COLORS[k % CREATED_COLORS.length]!));
+  const tracks = song.tracks.map((t) => {
+    const c = color.get(t.id);
+    return t.colorPinned || c === undefined || c === t.color ? t : { ...t, color: c };
+  });
+  return { ...song, tracks, colorsKept: true };
 }
 
 /** 색 문자열을 색 고르기 칸에 넣을 #rrggbb로 (파일을 읽을 때와 같은 규칙) */

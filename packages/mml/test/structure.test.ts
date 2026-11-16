@@ -700,3 +700,30 @@ describe("조표 명령", () => {
     expect(s.keys).toBeUndefined();
   });
 });
+
+describe("새 트랙 색 (트랙마다 고정)", () => {
+  it("새 트랙은 그 악보에서 아직 안 쓰는 색을 받고, 옮겨도 색이 그대로다", () => {
+    let s = fresh();
+    s = addTrack("p1", "트랙 2").apply(s);
+    s = addTrack("p1", "트랙 3").apply(s);
+    expect(s.tracks.map((t) => t.color)).toEqual(["#4f8cff", "#ff7a59", "#2bb673"]);
+    // 2번을 지우고 새로 더하면 빈 주황을 받는다 (곡 전체 순번이면 초록이 겹쳤다)
+    s = removeTrack("t2").apply(s);
+    s = addTrack("p1", "새").apply(s);
+    expect(s.tracks.map((t) => t.color)).toEqual(["#4f8cff", "#2bb673", "#ff7a59"]);
+    const moved = shiftTrack("t3", -1).apply(s);
+    expect(moved.tracks.map((t) => [t.id, t.color])).toEqual(s.tracks.map((t) => [t.id, t.color]).sort((a, b) => (a[0] === "t3" ? -1 : b[0] === "t3" ? 1 : 0)));
+  });
+
+  it("다른 악보 트랙 색은 세지 않는다 (새 악보 첫 트랙은 파랑)", () => {
+    let s = fresh();
+    s = addTrack("p1", "트랙 2").apply(s);
+    s = addPlayer("piano", "피아노 2", "트랙 1").apply(s);
+    expect(s.tracks.at(-1)!.color).toBe("#4f8cff");
+  });
+
+  it("복제본은 원본 악보에서 안 쓰는 색", () => {
+    const s = duplicateTrack("t1", "복제").apply(fresh());
+    expect(s.tracks.map((t) => t.color)).toEqual(["#4f8cff", "#ff7a59"]);
+  });
+});

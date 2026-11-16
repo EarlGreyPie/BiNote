@@ -44,6 +44,7 @@ import { chordsPerScore } from "./clipboard.js";
 import { distributeChords } from "./distribute.js";
 import { mergeChords, type MergeResult } from "./merge.js";
 import { gameTimeline } from "./game-timeline.js";
+import { TRACK_COLORS } from "./track-color.js";
 import { gameScores, withoutDefaultStart } from "./game-output.js";
 import { pitchlessForOutput } from "./pitchless.js";
 import { mergeTies, sameSound } from "./compare.js";
@@ -511,11 +512,20 @@ export function appendSong(other: Song, label = "악보 더하기"): Command {
         const notes = unmarkNotes(t.mml ? carryTabStrings(t.notes, parseTrackText(id, t.mml).notes) : t.notes.map((n, k) => ({ ...n, id: `${id}.${k + 1}` })));
         return { ...t, id, playerId: players.get(t.playerId)?.id ?? t.playerId, notes };
       });
+      // 트랙 색을 트랙마다 정해 두지 않은 곡(MML 글 등)은 그동안 보이던 대로 악보 안 위치 색을 준다
+      const placed = new Map<string, number>();
+      const colored = other.colorsKept
+        ? tracks
+        : tracks.map((t) => {
+            const k = placed.get(t.playerId) ?? 0;
+            placed.set(t.playerId, k + 1);
+            return t.colorPinned ? t : { ...t, color: TRACK_COLORS[k % TRACK_COLORS.length]! };
+          });
       return {
         ...song,
         tempo: normalizeTempo([...song.tempo, ...other.tempo]),
         players: [...song.players, ...players.values()],
-        tracks: [...song.tracks, ...tracks],
+        tracks: [...song.tracks, ...colored],
       };
     },
     invert: (before) => restoreSong(before),

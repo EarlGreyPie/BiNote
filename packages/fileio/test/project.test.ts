@@ -26,6 +26,12 @@ describe("writeProject / readProject", () => {
     expect(back.tracks[1]!.color).toBe("#e04a8a");
   });
 
+  it("트랙마다 정해 둔 색 표시(colorsKept)는 저장했다 다시 열어도 남고, 예전 파일에는 없다", () => {
+    const song = sample();
+    expect(readProject(writeProject({ ...song, colorsKept: true })).song.colorsKept).toBe(true);
+    expect(readProject(writeProject(song)).song.colorsKept).toBeUndefined();
+  });
+
   it("마비꼬 노래 칸 표시(mmiSong)와 트랙 보이기(mix.visible)는 true·false만 받는다 (점검 S07)", () => {
     const song = sample();
     const tracks = song.tracks.map((t, i) => (i === 0 ? { ...t, mmiSong: true, mix: { visible: false } } : t));

@@ -66,6 +66,10 @@ export interface RollDrawOptions {
   readonly dragNotes: readonly Note[];
   /** 끄는 음을 놓으면 고르는 트랙에서 잘리거나 지워질 음 (placeLoss). 경고 색 사선으로 미리 보여 준다 */
   readonly loss?: PlaceLoss | undefined;
+  /** 여러 트랙을 함께 끄는 중: 다른 트랙에서 같이 끄는 음 (음 id → 끄는 자리의 음). 그 트랙의 원래 음 대신 그린다 */
+  readonly dragOthers?: ReadonlyMap<string, Note> | undefined;
+  /** 여러 트랙을 함께 끄는 중: 지금 놓으면 다른 트랙에서 잘리거나 지워질 음 */
+  readonly lossOthers?: PlaceLoss | undefined;
   /** MIDI 건반 녹음 중 친 음 (트랙과 상관없이 높이대로 녹음 색 테두리로) */
   readonly ghost?: readonly GhostNote[] | undefined;
   readonly selected: ReadonlySet<string>;
@@ -369,6 +373,10 @@ export function drawRoll(canvas: HTMLCanvasElement, o: RollDrawOptions): void {
     if (isActive && o.dragNotes.length > 0) {
       const dragged = new Set(o.dragNotes.map((n) => n.id));
       notes = [...notes.filter((n) => !dragged.has(n.id)), ...o.dragNotes];
+    } else if (!isActive && o.dragOthers && o.dragOthers.size > 0 && notes.some((n) => o.dragOthers!.has(n.id))) {
+      // 끄는 음은 목록 맨 뒤에 (먹힐 음의 경고 표시 위에 다시 그려지게, 고르는 트랙과 같다)
+      const others = o.dragOthers;
+      notes = [...notes.filter((n) => !others.has(n.id)), ...notes.flatMap((n) => others.get(n.id) ?? [])];
     }
     const color = o.colors?.get(track.id) ?? track.color;
     const vols = chainVolumes(notes);
@@ -447,7 +455,7 @@ export function drawRoll(canvas: HTMLCanvasElement, o: RollDrawOptions): void {
       }
       // 끄는 음에 먹힐 음: 잘려 나갈 뒷부분(지워질 음은 통째로)에 경고 색 사선과 테두리.
       // 끄는 음은 이 트랙 음 목록 맨 뒤라 그 위에 다시 그려지므로 가리지 않는다
-      const loss = isActive ? o.loss : undefined;
+      const loss = isActive ? o.loss : o.lossOthers;
       if (loss && (loss.removed.has(n.id) || loss.cut.has(n.id))) {
         const keep = loss.removed.has(n.id) ? 0 : toFloat(loss.cut.get(n.id)!);
         const lost = noteRect(v, st + keep, du - keep, n.pitch);

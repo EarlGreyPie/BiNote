@@ -316,6 +316,24 @@ input[type="range"] {
   margin: 0 6px 0 0;
   font-size: 17px;
 }
+/* 제목줄이 없는 설치 앱에서 위 띠에 적는 곡 이름. 자리가 모자라면 이것부터 줄어든다 */
+.topbar .song-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 24em;
+  margin-left: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 13px;
+}
+/* 위 띠가 이미 넘치는 폭에서는 적지 않는다 (곡 이름은 트랙 창 머리에도 나온다) */
+@media (max-width: 900px) {
+  .topbar .song-name {
+    display: none;
+  }
+}
 .topbar .bar-end {
   position: sticky;
   right: 0;

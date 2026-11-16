@@ -8,7 +8,8 @@
 
   /**
    * 실험실 원곡 대조 셈여림 (보기만): 마디마다 원곡과 지금 곡의 크기를 같은 폭으로 맞춰 견주고,
-   * 원곡을 따라가려면 몇 dB·몇 v가 모자라거나 남는지 보여 준다. 곡은 바꾸지 않는다 (고치기는 볼륨 일괄 조정으로).
+   * 원곡을 따라가려면 몇 dB·몇 v가 모자라거나 남는지 보여 준다. 곡은 바꾸지 않는다.
+   * 제안이 있는 칸의 고치기 단추는 볼륨 일괄 조정을 그 칸(마디·반 마디)만·±제안으로 골라 연다 (onfix, 고치기는 그 창에서).
    * 크게 보기(가운데, 전체를 한눈에)와 작은 패널(떠 있어 띄운 채로 편집, 머리줄을 끌어 옮기고 접기) 두 모양이 있다.
    * 둘 다 모달이 아니라 곡을 고치면 바로 다시 센다.
    * 템포 자동 맞추기를 켜면(기본) 원곡 템포가 흔들려도 마디마다 원곡의 같은 자리를 찾아 읽고, 마디마다 원곡이 얼마나 늦거나 빠른지도 보여 준다
@@ -26,10 +27,12 @@
     /** 재생선(재생 중)이나 커서 자리 (온음표 단위). 그 마디를 표시한다 */
     now: number | undefined;
     onseek: (at: Rat) => void;
+    /** 이 칸 [start, end)만 v를 ±suggest 하도록 볼륨 일괄 조정을 연다. label은 칸 이름 (12, 12½), baseVol은 제안의 기준 v */
+    onfix?: (cell: { start: Rat; end: Rat; label: string }, suggest: number, baseVol: number) => void;
     onclose: () => void;
   }
 
-  let { song, profile, power, align, offsetMs, loop, now, onseek, onclose }: Props = $props();
+  let { song, profile, power, align, offsetMs, loop, now, onseek, onfix, onclose }: Props = $props();
 
   const PREFS_KEY = "mmlce.loudnessPanel";
   interface Prefs {
@@ -39,6 +42,8 @@
     readonly onlyBig: boolean;
     /** 템포 자동 맞추기 (기본 켬) */
     readonly autoTempo: boolean;
+    /** 반 마디로 나눠 보기 (기본 끔) */
+    readonly halves: boolean;
     /** 끌어 옮긴 자리 (px). 없으면 오른쪽 아래 */
     readonly at?: { readonly left: number; readonly top: number };
   }
@@ -46,7 +51,7 @@
     const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
     const at = o.at as Record<string, unknown> | undefined;
     const ok = at && Number.isFinite(at.left) && Number.isFinite(at.top);
-    return { mode: o.mode === "panel" ? "panel" : "big", collapsed: o.collapsed === true, onlyBig: o.onlyBig !== false, autoTempo: o.autoTempo !== false, ...(ok ? { at: { left: at.left as number, top: at.top as number } } : {}) };
+    return { mode: o.mode === "panel" ? "panel" : "big", collapsed: o.collapsed === true, onlyBig: o.onlyBig !== false, autoTempo: o.autoTempo !== false, halves: o.halves === true, ...(ok ? { at: { left: at.left as number, top: at.top as number } } : {}) };
   }
   let prefs = $state<Prefs>(loadStored(PREFS_KEY, (raw) => parsePrefs(parseJson(raw))));
   function setPrefs(change: Partial<Prefs>) {
@@ -69,21 +74,31 @@
     return featureCache.features;
   });
   const alignment = $derived(prefs.autoTempo && align ? alignTempo(songFeat, align, offsetMs / 1000) : undefined);
-  const result = $derived(compareLoudness(song, power, offsetMs / 1000, profile, inLoop && loop ? loop : undefined, alignment?.warp));
-  /** 다음 마디와의 어긋남 차이 = 원곡이 이 마디를 얼마나 더 길게(+) 치는지 (초). 다음 마디가 이어지지 않으면 없음 */
+  const result = $derived(compareLoudness(song, power, offsetMs / 1000, profile, inLoop && loop ? loop : undefined, alignment?.warp, prefs.halves));
+  /** 한 마디를 몇 칸으로 보는지 (반 마디로 나눠 보면 2) */
+  const per = $derived(prefs.halves ? 2 : 1);
+  /** 칸 번호: 마디마다 per칸씩, 뒤 반은 한 칸 뒤 (목록 열쇠·그래프 가로 자리) */
+  const slot = (b: BarLoudness) => b.bar * per + (b.half === 2 ? 1 : 0);
+  /** 칸 이름: 마디 번호, 뒤 반은 ½을 붙인다 (12½ = 12마디 뒤 반) */
+  const label = (b: BarLoudness) => (b.half === 2 ? `${b.bar}½` : `${b.bar}`);
+  /** 다음 칸과의 어긋남 차이 = 원곡이 이 칸을 얼마나 더 길게(+) 치는지 (초). 다음 칸이 이어지지 않으면 없음 */
   const longer = $derived.by(() => {
     const out = new Map<number, number>();
     result.bars.forEach((b, i) => {
       const next = result.bars[i + 1];
-      if (next && next.bar === b.bar + 1) out.set(b.bar, next.drift - b.drift);
+      if (next && slot(next) === slot(b) + 1) out.set(slot(b), next.drift - b.drift);
     });
     return out;
   });
   const maxDrift = $derived(Math.max(0.5, ...result.bars.map((b) => Math.abs(b.drift))));
   const driftY = (s: number) => D / 2 - (s / maxDrift) * (D / 2 - 3);
   const rows = $derived(prefs.onlyBig ? result.bars.filter((b) => Math.abs(b.diff) >= SUGGEST_DB) : result.bars);
-  /** 재생선·커서가 있는 마디 (뺀 마디면 없음) */
-  const nowBar = $derived(now === undefined ? undefined : result.bars.find((b) => toFloat(b.start) <= now + 1e-9 && now < toFloat(b.end) - 1e-9)?.bar);
+  /** 재생선·커서가 있는 칸 (뺀 칸이면 없음) */
+  const nowBar = $derived.by(() => {
+    if (now === undefined) return undefined;
+    const b = result.bars.find((b) => toFloat(b.start) <= now + 1e-9 && now < toFloat(b.end) - 1e-9);
+    return b ? slot(b) : undefined;
+  });
 
   // 그래프: 가로는 마디 번호, 위는 원곡(목표)·지금 두 줄, 아래는 차이 막대
   const W = 600;
@@ -91,8 +106,10 @@
   const D = $derived(prefs.mode === "big" ? 70 : 50);
   const first = $derived(result.bars[0]?.bar ?? 1);
   const last = $derived(result.bars.at(-1)?.bar ?? 1);
-  const x = (bar: number) => (last === first ? W / 2 : ((bar - first + 0.5) / (last - first + 1)) * W);
-  const step = $derived(W / Math.max(1, last - first + 1));
+  /** 그래프 가로 칸 수와 칸 번호 → 가로 자리 */
+  const slots = $derived((last - first + 1) * per);
+  const x = (s: number) => (slots === 1 ? W / 2 : ((s - first * per + 0.5) / slots) * W);
+  const step = $derived(W / Math.max(1, slots));
   const range = $derived.by(() => {
     const all = result.bars.flatMap((b) => [b.current, b.target]);
     const lo = Math.min(...all);
@@ -100,7 +117,7 @@
     return hi - lo < 1 ? [lo - 1, hi + 1] : [lo, hi];
   });
   const y = (db: number) => H - 4 - ((db - range[0]!) / (range[1]! - range[0]!)) * (H - 8);
-  const line = (pick: (b: BarLoudness) => number) => result.bars.map((b) => `${x(b.bar).toFixed(1)},${y(pick(b)).toFixed(1)}`).join(" ");
+  const line = (pick: (b: BarLoudness) => number) => result.bars.map((b) => `${x(slot(b)).toFixed(1)},${y(pick(b)).toFixed(1)}`).join(" ");
   const maxDiff = $derived(Math.max(SUGGEST_DB * 2, ...result.bars.map((b) => Math.abs(b.diff))));
   const barH = (d: number) => (Math.abs(d) / maxDiff) * (D / 2 - 2);
 
@@ -113,14 +130,19 @@
   /** 이만큼(초) 넘게 원곡이 이 마디를 길거나 짧게 치면 템포를 고칠 곳으로 표시한다 */
   const JUMP_SECONDS = 0.15;
   function driftTip(b: BarLoudness): string {
-    const d = longer.get(b.bar);
-    if (d === undefined || Math.abs(d) < JUMP_SECONDS) return t("ui.loudnessDriftTip", { bar: b.bar, drift: signed(b.drift, 2) });
-    return t(d > 0 ? "ui.loudnessDriftSlower" : "ui.loudnessDriftFaster", { bar: b.bar, seconds: Math.abs(d).toFixed(2) });
+    const d = longer.get(slot(b));
+    if (d === undefined || Math.abs(d) < JUMP_SECONDS) return t("ui.loudnessDriftTip", { bar: label(b), drift: signed(b.drift, 2) });
+    return t(d > 0 ? "ui.loudnessDriftSlower" : "ui.loudnessDriftFaster", { bar: label(b), seconds: Math.abs(d).toFixed(2) });
   }
   function suggestText(b: BarLoudness): string {
     if (b.suggest === undefined) return "";
     if (b.suggest === 0) return t("ui.loudnessAtEdge", { vol: b.baseVol });
     return `v${b.baseVol} → v${b.baseVol + b.suggest} (${b.suggest > 0 ? "+" : "−"}${Math.abs(b.suggest)})`;
+  }
+  /** 이 칸만 제안대로 고치는 볼륨 일괄 조정을 연다 */
+  function fix(b: BarLoudness) {
+    if (!onfix || !b.suggest) return;
+    onfix({ start: b.start, end: b.end, label: label(b) }, b.suggest, b.baseVol);
   }
   /** 그 마디로 커서를 옮긴다 (패널은 그대로 둔다) */
   function go(b: BarLoudness) {
@@ -200,12 +222,12 @@
     <svg class="graph diff" viewBox="0 0 {W} {D}" preserveAspectRatio="none" role="img" aria-label={t("ui.loudnessDiff")}>
       <line class="zero" x1="0" x2={W} y1={D / 2} y2={D / 2} />
       {#if nowBar !== undefined}<rect class="now" x={x(nowBar) - step / 2} width={step} y="0" height={D} />{/if}
-      {#each result.bars as b (b.bar)}
+      {#each result.bars as b (slot(b))}
         <rect
           class:up={b.diff > 0}
           class:down={b.diff < 0}
           class:small={Math.abs(b.diff) < SUGGEST_DB}
-          x={x(b.bar) - Math.max(1, step * 0.35)}
+          x={x(slot(b)) - Math.max(1, step * 0.35)}
           width={Math.max(2, step * 0.7)}
           y={b.diff > 0 ? D / 2 - barH(b.diff) : D / 2}
           height={Math.max(0.5, barH(b.diff))}
@@ -214,7 +236,7 @@
           onclick={() => go(b)}
           onkeydown={() => {}}
         >
-          <title>{t("ui.loudnessBarTip", { bar: b.bar, diff: signed(b.diff) })}</title>
+          <title>{t("ui.loudnessBarTip", { bar: label(b), diff: signed(b.diff) })}</title>
         </rect>
       {/each}
     </svg>
@@ -234,6 +256,7 @@
         {#if loop}
           <label><input type="checkbox" bind:checked={inLoop} /> {t("ui.loudnessInLoop")}</label>
         {/if}
+        <label title={t("ui.loudnessHalvesHelp")}><input type="checkbox" checked={prefs.halves} onchange={(e) => setPrefs({ halves: e.currentTarget.checked })} /> {t("ui.loudnessHalves")}</label>
         <span class="muted">{t("ui.loudnessOffset", { ms: Math.round(offsetMs) })}</span>
       </div>
       {@render autoTempoRow()}
@@ -245,10 +268,10 @@
         <svg class="graph diff" viewBox="0 0 {W} {D}" preserveAspectRatio="none" role="img" aria-label={t("ui.loudnessDrift")}>
           <line class="zero" x1="0" x2={W} y1={D / 2} y2={D / 2} />
           {#if nowBar !== undefined}<rect class="now" x={x(nowBar) - step / 2} width={step} y="0" height={D} />{/if}
-          <polyline class="drift" points={result.bars.map((b) => `${x(b.bar).toFixed(1)},${driftY(b.drift).toFixed(1)}`).join(" ")} />
-          {#each result.bars as b (b.bar)}
-            {#if Math.abs(longer.get(b.bar) ?? 0) >= JUMP_SECONDS}
-              <circle class="jump" cx={x(b.bar)} cy={driftY(b.drift)} r="3" role="button" tabindex="-1" onclick={() => go(b)} onkeydown={() => {}}>
+          <polyline class="drift" points={result.bars.map((b) => `${x(slot(b)).toFixed(1)},${driftY(b.drift).toFixed(1)}`).join(" ")} />
+          {#each result.bars as b (slot(b))}
+            {#if Math.abs(longer.get(slot(b)) ?? 0) >= JUMP_SECONDS}
+              <circle class="jump" cx={x(slot(b))} cy={driftY(b.drift)} r="3" role="button" tabindex="-1" onclick={() => go(b)} onkeydown={() => {}}>
                 <title>{driftTip(b)}</title>
               </circle>
             {/if}
@@ -267,13 +290,18 @@
             </tr>
           </thead>
           <tbody>
-            {#each rows as b (b.bar)}
-              <tr class:now={b.bar === nowBar}>
-                <td><button class="link" title={t("ui.loudnessGo")} onclick={() => go(b)}>{b.bar}</button></td>
+            {#each rows as b (slot(b))}
+              <tr class:now={slot(b) === nowBar}>
+                <td><button class="link" title={t("ui.loudnessGo")} onclick={() => go(b)}>{label(b)}</button></td>
                 <td>{clock(Math.max(0, b.refSeconds))}</td>
-                {#if alignment}<td class:jump={Math.abs(longer.get(b.bar) ?? 0) >= JUMP_SECONDS} title={driftTip(b)}>{signed(b.drift, 2)} s</td>{/if}
+                {#if alignment}<td class:jump={Math.abs(longer.get(slot(b)) ?? 0) >= JUMP_SECONDS} title={driftTip(b)}>{signed(b.drift, 2)} s</td>{/if}
                 <td class:up={b.diff >= SUGGEST_DB} class:down={b.diff <= -SUGGEST_DB}>{signed(b.diff)} dB</td>
-                <td>{suggestText(b)}</td>
+                <td class="suggest">
+                  {suggestText(b)}
+                  {#if onfix && b.suggest}
+                    <button class="fix" title={t("ui.loudnessFixHelp", { bar: label(b), by: `${b.suggest > 0 ? "+" : "−"}${Math.abs(b.suggest)}` })} onclick={() => fix(b)}>{t("ui.loudnessFix")}</button>
+                  {/if}
+                </td>
               </tr>
             {:else}
               <tr><td colspan={alignment ? 5 : 4} class="muted">{t("ui.loudnessNoBig")}</td></tr>
@@ -282,13 +310,14 @@
         </table>
       </div>
       <p class="small muted">
-        {t("ui.loudnessSummary", { bars: result.bars.length, bar: corr(result.corrBar), four: corr(result.corr4) })}
-        {#if result.skipped > 0}{t("ui.loudnessSkipped", { count: result.skipped })}{/if}
+        {t(prefs.halves ? "ui.loudnessSummaryHalves" : "ui.loudnessSummary", { bars: result.bars.length, bar: corr(result.corrBar), four: corr(result.corr4) })}
+        {#if result.skipped > 0}{t(prefs.halves ? "ui.loudnessSkippedHalves" : "ui.loudnessSkipped", { count: result.skipped })}{/if}
       </p>
       <details class="small muted" open={prefs.mode === "big"}>
         <summary>{t("ui.loudnessAbout")}</summary>
         <p>{t("ui.loudnessIntro")}</p>
         <p>{t("ui.loudnessHow")}</p>
+        {#if prefs.halves}<p>{t("ui.loudnessHalvesHow")}</p>{/if}
       </details>
     {/if}
   {/if}
@@ -486,6 +515,15 @@
   }
   td.down {
     color: var(--danger);
+  }
+  td.suggest {
+    white-space: nowrap;
+  }
+  .fix {
+    margin-left: 6px;
+    padding: 0 6px;
+    font-size: 0.85em;
+    cursor: pointer;
   }
   .link {
     background: none;

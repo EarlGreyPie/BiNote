@@ -23,6 +23,7 @@
     barBeatAt,
     barsOfRange,
     headsInBars,
+    headsInSpan,
     chainsInBars,
     type BarRange,
     meterAt,
@@ -194,7 +195,7 @@
     type SavedFile,
   } from "./lib/saveTarget.svelte";
   import { saveBaseName } from "./lib/saveName";
-  import { windowTitle } from "./lib/windowTitle";
+  import { hasNoTitleBar, songLabel, windowTitle } from "./lib/windowTitle";
   import { restoreWorkFile, sameAutosave, type AutosaveState as WorkAutosave } from "./lib/workFile";
   import { flushAllEditors, searchEditor } from "./lib/MmlEditor.svelte";
   import ReferenceBar from "./lib/ReferenceBar.svelte";
@@ -273,7 +274,7 @@
   import { retuneCommand, retuneKeepingTab } from "./lib/retune";
   import { shiftMs, shiftVideoOffset, stepHistory, withReferenceShift } from "./lib/referenceShift";
   import TransposeDialog, { type TransposeCheck, type TransposeScope } from "./lib/TransposeDialog.svelte";
-  import VolumeDialog, { type VolumeCheck } from "./lib/VolumeDialog.svelte";
+  import VolumeDialog, { isVolumeSpan, type VolumeCheck, type VolumeSpan, type VolumeWhere } from "./lib/VolumeDialog.svelte";
   import { typedAccidental } from "./lib/keyTyping";
   import KeyFitDialog, { type KeyFitCheck } from "./lib/KeyFitDialog.svelte";
   import DeleteBarsDialog from "./lib/DeleteBarsDialog.svelte";
@@ -287,6 +288,7 @@
   import LabNoteDialog from "./lib/LabNoteDialog.svelte";
   import ReverbDialog from "./lib/ReverbDialog.svelte";
   import LoudnessCompareDialog from "./lib/LoudnessCompareDialog.svelte";
+  import { modalOpen } from "./lib/modalOpen";
   import type { ReferencePower } from "./lib/loudnessCompare";
   import type { AlignFeatures } from "./lib/tempoAlign";
   import { reverbPrefs, stampTail } from "./lib/reverbPrefs.svelte";
@@ -311,7 +313,7 @@
   import { brokenRewrittenTracks, changedTrackIds, tempoConvertFailedText, tempoConvertPlan, type TempoConvertOutcome } from "./lib/tempoConvert";
   import { midiStepLength, stepCursorFor, notesEnd, placeChord, previousVolume, volumeForVelocity } from "./lib/midiInput";
   import { fillEditorTracks, oldestEditor, parseEditorCount, parseEditorMax, swapIntoEditors } from "./lib/editors";
-  import { melodyTrackIds, peakPolyphony, scoreGroups, soundingAt, trackColors, type ColorScheme } from "./lib/scores";
+  import { keepShownColors, melodyTrackIds, peakPolyphony, scoreGroups, soundingAt, trackColors, type ColorScheme } from "./lib/scores";
   import PasteDialog from "./lib/PasteDialog.svelte";
   import MidiDialog from "./lib/MidiDialog.svelte";
   import TranscribeDialog from "./lib/TranscribeDialog.svelte";
@@ -331,6 +333,7 @@
   } from "./lib/keymap";
   import { nextBarStart, prevBarStart, songEnd } from "./lib/editNav";
   import { spanOf } from "./lib/multiTrack";
+  import { canListenAll, listenAllTracks, type ListenAll } from "./lib/listenAll";
   import { applyUpdate, checkSpace, checkStorage, pwa, requestPersistentStorage } from "./lib/pwa.svelte";
   import { guideUrl } from "./lib/links";
   import { clampRollShare, maxRollShare, paneMinHeight, ROLL_SHARE_MAX, ROLL_SHARE_MIN } from "./lib/paneSplit";
@@ -427,7 +430,7 @@
   const themeKey = $derived(themeKeyOf(appearance, systemDark));
 
   const COLOR_STORAGE = "mmlce.colorScheme";
-  let colorScheme = $state<ColorScheme>(loadStored(COLOR_STORAGE, (raw) => (raw === "score" || raw === "stored" ? raw : "position")));
+  let colorScheme = $state<ColorScheme>(loadStored(COLOR_STORAGE, (raw) => (raw === "score" || raw === "position" ? raw : "stored")));
   function setColorScheme(v: ColorScheme) {
     colorScheme = v;
     saveStored(COLOR_STORAGE, v);
@@ -984,8 +987,17 @@
   let loopExact = $state.raw<readonly [Rat, Rat] | undefined>(undefined);
   function setLoop(range: readonly [number, number] | undefined) {
     loop = range;
-    if (range) loopExact = [asRat(range[0]), asRat(range[1])];
+    if (range) {
+      loopExact = [asRat(range[0]), asRat(range[1])];
+      // 반복 구간 긋기 단추는 한 번 긋고 꺼진다 (켜 둔 채 펜으로 누르다 또 생기지 않게)
+      loopDraw = false;
+    }
   }
+  /**
+   * 반복 구간 긋기 단추: 켜면 마디 번호 줄을 끌어 반복 구간을 정한다. 아이패드에서 펜으로 마디 번호 줄을 누를 때
+   * 조금만 미끄러져도 반복 구간이 생겨, 펜·손가락은 이것을 켰을 때만 긋는다 (마우스 끌기·Shift+끌기는 그대로)
+   */
+  let loopDraw = $state(false);
   /** 편집에 쓸 반복 구간 (분수). 없으면 undefined */
   function loopRat(): readonly [Rat, Rat] | undefined {
     return loopEnds(loop, loopExact, asRat);
@@ -1851,9 +1863,21 @@
   }
 
   // 창 제목에 작업 중인 파일 이름. 프로젝트로 저장한 뒤 고친 곳이 있으면 ● (저장한 적 없는 곡은 표시하지 않는다)
+  // 설치한 앱(크롬·엣지)은 앱 이름으로 시작하는 제목만 제목줄에 보여 주므로 순서를 바꾼다 (windowTitle.ts)
+  const standaloneQuery = typeof matchMedia !== "undefined" ? matchMedia("(display-mode: standalone)") : undefined;
+  let installed = $state(!!standaloneQuery?.matches);
   $effect(() => {
-    document.title = windowTitle(fileName, !!song, !!projectSaved && !savedAsProject());
+    if (!standaloneQuery?.addEventListener) return;
+    const update = () => (installed = standaloneQuery.matches);
+    standaloneQuery.addEventListener("change", update);
+    return () => standaloneQuery.removeEventListener("change", update);
   });
+  const unsavedMark = $derived(!!projectSaved && !savedAsProject());
+  $effect(() => {
+    document.title = windowTitle(fileName, !!song, unsavedMark, installed);
+  });
+  /** 제목줄이 없는 설치 앱(아이패드 홈 화면 앱 등)은 창 제목이 보이지 않아 위 띠에 곡 이름을 적는다 */
+  const barSongName = $derived(song && installed && hasNoTitleBar(navigator.userAgent, navigator.maxTouchPoints ?? 0) ? songLabel(fileName, unsavedMark) : "");
 
   /** 새 판으로 바꾸는 동안 화면 입력과 MIDI 건반 입력을 막는다 */
   function lockForUpdate(on: boolean) {
@@ -2198,7 +2222,13 @@
     readonly withReference?: string | undefined;
   }
 
-  function openSong(next: Song, name: string, file?: FileSystemFileHandle, media: OpenMedia = {}) {
+  function openSong(opened: Song, name: string, file?: FileSystemFileHandle, media: OpenMedia = {}) {
+    // 트랙 색을 트랙마다 정해 두지 않은 예전 곡은 지금까지 보이던 색으로 한 번 맞춘다 (그 뒤로는 트랙을 옮겨도 그대로)
+    const openedProfile = getProfile(opened.meta.profileId ?? "mobile");
+    const next = keepShownColors(
+      opened,
+      scoreGroups(opened, (playerId) => maxChordsOf(openedProfile, opened.players.find((p) => p.id === playerId)?.instrument.canonical)),
+    );
     // 녹음 중이면 앞 곡에 넣고 끝낸다 (준비 중이면 취소). 남겨 두면 정지 감지가 새 곡에 넣는다
     endRecording();
     // 앞 곡에서 찍다 만 탭은 버린다. 남겨 두면 정지 감지가 새 곡 템포를 바꾼다
@@ -2450,6 +2480,16 @@
     const current = history.song;
     sync(history.amend({ ...current, tracks: current.tracks.map((tr) => (tr.id === id ? { ...tr, ...change } : tr)) }));
     // 재생 중이면 바뀐 트랙 구성으로 처음부터 다시 재생한다 (이어 재생은 커서가 생기면)
+    if (playing) void play();
+  }
+
+  /** 모든 트랙 끄기·켜기, 이 트랙만 켜기. 한 번에 바꾸고 재생 중이면 한 번만 다시 재생한다 */
+  function updateAllTracks(how: ListenAll) {
+    if (!history) return;
+    const current = history.song;
+    const tracks = listenAllTracks(current.tracks, how);
+    if (tracks === current.tracks) return;
+    sync(history.amend({ ...current, tracks: [...tracks] }));
     if (playing) void play();
   }
 
@@ -2862,6 +2902,15 @@
     barDragMode = mode;
     saveStored(BAR_DRAG_KEY, mode);
   }
+  /** 원곡 고정: 켜면 파형 띠를 끌어도 원곡이 움직이지 않고, 어긋남 칸·단추도 잠근다. 기억한다 */
+  const REFERENCE_LOCK_KEY = "mmlce.referenceLock";
+  let referenceLock = $state(loadStored(REFERENCE_LOCK_KEY, (raw) => raw === "1"));
+  function setReferenceLock(on: boolean) {
+    referenceLock = on;
+    saveStored(REFERENCE_LOCK_KEY, on ? "1" : "0");
+  }
+  /** 파형 띠 끌기로 원곡 어긋남 바꾸기 (원곡 고정이면 없음: 누르면 그 자리로 가기만 한다) */
+  const waveOffsetDrag = $derived(referenceLock ? undefined : (sec: number) => setReferenceOffset(Math.round(sec * 1000)));
   function barPlan(s: Song, bar: Rat, to: number) {
     const target = positionToSeconds(s.tempo, fine(to));
     return barDragMode === "pair" ? pairBarTempo(s.tempo, s.timeSig, bar, target) : alignBarTempo(s.tempo, bar, target);
@@ -4626,7 +4675,16 @@
   }
 
   // 볼륨 일괄 조정: 고른 음(피아노롤·타브)·트랙·악보·곡 전체의 v를 한 값으로 / ±N / 목표 dB로. 실행 취소 한 칸
-  let volumeOpen = $state<{ scope: TransposeScope; vol: number } | undefined>(undefined);
+  let volumeOpen = $state<{ scope: TransposeScope; vol: number; cell?: VolumeSpan; change?: VolumeChange } | undefined>(undefined);
+
+  /**
+   * 원곡 대조 셈여림의 한 칸(마디·반 마디)에서 제안대로 고치기: 볼륨 일괄 조정을 그 칸만·±제안으로 골라 연다.
+   * 셈여림은 모든 트랙을 함께 세므로 처음 범위는 곡 전체 (멜로디만 고치려면 창에서 트랙을 고른다). 고치기는 창의 적용 한 번 = 실행 취소 한 칸
+   */
+  function openVolumeFor(cell: VolumeSpan, suggest: number, baseVol: number) {
+    if (!song) return;
+    volumeOpen = { scope: "song", vol: baseVol, cell, change: { kind: "shift", by: suggest } };
+  }
 
   function openVolume() {
     if (!song) return;
@@ -4639,14 +4697,16 @@
   }
 
   /** 범위에 드는 트랙과 그 안에서 바꿀 음 id (없으면 트랙 전체) */
-  function volumeTargets(scope: TransposeScope, bars?: readonly BarRange[]): { track: Track; notes: readonly Note[]; picked?: ReadonlySet<string> }[] {
+  function volumeTargets(scope: TransposeScope, bars?: VolumeWhere): { track: Track; notes: readonly Note[]; picked?: ReadonlySet<string> }[] {
     if (!song) return [];
     if (scope !== "selection" && !bars) return transposeTargets(scope).map(({ track }) => ({ track, notes: track.notes }));
     if (scope !== "selection") {
-      // 마디 범위: 범위 안에서 시작하는 소리만. 범위에 소리가 없는 트랙은 빼서 잠금 확인에도 끼지 않게 한다
+      // 마디 범위(또는 한 칸): 범위 안에서 시작하는 소리만. 범위에 소리가 없는 트랙은 빼서 잠금 확인에도 끼지 않게 한다
       const timeSig = song.timeSig;
+      const where = bars!;
+      const heads = (notes: readonly Note[]) => (isVolumeSpan(where) ? headsInSpan(notes, where.start, where.end) : headsInBars(notes, timeSig, where));
       return transposeTargets(scope)
-        .map(({ track }) => ({ track, notes: track.notes, picked: headsInBars(track.notes, timeSig, bars!) }))
+        .map(({ track }) => ({ track, notes: track.notes, picked: heads(track.notes) }))
         .filter((x) => x.picked.size > 0);
     }
     // 타브는 한 연주자의 여러 트랙에서 고른다. 고른 음은 곡 트랙의 음 그대로라 객체로 찾는다
@@ -4663,7 +4723,7 @@
     return { ...change, lossDb: (chain) => heldLossDb(profile, of, track, chain, canonicalOf) };
   }
 
-  function checkVolume(scope: TransposeScope, change: VolumeChange, bars?: readonly BarRange[]): VolumeCheck {
+  function checkVolume(scope: TransposeScope, change: VolumeChange, bars?: VolumeWhere): VolumeCheck {
     let count = 0;
     let changed = 0;
     let clamped = 0;
@@ -4686,7 +4746,7 @@
     return { count, changed, clamped, limited, viaTie, before, after };
   }
 
-  function applyVolume(scope: TransposeScope, change: VolumeChange, bars?: readonly BarRange[]) {
+  function applyVolume(scope: TransposeScope, change: VolumeChange, bars?: VolumeWhere) {
     if (!history) return;
     const targets = volumeTargets(scope, bars);
     const locked = lockedNames(targets.map(({ track }) => track.id));
@@ -5326,9 +5386,15 @@
   function onKeydown(event: KeyboardEvent) {
     // 편집기가 이미 처리한 키(편집기 안 실행 취소 등)는 건드리지 않는다
     if (picking && !event.defaultPrevented) return pickingKey(event);
-    if (event.defaultPrevented || showKeymap || paste || midi || transposing || arpeggio || slide || grace || trill || labDialog || reverbDialog || voicing || settings || meterOpen || songInfoOpen || eventEdit || addScoreOpen || mmiExportOpen || recoverOpen || outputOpen || optimizing || fitOpen || event.isComposing) return;
-    // 위 목록에 없는 대화 상자라도 열려 있으면 뒤의 곡에 단축키를 보내지 않는다
-    if (document.querySelector("dialog[open]")) return;
+    if (event.defaultPrevented || event.isComposing) return;
+    // 위 목록에 없는 대화 상자라도 모달로 열려 있으면 뒤의 곡에 단축키를 보내지 않는다.
+    // 셈여림처럼 모달 아닌 창은 뒤의 편집기를 그대로 쓰라고 띄운 것이므로 단축키도 그대로 받는다
+    if (showKeymap || paste || midi || transposing || arpeggio || slide || grace || trill || labDialog || reverbDialog || voicing || settings || meterOpen || songInfoOpen || eventEdit || addScoreOpen || mmiExportOpen || recoverOpen || outputOpen || optimizing || fitOpen || modalOpen(document.querySelectorAll("dialog[open]"))) {
+      // 곡 저장 단축키는 막더라도 브라우저의 "페이지 저장"(HTML)으로 넘기지 않는다
+      const blocked = keyName(event);
+      if (blocked && commandFor(bindings, blocked)?.startsWith("file.save")) event.preventDefault();
+      return;
+    }
     const target = event.target as HTMLElement | null;
     // Alt+숫자: 고른 음 v를 바로 (피아노 롤에서, 글 치는 곳 밖)
     // v0(뒤를 소리 없이 두는 데 쓴다)은 숫자 1 왼쪽 키: Alt+`
@@ -5432,6 +5498,8 @@
     trackInstrument: (id, canonical) => runSoloSplit(keepScoreTempo(setTrackInstrument(id, canonical, t("ui.trackInstrument"), soloSplit, programFor))),
     trackPack: (id, pack) => commit(setTrackPack(id, pack, programFor, t("ui.trackPack"))),
     listen: updateTrack,
+    listenAll: updateAllTracks,
+    canListenAll: (how) => !!song && canListenAll(song.tracks, how),
     viewOf: (id) => trackView[id] ?? {},
     view: (id, change) => (trackView = withTrackView(trackView, id, change)),
     remove: deleteTrack,
@@ -5714,6 +5782,7 @@
     {loop}
     now={nowAt}
     onseek={seekTo}
+    onfix={openVolumeFor}
     onclose={() => (loudnessOpen = false)}
   />
 {/if}
@@ -5777,6 +5846,8 @@
     ]}
     initialScope={volumeOpen.scope}
     initialVol={volumeOpen.vol}
+    cell={volumeOpen.cell}
+    initialChange={volumeOpen.change}
     loopBars={song && loop ? barsOfRange(song.timeSig, ...loopRat()!) : undefined}
     {profile}
     held={fadeOn()}
@@ -5991,6 +6062,7 @@
   <span class="divider"></span>
   <button class="icon" onclick={undo} disabled={!canUndo} title={t("ui.undo") + hint("edit.undo")} aria-label={t("ui.undo")}><Icon name="undo" /></button>
   <button class="icon" onclick={redo} disabled={!canRedo} title={t("ui.redo") + hint("edit.redo")} aria-label={t("ui.redo")}><Icon name="redo" /></button>
+  {#if barSongName}<span class="song-name" title={barSongName}>{barSongName}</span>{/if}
   <span class="spacer"></span>
   <div class="playgroup">
     <button class="icon" onclick={toStart} disabled={!song} title={t("ui.toStart")} aria-label={t("ui.toStart")}><Icon name="skip-back" fill /></button>
@@ -6004,6 +6076,9 @@
     <button class="icon" onclick={stop} disabled={!playing} title={t("ui.stop") + hint("play.stop")} aria-label={t("ui.stop")}><Icon name="stop" fill /></button>
     <button class="icon" class:on={!!loop} onclick={toggleLoop} disabled={!loop && !loopStash} title={t("ui.loopToggleHelp")} aria-label={t("ui.loopToggle")}>
       <Icon name="repeat" />
+    </button>
+    <button class="icon" class:on={loopDraw} onclick={() => (loopDraw = !loopDraw)} disabled={!song} title={t("ui.loopDrawHelp")} aria-label={t("ui.loopDraw")} aria-pressed={loopDraw}>
+      <Icon name="arrows-h" />
     </button>
     <Menu icon="gauge" title={t("ui.playOptions")} items={playOptionsMenu} />
     {#if playRate !== 1}<span class="clock" title={t("ui.playSpeed")}>{Math.round(playRate * 100)}%</span>{/if}
@@ -6079,7 +6154,7 @@
       onvideo={onVideo}
     />
     {#if reference}
-      <ReferenceBar {reference} bind:showWave onoffset={setReferenceOffset} onvolume={setReferenceVolume} onremove={removeReference} {tapOpen} ontaptempo={toggleTap} {barDragMode} onbardrag={setBarDragMode} />
+      <ReferenceBar {reference} bind:showWave onoffset={setReferenceOffset} onvolume={setReferenceVolume} onremove={removeReference} {tapOpen} ontaptempo={toggleTap} {barDragMode} onbardrag={setBarDragMode} locked={referenceLock} onlock={setReferenceLock} />
     {/if}
     {#if videoBarsOpen}
       <VideoBarsBar
@@ -6268,6 +6343,7 @@
           onseek={seek}
           {showEvents}
           onloop={setLoop}
+          {loopDraw}
           tool={rollTool}
           onreverb={stampReverb}
           {selectMove}
@@ -6286,7 +6362,7 @@
           oneventmove={moveEvent}
           onalignbar={alignBar}
           bardragtext={barDragText}
-          onwaveoffset={(sec) => setReferenceOffset(Math.round(sec * 1000))}
+          onwaveoffset={waveOffsetDrag}
           {pickedEvent}
           onpickevent={(e) => (pickedEvent = e)}
           ontempowheel={wheelTempo}
@@ -6302,7 +6378,7 @@
           ghost={recordLive}
           {themeKey}
           wave={showWave && reference && referencePeaks ? { peaks: referencePeaks, offset: reference.offsetMs / 1000 } : undefined}
-          onwaveoffset={(sec) => setReferenceOffset(Math.round(sec * 1000))}
+          onwaveoffset={waveOffsetDrag}
           octaveKey={(e) => {
             const c = commandFor(bindings, keyName(e) ?? "");
             return c === "note.octaveUp" || c === "note.octaveDown";
@@ -6334,6 +6410,7 @@
           onseek={seek}
           onplaycursor={(at) => (cursor = at)}
           onloop={setLoop}
+          {loopDraw}
           onevent={openEvent}
           oncursor={(at) => (tabCursor = at)}
           onalign={(a) => (tabAlign = a)}

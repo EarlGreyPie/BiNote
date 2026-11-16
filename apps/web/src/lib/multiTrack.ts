@@ -70,6 +70,37 @@ export function removeFromTracks(tracks: readonly TrackNotes[], ids: ReadonlySet
     .map((t) => ({ trackId: t.id, notes: removeNotes(t.notes, ids) }));
 }
 
+export interface TracksMove {
+  /** 트랙마다 옮긴 뒤 음 전체 (옮긴 음이 없는 트랙은 뺀다) */
+  readonly changes: readonly { readonly trackId: string; readonly notes: readonly Note[] }[];
+  /** 옮기면서 잘리거나 지워질, 옮기지 않은 음 (모든 트랙) */
+  readonly loss: PlaceLoss;
+}
+
+/**
+ * 여러 트랙에서 함께 고른 음을 끌어 옮긴 결과. moved: 음 id → 옮긴 음 (id는 그대로, 제 트랙에 다시 놓는다).
+ * 트랙마다 replaceNotes로 넣으므로 한 트랙 안의 규칙(옮긴 자리에 있던 음은 잘리거나 지워진다, 함께 옮긴 음끼리는 먹지 않는다)은
+ * 한 트랙 옮기기와 같다.
+ */
+export function moveInTracks(tracks: readonly TrackNotes[], moved: ReadonlyMap<string, Note>): TracksMove {
+  const changes: { trackId: string; notes: Note[] }[] = [];
+  const cut = new Map<string, Rat>();
+  const removed = new Set<string>();
+  for (const t of tracks) {
+    const map = new Map<string, Note | null>();
+    for (const n of t.notes) {
+      const to = moved.get(n.id);
+      if (to) map.set(n.id, to);
+    }
+    if (map.size === 0) continue;
+    const loss = placeLoss(t.notes, map);
+    for (const [id, d] of loss.cut) cut.set(id, d);
+    for (const id of loss.removed) removed.add(id);
+    changes.push({ trackId: t.id, notes: replaceNotes(t.notes, map) });
+  }
+  return { changes, loss: { cut, removed } };
+}
+
 const end = (n: Note): Rat => add(n.start, n.dur);
 
 /** 고른 음이 걸친 시간 [첫 시작, 마지막 끝] (화면 위치). 없으면 undefined */

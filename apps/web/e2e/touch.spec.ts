@@ -93,3 +93,35 @@ test("타브에서 두 손가락으로 확대해도 커서가 찍히거나 숫�
   expect(Number(await scroll.getAttribute("max"))).not.toBe(maxBefore);
   await expect(noteCount(page)).toHaveText("음 8개");
 });
+
+/** 손가락으로 (x0,y)를 눌러 x1까지 끌고 뗀다 */
+async function swipe(page: Page, context: BrowserContext, x0: number, x1: number, y: number): Promise<void> {
+  const cdp = await context.newCDPSession(page);
+  const finger = (x: number) => [{ x, y, id: 1, radiusX: 8, radiusY: 8, force: 1 }];
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: finger(x0) });
+  for (let i = 1; i <= 6; i++) {
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: finger(x0 + ((x1 - x0) * i) / 6) });
+    await page.waitForTimeout(16);
+  }
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await cdp.detach();
+}
+
+test("타브 마디 번호 줄을 손가락으로 끌어도 반복 구간 긋기 단추를 켜야만 반복 구간이 생긴다", async ({ page, context }) => {
+  const canvas = page.locator(".tab .canvas-wrap > canvas");
+  const loopToggle = page.getByRole("button", { name: "반복 구간 켜기/끄기" });
+  const draw = page.getByRole("button", { name: "반복 구간 긋기" });
+  const box = (await canvas.boundingBox())!;
+  const y = box.y + 6;
+  // 단추를 켜지 않으면 끌어도 누른 자리로 가기만 한다 (아이패드에서 펜이 조금만 미끄러져도 반복 구간이 생겼다)
+  await swipe(page, context, box.x + box.width * 0.3, box.x + box.width * 0.6, y);
+  await page.waitForTimeout(100);
+  await expect(loopToggle).toBeDisabled();
+  // 켜고 끌면 반복 구간이 생기고 단추는 꺼진다
+  // 단추는 마우스로 (CDP로 끈 바로 뒤의 손가락 누르기는 크로미움이 끌기 끝으로 먹는다)
+  await draw.click();
+  await expect(draw).toHaveAttribute("aria-pressed", "true");
+  await swipe(page, context, box.x + box.width * 0.3, box.x + box.width * 0.6, y);
+  await expect(loopToggle).toBeEnabled();
+  await expect(draw).toHaveAttribute("aria-pressed", "false");
+});

@@ -7,6 +7,7 @@
   import type { ScoreGroup } from "./scores";
   import { movedTooFar } from "./longPress";
   import type { TrackActions } from "./trackActions";
+  import { dragStarted, dropSpot, dropTargetAt, isDragExempt, scoreRowId, type DropSpot } from "./trackDrag";
 
   /**
    * 구조 목록: 악보 줄(접기·펼치기) 아래에 트랙 줄. 고른 트랙이 든 악보만 펼친다.
@@ -96,10 +97,13 @@
   }
 
   /**
-   * 손잡이 끌기: 트랙 줄 위쪽 반에 놓으면 그 앞, 아래쪽 반이면 그 뒤, 악보 줄에 놓으면 그 악보 끝으로.
-   * 마우스·펜·손가락 모두 같은 포인터 이벤트로 받는다 (HTML 끌어 놓기는 iPad에서 길게 누르기와 겹친다)
+   * 끌어 옮기기: 트랙 줄 위쪽 반에 놓으면 그 앞, 아래쪽 반이면 그 뒤, 악보 줄에 놓으면 그 악보 끝으로.
+   * 손잡이는 마우스·펜·손가락 모두 누르자마자 끈다 (HTML 끌어 놓기는 iPad에서 길게 누르기와 겹친다).
+   * 마우스는 줄 어디든 누른 채 조금 움직이면 끈다. 손가락·펜은 줄을 끌면 목록이 굴러가야 하므로 손잡이로만 끈다
    */
-  let drag = $state<{ trackId: string; pointerId: number; over?: { playerId: string; index: number; rowId: string; after: boolean } | undefined } | undefined>(undefined);
+  let drag = $state<{ trackId: string; pointerId: number; over?: DropSpot | undefined } | undefined>(undefined);
+  /** 마우스로 줄을 눌렀지만 아직 끌기로 볼 만큼 움직이지 않은 상태 */
+  let pending: { trackId: string; pointerId: number; clientX: number; clientY: number } | undefined;
   let listEl: HTMLDivElement;
 
   function startDrag(e: PointerEvent, trackId: string) {
@@ -111,30 +115,43 @@
     drag = { trackId, pointerId: e.pointerId };
   }
 
-  /** 놓을 자리: 그 연주자 트랙 중 몇 번째 (끄는 트랙을 뺀 순서) */
-  function dropAt(e: PointerEvent): NonNullable<typeof drag>["over"] {
-    if (!drag) return undefined;
-    const el = document.elementFromPoint(e.clientX, e.clientY)?.closest<HTMLElement>("[data-drop]");
-    if (!el || !listEl.contains(el)) return undefined;
-    const playerId = el.dataset.player!;
-    const others = song.tracks.filter((tr) => tr.playerId === playerId && tr.id !== drag!.trackId).map((tr) => tr.id);
-    if (el.dataset.drop === "score") {
-      // 악보 줄: 그 게임 악보(묶음)의 마지막 트랙 뒤
-      const group = groups.find((g) => g.number === Number(el.dataset.score));
-      const tail = group ? [...group.trackIds].reverse().find((id) => id !== drag!.trackId) : undefined;
-      const index = tail ? others.indexOf(tail) + 1 : others.length;
-      return { playerId, index, rowId: el.dataset.row!, after: true };
+  /** 트랙 줄 누르기: 터치는 길게 누르기 메뉴, 마우스는 끌기 준비 */
+  function rowDown(e: PointerEvent, track: Track, playerId: string) {
+    press(e, track, playerId);
+    pending = undefined;
+    if (e.pointerType !== "mouse" || e.button !== 0 || drag || isDragExempt(e.target, e.currentTarget as Element)) return;
+    pending = { trackId: track.id, pointerId: e.pointerId, clientX: e.clientX, clientY: e.clientY };
+  }
+
+  function rowMove(e: PointerEvent) {
+    pressMove(e);
+    if (pending && e.pointerId === pending.pointerId && !drag) {
+      // 단추 밖에서 마우스를 놓으면 pointerup이 여기 오지 않는다. 버튼이 안 눌린 채 돌아오면 남은 누름을 버린다
+      if ((e.buttons & 1) === 0) {
+        pending = undefined;
+        return;
+      }
+      if (!dragStarted(pending, e)) return;
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      getSelection()?.removeAllRanges();
+      drag = { trackId: pending.trackId, pointerId: pending.pointerId };
+      pending = undefined;
+      // 끌고 나서 손을 떼며 들어오는 click이 트랙을 고르지 않게
+      longPressed = true;
     }
-    const id = el.dataset.track!;
-    const r = el.getBoundingClientRect();
-    const after = e.clientY > r.top + r.height / 2;
-    if (id === drag.trackId) return { playerId, index: song.tracks.filter((tr) => tr.playerId === playerId).findIndex((tr) => tr.id === id), rowId: id, after };
-    return { playerId, index: others.indexOf(id) + (after ? 1 : 0), rowId: id, after };
+    moveDrag(e);
+  }
+
+  function rowUp(e: PointerEvent, cancel = false) {
+    release();
+    pending = undefined;
+    endDrag(e, cancel);
   }
 
   function moveDrag(e: PointerEvent) {
     if (!drag || e.pointerId !== drag.pointerId) return;
-    drag = { ...drag, over: dropAt(e) };
+    const target = dropTargetAt(listEl, e, "y");
+    drag = { ...drag, over: target && dropSpot(song.tracks, groups, drag.trackId, target) };
   }
 
   function endDrag(e: PointerEvent, cancel = false) {
@@ -142,6 +159,14 @@
     const { trackId, over } = drag;
     drag = undefined;
     if (!cancel && over) actions.move(trackId, over.playerId, over.index);
+  }
+
+  /** 끄는 중 Esc: 옮기지 않고 그만둔다 */
+  function onwindowkeydown(e: KeyboardEvent) {
+    if (e.key !== "Escape" || !drag) return;
+    e.preventDefault();
+    e.stopPropagation();
+    drag = undefined;
   }
 
   /** 끄는 동안 놓을 자리 표시와 막힌 자리 */
@@ -161,6 +186,8 @@
   }
 </script>
 
+<svelte:window onkeydowncapture={onwindowkeydown} />
+
 <div class="structure-list" class:dragging={!!drag} bind:this={listEl}>
   {#each groups as g (g.number)}
     {@const player = playerOf(g.playerId)}
@@ -171,9 +198,8 @@
       data-drop="score"
       data-player={g.playerId}
       data-score={g.number}
-      data-row="score-{g.number}"
-      class:drop-after={drag?.over?.rowId === `score-${g.number}`}
-      class:drop-blocked={drag?.over?.rowId === `score-${g.number}` && !!dropBlocked(g.playerId)}
+            class:drop-after={drag?.over?.rowId === scoreRowId(g.number)}
+      class:drop-blocked={drag?.over?.rowId === scoreRowId(g.number) && !!dropBlocked(g.playerId)}
       role="button"
       tabindex="0"
       aria-expanded={open}
@@ -232,10 +258,10 @@
             onclick={(e) => takeClick() && ((e.ctrlKey || e.metaKey) && actions.toggleLane ? actions.toggleLane(id) : e.altKey && actions.openSecond ? actions.openSecond(id) : actions.select(id))}
             onkeydown={(e) => rowKey(e, () => (e.altKey && actions.openSecond ? actions.openSecond(id) : actions.select(id)), track, g.playerId)}
             oncontextmenu={(e) => (e.preventDefault(), openMenu(e, track, g.playerId))}
-            onpointerdown={(e) => press(e, track, g.playerId)}
-            onpointerup={release}
-            onpointercancel={release}
-            onpointermove={pressMove}
+            onpointerdown={(e) => rowDown(e, track, g.playerId)}
+            onpointerup={(e) => rowUp(e)}
+            onpointercancel={(e) => rowUp(e, true)}
+            onpointermove={rowMove}
           >
             <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
             <span
@@ -273,7 +299,12 @@
               aria-pressed={!!view.locked}
               onclick={(e) => (e.stopPropagation(), actions.view(id, { locked: !view.locked }))}><Icon name={view.locked ? "lock" : "lock-open"} size={13} /></button
             >
-            <button class="ms" class:lit={track.mute} title={t("ui.mute")} onclick={(e) => (e.stopPropagation(), actions.listen(id, { mute: !track.mute }))}>{t("ui.muteShort")}</button>
+            <button
+              class="ms"
+              class:lit={track.mute}
+              title={t("ui.muteAllHelp")}
+              onclick={(e) => (e.stopPropagation(), e.shiftKey ? actions.listenAll({ kind: track.mute ? "unmute" : "mute" }) : actions.listen(id, { mute: !track.mute }))}>{t("ui.muteShort")}</button
+            >
             <button class="ms" class:lit={track.solo} title={t("ui.solo")} onclick={(e) => (e.stopPropagation(), actions.listen(id, { solo: !track.solo }))}>{t("ui.soloShort")}</button>
             <span class="bar" class:over={count > charLimit} title={`${count} / ${charLimit}`}>
               <span style:width="{Math.min(100, (count / charLimit) * 100)}%"></span>
@@ -360,8 +391,12 @@
     }
   }
   .dragging,
-  .dragging .grip {
+  .dragging .grip,
+  .dragging .track-row,
+  .dragging .score-row {
     cursor: grabbing;
+    user-select: none;
+    -webkit-user-select: none;
   }
   .lifted {
     opacity: 0.5;

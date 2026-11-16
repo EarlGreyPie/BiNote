@@ -4,6 +4,7 @@
   import { diag, instrumentName, t } from "./i18n.svelte";
   import Icon from "./Icon.svelte";
   import InlineName from "./InlineName.svelte";
+  import type { ListenAll } from "./listenAll";
   import MmlEditor from "./MmlEditor.svelte";
 
   /** 편집기 하나: 머리 줄(이름·악기·음 수·글자 수·검사)과 고른 트랙의 MML 글 */
@@ -33,6 +34,8 @@
     /** 팩 고르기 (undefined면 자동) */
     onpack?: ((pack: string | undefined) => void) | undefined;
     onlisten: (change: { mute?: boolean; solo?: boolean }) => void;
+    /** M을 Shift+클릭하면 모든 트랙을 함께 끄거나 켠다 (없으면 이 트랙만) */
+    onlistenall?: ((how: ListenAll) => void) | undefined;
     /** 글 저장. trackId는 그 편집기를 연 트랙 (트랙을 바꾸는 순간 남은 입력이 새 트랙에 들어가지 않게) */
     onedit: (trackId: string, text: string) => void;
     onundo: () => void;
@@ -54,7 +57,7 @@
     onclose?: (() => void) | undefined;
   }
 
-  let { track, index, text, diagnostics, color, instrument, instrumentLabel, pack, packLabels = [], charLimit, exportCount, showListen, reveal, playing, follow = false, oninstrument, onpack, onlisten, onedit, onundo, onredo, ongodiag, oncursor, accidental, onrename, onclose, locked = false, onlock, hold = false }: Props = $props();
+  let { track, index, text, diagnostics, color, instrument, instrumentLabel, pack, packLabels = [], charLimit, exportCount, showListen, reveal, playing, follow = false, oninstrument, onpack, onlisten, onlistenall, onedit, onundo, onredo, ongodiag, oncursor, accidental, onrename, onclose, locked = false, onlock, hold = false }: Props = $props();
 
   const count = $derived(exportCount ?? text.length);
   const over = $derived(count > charLimit);
@@ -104,7 +107,12 @@
     <span class={over ? "over" : "muted"} title={t("ui.exportCharsHelp")}>{count} / {charLimit}</span>
     <span class="spacer"></span>
     {#if showListen}
-      <button class="ms" class:lit={track.mute} title={t("ui.mute")} onclick={() => onlisten({ mute: !track.mute })}>{t("ui.muteShort")}</button>
+      <button
+        class="ms"
+        class:lit={track.mute}
+        title={onlistenall ? t("ui.muteAllHelp") : t("ui.mute")}
+        onclick={(e) => (e.shiftKey && onlistenall ? onlistenall({ kind: track.mute ? "unmute" : "mute" }) : onlisten({ mute: !track.mute }))}>{t("ui.muteShort")}</button
+      >
       <button class="ms" class:lit={track.solo} title={t("ui.solo")} onclick={() => onlisten({ solo: !track.solo })}>{t("ui.soloShort")}</button>
     {/if}
     {#if onlock}

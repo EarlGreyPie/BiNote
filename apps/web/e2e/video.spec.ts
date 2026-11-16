@@ -217,3 +217,48 @@ test("속도 자동 재기 중에 재생을 시작하면 재기를 그만두고 
   await expect(page.getByText(/영상 속도 \d+px\/초|움직임을 찾지 못했어요/)).toHaveCount(0);
   expect((await savedVideo(page, testInfo.outputPath("play.mme"))).speed).toBeUndefined();
 });
+
+test("원곡 고정을 켜면 파형 띠를 끌어도 원곡 어긋남이 바뀌지 않고, 어긋남 칸·단추도 잠긴다", async ({ page }) => {
+  await openApp(page);
+  await pasteAsNewSong(page, "MML@t120l4cdefgab>c;");
+  await openReference(page);
+  const offset = page.getByLabel("어긋남(ms, 원곡이 늦으면 +)", { exact: true });
+  const canvas = page.locator(".roll canvas").first();
+  const box = (await canvas.boundingBox())!;
+  // 마디 번호 줄 바로 아래가 파형 띠다. 마디선을 잡지 않게 마디 가운데쯤에서 끈다
+  const findWaveY = async () => {
+    const x0 = box.x + box.width * 0.45;
+    let y = box.y;
+    // 파형 띠 높이를 몰라도 되게: 위에서부터 내려가며 "grab" 손 모양이 되는 줄을 찾는다
+    for (let dy = 4; dy < 120; dy += 4) {
+      await page.mouse.move(x0, box.y + dy);
+      if ((await canvas.evaluate((c) => (c as HTMLCanvasElement).style.cursor)) === "grab") {
+        y = box.y + dy;
+        break;
+      }
+    }
+    return y;
+  };
+  const y = await findWaveY();
+  expect(y).toBeGreaterThan(box.y);
+  await page.mouse.move(box.x + box.width * 0.45, y);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.55, y, { steps: 5 });
+  await page.mouse.up();
+  const moved = await offset.inputValue();
+  expect(moved).not.toBe("0");
+
+  await page.getByRole("button", { name: "원곡 고정" }).click();
+  await expect(offset).toBeDisabled();
+  await expect(page.getByRole("button", { name: "+10", exact: true })).toBeDisabled();
+  await page.mouse.move(box.x + box.width * 0.45, y);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.6, y, { steps: 5 });
+  await page.mouse.up();
+  await expect(offset).toHaveValue(moved);
+  // 다시 열어도 기억한다
+  await openApp(page);
+  await pasteAsNewSong(page, "MML@t120l4cdefgab>c;");
+  await openReference(page);
+  await expect(offset).toBeDisabled();
+});

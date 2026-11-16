@@ -1,4 +1,5 @@
 import type { Track } from "@mmlce/core";
+import type { ListenAll } from "./listenAll";
 import type { TrackViewState } from "./projectEditor";
 
 /** 구조 목록·트랙 띠·오른쪽 클릭 메뉴가 같이 쓰는 트랙·악보 조작 */
@@ -18,6 +19,10 @@ export interface TrackActions {
   trackPack(trackId: string, pack: string | undefined): void;
   /** 끄기·솔로 (듣는 방법이라 실행 취소에 안 들어간다) */
   listen(trackId: string, change: { mute?: boolean; solo?: boolean }): void;
+  /** 모든 트랙 끄기·켜기, 이 트랙만 켜기 (끄기·솔로처럼 실행 취소에 안 들어간다) */
+  listenAll(how: ListenAll): void;
+  /** 이 방법으로 바꿀 것이 있는지 (지금 곡 기준, 메뉴 항목을 막을 때) */
+  canListenAll(how: ListenAll): boolean;
   /** 눈(롤에서 숨김)·잠금(편집 막기). 실행 취소에 안 들어간다 */
   viewOf(trackId: string): TrackViewState;
   view(trackId: string, change: { hidden?: boolean; locked?: boolean }): void;
