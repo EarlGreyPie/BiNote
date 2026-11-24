@@ -17,6 +17,8 @@ export interface PlayOptions {
   readonly countIn?: boolean;
   /** 메트로놈을 울리지 않는다 (고친 자리 짧게 듣기) */
   readonly noClicks?: boolean;
+  /** 원곡을 함께 틀지 않는다 (병합 칸 미리 듣기: 지금 곡이 아닌 곡을 들을 때) */
+  readonly noReference?: boolean;
 }
 
 /**
@@ -118,7 +120,7 @@ export class Playback {
     // 예비박 한 마디만큼 비우고 시작한다. 반복 구간 가운데서 이어 재생하면(offset) 예비박을 두지 않는다
     const counting = options.record || (options.countIn && offset === 0);
     const lead = counting ? { leadIn: countIn(song, from ?? ZERO).seconds / rate, endless: !!options.record } : undefined;
-    const result = await this.engine.play(song, from, loopSeconds && loopSeconds > 0 ? loopSeconds : undefined, rate, offset, lead);
+    const result = await this.engine.play(song, from, loopSeconds && loopSeconds > 0 ? loopSeconds : undefined, rate, offset, lead, !!options.noReference);
     if (generation !== this.generation) return false;
     this.pending = undefined;
     this.heard = options.record || options.noClicks ? undefined : song;

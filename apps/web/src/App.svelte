@@ -318,7 +318,7 @@
   import MidiDialog from "./lib/MidiDialog.svelte";
   import TranscribeDialog from "./lib/TranscribeDialog.svelte";
   import { BASIC_SCRIPTOR_ON, pcEnvironmentNow } from "./lib/basicScriptor";
-  import { analyzeMidi, decodeXml, isZip, looksLikeMusicXml, readMusicXml, readMxl, readSmf, songToMusicXml, songToSmf, writeSmf, type MidiAnalysis, type MusicXmlReport } from "@mmlce/midi";
+  import { analyzeMidi, decodeXml, isZip, looksLikeMusicXml, readMusicXml, readMxl, readSmf, songToMusicXml, songToSmfReport, writeSmf, type MidiAnalysis, type MusicXmlReport } from "@mmlce/midi";
   import {
     allowedWhileTyping,
     commandFor,
@@ -3475,6 +3475,38 @@
       }, Math.max(0, seconds) * 1000 + 150);
     });
   }
+  /**
+   * 병합 칸 "들어 보기": 지금 곡이 아닌 곡(병합 전·후·빠지는 음만)을 들려준다. 곡·실행 취소·반복 구간·커서는 바꾸지 않는다.
+   * 메트로놈·예비박·원곡 소리는 내지 않는다. range가 있으면 그 마디 구간만 되풀이하고(앱 반복 구간은 쓰지 않는다),
+   * 없으면 커서 자리(from을 주면 거기)부터, 앱 반복 구간이 켜져 있으면 그 구간을 되풀이한다.
+   * keep: 미리 듣는 중이면 지금 들리던 자리에서 그 소리로 이어 간다 (단추 바꾸기)
+   */
+  let previewRun = $state<number | undefined>(undefined);
+  /** 마지막으로 요청한 미리 듣기 곡. 아직 소리를 준비 중일 때(playback.pending이 이 곡) 창을 닫아도 그 요청을 멈추려고 둔다 */
+  let previewPending: Song | undefined;
+  const previewing = $derived(playback.playing && previewRun !== undefined && previewRun === playback.runs);
+  async function listenPreview(target: Song, opts: { from?: Rat | undefined; range?: readonly [Rat, Rat] | undefined; keep?: boolean }) {
+    // MIDI 건반 녹음 중에는 듣지 않는다 (녹음을 끝내 버리므로)
+    if (recordStatus) return false;
+    clearTimeout(offgridTimer);
+    offgridTimer = undefined;
+    const seconds = opts.keep && previewing ? playback.now() : undefined;
+    const range = opts.range ? ([toFloat(opts.range[0]), toFloat(opts.range[1])] as const) : loop;
+    const start = range ? undefined : seconds !== undefined ? secondsToWhole(target.tempo, seconds) : opts.from ? toFloat(opts.from) : cursor;
+    previewRun = undefined;
+    previewPending = target;
+    const ok = await playback.play(target, start, range, playRate, range ? seconds : undefined, { noClicks: true, noReference: true });
+    // 준비하는 사이 멈추거나 다른 재생을 시작했으면 playback.play가 false를 돌려주므로 previewRun을 되살리지 않는다
+    if (ok) previewRun = playback.runs;
+    return ok;
+  }
+  /** 병합 칸 미리 듣기를 멈춘다 (준비 중인 미리 듣기도 멈춘다. 다른 재생이면 그대로 둔다) */
+  function stopPreview() {
+    const preparing = previewPending !== undefined && playback.pending?.song === previewPending;
+    if (previewing || preparing) stop();
+    previewRun = undefined;
+    previewPending = undefined;
+  }
   /** 고친 자리 앞뒤 한 박씩을 원래대로 또는 고친 대로 들려준다 (곡 전체 트랙을 같이) */
   function listenOffgrid(fix: OffgridFix, fixed: boolean) {
     if (!song) return;
@@ -5109,7 +5141,11 @@
   function saveMidi() {
     if (!song) return;
     // 번호로만 적힌 추가 팩 악기는 재생처럼 올린 팩에서 찾은 실제 악기의 GM 번호로 낸다
-    void store(writeSmf(songToSmf(song, 480, profile.volume.max, "gm", { canonicalOf: engine.canonicalOf })), `${baseName()}.mid`);
+    const { smf, notices: lost } = songToSmfReport(song, 480, profile.volume.max, "gm", { canonicalOf: engine.canonicalOf });
+    void store(writeSmf(smf), `${baseName()}.mid`);
+    // 그대로 옮기지 못한 것(접은 높이, 채널이 모자라 나누지 못한 겹침)을 알린다
+    notices = lost;
+    offerUtf8 = false;
   }
 
   function saveMmi() {
@@ -6559,14 +6595,24 @@
     chars={exportCount?.song === song ? exportCount.chars : undefined}
     {chordsOf}
     tab={fitOpen.tab}
-    ontab={(tab) => fitOpen && (fitOpen = { ...fitOpen, tab })}
+    ontab={(tab) => {
+      if (fitOpen && fitOpen.tab !== tab) stopPreview();
+      if (fitOpen) fitOpen = { ...fitOpen, tab };
+    }}
     spreadSource={fitOpen.source}
     where={scoreLabel}
     {newScoreOnAdd}
     onseek={seekTo}
     onaddtrack={addSpreadTrack}
-    onapply={applyChordTool}
+    onapply={(command) => {
+      stopPreview();
+      applyChordTool(command);
+    }}
+    listening={previewing}
+    onlisten={listenPreview}
+    onstoplisten={stopPreview}
     onclose={() => {
+      stopPreview();
       fitOpen = undefined;
       booksRunner.cancel();
       fewer = undefined;
@@ -6603,6 +6649,7 @@
     {profile}
     {chordsOf}
     copied={exportCopied}
+    {colors}
     oncopied={(stamps) => (exportCopied = stamps)}
     ontrack={(id) => (activeTrackId = id)}
     onseek={seekTo}

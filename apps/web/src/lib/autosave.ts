@@ -79,10 +79,17 @@ export class AutosaveQueue<T> {
     }
     const save = prepare(current);
     const done = this.tracker.begin(current);
-    const job = this.queue.then(save).then((ok) => {
-      done(ok);
-      if (!ok) throw new Error("autosave failed");
-    });
+    const job = this.queue.then(save).then(
+      (ok) => {
+        done(ok);
+        if (!ok) throw new Error("autosave failed");
+      },
+      (error: unknown) => {
+        // 저장이 예외를 내도 실패로 끝내야 같은 상태를 다시 적을 수 있다 (적는 중으로 남으면 다시 부르지 않는다)
+        done(false);
+        throw error;
+      },
+    );
     // 한 번 실패해도 다음 저장은 이어서 한다
     this.queue = job.catch(() => {});
     this.last = { state: current, job };

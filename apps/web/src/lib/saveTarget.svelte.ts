@@ -1,4 +1,5 @@
 import { loadStored, saveStored } from "./persist";
+import { openPickerTypes } from "./fileAccept";
 import { SaveStartup, type SaveMode } from "./saveStartup";
 import { freeName } from "./saveName";
 import { saveProjectFile, type SavedFile, type SaveOutcome } from "./projectSave";
@@ -373,7 +374,8 @@ export async function pickOpenFile(extensions: readonly string[]): Promise<{ fil
   const pick = openPicker();
   if (!pick || !canOpenFile) return undefined;
   try {
-    const [handle] = await pick({ id: "binote-open", types: [{ description: "BiNote", accept: { "application/octet-stream": [...extensions] } }] });
+    const types = openPickerTypes("BiNote", extensions);
+    const [handle] = await pick({ id: "binote-open", ...(types ? { types } : {}) });
     if (!handle) return "cancelled";
     return { file: await handle.getFile(), handle };
   } catch (e) {

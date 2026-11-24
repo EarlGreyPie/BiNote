@@ -556,6 +556,28 @@ export function chainFadeEnd(
   return Math.min(fade, chainSampleEnd(profile, instrument, steps));
 }
 
+/**
+ * 붙임 사슬이 at초에 샘플 안 어디까지 왔는지(초, 구간 첫 음 높이로 돌렸을 때의 길이 단위. SampleZone.seconds와 같은 단위).
+ * chainSampleEnd와 같은 식이다. 게임은 경계를 넘어 붙인 음에서 새 구간 샘플로 바꿔 타되 이 위치를 이어 간다(실측).
+ * 샘플 구간을 모르는 높이를 지나면 그동안은 위치가 늘지 않는다
+ */
+export function chainSamplePosition(
+  profile: GameProfile,
+  instrument: string | undefined,
+  steps: readonly { readonly at: number; readonly pitch: number }[],
+  at: number,
+): number {
+  let pos = 0;
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i]!;
+    if (step.at >= at) break;
+    const until = Math.min(at, steps[i + 1]?.at ?? Infinity);
+    const zone = sampleZoneAt(profile, instrument, step.pitch);
+    if (zone) pos += (until - step.at) * 2 ** ((step.pitch - zone.from) / 12);
+  }
+  return pos;
+}
+
 /** 샘플 안 위치가 구간 길이(zoneAt이 주는 seconds)에 닿는 시각. 구간을 모르는 높이에서는 끝나지 않는다 */
 function chainPositionEnd(
   steps: readonly { readonly at: number; readonly pitch: number }[],

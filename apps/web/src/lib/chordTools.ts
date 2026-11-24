@@ -1,5 +1,5 @@
-import { add, cmp, toFloat, ZERO, type GameProfile, type Rat, type Song } from "@mmlce/core";
-import { soundGroups, trackSource, type MergeLevel } from "@mmlce/mml";
+import { add, barAt, barBounds, cmp, positionToSeconds, toFloat, ZERO, type GameProfile, type Note, type Rat, type Song, type Track } from "@mmlce/core";
+import { soundGroups, trackSource, type MergeLevel, type MergeTracksPlan } from "@mmlce/mml";
 
 /**
  * 화음 분산·병합 창(곡 메뉴)이 함께 쓰는 계산. 곡을 바꾸지 않는다 (바꾸는 명령은 @mmlce/mml spread·merge-tracks).
@@ -50,6 +50,13 @@ export const MERGE_LEVELS: readonly MergeLevel[] = [1, 2, 3];
 /** 화음 병합 단계 기억 */
 export const MERGE_LEVEL_KEY = "mmlce.mergeLevel";
 
+/** 화음 병합 "트랙은 남기고 옮길 수 있는 음만 몰기" 기억 (기본 꺼짐) */
+export const MERGE_PARTIAL_KEY = "mmlce.mergePartial";
+
+export function parseMergePartial(raw: string | null): boolean {
+  return raw === "1";
+}
+
 export function parseMergeLevel(raw: string | null): MergeLevel {
   return raw === "2" ? 2 : raw === "3" ? 3 : 1;
 }
@@ -72,4 +79,78 @@ export function songEnd(song: Song): Rat {
 export function spanX(at: Rat, end: Rat): number {
   const e = toFloat(end);
   return e > 0 ? Math.min(1, Math.max(0, toFloat(at) / e)) : 0;
+}
+
+/** 병합 칸 "들어 보기": 병합 전(지금 곡) · 병합 후(적용하면 될 곡) · 빠지는 음만 */
+export type MergeListenMode = "before" | "after" | "dropped";
+
+/** 끄기·솔로를 풀어 꼭 들리게 한다 (안 들리는 것을 판단하게 두지 않는다) */
+const audible = (t: Track): Track => (t.mute || t.solo ? { ...t, mute: false, solo: false } : t);
+
+/**
+ * 병합 칸에서 들을 곡. 곡은 바꾸지 않고 새 곡을 만든다 (음 객체와 시간은 그대로 쓴다, 다시 셈하거나 반올림하지 않는다).
+ * - before: 지금 곡, after: 병합 결과 곡 (빠진 음과 v를 올린 음이 함께 들린다)
+ * - dropped: 묶음 트랙마다 빠지는 음만 남긴 지금 곡 (원래 트랙의 악기·v 그대로)
+ * groupOnly(이 트랙들만)거나 dropped면 묶음 밖 트랙은 빼고 묶음 트랙은 끄기·솔로를 푼다. 템포·박자·연주자는 그대로
+ */
+export function mergeListenSong(song: Song, result: Pick<MergeTracksPlan, "song" | "dropped">, ids: readonly string[], mode: MergeListenMode, groupOnly: boolean): Song {
+  const group = new Set(ids);
+  if (mode === "dropped") {
+    const gone = new Set(result.dropped.map((d) => d.note));
+    const tracks = song.tracks
+      .filter((t) => group.has(t.id))
+      .map((t) => {
+        const { mml: _mml, ...rest } = t;
+        return audible({ ...rest, notes: t.notes.filter((n) => gone.has(n)) });
+      });
+    return { ...song, tracks };
+  }
+  const base = mode === "before" ? song : result.song;
+  if (!groupOnly) return base;
+  return { ...base, tracks: base.tracks.filter((t) => group.has(t.id)).map(audible) };
+}
+
+/** 마디로 듣기 한 구간: bar~lastBar 마디 (빠지는 음이 마디선을 넘으면 끝나는 마디까지). from은 짧으면 앞 마디를 붙인 시작 */
+export interface ListenBar {
+  readonly bar: number;
+  readonly lastBar: number;
+  readonly from: Rat;
+  readonly to: Rat;
+}
+
+/**
+ * 빠지는 음이 있는 마디 구간 (마디 순). 같은 마디에서 시작하는 음은 한 구간이고, 마디선을 넘는 음은 끝나는 마디까지 넣는다.
+ * 구간이 minSeconds보다 짧으면(짧은 마디·빠른 곡) 앞 마디 하나를 더 붙여 되풀이 사이가 숨 가쁘지 않게 한다
+ */
+export function droppedBars(song: Song, notes: readonly Note[], minSeconds = 2): ListenBar[] {
+  const last = new Map<number, number>();
+  for (const n of notes) {
+    const first = barAt(song.timeSig, n.start);
+    const end = add(n.start, n.dur);
+    let to = barAt(song.timeSig, end);
+    // 마디선에서 끝나는 음은 그 마디까지 (다음 마디는 넣지 않는다)
+    if (to > first && cmp(barBounds(song.timeSig, to)[0], end) >= 0) to--;
+    last.set(first, Math.max(last.get(first) ?? first, to));
+  }
+  return [...last]
+    .sort((a, b) => a[0] - b[0])
+    .map(([bar, lastBar]) => {
+      let from = barBounds(song.timeSig, bar)[0];
+      const to = barBounds(song.timeSig, lastBar)[1];
+      if (bar > 1 && positionToSeconds(song.tempo, to) - positionToSeconds(song.tempo, from) < minSeconds) from = barBounds(song.timeSig, bar - 1)[0];
+      return { bar, lastBar, from, to };
+    });
+}
+
+/** 그 음이 든 마디 구간 번호 (droppedBars 안). 없으면 -1 */
+export function listenBarOf(bars: readonly ListenBar[], song: Song, note: Note): number {
+  const bar = barAt(song.timeSig, note.start);
+  return bars.findIndex((b) => b.bar === bar);
+}
+
+/** "빠지는 음만" 시작 자리: 커서 뒤 첫 빠지는 음이 있는 마디 첫머리 (없으면 첫 빠지는 음의 마디) */
+export function droppedListenStart(song: Song, notes: readonly Note[], cursor: Rat | undefined): Rat | undefined {
+  const starts = [...notes].map((n) => n.start).sort(cmp);
+  const first = (cursor ? starts.find((s) => cmp(s, cursor) >= 0) : undefined) ?? starts[0];
+  return first ? barBounds(song.timeSig, barAt(song.timeSig, first))[0] : undefined;
 }

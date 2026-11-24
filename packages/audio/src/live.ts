@@ -1,5 +1,5 @@
 import type { SlotPatch } from "./patches.js";
-import { BEND_RANGE, type PlaybackEvent, type Schedule } from "./schedule.js";
+import { BEND_RANGE, EVENT_ORDER, type PlaybackEvent, type Schedule } from "./schedule.js";
 
 /**
  * 실시간 재생이 소리를 보내는 곳. 브라우저에서는 AudioWorklet 신스가 이 모양을 갖추고,
@@ -21,6 +21,11 @@ export interface LiveSink {
    * 같은 시각에 먼저 넣은 켜기 뒤에 처리되어야 한다. 없으면 noteOff로 대신한다
    */
   cut?(channel: number, time: number): void;
+  /**
+   * 채널 소리 크기(MIDI Expression, 0~127). 음색 경계를 넘는 붙임에서 새 구간 음을 소리 없이 미리 칠 때 쓴다.
+   * 없으면 미리 친 음이 들리므로 실제 신스는 갖춰야 한다 (시험용 가짜는 없어도 된다)
+   */
+  setExpression?(channel: number, value: number, time: number): void;
   /** 울리는 소리를 모두 끈다 */
   silence(): void;
 }
@@ -45,9 +50,6 @@ const STOP_GUARD = 0.03;
 
 /** 이어 붙인 일정의 이벤트. channel이 있으면 그 채널로 보낸다 (바꾸기 전에 켠 음의 끄기) */
 type LiveEvent = PlaybackEvent & { readonly channel?: number };
-
-/** 같은 시각이면 끄기 → 높이 되돌리기 → 켜기 (buildSchedule과 같은 순서) */
-const EVENT_ORDER = { off: 0, bend: 1, on: 2 } as const;
 
 const defaultTimers: TimerHost = {
   setInterval: (fn, ms) => globalThis.setInterval(fn, ms),
@@ -82,6 +84,8 @@ export class LivePlayer {
   private future: { channel: number; note: number; at: number }[] = [];
   /** 높이를 옮겨 둔 채널 → 옮긴 반음 수 (보낸 예약 기준) */
   private bent = new Map<number, number>();
+  /** 소리를 줄여 둔 채널 (음색 경계 바꿔 타기에서 미리 친 음) */
+  private muted = new Set<number>();
   private readonly lookahead: number;
   private readonly intervalMs: number;
   private readonly startDelay: number;
@@ -162,6 +166,8 @@ export class LivePlayer {
       this.sink.setGain?.(p.channel, p.gain ?? 1);
       this.sink.setBendRange(p.channel, BEND_RANGE, patchAt);
       this.sink.pitchBend(p.channel, 0, patchAt);
+      // 앞 재생이 바꿔 타기 가운데 멈췄으면 소리를 줄여 둔 채로 남아 있을 수 있다
+      this.sink.setExpression?.(p.channel, 127, patchAt);
     }
     this.tick();
     this.handle = this.timers.setInterval(() => this.tick(), this.intervalMs);
@@ -198,6 +204,7 @@ export class LivePlayer {
     this.future = [];
     this.sounding.clear();
     this.bent.clear();
+    this.muted.clear();
     this.schedule = undefined;
   }
 
@@ -221,9 +228,15 @@ export class LivePlayer {
       const boundary = this.origin + this.loop / this.rate;
       this.quietAfter = Math.max(this.quietAfter, boundary);
       for (const s of this.sounding.values()) this.sink.noteOff(s.channel, s.note, boundary);
+      // 소리를 줄여 둔 채널(미리 친 음)은 되돌리기 전에 끝소리 없이 끊는다. 아니면 끝소리가 들린다
+      for (const ch of this.muted) {
+        this.sink.cut?.(ch, boundary);
+        this.sink.setExpression?.(ch, 127, boundary);
+      }
       for (const ch of this.bent.keys()) this.sink.pitchBend(ch, 0, boundary);
       this.sounding.clear();
       this.bent.clear();
+      this.muted.clear();
       this.origin = boundary;
       this.index = 0;
       // 다음 회차는 이어 붙이기 없이 지금 일정 그대로
@@ -252,6 +265,8 @@ export class LivePlayer {
   replace(schedule: Schedule, patches: readonly SlotPatch[]): boolean {
     const old = this.schedule;
     if (!old || schedule.slots.length !== old.slots.length) return false;
+    // 음색 경계 바꿔 타기(소리 지점 둘을 함께 쓰는 사슬)는 이어 붙이지 않고 지금 자리부터 다시 재생한다
+    if (hasZoneSwitch(old) || hasZoneSwitch(schedule)) return false;
     const sentUntil = this.sentUntil;
     const now = this.sink.currentTime;
     const changeAt = Math.max(now, this.origin + Math.max(0, sentUntil) / this.rate);
@@ -369,9 +384,22 @@ export class LivePlayer {
       this.sink.noteOn(channel, e.note, e.velocity, at);
       this.sounding.set(key, { channel, note: e.note, at });
       this.future.push({ channel, note: e.note, at });
+    } else if (e.type === "mute" || e.type === "unmute") {
+      this.sink.setExpression?.(channel, e.type === "mute" ? 0 : 127, at);
+      if (e.type === "mute") this.muted.add(channel);
+      else this.muted.delete(channel);
+    } else if (e.type === "cut") {
+      if (this.sink.cut) this.sink.cut(channel, at);
+      else this.sink.noteOff(channel, e.note, at);
+      this.sounding.delete(key);
     } else {
       this.sink.noteOff(channel, e.note, at);
       this.sounding.delete(key);
     }
   }
+}
+
+/** 음색 경계 바꿔 타기가 들어 있는 일정인지 */
+function hasZoneSwitch(schedule: Schedule): boolean {
+  return schedule.events.some((e) => e.type === "mute" || e.type === "cut");
 }

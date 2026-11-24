@@ -210,11 +210,15 @@ async function authed<T>(fetchImpl: Fetch, port: number, path: string, init: Req
   }, signal);
 }
 
-/** 음원을 보내 받아 적기를 시작한다. 일 번호를 돌려준다 */
+/**
+ * 음원을 보내 받아 적기를 시작한다. 일 번호를 돌려준다.
+ * 2xx가 아니면 상태 번호와 상관없이(400·413·415·408·429·503 등) 답의 message를 그대로 오류로 올린다. code 같은 다른 필드는 읽지 않는다
+ */
 export async function startJob(port: number, audio: Blob, name: string, options: ScriptorOptions, fetchImpl: Fetch = fetch, signal?: AbortSignal): Promise<string> {
+  // options를 음원보다 먼저 넣는다: 서버가 음원을 다 받기 전에 옵션·대기열을 보고 바로 거절할 수 있다
   const form = new FormData();
-  form.append("audio", audio, name);
   form.append("options", JSON.stringify(options));
+  form.append("audio", audio, name);
   return authed(fetchImpl, port, "/jobs", { method: "POST", body: form }, 120_000, async (res) => {
     if (!res.ok) throw new Error(asString(((await res.json().catch(() => ({}))) as Record<string, unknown>).message, `HTTP ${res.status}`));
     const id = asString(((await res.json()) as Record<string, unknown>).id);

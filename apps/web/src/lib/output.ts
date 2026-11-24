@@ -168,3 +168,55 @@ export function nextExportPick(scores: readonly { readonly trackIds: readonly st
   for (const s of left.slice(first + 1)) if (s.partial && s.rest.length > 0 && out.length + s.rest.length <= limit) out.push(...s.rest);
   return out;
 }
+
+/**
+ * MML로 내보내기 창의 "붙여넣는 순서" (MML@ 글의 칸 차례). custom이 아니면 늘 곡 순서(악보 차례, 그 안에서 트랙 차례)이고,
+ * 체크를 어떤 차례로 누르든 껐다 켜든 같다. 순서 목록에서 직접 옮겼을 때만 custom이 되어 그 순서를 따른다
+ */
+export interface PasteOrder {
+  readonly ids: readonly string[];
+  /** 직접 정한 순서 (곡 순서와 다르다) */
+  readonly custom: boolean;
+}
+
+/** ids를 곡 순서로 (songIds에 없는 id는 뒤에 그대로) */
+export function songOrdered(songIds: readonly string[], ids: readonly string[]): string[] {
+  return [...songIds.filter((id) => ids.includes(id)), ...ids.filter((id) => !songIds.includes(id))];
+}
+
+/** 곡 순서와 같아지면 직접 정한 순서를 푼다. 곡 순서일 때는 곡 순서로 다시 세운다 (곡에서 트랙을 옮긴 경우) */
+function settle(ids: readonly string[], custom: boolean, songIds: readonly string[]): PasteOrder {
+  const sorted = songOrdered(songIds, ids);
+  if (!custom || sorted.every((id, k) => id === ids[k])) return { ids: sorted, custom: false };
+  return { ids: [...ids], custom: true };
+}
+
+/** 고른 트랙의 순서 (곡 순서 또는 그대로) */
+export function pasteOrderOf(order: PasteOrder, songIds: readonly string[]): PasteOrder {
+  return settle(order.ids, order.custom, songIds);
+}
+
+/** 트랙 더하기. 곡 순서면 제자리에, 직접 정한 순서면 맨 뒤 칸에 (여럿이면 그들끼리 곡 순서로) */
+export function pasteOrderAdd(order: PasteOrder, add: readonly string[], songIds: readonly string[]): PasteOrder {
+  const fresh = songOrdered(songIds, add).filter((id, k, all) => !order.ids.includes(id) && all.indexOf(id) === k);
+  return settle([...order.ids, ...fresh], order.custom, songIds);
+}
+
+/** 트랙 빼기. 뒤 칸이 당겨진다 */
+export function pasteOrderRemove(order: PasteOrder, remove: readonly string[], songIds: readonly string[]): PasteOrder {
+  return settle(
+    order.ids.filter((id) => !remove.includes(id)),
+    order.custom,
+    songIds,
+  );
+}
+
+/** 한 칸 앞(-1)·뒤(1)로 옮기기. 옮기면 직접 정한 순서가 되고, 옮긴 결과가 곡 순서와 같으면 곡 순서로 돌아간다 */
+export function pasteOrderShift(order: PasteOrder, id: string, step: -1 | 1, songIds: readonly string[]): PasteOrder {
+  const list = [...order.ids];
+  const k = list.indexOf(id);
+  const j = k + step;
+  if (k < 0 || j < 0 || j >= list.length) return order;
+  [list[k], list[j]] = [list[j]!, list[k]!];
+  return settle(list, true, songIds);
+}

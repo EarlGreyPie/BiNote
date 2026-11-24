@@ -104,6 +104,10 @@ export async function renderPatched(
       if (!patch) continue;
       if (e.type === "bend") synth.pitchWheel(patch.channel, bendValue(e.bend ?? 0));
       else if (e.type === "on") synth.noteOn(patch.channel, e.note, e.velocity);
+      // 음색 경계 바꿔 타기: Expression(CC 11)으로 소리를 줄이고 되돌린다. 끊기는 All Sound Off(CC 120)
+      else if (e.type === "mute") synth.controllerChange(patch.channel, 11, 0);
+      else if (e.type === "unmute") synth.controllerChange(patch.channel, 11, 127);
+      else if (e.type === "cut") synth.controllerChange(patch.channel, 120, 0);
       else synth.noteOff(patch.channel, e.note);
     }
     const next = index < events.length ? Math.round(events[index]!.time * sampleRate) : total;

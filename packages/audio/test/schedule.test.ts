@@ -58,11 +58,12 @@ describe("buildSchedule", () => {
   });
 
   it("다른 음 붙임을 다시 칠지는 프로필 높이 차 한도(tieBendLimit)로 정한다", () => {
-    const tied = song([{ notes: [n("a", [0, 1], [1, 4], 60, { tie: "next" }), n("b", [1, 4], [1, 4], 64)] }]);
+    // 같은 음색 구간(피아노 64~76) 안: o4f&o4a
+    const tied = song([{ notes: [n("a", [0, 1], [1, 4], 65, { tie: "next" }), n("b", [1, 4], [1, 4], 69)] }]);
     expect(buildSchedule(tied, MOBILE_PROFILE).events.map((e) => e.type)).toEqual(["on", "bend", "off", "bend"]);
-    // 한도를 3반음으로 줄이면 4반음 위 e는 새로 친다
+    // 한도를 3반음으로 줄이면 4반음 위 a는 새로 친다
     expect(buildSchedule(tied, { ...MOBILE_PROFILE, tieBendLimit: 3 }).events.map((e) => [e.type, e.note])).toEqual([
-      ["on", 60], ["off", 60], ["on", 64], ["off", 64],
+      ["on", 65], ["off", 65], ["on", 69], ["off", 69],
     ]);
     // 신스 벤드 범위는 프로필 한도보다 좁으면 안 된다
     for (const profile of Object.values(PROFILES)) expect(BEND_RANGE, profile.id).toBeGreaterThanOrEqual(profile.tieBendLimit);

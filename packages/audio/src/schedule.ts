@@ -1,4 +1,5 @@
-import { add, chainSampleEnd, cmp, eq, foldPitch, soundingRangeOf, tempoClock, trackInstrument, type GameProfile, type Note, type Rat, type Song } from "@mmlce/core";
+import { add, chainSampleEnd, chainSamplePosition, cmp, eq, foldPitch, sampleZoneAt, soundingRangeOf, tempoClock, trackInstrument, type GameProfile, type Note, type Rat, type Song } from "@mmlce/core";
+import { CHANNELS } from "./patches.js";
 
 /** 신스에 보낼 소리 지점. 악기는 아직 실제 팩 번호가 아니라 공통 ID다 */
 export interface VoiceSlot {
@@ -12,8 +13,13 @@ export interface VoiceSlot {
 
 export interface PlaybackEvent {
   readonly time: number;
-  /** bend: 다른 음 붙임. 다시 치지 않고 울리던 음의 높이를 bend 반음만큼 옮긴다(게임 실측) */
-  readonly type: "on" | "off" | "bend";
+  /**
+   * bend: 다른 음 붙임. 다시 치지 않고 울리던 음의 높이를 bend 반음만큼 옮긴다(게임 실측).
+   * 아래 셋은 음색 경계를 넘는 붙임에만 쓴다 (buildSchedule의 "바꿔 타기"):
+   * cut: 그 소리 지점의 소리를 끝소리(릴리스) 없이 바로 끊는다. mute: 그 소리 지점 소리를 0으로 줄인다(음은 계속 돈다).
+   * unmute: 줄인 소리를 되돌린다
+   */
+  readonly type: "on" | "off" | "bend" | "cut" | "mute" | "unmute";
   readonly slot: number;
   readonly note: number;
   readonly velocity: number;
@@ -28,14 +34,27 @@ export interface PlaybackEvent {
  */
 export const BEND_RANGE = 24;
 
+/** 같은 시각 이벤트의 순서: 끄기·끊기 → 소리 줄이기·되돌리기 → 높이 옮기기 → 켜기 */
+export const EVENT_ORDER = { off: 0, cut: 0, mute: 1, unmute: 1, bend: 2, on: 3 } as const;
+
+/**
+ * 바꿔 타기에서 앞 소리 지점을 줄인 뒤 끊기까지의 틈(초). 신스는 음량을 한 처리 단위(128샘플 ≈ 3ms)에 걸쳐
+ * 바꾸므로, 그동안 줄어들게 두었다가 끊어야 "딱" 소리가 나지 않는다
+ */
+export const LANE_GAP = 0.004;
+
 /** 반음 → 14비트 피치 휠 값 (가운데 8192) */
 export function bendValue(semitones: number): number {
   return Math.max(0, Math.min(16383, Math.round(8192 + (semitones / BEND_RANGE) * 8192)));
 }
 
 export interface Schedule {
+  /**
+   * 들리는 트랙마다 하나씩(audibleTrackIds 순서). 음색 경계를 넘는 붙임이 있는 트랙은 그 뒤에 "바꿔 타기"용
+   * 소리 지점을 하나 더 받는다 (key = 트랙 키 + "#zone", 같은 악기). 채널이 모자라면 받지 않는다
+   */
   readonly slots: VoiceSlot[];
-  /** 시각 순. 같은 시각이면 off가 on보다 먼저 */
+  /** 시각 순. 같은 시각이면 off·cut → mute·unmute → bend → on */
   readonly events: PlaybackEvent[];
   /** 악보상 마지막 음이 끝나는 시각(초). 샘플이 먼저 끝나도 줄지 않는다 */
   readonly duration: number;
@@ -94,6 +113,9 @@ export function buildSchedule(song: Song, profile: GameProfile, options: Schedul
   const offset = from ? secondsAt(from) : 0;
   const anySolo = song.tracks.some((t) => t.solo);
   const slots: VoiceSlot[] = [];
+  /** 바꿔 타기용 소리 지점. 들리는 트랙의 소리 지점 뒤에 붙인다 (앞쪽 번호가 트랙 순서와 맞도록) */
+  const extraSlots: VoiceSlot[] = [];
+  const primaryCount = audibleTrackIds(song).length;
   const events: PlaybackEvent[] = [];
   let duration = 0;
 
@@ -114,15 +136,94 @@ export function buildSchedule(song: Song, profile: GameProfile, options: Schedul
     });
 
     let previousLegato = false;
+    // 바꿔 타기용 소리 지점 (처음 필요할 때 만든다)
+    let lane: number | undefined;
+    const laneSlot = (): number | undefined => {
+      if (lane !== undefined) return lane;
+      const index = primaryCount + extraSlots.length;
+      if (index >= CHANNELS.length) return undefined;
+      extraSlots.push({ ...slots[slot]!, key: `${key}#zone` });
+      lane = index;
+      return lane;
+    };
     // 다른 음 붙임 사슬: 첫 음을 계속 누른 채 높이만 옮긴다. 게임은 붙인 음의 샘플로 바꿔 타되 샘플 안 위치를
-    // 이어 가므로(실측), 사슬의 음들로 샘플 끝을 계산해(chainSampleEnd, 악보 진단과 같은 식) 그때 끊는다
-    let chain: { pitch: number; velocity: number; end: number; steps: { at: number; pitch: number }[]; offAt: number } | undefined;
+    // 이어 가므로(실측), 사슬의 음들로 샘플 끝을 계산해(chainSampleEnd, 악보 진단과 같은 식) 그때 끊는다.
+    // 신스는 친 건반의 샘플을 끝까지 쓰므로, 음색 경계(샘플 구간)를 넘을 때는 높이만 옮기면 앞 구간 샘플이
+    // 빨리 돌아 일찍 끝나고 음색도 다르다. 그래서 새 구간 음을 다른 소리 지점에서 소리 없이 미리 쳐서 게임의 샘플 안
+    // 위치까지 돌려 두었다가, 경계를 넘는 때에 그쪽 소리를 켜고 앞 소리를 끈다 (바꿔 타기)
+    type Chain = {
+      /** 사슬 첫 음(접은 높이). 붙임 한도(tieBendLimit)는 이 음에서 잰다 */
+      head: number;
+      /** 지금 소리 내는 소리 지점과 그곳에서 친 음 */
+      slot: number;
+      pitch: number;
+      velocity: number;
+      /** 지금 높이 */
+      end: number;
+      start: number;
+      steps: { at: number; pitch: number }[];
+      offAt: number;
+      /** 바꿔 타고 비운 소리 지점: at에 끊었다. 다시 쓰지 않으면 사슬 끝에서 소리·높이를 되돌린다 */
+      freed?: { slot: number; note: number; at: number };
+    };
+    let chain: Chain | undefined;
+    const restore = (freed: NonNullable<Chain["freed"]>) => {
+      const base = { slot: freed.slot, note: freed.note, velocity: 0, trackId: track.id, time: freed.at };
+      events.push({ ...base, type: "unmute" }, { ...base, type: "bend", bend: 0 });
+    };
     const closeChain = () => {
       if (!chain) return;
-      const base = { slot, note: chain.pitch, velocity: chain.velocity, trackId: track.id };
+      const base = { slot: chain.slot, note: chain.pitch, velocity: chain.velocity, trackId: track.id };
       events.push({ ...base, time: chain.offAt, type: "off" });
       if (chain.end !== chain.pitch) events.push({ ...base, time: chain.offAt, type: "bend", bend: 0 });
+      if (chain.freed) restore(chain.freed);
       chain = undefined;
+    };
+    /**
+     * 붙인 음(on초, 높이 pitch)에서 음색 구간이 바뀌면 다른 소리 지점으로 바꿔 탄다. 바꿔 탔으면 true.
+     * 채널이 모자라거나 틈이 너무 짧으면 false (예전처럼 높이만 옮긴다)
+     */
+    const switchZone = (c: Chain, on: number, off: number, pitch: number): boolean => {
+      const zone = sampleZoneAt(profile, instrument, pitch);
+      const before = sampleZoneAt(profile, instrument, c.end);
+      if (!zone || !before || zone.from === before.from) return false;
+      // 붙인 음이 너무 짧으면 끊기 전에 다음 음이 온다
+      if (off - on < LANE_GAP) return false;
+      const steps = [...c.steps, { at: on, pitch }];
+      // 새 구간 샘플이 이미 끝났으면 바꿔 탈 것이 없다 (소리는 on에서 끝난다)
+      if (chainSampleEnd(profile, instrument, steps) <= on) return false;
+      const extra = laneSlot();
+      if (extra === undefined) return false;
+      const target = c.slot === slot ? extra : slot;
+      // 미리 칠 소리 지점이 비는 때: 이 사슬에서 아직 안 썼으면 사슬 처음, 썼으면 앞서 끊은 때
+      const from = c.freed?.slot === target ? c.freed.at : c.start;
+      if (from >= on) return false;
+      // 게임이 on초에 닿는 샘플 안 위치. 미리 친 음이 그 위치에 닿도록 그동안 높이(재생 빠르기)를 맞춘다
+      const position = chainSamplePosition(profile, instrument, c.steps, on);
+      const rate = position / (on - from);
+      const lead = rate > 0 ? zone.from - pitch + 12 * Math.log2(rate) : -BEND_RANGE;
+      // 높이 옮기기 범위로 그 위치에 닿지 못하면(경계를 잇달아 넘어 비운 소리 지점의 틈이 짧을 때) 틀린 위치로
+      // 바꿔 타지 않고 예전처럼 높이만 옮긴다 (끝나는 때는 그대로 게임과 맞다)
+      if (rate > 0 && Math.abs(lead) > BEND_RANGE + 1e-9) return false;
+      const bend = Math.max(-BEND_RANGE, Math.min(BEND_RANGE, lead));
+      const shadow = { slot: target, note: pitch, velocity: c.velocity, trackId: track.id };
+      events.push({ ...shadow, time: from, type: "mute" });
+      if (bend !== 0) events.push({ ...shadow, time: from, type: "bend", bend });
+      events.push({ ...shadow, time: from, type: "on" });
+      // 경계에서: 새 소리를 켜고(높이 그대로) 앞 소리는 줄였다가 조금 뒤 끊는다
+      events.push({ ...shadow, time: on, type: "unmute" });
+      if (bend !== 0) events.push({ ...shadow, time: on, type: "bend", bend: 0 });
+      const old = { slot: c.slot, note: c.pitch, velocity: c.velocity, trackId: track.id };
+      events.push({ ...old, time: on, type: "mute" }, { ...old, time: on + LANE_GAP, type: "cut" });
+      // 앞서 비운 소리 지점을 다시 쓰지 않았으면 되돌린다 (다시 썼으면 지금 켰다)
+      if (c.freed && c.freed.slot !== target) restore(c.freed);
+      c.freed = { slot: c.slot, note: c.pitch, at: on + LANE_GAP };
+      c.slot = target;
+      c.pitch = pitch;
+      c.end = pitch;
+      c.steps = steps;
+      c.offAt = Math.min(off, chainSampleEnd(profile, instrument, steps));
+      return true;
     };
     for (const { note, end, legatoNext } of soundingNotes(track.notes)) {
       const legato = previousLegato;
@@ -135,28 +236,31 @@ export function buildSchedule(song: Song, profile: GameProfile, options: Schedul
       duration = Math.max(duration, off);
       // 게임처럼 악기 범위 밖 음은 옥타브째 접어서 낸다
       const pitch = foldPitch(note.pitch, range);
-      const shift = chain ? pitch - chain.pitch : 0;
-      if (legato && chain && Math.abs(shift) <= Math.min(profile.tieBendLimit, BEND_RANGE)) {
+      if (legato && chain && Math.abs(pitch - chain.head) <= Math.min(profile.tieBendLimit, BEND_RANGE)) {
         // 샘플이 이미 끝났으면 붙인 음도 소리가 없다
         if (on >= chainSampleEnd(profile, instrument, chain.steps)) continue;
-        chain.steps.push({ at: on, pitch });
-        chain.end = pitch;
-        events.push({ slot, note: chain.pitch, velocity: chain.velocity, trackId: track.id, time: on, type: "bend", bend: shift });
-        chain.offAt = Math.min(off, chainSampleEnd(profile, instrument, chain.steps));
-        continue;
+        if (switchZone(chain, on, off, pitch)) continue;
+        const shift = pitch - chain.pitch;
+        if (Math.abs(shift) <= BEND_RANGE) {
+          chain.steps.push({ at: on, pitch });
+          chain.end = pitch;
+          events.push({ slot: chain.slot, note: chain.pitch, velocity: chain.velocity, trackId: track.id, time: on, type: "bend", bend: shift });
+          chain.offAt = Math.min(off, chainSampleEnd(profile, instrument, chain.steps));
+          continue;
+        }
       }
       closeChain();
       const velocity = velocityForVolume(profile, note.vol);
       if (velocity === 0) continue;
       events.push({ slot, note: pitch, velocity, trackId: track.id, time: on, type: "on" });
       const steps = [{ at: on, pitch }];
-      chain = { pitch, velocity, end: pitch, steps, offAt: Math.min(off, chainSampleEnd(profile, instrument, steps)) };
+      chain = { head: pitch, slot, pitch, velocity, end: pitch, start: on, steps, offAt: Math.min(off, chainSampleEnd(profile, instrument, steps)) };
     }
     closeChain();
   }
 
-  // 같은 시각이면 끄기 → 높이 되돌리기 → 켜기
-  const order = { off: 0, bend: 1, on: 2 } as const;
-  events.sort((a, b) => a.time - b.time || order[a.type] - order[b.type]);
+  slots.push(...extraSlots);
+  // 같은 시각이면 끄기 → 소리 줄이기·되돌리기 → 높이 옮기기 → 켜기
+  events.sort((a, b) => a.time - b.time || EVENT_ORDER[a.type] - EVENT_ORDER[b.type]);
   return { slots, events, duration };
 }

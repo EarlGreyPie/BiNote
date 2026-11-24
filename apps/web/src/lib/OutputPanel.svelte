@@ -3,7 +3,8 @@
   import { gamePaste, pasteTempoChoices } from "@mmlce/mml";
   import { instrumentName, t } from "./i18n.svelte";
   import Icon from "./Icon.svelte";
-  import { isCopied, nextExportPick, trackStamp, type OutputRow, type TempoAdvice } from "./output";
+  import { isCopied, nextExportPick, pasteOrderAdd, pasteOrderOf, pasteOrderRemove, pasteOrderShift, trackStamp, type OutputRow, type PasteOrder, type TempoAdvice } from "./output";
+  import { tick } from "svelte";
   import { scaleText, tempoConvertNotice, tempoConvertPlan, type TempoConvertOutcome } from "./tempoConvert";
 
   /**
@@ -23,6 +24,8 @@
     /** 트랙 id → 복사할 때의 도장 (곡을 열면 비운다) */
     copied: ReadonlyMap<string, string> | undefined;
     oncopied: (stamps: ReadonlyMap<string, string>) => void;
+    /** 트랙 id → 화면의 트랙 색 (붙여넣는 순서 목록에 점으로) */
+    colors?: ReadonlyMap<string, string>;
     /** 트랙 이름을 누르면 그 트랙으로 */
     ontrack: (trackId: string) => void;
     /** 템포 자리로 커서 옮기기 */
@@ -40,7 +43,7 @@
     onclose: () => void;
   }
 
-  let { song, rows, tempo, profile, chordsOf, copied, oncopied, ontrack, onseek, onconvert, ondistribute, onsplit, onchecks, onclose }: Props = $props();
+  let { song, rows, tempo, profile, chordsOf, copied, colors, oncopied, ontrack, onseek, onconvert, ondistribute, onsplit, onchecks, onclose }: Props = $props();
   const limit = $derived(profile.charLimitPerScore);
   const tempoRange = $derived(profile.tempo);
   /** 붙여넣기 한 번에 넣을 수 있는 트랙 수 */
@@ -58,29 +61,36 @@
 
   const done = (id: string) => isCopied(song, copied, id);
   const trackIdsOf = (row: OutputRow) => row.tracks.map((tr) => tr.trackId);
+  /** 곡 순서 = 창의 목록 차례 (악보 차례, 그 안에서 트랙 차례) */
+  const songIds = $derived(rows.flatMap(trackIdsOf));
+  /**
+   * 고른 트랙과 붙여넣는 순서. 기본은 늘 곡 순서이고, 순서 목록에서 직접 옮겼을 때만 그 순서를 따른다
+   * (규칙은 output.ts의 pasteOrder*)
+   */
   // svelte-ignore state_referenced_locally
-  let picked = $state<readonly string[]>(nextExportPick(rows.map((r) => ({ trackIds: trackIdsOf(r) })), done, profile.maxChordsPerPlayer));
-  /** 곡이 바뀌어 없어진 트랙은 고른 것에서 뺀다 */
-  const chosen = $derived(picked.filter((id) => song.tracks.some((tr) => tr.id === id)));
+  let picked = $state.raw<PasteOrder>({ ids: nextExportPick(rows.map((r) => ({ trackIds: trackIdsOf(r) })), done, profile.maxChordsPerPlayer), custom: false });
+  /** 곡이 바뀌어 없어진 트랙은 고른 것에서 빼고, 곡 순서일 때는 지금 곡 순서로 세운다 */
+  const order = $derived(
+    pasteOrderOf(
+      { ids: picked.ids.filter((id) => song.tracks.some((tr) => tr.id === id)), custom: picked.custom },
+      songIds,
+    ),
+  );
+  const chosen = $derived(order.ids);
   const full = $derived(chosen.length >= pickLimit);
   /** 방금 복사한 트랙 수 (복사했다는 알림. 고른 것을 바꾸면 지운다) */
   let justCopied = $state(0);
 
   function toggleTrack(id: string) {
     justCopied = 0;
-    if (chosen.includes(id)) picked = chosen.filter((x) => x !== id);
-    else if (!full) picked = [...chosen, id];
+    if (chosen.includes(id)) picked = pasteOrderRemove(order, [id], songIds);
+    else if (!full) picked = pasteOrderAdd(order, [id], songIds);
   }
   /** 악보 체크: 다 골랐으면 모두 빼고, 아니면 남은 트랙을 모두 더한다 (한도를 넘으면 못 누른다) */
   function toggleScore(row: OutputRow) {
     justCopied = 0;
     const ids = trackIdsOf(row);
-    if (ids.every((id) => chosen.includes(id))) picked = chosen.filter((id) => !ids.includes(id));
-    else {
-      const added = [...chosen, ...ids.filter((id) => !chosen.includes(id))];
-      // 순서를 손으로 바꾸지 않았으면 곡 순서로 붙인다. 미리 체크된 트랙(고친 트랙 등)이 앞에 남아 채널 순서가 바뀌지 않게
-      picked = reordered ? added : songOrder(added);
-    }
+    picked = ids.every((id) => chosen.includes(id)) ? pasteOrderRemove(order, ids, songIds) : pasteOrderAdd(order, ids, songIds);
   }
   const scoreRoom = (row: OutputRow) => chosen.length + trackIdsOf(row).filter((id) => !chosen.includes(id)).length <= pickLimit;
 
@@ -102,22 +112,25 @@
   let keptTempo = $state<readonly TempoEvent[] | undefined>(undefined);
   const tempoMap = $derived(tempoPick?.tempo ?? keptTempo);
 
-  /** 붙여넣는 글 안의 트랙 순서 = 체크한 순서 (곡 구조는 그대로). 악보 체크·미리 체크는 곡 순서로 붙는다 */
-  const songOrder = (ids: readonly string[]) => song.tracks.map((tr) => tr.id).filter((id) => ids.includes(id));
+  /** 붙여넣는 글 안의 칸 차례 (곡 구조는 그대로). 곡 순서가 기본이고 목록에서 직접 옮기면 그 순서 */
   const pasteOrder = $derived(chosen);
-  const reordered = $derived(chosen.some((id, k) => id !== songOrder(chosen)[k]));
-  function shiftOrder(id: string, step: -1 | 1) {
-    const list = [...chosen];
-    const k = list.indexOf(id);
-    const j = k + step;
-    if (k < 0 || j < 0 || j >= list.length) return;
-    [list[k], list[j]] = [list[j]!, list[k]!];
-    picked = list;
+  const reordered = $derived(order.custom);
+  /** 트랙이 든 악보 번호 (순서 목록에 같은 이름 트랙을 가리려고) */
+  const scoreNumberOf = (id: string) => rows.find((r) => r.tracks.some((tr) => tr.trackId === id))?.number;
+  let orderList = $state<HTMLOListElement>();
+  async function shiftOrder(id: string, step: -1 | 1) {
+    picked = pasteOrderShift(order, id, step, songIds);
     justCopied = 0;
+    // 옮긴 뒤에도 같은 줄의 단추에 초점을 둔다 (끝 칸에 닿아 그 단추가 꺼지면 반대 단추로)
+    await tick();
+    const line = orderList?.querySelector<HTMLElement>(`li[data-id="${CSS.escape(id)}"]`);
+    const want = line?.querySelector<HTMLButtonElement>(step < 0 ? "button.up" : "button.down");
+    const other = line?.querySelector<HTMLButtonElement>(step < 0 ? "button.down" : "button.up");
+    (want && !want.disabled ? want : other)?.focus();
   }
 
   const paste = $derived(
-    chosen.length > 0 ? gamePaste(song, chosen, chordsOf, pickLimit, { tempo: withTempo, tempoMap, charLimit: limit, order: reordered ? pasteOrder : undefined }) : undefined,
+    chosen.length > 0 ? gamePaste(song, chosen, chordsOf, pickLimit, { tempo: withTempo, tempoMap, charLimit: limit, order: pasteOrder }) : undefined,
   );
   const pastedCount = (id: string) => paste?.written.get(id)?.length;
   const pasteOver = $derived(paste ? [...paste.written.values()].some((text) => text.length > limit) : false);
@@ -165,7 +178,7 @@
     const fold = new Set(collapsed);
     for (const row of rows) if (trackIdsOf(row).every(now) && trackIdsOf(row).some((id) => sent.trackIds.includes(id))) fold.add(rowKey(row));
     collapsed = fold;
-    picked = nextExportPick(rows.map((r) => ({ trackIds: trackIdsOf(r) })), now, pickLimit);
+    picked = { ids: nextExportPick(rows.map((r) => ({ trackIds: trackIdsOf(r) })), now, pickLimit), custom: false };
     justCopied = sent.trackIds.length;
   }
 
@@ -263,6 +276,10 @@
                   <input type="checkbox" checked={on} disabled={!on && full} onchange={() => toggleTrack(tr.trackId)} />
                 </label>
                 <button class="name" onclick={() => closeThen(() => ontrack(tr.trackId))} title={t("ui.outputTrackGo")}>{tr.name}</button>
+                {#if on && pasteOrder.length > 1}
+                  {@const slot = pasteOrder.indexOf(tr.trackId) + 1}
+                  <span class="slot" title={t("ui.exportOrderSlot", { n: slot })} aria-label={t("ui.exportOrderSlot", { n: slot })}>{slot}</span>
+                {/if}
                 <span class="bar"><span style:width="{Math.min(100, (count / limit) * 100)}%"></span></span>
                 <span class="count">{count}/{limit}</span>
                 {#if done(tr.trackId)}<span class="badge ok">{t("ui.exportCopiedMark")}</span>{:else if was}<span class="badge warn">{t("ui.exportChangedMark")}</span>{/if}
@@ -297,15 +314,26 @@
     {/if}
     {#if pasteOrder.length > 1}
       <div class="paste-order">
-        <span class="muted" title={t("ui.exportOrderHelp")}>{t("ui.exportOrder")}</span>
-        {#each pasteOrder as id, k (id)}
-          <span class="chip">
-            <button class="small" disabled={k === 0} title={t("ui.exportOrderEarlier")} aria-label={t("ui.exportOrderEarlier")} onclick={() => shiftOrder(id, -1)}>‹</button>
-            <span>{k + 1}. {nameOf(id)}</span>
-            <button class="small" disabled={k === pasteOrder.length - 1} title={t("ui.exportOrderLater")} aria-label={t("ui.exportOrderLater")} onclick={() => shiftOrder(id, 1)}>›</button>
-          </span>
-        {/each}
-        {#if reordered}<button class="small" onclick={() => (picked = songOrder(chosen))}>{t("ui.exportOrderReset")}</button>{/if}
+        <div class="order-head">
+          <span class="muted" title={t("ui.exportOrderHelp")}>{t("ui.exportOrder")}</span>
+          {#if reordered}
+            <span class="badge warn">{t("ui.exportOrderCustom")}</span>
+            <button class="small" onclick={() => (picked = { ids: chosen, custom: false })}>{t("ui.exportOrderReset")}</button>
+          {/if}
+        </div>
+        <ol bind:this={orderList} aria-label={t("ui.exportOrder")}>
+          {#each pasteOrder as id, k (id)}
+            {@const score = scoreNumberOf(id)}
+            <li data-id={id}>
+              <span class="slot">{k + 1}</span>
+              <span class="dot" style:background={colors?.get(id) ?? song.tracks.find((tr) => tr.id === id)?.color ?? "var(--line)"}></span>
+              {#if score !== undefined}<span class="muted">{t("ui.scoreN", { n: score })}</span>{/if}
+              <span class="order-name">{nameOf(id)}</span>
+              <button class="move up" disabled={k === 0} title={t("ui.exportOrderEarlier")} aria-label={`${nameOf(id)}: ${t("ui.exportOrderEarlier")}`} onclick={() => shiftOrder(id, -1)}>▲</button>
+              <button class="move down" disabled={k === pasteOrder.length - 1} title={t("ui.exportOrderLater")} aria-label={`${nameOf(id)}: ${t("ui.exportOrderLater")}`} onclick={() => shiftOrder(id, 1)}>▼</button>
+            </li>
+          {/each}
+        </ol>
       </div>
     {/if}
     {#if silent.length > 0}<p class="muted note" title={t("ui.pasteSilentHint")}>{t("ui.pasteSilent", { count: silent.length })} · {t("ui.pasteSilentHint")}</p>{/if}
@@ -385,19 +413,57 @@
     font-size: 0.85em;
   }
   .paste-order {
+    margin: 6px 0 4px;
+  }
+  .order-head {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: 4px 8px;
-    margin: 4px 0;
   }
-  .paste-order .chip {
-    display: inline-flex;
+  .paste-order ol {
+    list-style: none;
+    margin: 2px 0 0;
+    padding: 0;
+    max-height: 30dvh;
+    overflow-y: auto;
+  }
+  .paste-order li {
+    display: flex;
     align-items: center;
-    gap: 2px;
-    border: 1px solid var(--line);
-    border-radius: 4px;
-    padding: 0 2px;
+    gap: 6px;
+    padding: 1px 0;
+  }
+  .order-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* 손가락·펜으로 누를 크기 */
+  .move {
+    min-width: 32px;
+    min-height: 28px;
+    padding: 0 6px;
+    line-height: 1;
+  }
+  .slot {
+    display: inline-block;
+    min-width: 1.4em;
+    padding: 0 3px;
+    border-radius: 3px;
+    background: var(--line);
+    font-size: 0.85em;
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+  }
+  .dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex: none;
   }
   button.badge.link {
     background: none;

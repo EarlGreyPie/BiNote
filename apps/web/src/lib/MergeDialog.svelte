@@ -8,10 +8,17 @@
   import {
     defaultMergeRoles,
     defaultPriority,
+    droppedBars,
+    droppedListenStart,
+    listenBarOf,
     MERGE_LEVEL_KEY,
     MERGE_LEVELS,
+    MERGE_PARTIAL_KEY,
     mergeGroups,
+    mergeListenSong,
     parseMergeLevel,
+    parseMergePartial,
+    type MergeListenMode,
     pitchLabel,
     songEnd,
     spanX,
@@ -22,7 +29,9 @@
   /**
    * 화음 병합 창 (곡 메뉴). 같은 악보·같은 악기 트랙 묶음에서 비울 트랙과 남길 트랙을 고르고,
    * 비울 트랙의 음을 남길 트랙이 쉬는 자리로 옮긴다. 자리가 없는 음은 단계(1·2·3)에 따라 그대로 두거나 뺀다.
-   * 우선 트랙 음은 빼지 않는다. 뺄 음은 수와 자리(마디·박·높이)를 모두 보여 주고, 띠에 빨갛게 표시한다
+   * 우선 트랙 음은 빼지 않는다. 뺄 음은 수와 자리(마디·박·높이)를 모두 보여 주고, 띠에 빨갛게 표시한다.
+   * 들어 보기: 적용하기 전에 병합 전·병합 후·빠지는 음만을 들려준다 (곡은 바꾸지 않는다). 곡 전체를 커서부터 듣거나,
+   * 빠지는 음이 있는 마디만 되풀이해 듣는다 (앱의 반복 구간·커서는 건드리지 않는다)
    */
   interface Props {
     /** 화면 트랙 색 (트랙 목록·롤과 같은 색). 없는 트랙은 저장된 색 */
@@ -38,9 +47,16 @@
     onclose: () => void;
     /** 글자 수 맞추기 창의 한 칸으로 넣는다: 따로 창을 띄우지 않고, 적용해도 닫지 않는다 (취소 단추 없음) */
     embedded?: boolean;
+    /** 편집 커서 ("빠지는 음만"을 어디서부터 들을지) */
+    cursor?: Rat | undefined;
+    /** 이 칸이 시작한 미리 듣기가 지금 소리 나는지 */
+    listening?: boolean;
+    /** 들을 곡을 넘긴다: range면 그 구간 되풀이, 아니면 from(없으면 커서)부터. keep이면 지금 들리던 자리에서 이어 간다 */
+    onlisten?: ((song: Song, opts: { from?: Rat | undefined; range?: readonly [Rat, Rat] | undefined; keep?: boolean }) => Promise<boolean>) | undefined;
+    onstoplisten?: (() => void) | undefined;
   }
 
-  let { song, colors, profile, locked, activeTrackId, where, onseek, onapply, onclose, embedded = false }: Props = $props();
+  let { song, colors, profile, locked, activeTrackId, where, onseek, onapply, onclose, embedded = false, cursor, listening = false, onlisten, onstoplisten }: Props = $props();
 
   let dialog: HTMLElement;
   /** 창을 닫는다 (글자 수 맞추기 창 안이면 닫지 않는다: 곡이 바뀌면 그 창이 이 칸을 새로 만든다) */
@@ -64,12 +80,15 @@
     });
   });
   let level = $state<MergeLevel>(loadStored(MERGE_LEVEL_KEY, parseMergeLevel));
+  /** 트랙은 남기고 옮길 수 있는 음만 몰기 (기본 꺼짐, 기억한다) */
+  let partial = $state(loadStored(MERGE_PARTIAL_KEY, parseMergePartial));
 
   const options = $derived<MergeTracksOptions>({
     keep: ids.filter((id) => roles[id] === "keep"),
     remove: ids.filter((id) => roles[id] === "remove"),
     level,
     priority: priority || undefined,
+    partial,
   });
   const ready = $derived(options.keep.length > 0 && options.remove.length > 0);
 
@@ -91,7 +110,7 @@
     }, 120);
     return () => clearTimeout(timer);
   });
-  const changed = $derived(!!result && result.emptied.length > 0 && !result.kept);
+  const changed = $derived(!!result && !result.kept && (result.emptied.length > 0 || result.partial.length > 0));
   const rows = $derived(changed && result ? previewRows(song, result.song, limit) : []);
   /** 뺀 음 (시간 순) */
   const dropped = $derived(changed && result ? [...result.dropped].sort((a, b) => cmp(a.note.start, b.note.start)) : []);
@@ -112,6 +131,92 @@
       return { id, notes: [...own, ...came] };
     });
   });
+
+  const LISTEN_MODES: readonly MergeListenMode[] = ["before", "after", "dropped"];
+  const LISTEN_LABEL = { before: "ui.mergeListenBefore", after: "ui.mergeListenAfter", dropped: "ui.mergeListenDropped" } as const satisfies Record<MergeListenMode, string>;
+  const barLabel = (i: number) => {
+    const b = bars[i];
+    return b ? (b.lastBar > b.bar ? `${b.bar}-${b.lastBar}` : String(b.bar)) : "";
+  };
+
+  function setPartial(on: boolean) {
+    partial = on;
+    saveStored(MERGE_PARTIAL_KEY, on ? "1" : "0");
+  }
+
+  /** 비울 트랙에서 옮긴 음 수 (partial 줄) */
+  const movedFrom = (id: string) => result?.moves.filter((m) => m.from === id).length ?? 0;
+
+  // ── 들어 보기 ──
+  /** 이 트랙들만 (끄면 곡 전체를 지금 끄기·솔로 그대로) */
+  let groupOnly = $state(true);
+  /** 마지막에 고른 소리 */
+  let mode = $state<MergeListenMode | undefined>(undefined);
+  /** 마디로 듣는 중이면 그 구간 번호 (bars 안) */
+  let barIndex = $state<number | undefined>(undefined);
+  const canListen = $derived(!!onlisten && changed && !busy && dropped.length > 0);
+  const bars = $derived(canListen ? droppedBars(song, dropped.map((d) => d.note)) : []);
+  const silent = $derived(dropped.length > 0 && dropped.every((d) => d.note.vol <= 0));
+  const barListening = $derived(listening && barIndex !== undefined);
+
+  function target(m: MergeListenMode): Song | undefined {
+    return result ? mergeListenSong(song, result, ids, m, groupOnly) : undefined;
+  }
+  /** 소리 단추: 듣는 중이면 지금 자리(마디로 듣는 중이면 그 마디)에서 그 소리로 이어 가고, 같은 단추면 멈춘다 */
+  function listen(m: MergeListenMode) {
+    if (!canListen || !onlisten) return;
+    if (listening && mode === m) return onstoplisten?.();
+    play(m);
+  }
+  function play(m: MergeListenMode) {
+    if (!canListen || !onlisten) return;
+    const next = target(m);
+    if (!next) return;
+    mode = m;
+    if (listening && barIndex !== undefined) {
+      const b = bars[barIndex];
+      if (b) void onlisten(next, { range: [b.from, b.to], keep: true });
+      return;
+    }
+    if (listening) return void onlisten(next, { keep: true });
+    barIndex = undefined;
+    void onlisten(next, m === "dropped" ? { from: droppedListenStart(song, dropped.map((d) => d.note), cursor) } : {});
+  }
+  /** 그 마디 구간을 되풀이한다 (소리는 마지막에 고른 것, 없으면 병합 전). 듣고 있는 마디를 다시 누르면 멈춘다 */
+  function listenBar(i: number) {
+    if (!canListen || !onlisten || i < 0 || i >= bars.length) return;
+    if (barListening && barIndex === i) return onstoplisten?.();
+    const b = bars[i]!;
+    const m = mode ?? "before";
+    const next = target(m);
+    if (!next) return;
+    mode = m;
+    barIndex = i;
+    void onlisten(next, { range: [b.from, b.to] });
+  }
+  function stepBar(delta: number) {
+    if (bars.length === 0) return;
+    const at = barListening && barIndex !== undefined ? barIndex + delta : delta > 0 ? 0 : bars.length - 1;
+    listenBar(Math.min(bars.length - 1, Math.max(0, at)));
+  }
+  /** "이 트랙들만"을 바꾸면 듣던 자리에서 바뀐 범위로 이어 간다. 아직 소리를 준비 중인 미리 듣기는 옛 범위라 멈춘다 */
+  function setGroupOnly(on: boolean) {
+    groupOnly = on;
+    if (listening && mode && mode !== "dropped") play(mode);
+    else if (!listening) onstoplisten?.();
+  }
+  // 고르기(남기기·비우기·제외, 우선 트랙, 단계, 몰기, 묶음)를 바꾸거나 결과가 바뀌면 멈춘다. 옛 결과를 계속 들려주지 않는다
+  // 소리를 준비 중이라 listening이 아직 false여도 그 요청을 끊어야 하므로 늘 부른다 (앱이 자기 미리 듣기일 때만 멈춘다)
+  $effect(() => {
+    void options;
+    void result;
+    untrack(() => {
+      onstoplisten?.();
+      barIndex = undefined;
+    });
+  });
+  // 칸이 사라지면(칸 바꾸기·적용 뒤 새로 만들기·닫기) 멈춘다
+  $effect(() => () => untrack(() => onstoplisten?.()));
 
   function setLevel(next: MergeLevel) {
     level = next;
@@ -187,6 +292,11 @@
         </label>
       {/each}
     </fieldset>
+    <label class="partial">
+      <input type="checkbox" checked={partial} onchange={(e) => setPartial(e.currentTarget.checked)} />
+      {t("ui.mergePartial")}
+      <span class="muted small">{t("ui.mergePartialHelp")}</span>
+    </label>
 
     {#if !ready}
       <p class="muted">{t("ui.mergePickBoth")}</p>
@@ -196,17 +306,44 @@
       <p class="warn">{t(result.kept === "sound" ? "ui.spreadKeptSound" : result.kept === "tempo" ? "ui.compactKeptTempo" : "ui.compactKept")}</p>
     {:else if result}
       {#each result.stuck as s (s.trackId)}
-        <p class="warn">{t(level === 1 ? "ui.mergeStuck1" : "ui.mergeStuck", { name: name(s.trackId), count: s.left })}</p>
+        {#if result.partial.includes(s.trackId)}
+          <p>{t("ui.mergePartialLeft", { name: name(s.trackId), moved: movedFrom(s.trackId), count: s.left })}</p>
+        {:else}
+          <p class="warn">{t(level === 1 ? "ui.mergeStuck1" : "ui.mergeStuck", { name: name(s.trackId), count: s.left })}</p>
+        {/if}
       {/each}
       {#if changed}
         <p>
-          {t("ui.mergeSummary", { moved: result.moved, removed: result.emptied.length })}
+          {#if result.emptied.length > 0}{t("ui.mergeSummary", { moved: result.moved, removed: result.emptied.length })}{/if}
           {#if dropped.length > 0}
             <strong class="warn">{t("ui.mergeDropped", { count: dropped.length })}</strong>
           {:else}
             <span class="muted">{t("ui.mergeNoDrop")}</span>
           {/if}
         </p>
+        {#if canListen}
+          <div class="listen" role="group" aria-label={t("ui.mergeListen")}>
+            <div class="row">
+              <strong>{t("ui.mergeListen")}</strong>
+              {#each LISTEN_MODES as m (m)}
+                {@const on = listening && mode === m}
+                <button class="small" class:on aria-pressed={on} onclick={() => listen(m)}>{on ? `■ ${t("ui.mergeListenStop")}` : `▶ ${t(LISTEN_LABEL[m])}`}</button>
+              {/each}
+              <label class="small"><input type="checkbox" checked={groupOnly} onchange={(e) => setGroupOnly(e.currentTarget.checked)} /> {t("ui.mergeListenGroup")}</label>
+            </div>
+            <div class="row small">
+              <button class="small" onclick={() => stepBar(-1)} title={t("ui.mergeListenPrev")} aria-label={t("ui.mergeListenPrev")}>◀</button>
+              <button class="small" onclick={() => stepBar(1)} title={t("ui.mergeListenNext")} aria-label={t("ui.mergeListenNext")}>▶</button>
+              {#if barListening && barIndex !== undefined}
+                <span>{t("ui.mergeListenBar", { bar: barLabel(barIndex), n: barIndex + 1, count: bars.length })}</span>
+              {:else}
+                <span class="muted">{t("ui.mergeListenBars", { count: bars.length })}</span>
+              {/if}
+            </div>
+            <p class="muted small">{t("ui.mergeListenHelp")}</p>
+            {#if silent}<p class="muted small">{t("ui.mergeListenSilent")}</p>{/if}
+          </div>
+        {/if}
         <svg class="strip" viewBox="0 0 1000 {12 * (lanes.length + (dropped.length > 0 ? 1 : 0)) + 2}" preserveAspectRatio="none" role="img" aria-label={t("ui.mergePreview")}>
           {#each lanes as lane, k (lane.id)}
             <rect x="0" y={2 + 12 * k} width="1000" height="10" class="lane" />
@@ -229,7 +366,12 @@
           {/if}
           <ul class="gone-list">
             {#each dropped as d, i (i)}
-              <li>
+              {@const at = canListen ? listenBarOf(bars, song, d.note) : -1}
+              {@const here = barListening && at >= 0 && at === barIndex}
+              <li class:here>
+                {#if at >= 0}
+                  <button class="small play" aria-pressed={here} title={t("ui.mergeListenThisBar")} aria-label={t("ui.mergeListenThisBar")} onclick={() => listenBar(at)}>{here ? "■" : "▶"}</button>
+                {/if}
                 <button class="small link" onclick={() => onseek(d.note.start)}>{place(d.note.start)}</button>
                 <span class="dot" style:background={color(d.trackId)}></span>
                 {name(d.trackId)} · {pitchLabel(d.note.pitch)} <span class="muted">v{d.note.vol}</span>
@@ -336,6 +478,31 @@
   }
   .gone-list li {
     padding: 1px 0;
+  }
+  .gone-list li.here {
+    background: color-mix(in srgb, var(--accent, #4a90e2) 18%, transparent);
+  }
+  .play {
+    min-width: 2em;
+  }
+  .partial {
+    display: block;
+    margin: 4px 0 8px;
+  }
+  .listen {
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 6px 10px;
+    margin: 6px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .listen p {
+    margin: 0;
+  }
+  .listen button.on {
+    font-weight: bold;
   }
   .link {
     white-space: nowrap;

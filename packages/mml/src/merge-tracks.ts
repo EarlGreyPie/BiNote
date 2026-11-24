@@ -31,6 +31,11 @@ export interface MergeTracksOptions {
   readonly level: MergeLevel;
   /** 우선 트랙: 이 트랙 음은 빼지 않는다 */
   readonly priority?: string | undefined;
+  /**
+   * 트랙은 남기고 옮길 수 있는 음만 몬다: 다 비우지 못하는 트랙도 자리가 있는 음은 옮기고, 못 넣은 음은 그 트랙에 남긴다
+   * (그 트랙은 지우지 않는다). 끄면 트랙 하나를 다 비울 수 있을 때만 바꾼다
+   */
+  readonly partial?: boolean | undefined;
 }
 
 export interface DroppedNote {
@@ -49,8 +54,10 @@ export interface MergeTracksPlan {
   readonly moves: readonly { readonly from: string; readonly to: string; readonly note: Note }[];
   /** 다 비워 지운(또는 빈 트랙으로 남긴) 트랙 */
   readonly emptied: readonly string[];
-  /** 자리가 모자라 그대로 둔 비울 트랙과, 넣지 못한 음 수 */
+  /** 자리가 모자라 그대로 둔 비울 트랙과, 넣지 못한 음 수 (partial이면 옮길 수 있는 음은 옮기고 남긴 음 수) */
   readonly stuck: readonly { readonly trackId: string; readonly left: number }[];
+  /** partial로 음 일부만 옮기고 남긴 비울 트랙 (지우지 않는다) */
+  readonly partial: readonly string[];
 }
 
 const endOf = (n: Note) => add(n.start, n.dur);
@@ -72,6 +79,7 @@ export function planTrackMerge(song: Song, options: MergeTracksOptions, keepEmpt
   const dropped: DroppedNote[] = [];
   const emptied: string[] = [];
   const stuck: { trackId: string; left: number }[] = [];
+  const partial: string[] = [];
   const moves: { from: string; to: string; note: Note }[] = [];
 
   /** 그 순간 묶음 트랙들에서 울리는 음 (옮긴 음은 받은 트랙에만, 뺀 음은 어디에도 없다) */
@@ -101,7 +109,7 @@ export function planTrackMerge(song: Song, options: MergeTracksOptions, keepEmpt
     .filter((id) => !keep.includes(id) && state.has(id))
     .sort((a, b) => (state.get(a)?.length ?? 0) - (state.get(b)?.length ?? 0));
   for (const from of order) {
-    // 트랙 하나를 다 비울 수 있을 때만 바꾼다. 못 비우면 그 트랙 몫은 모두 되돌린다
+    // 트랙 하나를 다 비울 수 있을 때만 바꾼다. 못 비우면 그 트랙 몫은 모두 되돌린다 (partial이면 옮긴 것은 남기고 트랙도 남긴다)
     const before = new Map([...state].map(([k, v]) => [k, [...v]]));
     const lost: DroppedNote[] = [];
     const went: { from: string; to: string; note: Note }[] = [];
@@ -162,11 +170,13 @@ export function planTrackMerge(song: Song, options: MergeTracksOptions, keepEmpt
       left += unit.length;
     }
     if (left > 0) {
-      for (const [k, v] of before) state.set(k, v);
       stuck.push({ trackId: from, left });
-      continue;
-    }
-    emptied.push(from);
+      if (!options.partial || (went.length === 0 && lost.length === 0)) {
+        for (const [k, v] of before) state.set(k, v);
+        continue;
+      }
+      partial.push(from);
+    } else emptied.push(from);
     dropped.push(...lost);
     // 옮긴 음이 뒤에서 대신 빠졌으면 옮긴 목록에서 뺀다
     const lostNotes = new Set(lost.map((d) => d.note));
@@ -174,7 +184,7 @@ export function planTrackMerge(song: Song, options: MergeTracksOptions, keepEmpt
     moves.push(...went.filter((m) => !lostNotes.has(m.note)));
   }
 
-  if (emptied.length === 0) return { song, moved: 0, dropped: [], moves: [], emptied: [], stuck };
+  if (emptied.length === 0 && partial.length === 0) return { song, moved: 0, dropped: [], moves: [], emptied: [], stuck, partial: [] };
   const tracks: Track[] = [];
   for (const t of song.tracks) {
     const next = state.get(t.id)!;
@@ -187,7 +197,7 @@ export function planTrackMerge(song: Song, options: MergeTracksOptions, keepEmpt
     const { mml: _mml, ...rest } = t;
     tracks.push({ ...rest, notes: next });
   }
-  return { song: { ...song, tracks }, moved: moves.length, dropped, moves, emptied, stuck };
+  return { song: { ...song, tracks }, moved: moves.length, dropped, moves, emptied, stuck, partial };
 }
 
 export interface MergeTracksResult extends MergeTracksPlan {
@@ -301,16 +311,16 @@ export function mergeTracksResult(song: Song, profile: GameProfile, options: Mer
   let last: MergeTracksResult | undefined;
   for (const keepEmpty of [false, true]) {
     const plan = planTrackMerge(song, safe, keepEmpty);
-    if (plan.emptied.length === 0) return plan;
+    if (plan.emptied.length === 0 && plan.partial.length === 0) return plan;
     // 잠근 트랙 음은 v도 바꾸지 않는다
     const lockedNotes = new Set(song.tracks.filter((t) => locked?.has(t.id)).flatMap((t) => t.notes));
     const louder = new Map([...louderAfterDrop(song, [...new Set([...safe.keep, ...safe.remove])], plan.dropped, profile)].filter(([n]) => !lockedNotes.has(n)));
     const compact = compactResult(withVolumes(plan.song, louder), profile, locked, ends);
-    if (compact.kept) return { ...plan, song, moved: 0, dropped: [], moves: [], emptied: [], kept: compact.kept };
+    if (compact.kept) return { ...plan, song, moved: 0, dropped: [], moves: [], emptied: [], partial: [], kept: compact.kept };
     const expected = withVolumes(withoutDropped(song, plan.dropped), louder);
     const changed = { louder: [...louder].map(([note, vol]) => ({ note, vol })) };
     if (players.every((p) => gameTimeline(compact.song, profile, p) === gameTimeline(expected, profile, p))) return { ...plan, ...changed, song: compact.song };
-    last = { ...plan, song, moved: 0, dropped: [], moves: [], emptied: [], kept: "sound" };
+    last = { ...plan, song, moved: 0, dropped: [], moves: [], emptied: [], partial: [], kept: "sound" };
   }
   return last!;
 }

@@ -150,3 +150,65 @@ describe("mergeTracksSong", () => {
     expect(command.invert(s).apply(after)).toBe(s);
   });
 });
+
+describe("트랙은 남기고 옮길 수 있는 음만 몰기 (partial)", () => {
+  // 조각 첫 음(o5g)은 위·가운데 모두 울리는 자리라 못 넣고, 셋째 음(o5g, 6박)은 위가 쉬는 자리라 넣을 수 있다
+  const stuckFirst = "o5 g4 r4 r2 r2 g4 r4";
+
+  it("자리가 있는 음은 옮기고 못 넣은 음은 그 트랙에 남긴다. 트랙은 지우지 않고 소리는 그대로", () => {
+    const s = song([track("a", top), track("b", middle), track("c", stuckFirst)]);
+    const r = mergeTracksResult(s, MOBILE_PROFILE, { keep: ["a", "b"], remove: ["c"], level: 1, partial: true });
+    expect(r.kept).toBeUndefined();
+    expect(r.emptied).toEqual([]);
+    expect(r.partial).toEqual(["c"]);
+    expect(r.stuck).toEqual([{ trackId: "c", left: 1 }]);
+    expect(r.moved).toBe(1);
+    expect(r.dropped).toEqual([]);
+    expect(r.song.tracks.map((t) => t.id)).toEqual(["a", "b", "c"]);
+    expect(r.song.tracks.find((t) => t.id === "c")!.notes.map((n) => n.pitch)).toEqual([79]);
+    // 음 수 합과 소리(음 자리·높이·길이·v)가 같다
+    expect(sound(r.song)).toEqual(sound(s));
+    expect(gameTimeline(r.song, MOBILE_PROFILE)).toBe(gameTimeline(s, MOBILE_PROFILE));
+  });
+
+  it("끄면 지금과 같다 (그 트랙 몫을 모두 되돌린다)", () => {
+    const s = song([track("a", top), track("b", middle), track("c", stuckFirst)]);
+    const off = mergeTracksResult(s, MOBILE_PROFILE, { keep: ["a", "b"], remove: ["c"], level: 1, partial: false });
+    expect(off.song).toBe(s);
+    expect(off.partial).toEqual([]);
+    expect(off.stuck).toEqual([{ trackId: "c", left: 1 }]);
+  });
+
+  it("옮길 음이 하나도 없으면 곡은 그대로", () => {
+    const s = song([track("a", "o5 c1 c1"), track("b", "o4 c1 c1"), track("c", "o5 g1")]);
+    const r = mergeTracksResult(s, MOBILE_PROFILE, { keep: ["a", "b"], remove: ["c"], level: 1, partial: true });
+    expect(r.song).toBe(s);
+    expect(r.partial).toEqual([]);
+    expect(r.moved).toBe(0);
+  });
+
+  it("다 비울 수 있는 트랙은 지금처럼 지운다", () => {
+    const s = song([track("a", top), track("b", middle), track("c", pieces)]);
+    const r = mergeTracksResult(s, MOBILE_PROFILE, { keep: ["a", "b"], remove: ["c"], level: 1, partial: true });
+    expect(r.emptied).toEqual(["c"]);
+    expect(r.partial).toEqual([]);
+    expect(r.song.tracks.map((t) => t.id)).toEqual(["a", "b"]);
+  });
+
+  it("&로 이은 묶음은 통째로 옮기거나 통째로 남긴다", () => {
+    // 첫 묶음(o5g4&g4)은 위가 쉬지 않아 못 넣고, 뒤 묶음(6박 o5g8&g8)은 위가 쉬는 자리라 통째로 옮긴다
+    const s = song([track("a", top), track("b", middle), track("c", "o5 g4&g4 r2 r2 g8&g8 r4")]);
+    const plan = planTrackMerge(s, { keep: ["a", "b"], remove: ["c"], level: 1, partial: true });
+    expect(plan.partial).toEqual(["c"]);
+    expect(plan.stuck).toEqual([{ trackId: "c", left: 2 }]);
+    expect(plan.moved).toBe(2);
+    expect(plan.song.tracks.find((t) => t.id === "c")!.notes).toHaveLength(2);
+  });
+
+  it("실행 명령으로 적용해도 같은 결과", () => {
+    const s = song([track("a", top), track("b", middle), track("c", stuckFirst)]);
+    const next = mergeTracksSong(MOBILE_PROFILE, { keep: ["a", "b"], remove: ["c"], level: 1, partial: true }).apply(s);
+    expect(next.tracks.map((t) => t.id)).toEqual(["a", "b", "c"]);
+    expect(sound(next)).toEqual(sound(s));
+  });
+});

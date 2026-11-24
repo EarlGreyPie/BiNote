@@ -291,6 +291,8 @@ export class Engine {
         synth.controllerChange(channel, 101, 127, { time });
         synth.controllerChange(channel, 100, 127, { time });
       },
+      // Expression(CC 11): 음색 경계를 넘는 붙임에서 새 구간 음을 소리 없이 미리 칠 때 채널 소리를 줄였다 되돌린다
+      setExpression: (channel, value, at) => synth.controllerChange(channel, 11, value, { time: clock.at(at) }),
       // All Sound Off(CC 120): 그 채널 음을 끝소리 없이 바로 끊는다. 신스 큐는 같은 시각이면 넣은 순서대로 처리한다
       cut: (channel, at) => synth.controllerChange(channel, 120, 0, { time: clock.cut(channel, at) }),
       silence: () => synth.stopAll(true),
@@ -646,8 +648,9 @@ export class Engine {
   /** 재생을 시작하고, 사운드팩에서 찾지 못한 악기를 돌려준다 */
   /** loop: 반복할 길이(초). 주면 시작 자리부터 그 길이를 끊김 없이 되풀이한다. rate: 재생 속도 (원곡도 같은 속도로).
    * offset: from에서 이만큼(곡 초) 뒤부터 소리를 낸다 (반복 구간 가운데서 이어 재생).
-   * lead: 예비박. leadIn초(오디오 시간)를 비우고 시작한다. endless면(MIDI 건반 녹음) 곡이 끝나도 정지할 때까지 멈추지 않는다 */
-  async play(song: Song, from?: Rat, loop?: number, rate = 1, offset = 0, lead?: { leadIn: number; endless?: boolean }): Promise<Unresolved[]> {
+   * lead: 예비박. leadIn초(오디오 시간)를 비우고 시작한다. endless면(MIDI 건반 녹음) 곡이 끝나도 정지할 때까지 멈추지 않는다.
+   * noReference: 원곡을 함께 틀지 않는다 (병합 칸 미리 듣기처럼 지금 곡이 아닌 곡을 들을 때) */
+  async play(song: Song, from?: Rat, loop?: number, rate = 1, offset = 0, lead?: { leadIn: number; endless?: boolean }, noReference = false): Promise<Unresolved[]> {
     const request = ++this.playRequest;
     await this.live();
     const context = this.context!;
@@ -693,7 +696,9 @@ export class Engine {
     this.fromSeconds = from ? positionToSeconds(song.tempo, from) : 0;
     this.runOrigin = this.player!.startTime ?? 0;
     this.liveRun = { request, from, profileId: song.meta.profileId, tempo: JSON.stringify(song.tempo), tracks: audibleTrackIds(song).join("\n"), endless: !!lead?.endless };
-    this.startReference();
+    this.noReference = noReference;
+    if (noReference) this.stopReference();
+    else this.startReference();
     return unresolved;
   }
 
@@ -1066,7 +1071,14 @@ export class Engine {
     if (restart && this.playing) this.startReference();
   }
 
+  /** 이번 재생은 원곡을 틀지 않는다 (play의 noReference). 반복 경계·어긋남 바꾸기·원곡 열기에서도 틀지 않는다 */
+  private noReference = false;
+
   private startReference(wrapAt?: number): void {
+    if (this.noReference) {
+      this.stopReference(wrapAt);
+      return;
+    }
     // 반복 경계 알림은 미리 예약하느라 경계보다 조금 먼저 온다. 지금 원곡은 경계에서 멈추게 예약한다
     this.stopReference(wrapAt);
     const context = this.context;

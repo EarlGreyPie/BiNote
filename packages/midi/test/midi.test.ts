@@ -17,6 +17,9 @@ import {
   quantize,
   readSmf,
   songToSmf,
+  songToSmfReport,
+  splitVoices,
+  foldPitch,
   suggestPlan,
   velocityToVolume,
   writeSmf,
@@ -660,6 +663,100 @@ describe("songToSmf", () => {
     const flute = channels[15]!;
     expect(flute.value).toBe(73);
     expect(channels.slice(0, 15).every((c) => c.channel !== flute.channel)).toBe(true);
+  });
+
+  /** MIDI를 다시 읽어 [채널, 높이, 켜는 틱, 끄는 틱] (켠 순서대로 같은 채널·높이의 끄기를 짝짓는 읽기와 같게) */
+  const heard = (smf: ReturnType<typeof songToSmf>) => {
+    const out: [number, number, number, number][] = [];
+    const open = new Map<string, number[]>();
+    const events = smf.tracks.slice(1).flatMap((t) => t.events);
+    const order = { noteOff: 0, noteOn: 1 } as Record<string, number>;
+    for (const e of [...events].sort((a, b) => a.tick - b.tick || (order[a.type] ?? 2) - (order[b.type] ?? 2))) {
+      if (e.type === "noteOn") {
+        const k = `${e.channel}:${e.pitch}`;
+        open.set(k, [...(open.get(k) ?? []), e.tick]);
+      } else if (e.type === "noteOff") {
+        const k = `${e.channel}:${e.pitch}`;
+        const on = open.get(k)?.shift();
+        if (on !== undefined) out.push([e.channel, e.pitch, on, e.tick]);
+      }
+    }
+    return out.sort((a, b) => a[2] - b[2] || a[3] - b[3]);
+  };
+  const twoTracks = (a: Partial<Note>[], b: Partial<Note>[]): Song => {
+    const s = playerSong(["piano"]);
+    const t = s.tracks[0]!;
+    const mk = (ns: Partial<Note>[], p: string) => ns.map((n, i) => ({ ...t.notes[0]!, id: `${p}${i}`, ...n }));
+    return { ...s, tracks: [{ ...t, notes: mk(a, "a") }, { ...t, id: "t1", notes: mk(b, "b") }] };
+  };
+
+  it("한 연주자 안에서 같은 높이로 겹치는 음은 목소리를 나눠 길이를 지킨다 (rc.4, 외부 점검 B05)", () => {
+    // 보고서의 입력: 0에서 2분음표, 1/8에서 8분음표 (같은 악보 두 트랙)
+    const song = twoTracks([{ start: rat(0), dur: rat(1, 2) }], [{ start: rat(1, 8), dur: rat(1, 8) }]);
+    const { smf, notices } = songToSmfReport(song);
+    const notes = heard(smf);
+    expect(notes.map(([, p, on, off]) => [p, on, off])).toEqual([
+      [60, 0, 960],
+      [60, 240, 480],
+    ]);
+    expect(notes[0]![0]).not.toBe(notes[1]![0]);
+    expect(smf.tracks.slice(1).map((t) => t.events.find((e) => e.type === "name"))).toEqual([
+      { tick: 0, type: "name", text: "P0" },
+      { tick: 0, type: "name", text: "P0 2" },
+    ]);
+    expect(notices).toEqual([]);
+  });
+
+  it("세 겹 겹침은 목소리 셋, 시작과 끝이 같은 중복은 한 음으로", () => {
+    const song = twoTracks(
+      [{ start: rat(0), dur: rat(1) }, { start: rat(1, 4), dur: rat(1, 4) }],
+      [{ start: rat(1, 8), dur: rat(1, 2) }, { start: rat(0), dur: rat(1), vol: 15 }],
+    );
+    const { smf } = songToSmfReport(song);
+    expect(smf.tracks).toHaveLength(4);
+    expect(heard(smf).map(([, , on, off]) => [on, off])).toEqual([
+      [0, 1920],
+      [240, 1200],
+      [480, 960],
+    ]);
+    expect(new Set(heard(smf).map(([c]) => c)).size).toBe(3);
+  });
+
+  it("splitVoices: 겹치지 않으면 한 목소리, 중복은 센 음을 남긴다", () => {
+    expect(splitVoices([])).toEqual([[]]);
+    const a = { pitch: 60, on: 0, off: 10, vol: 5 };
+    const b = { pitch: 60, on: 10, off: 20, vol: 5 };
+    const c = { pitch: 60, on: 0, off: 10, vol: 9 };
+    expect(splitVoices([a, b])).toEqual([[a, b]]);
+    expect(splitVoices([a, c, b])).toEqual([[c, b]]);
+  });
+
+  it("다른 연주자 사이의 같은 높이 겹침은 전처럼 다른 채널로", () => {
+    const s = playerSong(["piano", "piano"]);
+    const song = { ...s, tracks: s.tracks.map((t, i) => ({ ...t, notes: [{ ...t.notes[0]!, start: rat(i, 8), dur: i === 0 ? rat(1, 2) : rat(1, 8) }] })) };
+    const notes = heard(songToSmf(song));
+    expect(notes.map(([, , on, off]) => [on, off])).toEqual([
+      [0, 960],
+      [240, 480],
+    ]);
+  });
+
+  it("채널이 모자라 함께 쓰게 된 겹침 음은 알림으로 센다", () => {
+    // 피아노 16명이 같은 높이로 모두 겹침: 드럼 빼고 15채널
+    const { notices } = songToSmfReport(playerSong(Array(16).fill("piano")));
+    expect(notices).toEqual([{ level: "warning", code: "midi-overlap-shared", params: { count: 1 }, span: [0, 0], where: "P15" }]);
+  });
+
+  it("0-127 밖의 높이는 옥타브로 접고 센다 (rc.4, 외부 점검 B08)", () => {
+    expect([127, 128, 132, 139, 140, -1].map(foldPitch)).toEqual([127, 116, 120, 127, 116, 11]);
+    const s = playerSong(["piano"]);
+    const t = s.tracks[0]!;
+    const pitches = [127, 128, 129, 130, 131, 132];
+    const song = { ...s, tracks: [{ ...t, notes: pitches.map((pitch, i) => ({ ...t.notes[0]!, id: `n${i}`, start: rat(i, 4), pitch })) }] };
+    const { smf, notices } = songToSmfReport(song);
+    expect(heard(smf).map(([, p]) => p)).toEqual([127, 116, 117, 118, 119, 120]);
+    expect(notices).toEqual([{ level: "warning", code: "midi-pitch-folded", params: { count: 5 }, span: [0, 0], where: "P0" }]);
+    expect(writeSmf(smf).every((b) => b <= 0xff)).toBe(true);
   });
 
   it("볼륨이 다른 같은 음 &도 첫 음 볼륨으로 한 번만 친다", () => {

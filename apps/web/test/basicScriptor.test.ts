@@ -62,6 +62,21 @@ describe("Basic Scriptor 규격 읽기", () => {
     expect(parseJob({ state: "running", progress: 1.7, stage: "transcribe" })).toEqual({ state: "running", progress: 1, stage: "transcribe", message: "" });
     expect(parseJob({ state: "weird" }).state).toBe("failed");
   });
+  it("서버가 필드를 더해도(2026-11-17 Basic Scriptor 추가안) 아는 필드만 읽는다", () => {
+    const more = {
+      ...HEALTH,
+      engines: [{ id: "muscriptor", label: "MuScriptor", ready: true, status: { installed: true, weights_cached: true, access_checked: null, can_run: true } }],
+      features: { score: { can_run: true } },
+      limits: { max_upload_mb: 512, max_queued: { audio: 2 } },
+      queue: { audio: { running: 1, queued: 1 } },
+      audio_formats: ["wav"],
+      velocity_modes: ["auto", "sfproxy"],
+    };
+    expect(parseHealth(more)).toEqual({ version: "0.1.0", engines: [{ id: "muscriptor", label: "MuScriptor", ready: true }], velocity: ["sfproxy"] });
+    const job = { state: "running", progress: 0.5, stage: "멈추는 중", message: "", kind: "audio", quality: null, warnings: [{ code: "tempo_rejected", severity: "degraded", text: "x" }], error: null, cancelling: true };
+    expect(parseJob(job)).toEqual({ state: "running", progress: 0.5, stage: "멈추는 중", message: "" });
+    expect(parseJob({ state: "failed", message: "까닭", error: { code: "x", message: "까닭" } }).message).toBe("까닭");
+  });
   it("포트: 1024~65535 정수만, 아니면 기본", () => {
     expect(parsePort("50000")).toBe(50000);
     expect(parsePort("80")).toBe(DEFAULT_BASIC_SCRIPTOR_PORT);
@@ -100,10 +115,22 @@ describe("Basic Scriptor 주고받기", () => {
     expect((server.calls[0]!.init.headers as Record<string, string>).Authorization).toBe("Bearer tok-2");
     const form = server.calls[0]!.init.body as FormData;
     expect(JSON.parse(String(form.get("options")))).toEqual({ engine: "basic-pitch", velocity: "none", instrument: "auto" });
+    expect([...form.keys()]).toEqual(["options", "audio"]);
 
     const expired = fakeFetch(() => json({}, 401));
     await expect(jobStatus(47811, "job-9", expired.impl)).rejects.toBeInstanceOf(ScriptorAuthError);
     expect(pairedToken(47811)).toBeUndefined();
+  });
+
+  it("음원 보내기 거절(429·503·415·408·413)은 상태 번호와 상관없이 message를 그대로 올린다 (code는 읽지 않음)", async () => {
+    await pair(47811, "1", fakeFetch(() => json({ token: "tok-3" })).impl);
+    for (const [status, code] of [[429, "queue_full"], [503, "storage_full"], [415, "unsupported_media"], [408, "upload_timeout"], [413, "too_large"]] as const) {
+      const server = fakeFetch(() => json({ message: `거절 ${code}`, code }, status));
+      await expect(startJob(47811, new Blob([]), "a.wav", { engine: "e", velocity: "none", instrument: "auto" }, server.impl)).rejects.toThrow(`거절 ${code}`);
+    }
+    const bare = fakeFetch(() => new Response("busy", { status: 503 }));
+    await expect(startJob(47811, new Blob([]), "a.wav", { engine: "e", velocity: "none", instrument: "auto" }, bare.impl)).rejects.toThrow("HTTP 503");
+    expect(pairedToken(47811)).toBe("tok-3");
   });
 
   it("짝을 맞추지 않았으면 보내지 않는다", async () => {

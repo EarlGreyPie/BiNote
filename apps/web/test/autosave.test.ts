@@ -134,6 +134,19 @@ describe("AutosaveQueue", () => {
     await expect(q.flush("A", () => async () => true)).resolves.toBeUndefined();
   });
 
+  it("저장이 예외를 내도 실패로 끝나, 같은 상태를 다시 부르면 저장을 다시 한다 (rc.4, 외부 점검 B06)", async () => {
+    const tracker = new AutosaveTracker<string>();
+    tracker.reset("open");
+    const q = new AutosaveQueue(tracker);
+    await expect(q.flush("A", () => async () => { throw new Error("boom"); })).rejects.toThrow("boom");
+    expect(tracker.pending).toBe(false);
+    expect(tracker.dirty("A")).toBe(true);
+    let called = 0;
+    await expect(q.flush("A", () => async () => (called++, true))).resolves.toBeUndefined();
+    expect(called).toBe(1);
+    expect(tracker.dirty("A")).toBe(false);
+  });
+
   it("적는 중인 상태를 다시 부르면 그 저장의 결과를 따른다", async () => {
     const tracker = new AutosaveTracker<string>();
     tracker.reset("open");

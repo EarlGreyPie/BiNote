@@ -52,6 +52,10 @@
     onpreview: (on: boolean) => void;
     /** 나누기 진행 글 (단계 이름) */
     progressLabel: (progress: BookProgress) => string;
+    /** 병합 칸 들어 보기: 미리 듣는 중인지, 들을 곡 넘기기, 멈추기 (MergeDialog) */
+    listening?: boolean;
+    onlisten?: (song: Song, opts: { from?: Rat | undefined; range?: readonly [Rat, Rat] | undefined; keep?: boolean }) => Promise<boolean>;
+    onstoplisten?: () => void;
   }
 
   let p: Props = $props();
@@ -150,6 +154,10 @@
           profile={p.profile}
           locked={p.locked}
           activeTrackId={p.activeTrackId}
+          cursor={p.cursor}
+          listening={p.listening ?? false}
+          {...p.onlisten ? { onlisten: p.onlisten } : {}}
+          {...p.onstoplisten ? { onstoplisten: p.onstoplisten } : {}}
           where={p.where}
           onseek={p.onseek}
           onapply={p.onapply}

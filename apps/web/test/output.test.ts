@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { emptySong, MOBILE_PROFILE, rat, type Song, type Track } from "@mmlce/core";
 import { parseTrackText } from "@mmlce/mml";
 import { analyzeSong } from "../src/lib/analysis";
-import { isCopied, nextExportPick, outputRows, previewRows, tempoAdvice, trackStamp } from "../src/lib/output";
+import { isCopied, nextExportPick, outputRows, pasteOrderAdd, pasteOrderOf, pasteOrderRemove, pasteOrderShift, previewRows, songOrdered, tempoAdvice, trackStamp, type PasteOrder } from "../src/lib/output";
 
 function track(id: string, playerId: string, text: string): Track {
   return { id, playerId, name: id, color: "", role: "free", mute: false, solo: false, notes: parseTrackText(id, { text }).notes, spelling: {} };
@@ -136,5 +136,58 @@ describe("analyzeSong 글자 수 검사", () => {
     expect(result.tracks[0]!.diagnostics.map((d) => d.code)).not.toContain("char-limit");
     // 원문이 없는 트랙(출력기 글)은 그대로 알린다
     expect(result.tracks[1]!.diagnostics.map((d) => d.code)).toContain("char-limit");
+  });
+});
+
+describe("붙여넣는 순서", () => {
+  // 악보1 피아노 1-4, 악보2 류트 1-3
+  const songIds = ["p1", "p2", "p3", "p4", "l1", "l2", "l3"];
+  const plain = (ids: string[]): PasteOrder => ({ ids, custom: false });
+
+  it("뒤 트랙을 먼저, 앞 트랙을 나중에 체크해도 곡 순서다", () => {
+    let o = plain(["p1", "p2", "p3", "p4"]);
+    o = pasteOrderAdd(o, ["l3"], songIds);
+    o = pasteOrderAdd(o, ["l1"], songIds);
+    expect(o).toEqual({ ids: ["p1", "p2", "p3", "p4", "l1", "l3"], custom: false });
+  });
+
+  it("껐다가 다시 켜도 같은 칸이다", () => {
+    const o = plain(["p1", "p2", "p3", "p4"]);
+    const off = pasteOrderRemove(o, ["p2"], songIds);
+    expect(off.ids).toEqual(["p1", "p3", "p4"]);
+    expect(pasteOrderAdd(off, ["p2"], songIds)).toEqual(o);
+  });
+
+  it("옮기면 직접 정한 순서가 되고, 그 뒤 체크한 트랙은 맨 뒤 칸이다", () => {
+    let o = pasteOrderShift(plain(["p1", "p2", "l1"]), "p1", 1, songIds);
+    expect(o).toEqual({ ids: ["p2", "p1", "l1"], custom: true });
+    o = pasteOrderAdd(o, ["p3"], songIds);
+    expect(o).toEqual({ ids: ["p2", "p1", "l1", "p3"], custom: true });
+    // 악보 체크는 그 악보 트랙 차례대로 맨 뒤에
+    o = pasteOrderAdd(o, ["l3", "l2", "l1"], songIds);
+    expect(o.ids).toEqual(["p2", "p1", "l1", "p3", "l2", "l3"]);
+    // 빼면 뒤 칸이 당겨지고 직접 정한 순서는 그대로
+    expect(pasteOrderRemove(o, ["l1"], songIds)).toEqual({ ids: ["p2", "p1", "p3", "l2", "l3"], custom: true });
+  });
+
+  it("옮기다가 곡 순서와 같아지면 곡 순서로 돌아간다", () => {
+    const moved = pasteOrderShift(plain(["p1", "p2"]), "p2", -1, songIds);
+    expect(moved.custom).toBe(true);
+    expect(pasteOrderShift(moved, "p2", 1, songIds)).toEqual(plain(["p1", "p2"]));
+    // 빼서 곡 순서와 같아져도
+    expect(pasteOrderRemove({ ids: ["p1", "p3", "p2"], custom: true }, ["p3"], songIds)).toEqual(plain(["p1", "p2"]));
+  });
+
+  it("맨 앞을 앞으로, 맨 뒤를 뒤로, 없는 트랙은 그대로", () => {
+    const o = plain(["p1", "p2"]);
+    expect(pasteOrderShift(o, "p1", -1, songIds)).toBe(o);
+    expect(pasteOrderShift(o, "p2", 1, songIds)).toBe(o);
+    expect(pasteOrderShift(o, "l1", 1, songIds)).toBe(o);
+  });
+
+  it("곡 순서일 때 곡에서 트랙 차례가 바뀌면 새 곡 순서를 따른다", () => {
+    expect(pasteOrderOf(plain(["p1", "p2"]), ["p2", "p1"])).toEqual(plain(["p2", "p1"]));
+    expect(pasteOrderOf({ ids: ["p2", "p1"], custom: true }, songIds)).toEqual({ ids: ["p2", "p1"], custom: true });
+    expect(songOrdered(["a", "b"], ["x", "b", "a"])).toEqual(["a", "b", "x"]);
   });
 });
