@@ -1,9 +1,11 @@
 # BiNote (バイノート)
 
-[한국어](README.md) · [English](README.en.md) · 日本語
+[한국어](README.md) · [English](README.en.md) · 日本語 · [繁體中文](README.zh-TW.md) · [简体中文](README.zh-Hans.md)
 
 BiNoteは、マビノギモバイル用のMML楽譜エディタです。ピアノロールとタブ譜でMMLを作成できます。
 和音ごとにトラックを分けて書き、複数のサウンドパックで試聴し、ゲームの制限(文字数・和音数)に合わせて最適化・分割できます。
+
+**アプリを開く: [binote.pages.dev](https://binote.pages.dev)**
 
 **マビノギ**(PC版)用の楽譜とは、一部で**互換性の問題**が起きることがあります。下の「互換性について」をご覧ください。
 

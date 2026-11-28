@@ -1,9 +1,11 @@
 # BiNote
 
-[한국어](README.md) · English · [日本語](README.ja.md)
+[한국어](README.md) · English · [日本語](README.ja.md) · [繁體中文](README.zh-TW.md) · [简体中文](README.zh-Hans.md)
 
 BiNote is an MML score editor for Mabinogi Mobile. You write MML on a piano roll or a tab view.
 Each chord voice is its own track. You can listen with several soundpacks, and optimize or split the MML to fit the game limits (characters and chords per score).
+
+**Open the app: [binote.pages.dev](https://binote.pages.dev)**
 
 Scores for **Mabinogi** (the PC game) may have some **compatibility problems**. See "Compatibility" below.
 

@@ -1,9 +1,11 @@
 # BiNote (바이노트)
 
-한국어 · [English](README.en.md) · [日本語](README.ja.md)
+한국어 · [English](README.en.md) · [日本語](README.ja.md) · [繁體中文](README.zh-TW.md) · [简体中文](README.zh-Hans.md)
 
 마비노기 모바일용 MML 악보 편집기입니다. MML을 피아노롤, 타브로 작성할 수 있습니다.
 화음별로 트랙으로 작성 가능하고, 여러 사운드팩으로 들어 보고, 게임 한도(글자 수·화음 수)에 맞게 최적화·분할하는 MML 편집도구입니다.
+
+**바로 쓰기: [binote.pages.dev](https://binote.pages.dev)**
 
 **마비노기**용 악보와는 일부 **호환성 문제**가 발생할 수 있습니다. 아래 호환성 문단을 참고해주세요.
 

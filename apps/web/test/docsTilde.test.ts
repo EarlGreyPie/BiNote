@@ -10,6 +10,8 @@ const files = [
   "README.md",
   "README.en.md",
   "README.ja.md",
+  "README.zh-TW.md",
+  "README.zh-Hans.md",
   "CHANGELOG.md",
   "docs/가이드북.md",
   ...readdirSync(new URL("docs/guide/", root))
