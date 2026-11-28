@@ -1,16 +1,10 @@
 <script lang="ts" module>
-  import type { BarRange } from "@mmlce/core";
-
-  /** 바꿀 자리: 곡 전체 · 선택 마디(반복 구간이 걸친 마디) · 반복 구간 그대로(마디선에 맞지 않을 때) · 적은 마디 */
-  export type TempoTarget =
-    | { readonly kind: "all" }
-    | { readonly kind: "loopBars" }
-    | { readonly kind: "loop" }
-    | { readonly kind: "bars"; readonly bars: readonly BarRange[] };
+  export type { TempoTarget } from "./BarTargetRow.svelte";
 </script>
 
 <script lang="ts">
-  import { parseBarList } from "@mmlce/core";
+  import type { BarRange } from "@mmlce/core";
+  import BarTargetRow, { barTarget, initialBarMode, type BarMode, type TempoTarget } from "./BarTargetRow.svelte";
   import { changedBpm, type TempoChange } from "@mmlce/mml";
   import { t } from "./i18n.svelte";
 
@@ -41,17 +35,13 @@
   const LABEL = { set: "ui.tempoChangeSet", add: "ui.tempoChangeAdd", scale: "ui.tempoChangeScale" } as const;
   // 마디: 반복 구간이 있으면 처음엔 그 마디만 (마디선에 맞지 않는 반복 구간은 전처럼 구간 그대로)
   // svelte-ignore state_referenced_locally
-  const initial = loopRange ? ({ kind: "loop" } as const) : loopBars ? ({ kind: "loopBars" } as const) : ({ kind: "all" } as const);
-  let barMode = $state<"all" | "loopBars" | "loop" | "typed">(initial.kind);
+  const initial = initialBarMode(loopBars, loopRange);
+  let barMode = $state<BarMode>(initial);
   let barText = $state("");
-  const typedBars = $derived(parseBarList(barText));
-  const target = $derived<TempoTarget | undefined>(
-    barMode === "typed" ? (typedBars ? { kind: "bars", bars: typedBars } : undefined) : barMode === "all" ? { kind: "all" } : { kind: barMode },
-  );
+  const target = $derived<TempoTarget | undefined>(barTarget(barMode, barText));
   const bpms = $derived(target ? bpmsOf(target) : []);
-  const barSpan = (b: BarRange) => (b[0] === b[1] ? `${b[0]}` : `${b[0]}-${b[1]}`);
   // svelte-ignore state_referenced_locally
-  const first = bpmsOf(initial)[0] ?? 120;
+  const first = bpmsOf(barTarget(initial, "")!)[0] ?? 120;
   let mode = $state<Mode>("set");
   let value = $state(first);
   /** 실제 시간 지키기: 음 길이도 함께 맞춘다 (창을 열 때마다 끔) */
@@ -96,24 +86,8 @@
 
 <dialog bind:this={dialog} {onclose}>
   <h2>{t("ui.tempoChange")}</h2>
-  <div class="bars-row">
-    <span>{t("ui.volumeBars")}</span>
-    <label><input type="radio" name="tempo-bars" value="all" bind:group={barMode} onchange={pickBars} /> {t("ui.volumeBarsAll")}</label>
-    <label title={loopBars ? undefined : t("ui.volumeBarsNoLoop")}>
-      <input type="radio" name="tempo-bars" value="loopBars" bind:group={barMode} onchange={pickBars} disabled={!loopBars} />
-      {loopBars ? t("ui.volumeBarsLoop", { bars: barSpan(loopBars) }) : t("ui.volumeBarsLoopNone")}
-    </label>
-    {#if loopRange}
-      <label><input type="radio" name="tempo-bars" value="loop" bind:group={barMode} onchange={pickBars} /> {t("ui.tempoBarsLoopExact", { range: loopRange })}</label>
-    {/if}
-    <label><input type="radio" name="tempo-bars" value="typed" bind:group={barMode} onchange={pickBars} /> {t("ui.volumeBarsTyped")}</label>
-    {#if barMode === "typed"}
-      <input class="bars" type="text" inputmode="text" placeholder={t("ui.volumeBarsPlaceholder")} bind:value={barText} oninput={pickBars} aria-label={t("ui.volumeBarsTyped")} />
-    {/if}
-  </div>
-  {#if barMode === "typed" && barText.trim() !== "" && !typedBars}
-    <p class="warn">{t("ui.volumeBarsInvalid")}</p>
-  {:else if target && target.kind !== "all" && bpms.length === 0}
+  <BarTargetRow name="tempo-bars" {loopBars} {loopRange} bind:mode={barMode} bind:text={barText} onpick={pickBars} />
+  {#if target && target.kind !== "all" && bpms.length === 0}
     <p class="warn">{t("ui.tempoChangeNoBars")}</p>
   {/if}
   <div class="seg">
@@ -162,16 +136,6 @@
   h2 {
     margin: 0 0 8px;
     font-size: 1.05rem;
-  }
-  .bars-row {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px 12px;
-    margin-bottom: 8px;
-  }
-  .bars-row .bars {
-    width: 9em;
   }
   .seg {
     display: inline-flex;

@@ -4,6 +4,7 @@ import { mergeTies } from "./compare.js";
 import { gameScores } from "./game-output.js";
 import { parseMml } from "./parser.js";
 import { audibleTempo } from "./tempo-text.js";
+import { widestLimit } from "./track-limits.js";
 
 /** 게임 출력 시간표. 악보마다 템포·끝과, "악보 + 소리 묶음"마다 음 목록 */
 export interface GameTimeline {
@@ -34,11 +35,11 @@ export function gameTimelineOf(whole: Song, profile: GameProfile, player?: strin
   const scores: string[] = [];
   const events = new Map<string, string[]>();
   const count = new Map<string, number>();
-  for (const score of gameScores(song, chords, profile.maxChordsPerPlayer, profile.charLimitPerScore)) {
+  for (const score of gameScores(song, chords, profile.maxChordsPerPlayer, widestLimit(profile))) {
     const index = count.get(score.playerId) ?? 0;
     count.set(score.playerId, index + 1);
     const name = `${score.playerId}#${index}`;
-    const channels = score.text.replace(/^MML@/, "").replace(/;$/, "").split(",").map((text) => parseMml(text));
+    const channels = score.text.replace(/^MML@/, "").replace(/;$/, "").split(",").map((text) => parseMml(text, { lengths: profile.length }));
     const tempo = audibleTempo(normalizeTempo(channels.flatMap((c) => c.tempo)));
     const end = channels.reduce((m, c) => (c.gameEnd.n * m.d > m.n * c.gameEnd.d ? c.gameEnd : m), { n: 0, d: 1 } as Rat);
     scores.push(`${name} t=${tempo.map((e) => `${r(e.at)}:${e.bpm}`).join(";")} end=${r(end)}`);

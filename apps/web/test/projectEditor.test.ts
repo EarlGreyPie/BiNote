@@ -53,10 +53,14 @@ describe("parseEditorState", () => {
 
   it("없는 트랙·모르는 격자·깨진 맞춤값은 버린다", () => {
     const state = parseEditorState(
-      { activeTrackId: "gone", division: 200, viewMode: "staff", tuning: "toString", capo: -1, reference: { name: "a" }, video: { name: "v", high: 1, low: 2 } },
+      { activeTrackId: "gone", division: 200, viewMode: "score", tuning: "toString", capo: -1, reference: { name: "a" }, video: { name: "v", high: 1, low: 2 } },
       song,
     );
     expect(state).toEqual({});
+  });
+
+  it("오선보 보기(실험실)도 읽는다", () => {
+    expect(parseEditorState({ viewMode: "staff" }, song)).toEqual({ viewMode: "staff" });
   });
 
   it("트랙 보기 상태는 있는 트랙의 숨김·잠금만 남긴다", () => {

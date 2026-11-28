@@ -16,7 +16,8 @@
     chars: ReadonlyMap<string, number>;
     colors: ReadonlyMap<string, string>;
     activeTrackId: string | undefined;
-    charLimit: number;
+    /** 트랙마다 글자 수 한도 (게임이 붙여넣는 자리마다 한도가 다를 수 있다) */
+    charLimit: (trackId: string) => number;
     trackInstrument: (track: Track) => string;
     actions: TrackActions;
   }
@@ -190,7 +191,7 @@
               <span class="dot"></span>{k + 1}{#if actions.isMelody(id)}<span class="melody" title={t("ui.melodyTrack")}>♪</span>{/if} {track.name}
               {#if actions.viewOf(id).hidden}<span class="flag" title={t("ui.showTrack")}><Icon name="eye-off" size={12} /></span>{/if}
               {#if actions.viewOf(id).locked}<span class="flag" title={t("ui.unlockTrack")}><Icon name="lock" size={12} /></span>{/if}
-              <span class="count" class:over={count > charLimit}>{count}</span>
+              <span class="count" class:over={count > charLimit(id)}>{count}</span>
             </button>
           {/if}
         {/each}

@@ -50,6 +50,7 @@ export const COMMANDS = [
   "note.glue",
   "event.tempo",
   "event.marker",
+  "event.memo",
   "tempo.tap",
   "record.toggle",
   "play.toggle",
@@ -125,6 +126,8 @@ const COMMON: Bindings = {
   "note.glue": ["Alt+G"],
   "event.tempo": ["Alt+B"],
   "event.marker": ["Alt+M"],
+  // 작업 메모 넣기 (실험실): 반복 구간이 있으면 그 범위, 없으면 편집 커서 자리
+  "event.memo": ["Alt+N"],
   // 탭 템포를 켰을 때만 쓴다 (꺼져 있으면 키를 그대로 넘긴다)
   "tempo.tap": ["T"],
   // MIDI 건반 녹음 줄(실험실)이 열려 있을 때만 쓴다: 녹음 시작 / 멈추고 넣기

@@ -2,6 +2,7 @@ import { add, cmp, eq, trackInstrument, type GameProfile, type Note, type Rat, t
 import { chordsPerScore, scoreChunks } from "./clipboard.js";
 import { optimizeMml } from "./optimizer.js";
 import { placeTempoByScore } from "./tempo-placement.js";
+import { trackLimits } from "./track-limits.js";
 
 /**
  * 화음 분산 (설계 8장). 같은 연주자 안에서 글자 수가 넘치는 채널의 음 묶음을
@@ -22,24 +23,34 @@ export interface DistributeResult {
 /** 한 연주자에서 시도할 최대 옮기기 횟수 */
 const MAX_MOVES = 200;
 
+/** 악보책 몇 권에 나눠 넣을 채널 길이 (자리 한도 × books × share) */
+export interface BookFit {
+  readonly books: number;
+  readonly share: number;
+}
+
 export interface DistributeOptions {
   /**
-   * 채널마다 맞출 글자 수. 생략하면 프로필 한도(한 권에 넣기).
-   * 악보책으로 나눌 때는 "권 수 × 한도"보다 조금 작게 주어 채널 길이를 고르게 해 권 수를 줄인다
+   * 악보책으로 나눌 때 채널마다 맞출 글자 수 = 그 트랙 자리 한도(trackLimits) × books × share (내림).
+   * share를 1보다 조금 작게 주어 채널 길이를 고르게 해 권 수를 줄인다. 생략하면 자리 한도 그대로 (한 권에 넣기)
    */
-  readonly limit?: number;
+  readonly fit?: BookFit;
   /** 잠근 트랙 id: 음을 빼지도 넣지도 않는다 */
   readonly locked?: ReadonlySet<string>;
 }
 
 export function distributeChords(song: Song, profile: GameProfile, options: DistributeOptions = {}): DistributeResult {
-  const limit = options.limit ?? profile.charLimitPerScore;
+  const slot = trackLimits(song, profile);
   const start = baseOf(song, profile, options.locked);
   let tracks = start.tracks;
   const placed = start.placed;
   let moved = 0;
-  const lengthOf = (k: number) => optimizeMml(tracks[k]!.notes, { tempo: placed[k] ?? [] }).text.length;
+  const lengthOf = (k: number) => optimizeMml(tracks[k]!.notes, { tempo: placed[k] ?? [], profile }).text.length;
   let sizes = start.sizes;
+  /** 트랙 k가 맞출 글자 수 (자리 한도, 악보책이면 × 권 수 × share) */
+  const fit = options.fit;
+  const limits = start.tracks.map((t) => (fit ? Math.floor((slot.get(t.id) ?? 0) * fit.books * fit.share) : (slot.get(t.id) ?? 0)));
+  const over = (k: number, size = sizes[k]!) => size - limits[k]!;
 
   // 같은 소리 묶음(같은 악보·실제 악기·끄기·솔로·채널 볼륨·팬) 트랙끼리만 옮긴다 (화음 분산 창과 같은 기준).
   // 같은 연주자라도 악보가 다르면(오르골 3+3 등) 다른 악기가 치고, 끈 트랙이나 볼륨이 다른 트랙으로 가면 소리가 바뀐다
@@ -55,13 +66,14 @@ export function distributeChords(song: Song, profile: GameProfile, options: Dist
     if (mine.length < 2) continue;
     const tried = new Set<string>();
     for (let step = 0; step < MAX_MOVES; step++) {
-      const from = mine.reduce((a, b) => (sizes[b]! > sizes[a]! ? b : a));
-      const excess = sizes[from]! - limit;
+      // 가장 많이 넘친 트랙부터 (자리마다 한도가 다를 수 있다. 같으면 가장 긴 트랙과 같다)
+      const from = mine.reduce((a, b) => (over(b) > over(a) ? b : a));
+      const excess = over(from);
       if (excess <= 0) break;
       let done = false;
       // 여유가 많은 채널부터
-      for (const to of [...mine].filter((k) => k !== from).sort((a, b) => sizes[a]! - sizes[b]!)) {
-        const room = limit - sizes[to]!;
+      for (const to of [...mine].filter((k) => k !== from).sort((a, b) => over(a) - over(b))) {
+        const room = -over(to);
         if (room <= 0) continue;
         const runs = freeRuns(tracks[from]!.notes, tracks[to]!.notes).flatMap(halves).filter(
           (r) => !tried.has(`${from}>${to}:${r[0]!.id}:${r.length}`),
@@ -81,7 +93,7 @@ export function distributeChords(song: Song, profile: GameProfile, options: Dist
           const after = [...sizes];
           after[from] = lengthOf(from);
           after[to] = lengthOf(to);
-          if (after[to]! <= limit && after[from]! < sizes[from]!) {
+          if (after[to]! <= limits[to]! && after[from]! < sizes[from]!) {
             sizes = after;
             moved += run.length;
             done = true;
@@ -108,7 +120,7 @@ export function distributeChords(song: Song, profile: GameProfile, options: Dist
   return {
     song: { ...song, tracks: out },
     moved,
-    over: out.filter((_, k) => sizes[k]! > limit).map((t) => t.id),
+    over: out.filter((_, k) => over(k) > 0).map((t) => t.id),
   };
 }
 
@@ -147,7 +159,7 @@ function baseOf(song: Song, profile: GameProfile, locked: ReadonlySet<string> | 
   // 게임에는 악보마다 템포를 넣으므로 악보마다 자리를 정한다. 잠근 트랙에는 맡기지 않는다 (글자 수 줄이기와 같게)
   const placedBy = placeTempoByScore({ ...song, tracks }, chordsPerScore(song, profile), undefined, locked);
   const placed = tracks.map((t) => placedBy.get(t.id) ?? []);
-  const sizes = tracks.map((t, k) => optimizeMml(t.notes, { tempo: placed[k] ?? [] }).text.length);
+  const sizes = tracks.map((t, k) => optimizeMml(t.notes, { tempo: placed[k] ?? [], profile }).text.length);
   lastBase = { song, profile, locked: lockedKey, tracks, placed, sizes };
   return lastBase;
 }

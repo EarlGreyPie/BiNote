@@ -2,10 +2,11 @@
   import type { MessageKey } from "@mmlce/i18n";
   import { i18n, t } from "./i18n.svelte";
   import { guideUrl } from "./links";
+  import type { ViewMode } from "./viewRules";
 
-  /** 지금 보기(롤/타브)에 맞는 조작 안내를 항목별 줄로 보여 준다 */
+  /** 지금 보기(롤/타브/오선보)에 맞는 조작 안내를 항목별 줄로 보여 준다 */
   interface Props {
-    viewMode: "roll" | "tab";
+    viewMode: ViewMode;
     onkeymap: () => void;
   }
 
@@ -25,11 +26,12 @@
     "ui.helpRoll11",
   ];
   const TAB: readonly MessageKey[] = ["ui.helpTab1", "ui.helpTab2", "ui.helpTab3", "ui.helpTab4", "ui.helpTab5"];
-  const lines = $derived(viewMode === "roll" ? ROLL : TAB);
+  const STAFF: readonly MessageKey[] = ["ui.helpStaff1", "ui.helpStaff2", "ui.helpStaff3"];
+  const lines = $derived(viewMode === "roll" ? ROLL : viewMode === "tab" ? TAB : STAFF);
 </script>
 
 <div class="help-body">
-  <strong>{t("ui.helpTitle")} · {viewMode === "roll" ? t("ui.pianoRoll") : t("ui.tabView")}</strong>
+  <strong>{t("ui.helpTitle")} · {viewMode === "roll" ? t("ui.pianoRoll") : viewMode === "tab" ? t("ui.tabView") : t("ui.staffView")}</strong>
   <ul>
     {#each lines as key (key)}<li>{t(key)}</li>{/each}
   </ul>

@@ -6,10 +6,10 @@
  */
 
 /**
- * Basic Scriptor 연결을 보일지. Basic Scriptor 프로그램이 아직 완성 전이라 rc 전에 꺼 두었다 (2026-11-02).
- * 끄면 받아 적기 창에 Basic Scriptor (PC) 쪽이 나오지 않고 브라우저 안 basic-pitch만 쓴다. 연결 코드(이 파일)와 문구(…Scriptor 키)는 그대로 남아 있어, 완성되면 true로 바꾸기만 하면 된다
+ * Basic Scriptor 연결을 보일지. rc 전에 꺼 두었다가(2026-11-02) Basic Scriptor 서버(API 1판)가 나와 다시 켰다 (2026-11-03, 1.1 개발 브랜치. 1.0 판에서는 꺼져 있다).
+ * 끄면 받아 적기 창에 Basic Scriptor (PC) 쪽이 나오지 않고 브라우저 안 basic-pitch만 쓴다. 숨길 때 보이는 문구는 Basic Scriptor를 말하지 않는 키, 켤 때는 …Scriptor 키를 쓴다
  */
-export const BASIC_SCRIPTOR_ON = false;
+export const BASIC_SCRIPTOR_ON = true;
 
 export const BASIC_SCRIPTOR_API = 1;
 export const DEFAULT_BASIC_SCRIPTOR_PORT = 47811;

@@ -18,6 +18,11 @@ export interface TimeSigEvent {
   readonly at: Rat;
   readonly beats: number;
   readonly unit: number;
+  /**
+   * 못갖춘마디: 곡 처음(0)의 박자표에만 붙는다. 첫 마디는 이 박자표 길이의 짧은 마디(0번 마디)이고, 마디 번호는 다음 박자표부터 1이다.
+   * 화면에는 이 박자표를 쓰지 않고 다음(본) 박자표만 보인다. 뒤에 박자표가 없으면 쓰지 않는다 (meter.ts pickupOf)
+   */
+  readonly pickup?: boolean;
   readonly extras?: Extras;
 }
 
@@ -28,11 +33,37 @@ export interface KeyEvent {
   readonly extras?: Extras;
 }
 
+/**
+ * 마커. kind가 없으면 곡 구조 마커(A·B·후렴 등, 악보책 나누기·마비꼬·MIDI 내보내기가 읽는다).
+ * kind가 "memo"면 작업 메모(할 일 쪽지): 프로젝트 파일(.mme)에만 저장하고 어떤 내보내기에도 나가지 않는다.
+ * 옛 앱은 모르는 칸(kind·done·end)을 extras로 지켜 주므로 보통 마커로 보이고 다시 저장해도 사라지지 않는다
+ */
 export interface Marker {
   readonly id: string;
   readonly at: Rat;
   readonly label: string;
+  /** "memo" = 작업 메모. 없으면 구조 마커 */
+  readonly kind?: "memo";
+  /** 작업 메모를 끝냈는지 (메모에만) */
+  readonly done?: boolean;
+  /** 범위 메모의 끝 (at보다 뒤, 메모에만). 없으면 한 자리 메모 */
+  readonly end?: Rat;
   readonly extras?: Extras;
+}
+
+/** 작업 메모인지 */
+export function isMemo(m: Pick<Marker, "kind">): boolean {
+  return m.kind === "memo";
+}
+
+/** 곡 구조 마커만 (작업 메모를 뺀다). 마커를 구간 이름·나눌 자리로 읽는 곳은 이것만 본다 */
+export function structureMarkers<M extends Pick<Marker, "kind">>(markers: readonly M[]): M[] {
+  return markers.filter((m) => !isMemo(m));
+}
+
+/** 작업 메모만 (자리순) */
+export function memoMarkers<M extends Pick<Marker, "kind">>(markers: readonly M[]): M[] {
+  return markers.filter(isMemo);
 }
 
 /**

@@ -41,11 +41,12 @@
   import { type LengthName, type NoteLength, type Orientation, type RollTool } from "./roll";
   import { coarsePointer } from "./mmlPad.svelte";
   import { nextTabAlign, TAB_ALIGN_ICON, TAB_ALIGN_LABEL, type TabAlign } from "./tabAlign";
+  import type { ViewMode } from "./viewRules";
 
   /** 보기별 도구줄: 피아노롤이면 입력 도구·박자·격자·줌·마디·레이어, 타브면 튜닝·카포·격자 */
   interface Props {
-    viewMode: "roll" | "tab";
-    onview: (mode: "roll" | "tab") => void;
+    viewMode: ViewMode;
+    onview: (mode: ViewMode) => void;
     /** 단축키 안내 (툴팁에 붙인다) */
     tabHint: string;
     tool: RollTool;
@@ -187,6 +188,11 @@
   let referenceInput: HTMLInputElement;
   let videoInput: HTMLInputElement;
 
+  /** 원곡 고르기 창을 연다 (원곡을 아직 안 불러온 곡의 원곡 줄 단추가 쓴다) */
+  export function pickReference(): void {
+    referenceInput.click();
+  }
+
   const LAYERS: readonly RollLayer[] = ["track", "score", "all"];
   const layerLabel = (l: RollLayer) => t(l === "track" ? "ui.layerTrack" : l === "score" ? "ui.layerScore" : "ui.layerAll");
 
@@ -273,6 +279,10 @@
   <span class="seg">
     <button class:on={viewMode === "roll"} onclick={() => onview("roll")}>{t("ui.pianoRoll")}</button>
     <button class:on={viewMode === "tab"} title={t("ui.tabView") + tabHint} onclick={() => onview("tab")}>{t("ui.tabView")}</button>
+    {#if labs.on}
+      <!-- 오선보 보기 (실험실, 보기만) -->
+      <button class:on={viewMode === "staff"} title={t("ui.staffTabHelp")} onclick={() => onview("staff")}>{t("ui.staffView")}</button>
+    {/if}
   </span>
   <span class="sep"></span>
 
@@ -364,6 +374,19 @@
         </span>
       </span>
     {/if}
+  {:else if viewMode === "staff"}
+    <!-- 오선보: 곡 단위 박자와 그릴 트랙(피아노롤과 같은 범위)만. 확대는 오선보 칸 머리에 있다 -->
+    {@render meterField()}
+    <span class="spacer"></span>
+    {@render dockSwitch()}
+    <span class="field" title={t("ui.layerHelp")}>
+      <span class="muted">{t("ui.layer")}</span>
+      <span class="seg">
+        {#each LAYERS as l (l)}
+          <button class:on={layer === l} onclick={() => onlayer(l)}>{layerLabel(l)}</button>
+        {/each}
+      </span>
+    </span>
   {:else}
     <label class="field" title={t("ui.tuningHelp")}>
       <span class="muted">{t("ui.tuning")}</span>

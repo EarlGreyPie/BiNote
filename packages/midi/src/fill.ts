@@ -1,4 +1,4 @@
-import { add, cmp, rat, sub, type Note, type Rat } from "@mmlce/core";
+import { add, cmp, rat, sub, type GameProfile, type Note, type Rat } from "@mmlce/core";
 import { optimizeMml } from "@mmlce/mml";
 import type { GridNote } from "./quantize.js";
 
@@ -15,8 +15,10 @@ import type { GridNote } from "./quantize.js";
 export interface FillOptions {
   /** 이보다 짧은 조각은 넣지 않는다 (글자 수만 늘고 소리 보강은 작다) */
   readonly minLength: Rat;
-  /** 채널 글자 수 한도 */
-  readonly charLimit: number;
+  /** 채널 글자 수 한도. 목록이면 채널(트랙 차례)마다 그 자리 한도 */
+  readonly charLimit: number | readonly number[];
+  /** 곡의 게임 프로필 (글자 수를 셀 때 길이·옥타브 한도). 생략하면 기본 프로필 */
+  readonly profile?: GameProfile;
 }
 
 export interface FillResult {
@@ -83,10 +85,11 @@ export function fillRests(
 
   // 글자 수 한도: 넘친 채널은 넣은 음을 뒤에서부터 덜어 낸다 (이분 탐색으로 남길 개수를 찾는다)
   let total = 0;
+  const limitAt = (k: number) => (typeof options.charLimit === "number" ? options.charLimit : (options.charLimit[k] ?? Infinity));
   out.forEach((track, k) => {
     const mine = added[k]!;
-    const length = (notes: readonly Note[]) => optimizeMml(notes).text.length;
-    if (mine.length > 0 && length(track) > options.charLimit) {
+    const length = (notes: readonly Note[]) => optimizeMml(notes, { profile: options.profile }).text.length;
+    if (mine.length > 0 && length(track) > limitAt(k)) {
       const without = (keep: number) => {
         const drop = new Set(mine.slice(keep).map((n) => n.id));
         return track.filter((n) => !drop.has(n.id));
@@ -95,7 +98,7 @@ export function fillRests(
       let hi = mine.length;
       while (lo < hi) {
         const mid = (lo + hi + 1) >> 1;
-        if (length(without(mid)) <= options.charLimit) lo = mid;
+        if (length(without(mid)) <= limitAt(k)) lo = mid;
         else hi = mid - 1;
       }
       out[k] = without(lo);

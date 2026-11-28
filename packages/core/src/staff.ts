@@ -1,7 +1,9 @@
 import { add, cmp, div, mul, rat, sub, toFloat, ZERO, type Rat } from "./rat.js";
 import type { Note, Song } from "./model.js";
-import { meterGrid } from "./meter.js";
+import { meterGrid, pickupOf } from "./meter.js";
 import { DEFAULT_BPM, normalizeTempo } from "./time.js";
+import { INSTRUMENTS } from "./instruments.js";
+import { keyAt } from "./key.js";
 
 /**
  * 오선보 보기 (실험실, 보기 전용). 곡을 마디마다 그릴 음표 모양(온·2·4·8·16·32·64분 + 점 + 잇단음표)으로 나눈다.
@@ -11,7 +13,7 @@ import { DEFAULT_BPM, normalizeTempo } from "./time.js";
 
 /** 오선보 마디 하나 (곡 시간, 온음표 단위) */
 export interface StaffBar {
-  /** 마디 번호 (1부터, barAt과 같은 규칙: 박자가 바뀌기 전 덜 찬 마디도 한 마디) */
+  /** 마디 번호 (1부터, 못갖춘마디는 0. barAt과 같은 규칙: 박자가 바뀌기 전 덜 찬 마디도 한 마디) */
   readonly number: number;
   readonly start: Rat;
   readonly end: Rat;
@@ -19,6 +21,17 @@ export interface StaffBar {
   readonly unit: number;
   /** 박자표를 그릴지 (첫 마디, 박자가 바뀐 마디) */
   readonly showSig: boolean;
+  /**
+   * 이 마디를 적는 조표 (올림표 개수, 내림표면 음수). 마디 시작 자리의 곡 조표(Song.keys)다.
+   * 조표가 마디 중간에서 바뀌면 다음 마디부터 새 조표로 적는다 (그 마디 남은 음은 앞 조표에 임시표로 적어 소리는 맞다)
+   */
+  readonly fifths: number;
+  /** 조표를 그릴지 (첫 마디가 다장조가 아닐 때, 조표가 바뀐 마디) */
+  readonly showKey: boolean;
+  /** 조표가 바뀐 마디: 앞 조표 (새 조표에 없는 앞 조표의 올림·내림을 제자리표로 지운다) */
+  readonly cancelKey?: number;
+  /** 그릴 박자표가 마디 박자와 다를 때 (못갖춘마디는 본 박자표를 그린다) */
+  readonly shownSig?: { readonly beats: number; readonly unit: number };
   /** 이 마디 안의 템포 표시 (첫 마디는 처음 템포를 늘 넣는다) */
   readonly tempo: readonly { readonly at: Rat; readonly bpm: number }[];
 }
@@ -43,13 +56,27 @@ export interface StaffItem {
   readonly attack: boolean;
   /** 다음 조각과 붙임줄로 잇는다 */
   readonly tie: boolean;
-  /** 임시표 (조표 없이 올림표로 쓴다. n = 제자리표) */
-  readonly accidental?: "#" | "n";
+  /** 임시표 (마디의 조표에 견준다. n = 제자리표) */
+  readonly accidental?: StaffAccidental;
+  /** 앞 조각에서 붙임줄로 이어 받은 조각 (임시표를 다시 붙이지 않는다) */
+  readonly tiedIn?: boolean;
+  /** 같은 자리·같은 길이로 함께 치는 다른 음 (큰보표에서 트랙을 합친 화음). pitch와 겹치지 않는다 */
+  readonly chord?: readonly StaffChordKey[];
   /** 셈여림 (v를 pp~ff로 어림, 앞과 달라진 곳에만) */
   readonly dynamic?: string;
   /** 박자 밖 음이라 그리기용으로 자리·길이를 맞췄다 */
   readonly approx: boolean;
 }
+
+/** 화음의 다른 음 하나 */
+export interface StaffChordKey {
+  readonly pitch: number;
+  readonly noteId: string;
+  readonly accidental?: StaffAccidental;
+}
+
+/** 임시표: 올림표·내림표·제자리표 */
+export type StaffAccidental = "#" | "b" | "n";
 
 export interface StaffMeasure {
   readonly items: readonly StaffItem[];
@@ -57,8 +84,10 @@ export interface StaffMeasure {
   readonly fullRest: boolean;
 }
 
+export type StaffClef = "treble" | "bass" | "percussion";
+
 export interface StaffTrack {
-  readonly clef: "treble" | "bass";
+  readonly clef: StaffClef;
   /** bars와 같은 순서·개수 */
   readonly measures: readonly StaffMeasure[];
   /** 너무 짧아 그리기용 칸에 맞추면 사라지는 음 수 (곡에는 그대로 있다) */
@@ -70,6 +99,46 @@ export const STAFF_DYNAMICS = ["pp", "p", "mp", "mf", "f", "ff"] as const;
 
 const LETTERS = ["c", "c", "d", "d", "e", "f", "f", "g", "g", "a", "a", "b"] as const;
 const SHARP = [false, true, false, true, false, false, true, false, true, false, true, false] as const;
+/** 글자 → 제자리 음 번호 % 12 */
+const NATURAL: Readonly<Record<string, number>> = { c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b: 11 };
+/** 올림표가 붙는 차례 (내림표는 거꾸로) */
+const SHARP_ORDER = ["f", "c", "g", "d", "a", "e", "b"] as const;
+
+/** 조표가 이 글자에 붙이는 올림(1)·내림(-1)·없음(0) */
+export function keyAlter(letter: string, fifths: number): -1 | 0 | 1 {
+  const i = SHARP_ORDER.indexOf(letter as (typeof SHARP_ORDER)[number]);
+  if (i < 0) return 0;
+  if (fifths > 0) return i < fifths ? 1 : 0;
+  if (fifths < 0) return 6 - i < -fifths ? -1 : 0;
+  return 0;
+}
+
+/** 오선 위 음 이름: 글자, 올림(1)·내림(-1)·제자리(0), 옥타브 (글자 기준. B#3 = 가온 도) */
+export interface StaffSpelling {
+  readonly letter: string;
+  readonly alter: -1 | 0 | 1;
+  readonly octave: number;
+}
+
+/**
+ * 음 번호 → 오선 위 글자·올림·옥타브 (o4c = 60 = c/4). fifths는 조표.
+ * 조 안 음은 조표대로 적는다 (F# 장조의 E#, G♭ 장조의 C♭도). 조 밖 음은 올림표 조·다장조면 올림표, 내림표 조면 내림표로 적는다
+ */
+export function staffSpell(pitch: number, fifths = 0): StaffSpelling {
+  const pc = ((pitch % 12) + 12) % 12;
+  // 조 안 음: 글자마다 조표가 붙인 높이와 같은가
+  for (const letter of SHARP_ORDER) {
+    const alter = keyAlter(letter, fifths);
+    if (alter !== 0 && (NATURAL[letter]! + alter + 12) % 12 === pc) return { letter, alter, octave: Math.floor((pitch - alter) / 12) - 1 };
+  }
+  const natural = Object.entries(NATURAL).find(([, n]) => n === pc);
+  if (natural) return { letter: natural[0], alter: 0, octave: Math.floor(pitch / 12) - 1 };
+  if (fifths < 0) {
+    const letter = LETTERS[(pc + 1) % 12]!;
+    return { letter, alter: -1, octave: Math.floor((pitch + 1) / 12) - 1 };
+  }
+  return { letter: LETTERS[pc]!, alter: 1, octave: Math.floor(pitch / 12) - 1 };
+}
 
 /** 음 번호 → 오선 위 글자·올림표·옥타브 (o4c = 60 = c/4). 조표 없이 올림표로 쓴다 */
 export function staffPitch(pitch: number): { readonly letter: string; readonly sharp: boolean; readonly octave: number } {
@@ -103,7 +172,7 @@ function songEnd(song: Pick<Song, "tracks">): Rat {
  * 곡의 마디 목록. 곡 끝(음이 없으면 한 마디)까지 박자표를 따라 마디를 나눈다.
  * 박자가 마디 중간에서 바뀌면 그 앞 마디는 덜 찬 마디로 끝낸다 (barAt과 같은 번호)
  */
-export function staffBars(song: Pick<Song, "tracks" | "timeSig" | "tempo">): StaffBar[] {
+export function staffBars(song: Pick<Song, "tracks" | "timeSig" | "tempo"> & Partial<Pick<Song, "keys">>): StaffBar[] {
   const sorted = [...song.timeSig].sort((a, b) => cmp(a.at, b.at));
   const sigs: { at: Rat; beats: number; unit: number }[] = [];
   for (const s of sorted) {
@@ -128,9 +197,17 @@ export function staffBars(song: Pick<Song, "tracks" | "timeSig" | "tempo">): Sta
     } while ((!next || cmp(pos, next) < 0) && cmp(pos, end) < 0);
   }
   const tempo = normalizeTempo(song.tempo);
+  // 못갖춘마디: 0번 마디이고 본 박자표를 그린다. 다음 마디(1번)는 같은 박자표라 다시 그리지 않는다
+  const pickup = pickupOf(song.timeSig);
+  const first = pickup ? 0 : 1;
+  const shown = (i: number) => (pickup && i === 0 ? pickup.main : raw[i]!);
   let bpm = tempo.length > 0 && cmp(tempo[0]!.at, ZERO) === 0 ? tempo[0]!.bpm : DEFAULT_BPM;
+  let key: number | undefined;
   return raw.map((b, i) => {
     const prev = raw[i - 1];
+    const before = key;
+    key = keyAt(song.keys, b.start);
+    const showKey = before === undefined ? key !== 0 : before !== key;
     const marks: { at: Rat; bpm: number }[] = i === 0 ? [{ at: ZERO, bpm }] : [];
     for (const e of tempo) {
       if (cmp(e.at, b.start) < 0 || cmp(e.at, b.end) >= 0 || (i === 0 && cmp(e.at, ZERO) === 0)) continue;
@@ -138,13 +215,19 @@ export function staffBars(song: Pick<Song, "tracks" | "timeSig" | "tempo">): Sta
       bpm = e.bpm;
       marks.push({ at: e.at, bpm: e.bpm });
     }
+    const sig = shown(i);
+    const prevSig = prev && shown(i - 1);
     return {
-      number: i + 1,
+      number: i + first,
       start: b.start,
       end: b.end,
       beats: b.beats,
       unit: b.unit,
-      showSig: !prev || prev.beats !== b.beats || prev.unit !== b.unit,
+      showSig: !prevSig || prevSig.beats !== sig.beats || prevSig.unit !== sig.unit,
+      ...(sig !== b ? { shownSig: { beats: sig.beats, unit: sig.unit } } : {}),
+      fifths: key,
+      showKey,
+      ...(showKey && before !== undefined && before !== 0 ? { cancelKey: before } : {}),
       tempo: marks,
     };
   });
@@ -419,7 +502,17 @@ function plan(segs: readonly Seg[], ws: Rat, we: Rat, bar: Rat, beat: Rat): Plan
  * 트랙 하나의 오선보 (마디마다). bars는 staffBars 결과.
  * volume은 프로필 v 범위 (셈여림 어림)
  */
-export function staffTrack(notes: readonly Note[], bars: readonly StaffBar[], volume: { readonly min: number; readonly max: number }): StaffTrack {
+export interface StaffTrackOptions {
+  /** 음자리표를 정해 둔다 (큰보표의 위·아래 단, 타악기). 없으면 음높이 가운데값으로 고른다 */
+  readonly clef?: StaffClef;
+  /** 대표 음 id → 같은 자리·길이로 함께 치는 다른 음 (화음으로 한 음표에 그린다) */
+  readonly chords?: ReadonlyMap<string, readonly Note[]>;
+  /** 셈여림을 쓸지 (한 단의 둘째 성부는 겹쳐 쓰지 않는다). 기본 true */
+  readonly dynamics?: boolean;
+}
+
+export function staffTrack(notes: readonly Note[], bars: readonly StaffBar[], volume: { readonly min: number; readonly max: number }, options: StaffTrackOptions = {}): StaffTrack {
+  const percussion = options.clef === "percussion";
   const sorted = [...notes].filter((n) => n.dur.n > 0).sort((a, b) => cmp(a.start, b.start));
   const srcs: Src[] = sorted.map((note, i) => {
     const prev = sorted[i - 1];
@@ -476,6 +569,7 @@ export function staffTrack(notes: readonly Note[], bars: readonly StaffBar[], vo
         dots: piece.dots,
         ...(tuplet ? { tuplet } : {}),
         ...(src ? { pitch: src.note.pitch, noteId: src.note.id } : {}),
+        ...(src && options.chords?.get(src.note.id)?.length ? { chord: options.chords.get(src.note.id)!.map((n) => ({ pitch: n.pitch, noteId: n.id })) } : {}),
         attack: !!src && piece.first && !piece.seg.cutStart && !src.joinedIn,
         tie: false,
         approx: !!src && !!piece.seg.moved,
@@ -502,18 +596,35 @@ export function staffTrack(notes: readonly Note[], bars: readonly StaffBar[], vo
   }
   // 임시표(마디마다 새로. 붙임줄로 이어 받은 조각에는 쓰지 않는다)·셈여림(트랙 전체, 새로 치는 음에서 달라질 때)
   let dynamic: string | undefined;
-  const out: StaffMeasure[] = measures.map((m) => {
-    const state = new Map<string, boolean>();
+  const out: StaffMeasure[] = measures.map((m, mi) => {
+    const fifths = bars[mi]?.fifths ?? 0;
+    // 글자·옥타브마다 지금 붙은 올림·내림 (마디 처음에는 조표대로)
+    const state = new Map<string, number>();
     const items = m.items.map((item) => {
       let next: StaffItem = tied.has(item) ? { ...item, tie: true } : item;
       if (item.pitch === undefined) return next;
-      const sp = staffPitch(item.pitch);
-      const key = `${sp.letter}${sp.octave}`;
-      if (!tiedFrom.has(item)) {
-        if ((state.get(key) ?? false) !== sp.sharp) next = { ...next, accidental: sp.sharp ? "#" : "n" };
-        state.set(key, sp.sharp);
+      if (tiedFrom.has(item)) next = { ...next, tiedIn: true };
+      // 타악기는 음높이를 그리지 않아 임시표가 없다
+      if (!percussion && !tiedFrom.has(item)) {
+        const mark = (pitch: number): StaffAccidental | undefined => {
+          const sp = staffSpell(pitch, fifths);
+          const key = `${sp.letter}${sp.octave}`;
+          const changed = (state.get(key) ?? keyAlter(sp.letter, fifths)) !== sp.alter;
+          state.set(key, sp.alter);
+          return changed ? (sp.alter === 1 ? "#" : sp.alter === -1 ? "b" : "n") : undefined;
+        };
+        const acc = mark(item.pitch);
+        if (acc) next = { ...next, accidental: acc };
+        if (item.chord)
+          next = {
+            ...next,
+            chord: item.chord.map((c) => {
+              const a = mark(c.pitch);
+              return a ? { ...c, accidental: a } : c;
+            }),
+          };
       }
-      if (item.attack) {
+      if (item.attack && options.dynamics !== false) {
         const d = staffDynamic(srcOf.get(item)?.note.vol ?? volume.max, volume);
         if (d !== dynamic) next = { ...next, dynamic: d };
         dynamic = d;
@@ -523,7 +634,136 @@ export function staffTrack(notes: readonly Note[], bars: readonly StaffBar[], vo
     return { items, fullRest: m.fullRest };
   });
   const shown = new Set(all.map((x) => x.src));
-  return { clef: clefOf(sorted), measures: out, hidden: srcs.filter((x) => !shown.has(x)).length };
+  return { clef: options.clef ?? clefOf(sorted), measures: out, hidden: srcs.filter((x) => !shown.has(x)).length };
+}
+
+/**
+ * 악기마다 오선보 모양: 건반·하프처럼 두 손으로 치는 악기는 큰보표(높은·낮은음자리표 두 단, 악보 트랙을 합쳐 그린다),
+ * 타악기는 음높이 없는 한 단, 나머지는 지금처럼 트랙마다 한 단. 게임 한도가 아니라 표기 규칙이라 여기 둔다
+ */
+export type StaffKind = "grand" | "single" | "percussion";
+
+const GRAND_STAFF: ReadonlySet<string> = new Set(["piano", "harp", "music-box", "gramophone"]);
+
+export function staffKindOf(canonical: string): StaffKind {
+  if (GRAND_STAFF.has(canonical)) return "grand";
+  if (INSTRUMENTS.find((i) => i.id === canonical)?.percussion) return "percussion";
+  return "single";
+}
+
+/**
+ * 오선보 음자리표의 옥타브 표시. mark "8vb" = 적은 음보다 한 옥타브 낮게 소리 난다, "8va" = 한 옥타브 높게.
+ * shift: 그 표시에 맞춰 적을 때 MML 음에 더할 반음 수. clef: 음역과 상관없이 쓸 음자리표
+ */
+export interface StaffOctave {
+  readonly mark?: "8va" | "8vb";
+  readonly shift: number;
+  readonly clef?: "treble";
+}
+
+/** 기타는 관례대로 소리보다 한 옥타브 높여 높은음자리표(아래 8)에 적는다. 게임 한도가 아니라 표기 규칙이라 여기 둔다 */
+const WRITTEN_OCTAVE_UP: ReadonlySet<string> = new Set(["folk-guitar"]);
+
+/**
+ * 악기의 음자리표 옥타브 표시. 기타는 한 옥타브 높여 적고 8vb, 게임에서 한 옥타브 높게 소리 나는 악기
+ * (soundingOctave = GameProfile.soundingOctave, 실로폰·오르골)는 MML 높이 그대로 적고 8va
+ */
+export function staffOctaveOf(canonical: string, soundingOctave: Readonly<Record<string, number>>): StaffOctave {
+  if (WRITTEN_OCTAVE_UP.has(canonical)) return { mark: "8vb", shift: 12, clef: "treble" };
+  if (soundingOctave[canonical] === 1) return { mark: "8va", shift: 0 };
+  return { shift: 0 };
+}
+
+/** 큰보표에서 위·아래 단을 나누는 음: 가온 도(o4c = 60)부터 위 단 */
+export const GRAND_SPLIT = 60;
+
+/** 한 단의 성부 수 (기둥 위·아래 둘). 더 겹치는 음은 일찍 끝나는 성부에 넣고, 겹친 앞부분은 앞 음이 차지한다 */
+const MAX_VOICES = 2;
+
+/**
+ * 음들을 한 단에 그릴 성부로 나눈다. 같은 자리·같은 길이·같은 붙임(&)인 음은 화음 하나로 묶고(대표 = 가장 높은 음),
+ * 앞 성부가 비어 있으면 거기에, 아니면 다음 성부에, 다 차 있으면 가장 일찍 끝나는 성부에 넣는다
+ */
+export function staffVoices(notes: readonly Note[]): { notes: Note[]; chords: Map<string, Note[]> }[] {
+  const sorted = [...notes].filter((n) => n.dur.n > 0).sort((a, b) => cmp(a.start, b.start) || b.pitch - a.pitch);
+  const groups: Note[][] = [];
+  for (const n of sorted) {
+    const g = groups.find((x) => cmp(x[0]!.start, n.start) === 0 && cmp(x[0]!.dur, n.dur) === 0 && (x[0]!.tie ?? null) === (n.tie ?? null) && !x.some((m) => m.pitch === n.pitch));
+    if (g) g.push(n);
+    else groups.push([n]);
+  }
+  groups.sort((a, b) => cmp(a[0]!.start, b[0]!.start) || b[0]!.pitch - a[0]!.pitch);
+  const voices: { notes: Note[]; chords: Map<string, Note[]>; end: Rat }[] = [];
+  for (const g of groups) {
+    const start = g[0]!.start;
+    let v = voices.find((x) => cmp(x.end, start) <= 0);
+    if (!v && voices.length < MAX_VOICES) voices.push((v = { notes: [], chords: new Map(), end: ZERO }));
+    v ??= voices.reduce((a, b) => (cmp(b.end, a.end) < 0 ? b : a));
+    const [head, ...rest] = g;
+    v.notes.push(head!);
+    if (rest.length > 0) v.chords.set(head!.id, rest);
+    v.end = max(v.end, endOf(head!));
+  }
+  return voices.map(({ notes, chords }) => ({ notes, chords }));
+}
+
+/** 큰보표 한 단: 성부마다 오선보 (첫 성부는 기둥 위, 둘째는 아래) */
+export interface StaffGrandStaff {
+  readonly voices: readonly StaffTrack[];
+}
+
+/**
+ * 큰보표: 한 악보(연주자)의 트랙 음을 모두 합쳐 가온 도 기준으로 위(높은음자리표)·아래(낮은음자리표) 단에 나눈다.
+ * 화음 압축으로 여러 트랙에 흩어진 음도 같은 자리·길이면 한 화음으로 다시 모인다. 곡은 바꾸지 않는다
+ */
+export function staffGrand(notes: readonly Note[], bars: readonly StaffBar[], volume: { readonly min: number; readonly max: number }): { readonly upper: StaffGrandStaff; readonly lower: StaffGrandStaff } {
+  const high = notes.filter((n) => n.pitch >= GRAND_SPLIT);
+  const low = notes.filter((n) => n.pitch < GRAND_SPLIT);
+  const highVoices = staffVoices(high);
+  // 셈여림은 한 번만: 위 단이 한 성부면 위 단 밑에, 두 성부면(밑에 둘째 성부 음이 있어 겹친다) 아래 단 밑에. 위 단이 비면 아래 단
+  const dynamicsUp = highVoices.length === 1;
+  const side = (voices: ReturnType<typeof staffVoices>, clef: "treble" | "bass", dynamics: boolean): StaffGrandStaff => {
+    if (voices.length === 0) return { voices: [staffTrack([], bars, volume, { clef })] };
+    const tracks = voices.map((v, i) => staffTrack(v.notes, bars, volume, { clef, chords: v.chords, dynamics: dynamics && i === 0 }));
+    return { voices: tracks.length > 1 ? shareAccidentals(tracks, bars) : tracks };
+  };
+  return {
+    upper: side(highVoices, "treble", dynamicsUp),
+    lower: side(staffVoices(low), "bass", !dynamicsUp),
+  };
+}
+
+/**
+ * 한 단의 여러 성부는 임시표를 함께 쓴다 (악보 관례: 마디 안 임시표는 그 단의 모든 성부에 걸린다).
+ * 성부마다 따로 센 임시표를 버리고, 마디마다 모든 성부의 음을 시간 순(같은 자리면 성부 순)으로 다시 센다
+ */
+function shareAccidentals(tracks: readonly StaffTrack[], bars: readonly StaffBar[]): StaffTrack[] {
+  const measures = tracks.map((t) => t.measures.map((m) => [...m.items]));
+  const count = Math.max(...measures.map((m) => m.length));
+  for (let mi = 0; mi < count; mi++) {
+    const fifths = bars[mi]?.fifths ?? 0;
+    const state = new Map<string, number>();
+    const mark = (pitch: number): StaffAccidental | undefined => {
+      const sp = staffSpell(pitch, fifths);
+      const key = `${sp.letter}${sp.octave}`;
+      const changed = (state.get(key) ?? keyAlter(sp.letter, fifths)) !== sp.alter;
+      state.set(key, sp.alter);
+      return changed ? (sp.alter === 1 ? "#" : sp.alter === -1 ? "b" : "n") : undefined;
+    };
+    const order: { v: number; k: number }[] = [];
+    measures.forEach((m, v) => m[mi]?.forEach((item, k) => item.pitch !== undefined && !item.tiedIn && order.push({ v, k })));
+    order.sort((a, b) => cmp(measures[a.v]![mi]![a.k]!.start, measures[b.v]![mi]![b.k]!.start) || a.v - b.v);
+    for (const { v, k } of order) {
+      const { accidental: _a, ...item } = measures[v]![mi]![k]!;
+      const acc = mark(item.pitch!);
+      const chord = item.chord?.map(({ accidental: _c, ...c }) => {
+        const a = mark(c.pitch);
+        return a ? { ...c, accidental: a } : c;
+      });
+      measures[v]![mi]![k] = { ...item, ...(acc ? { accidental: acc } : {}), ...(chord ? { chord } : {}) };
+    }
+  }
+  return tracks.map((t, v) => ({ ...t, measures: t.measures.map((m, mi) => ({ ...m, items: measures[v]![mi]! })) }));
 }
 
 /** 음 높이 가운데값이 가온 도(60)보다 낮으면 낮은음자리표 */

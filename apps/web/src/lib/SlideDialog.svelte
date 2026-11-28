@@ -1,6 +1,6 @@
 <script lang="ts">
   import { cmp, planSlides, toFloat, type GameProfile, type Note, type Rat, type SlidesResult, type Song } from "@mmlce/core";
-  import { canWriteExactly, optimizeMml } from "@mmlce/mml";
+  import { canWriteExactly, optimizeMml, limitOf, trackLimits, widestLimit } from "@mmlce/mml";
   import { t } from "./i18n.svelte";
   import { lengthLabel } from "./Toolbar.svelte";
   import { lengthsFor, noteLengthOf, type NoteLength } from "./roll";
@@ -108,15 +108,21 @@
   const chars = $derived.by(() => {
     let delta: number | undefined;
     let over = false;
+    /** 넘친 트랙 자리의 한도 (자리마다 한도가 다를 수 있다) */
+    let overLimit: number | undefined;
+    const limits = trackLimits(song, profile);
     for (const c of result.changes) {
       const track = song.tracks.find((tr) => tr.id === c.trackId);
       if (!track) continue;
       const before = optimizeMml(track.notes, { lengths: profile.length }).text.length;
       const after = optimizeMml(c.notes, { lengths: profile.length }).text.length;
       delta = Math.max(delta ?? -Infinity, after - before);
-      if (after > profile.charLimitPerScore) over = true;
+      if (after > limitOf(limits, c.trackId, profile)) {
+        over = true;
+        overLimit ??= limitOf(limits, c.trackId, profile);
+      }
     }
-    return delta === undefined ? undefined : { delta, over };
+    return delta === undefined ? undefined : { delta, over, limit: overLimit ?? widestLimit(profile) };
   });
 
   // 미리 보기: 고른 음 구간(박 앞 들어가기는 앞으로 늘어난 자리까지)의 결과 음을 작은 롤로. 만든 사슬은 강조,
@@ -246,7 +252,7 @@
     {t("ui.slideMade", { n: result.made })}{#if chars}
       · {t("ui.slideChars", { n: chars.delta })}{/if}
   </p>
-  {#if chars?.over}<p class="warn">{t("ui.slideCharsOver", { limit: profile.charLimitPerScore })}</p>{/if}
+  {#if chars?.over}<p class="warn">{t("ui.slideCharsOver", { limit: chars.limit })}</p>{/if}
   {#if s.gap + s.same + s.short + s.tied + s.unsplittable > 0}
     <p class="muted">
       {t("ui.slideSkipped", { gap: s.gap, same: s.same, short: s.short, tied: s.tied, unsplittable: s.unsplittable })}

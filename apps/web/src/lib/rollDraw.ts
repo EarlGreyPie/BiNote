@@ -14,11 +14,10 @@ import {
   foldPitch,
   gridLines,
   inKey,
-  MOBILE_PROFILE,
-  PROFILES,
   soundingRangeOf,
   timbreBoundaries,
   toFloat,
+  songProfile,
   type KeyEvent,
   type Note,
   type PlaceLoss,
@@ -278,7 +277,7 @@ export function drawRoll(canvas: HTMLCanvasElement, o: RollDrawOptions): void {
 
   // 음색 경계: 고르는 트랙 악기의 샘플 구간을 한 칸 건너 옅게 칠하고, 바뀌는 자리에 강조색 선을 긋는다 (음보다 아래).
   // 범위 밖 줄은 접혀 나는 높이의 구간을 따르고, 그쪽 경계선은 옅은 점선 (접혀 되풀이되는 경계)
-  const profile = PROFILES[s.meta.profileId] ?? MOBILE_PROFILE;
+  const profile = songProfile(s);
   const activeTrack = activeId ? s.tracks.find((t) => t.id === activeId) : undefined;
   /** 악기 범위 안 음색 경계 (경계 바로 위 음). 건반 띠에도 짧게 표시한다 */
   const zoneEdges: number[] = [];
@@ -673,6 +672,7 @@ export function drawRoll(canvas: HTMLCanvasElement, o: RollDrawOptions): void {
   }
   if (o.showEvents) {
     const colorOf = { tempo: o.css("--ev-tempo"), meter: o.css("--ev-meter"), marker: o.css("--ev-marker"), key: o.css("--ev-key") };
+    const memoColor = o.css("--ev-memo");
     const dragged = o.eventDrag?.label;
     const labels = eventLabels(v, s).filter((l) => {
       const at = toFloat(l.at);
@@ -684,7 +684,17 @@ export function drawRoll(canvas: HTMLCanvasElement, o: RollDrawOptions): void {
     const font = eventFontSize(v);
     if (horizontal) g.fillRect(v.keyboard, barRowSize(v) + row, v.width - v.keyboard, 1);
     const drawLabel = (l: EventLabel, p: number, dashed: boolean) => {
-      const color = colorOf[l.kind];
+      const color = l.memo ? memoColor : colorOf[l.kind];
+      // 범위 메모: 이벤트 줄 칸 아래쪽에 시작부터 끝까지 굵은 띠 (끄는 중이면 옮길 자리에)
+      if (l.memo && l.end) {
+        const q = timeToScreen(v, toFloat(l.end)) + (p - timeToScreen(v, toFloat(l.at)));
+        g.fillStyle = color;
+        const alpha = g.globalAlpha;
+        g.globalAlpha = alpha * 0.45;
+        if (horizontal) g.fillRect(p, l.y + row - 3, Math.max(1, q - p), 3);
+        else g.fillRect(ruler - 3, Math.min(p, q), 3, Math.max(1, Math.abs(q - p)));
+        g.globalAlpha = alpha;
+      }
       // 바뀌는 자리를 롤 전체에 점선으로
       g.strokeStyle = color;
       g.lineWidth = dashed ? 2 : 1;
@@ -729,6 +739,8 @@ export function drawRoll(canvas: HTMLCanvasElement, o: RollDrawOptions): void {
       // 적지 않은 곡 처음 기본 템포는 옅게
       if (moving) g.globalAlpha = 0.35;
       else if (l.implicit) g.globalAlpha = 0.55;
+      // 끝낸 작업 메모는 흐리게
+      else if (l.memo === "done") g.globalAlpha = 0.4;
       drawLabel(l, timeToScreen(v, toFloat(l.at)), false);
       g.globalAlpha = 1;
     }

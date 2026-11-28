@@ -17,6 +17,9 @@ describe("박자를 바꿀 자리", () => {
     expect(meterTarget(fourFour, "roll", rat(5, 4), rat(1, 4))).toEqual(rat(0));
     expect(meterTarget(fourFour, "roll", rat(5, 4), undefined)).toEqual(rat(0));
   });
+  it("오선보에서도 타브 커서를 보지 않고 재생 커서가 든 마디", () => {
+    expect(meterTarget(fourFour, "staff", rat(5, 4), rat(9, 4))).toEqual(rat(2));
+  });
   it("커서가 다 없으면 곡 처음", () => {
     expect(meterTarget(fourFour, "tab", undefined, undefined)).toEqual(rat(0));
   });

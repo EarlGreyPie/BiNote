@@ -2,6 +2,29 @@
 
 What changed in each BiNote version, from 1.0.0 on. Earlier versions (beta and rc) are written only in Korean, in [CHANGELOG.md](../../CHANGELOG.md). A new version applies when you reopen the app. You can see your version at the bottom of Settings or under ? → About BiNote.
 
+## 1.1.0-beta.1 (2026-11-28)
+
+The first beta of 1.1. It is released only on the beta page (beta.binote.pages.dev). It has everything in 1.0.0, plus the features newly made for 1.1. Most new features are in **Labs** and are off at first, so if you do not turn them on, BiNote works the same as 1.0.0. The beta page and the official page use separate storage, so songs and sound packs do not show up in the other. To move a song, save it as a project (.mme) file and open it again.
+
+Mabinogi PC support (Switch game) needs more work and will come in 1.1.0-beta.2. It is not shown in this beta.
+
+### Added to Labs
+- **Staff view**: A staff view next to the piano roll and tab. It wraps lines to the width of the panel like a printed score, and follows the song's key signatures and pickup bars. Clicking a note takes you to that spot in the piano roll. Editing notes on the staff is not available yet.
+- **Tempo at note starts · Tidy tempos**: Puts tempos at note starts to match the original recording, and tidies tempos that are split into many small changes.
+- **Turn tempo patches into note lengths**: Rewrites a span that was matched by changing the tempo into note lengths, keeping the tempo as it is.
+- **Resolve out-of-range tempos into note lengths**: Where a tempo outside the game's range (t32-255) is placed, it is resolved into note lengths so it fits the range.
+- **Work notes**: Attach to-do notes in the marker lane (Alt+N). Notes are saved only in the project (.mme) and are not included in exported MML or MIDI.
+- **Original level guide**: Draws the level of the original recording as a guide line in the volume lane, to help you set v.
+- **Transcribe from audio**: The Basic Scriptor link is turned on.
+
+### Changes
+- **You can watch a video original recording in a floating window or picture-in-picture.** Open it with the button on the original recording bar.
+- **The original recording bar always shows the offset of the original recording.** A project whose original recording is not loaded yet also shows the saved offset.
+- **When the sound device (earphones or speakers) changes, a notice suggests recreating the audio.**
+- **The shift line in tab view shows the key signature.**
+- **Auto-fit in MIDI import adds quarter-note septuplets and nonuplets, and quintuplets across beats (l10, l5).**
+- **Songs with a pickup bar** (the `BS:pickup` marker in songs imported from Basic Scriptor) draw it as bar 0, and the marker is not written into exported songs.
+
 ## 1.0.0 (2026-11-28)
 
 This is the first official release of BiNote. After checking 1.0.0-rc.4 on a real iPad and in the game, we fixed the problems found and are releasing it as 1.0.0. 1.0.0-rc.5 was not released separately; it is part of this version. From this version on, the changelog is also written in English, Japanese and Chinese (Traditional and Simplified).

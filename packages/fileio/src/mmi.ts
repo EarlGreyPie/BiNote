@@ -3,9 +3,11 @@ import {
   emptySong,
   mul,
   rat,
+  structureMarkers,
   sub,
   trackInstrument,
   ZERO,
+  songProfile,
   type Marker,
   type Player,
   type Rat,
@@ -15,7 +17,7 @@ import {
   type Track,
 } from "@mmlce/core";
 import { audibleTempo, localAt, optimizeMml, sameTempo, spliceText, surgicalSource, tempoInsertOffset, tempoTokens } from "@mmlce/mml";
-import { channelToTrack, idMaker, instrumentFromProgram, mergeTempo, type ChannelTempo, type FileDiagnostic } from "./common.js";
+import { channelToTrack, idMaker, readProfile, type ReadGameOption, instrumentFromProgram, mergeTempo, type ChannelTempo, type FileDiagnostic } from "./common.js";
 import type { ReadResult } from "./threemle.js";
 
 /**
@@ -59,7 +61,9 @@ function ratToTick(at: Rat): { tick: number; exact: boolean } {
  * .mmi를 곡으로 읽는다. mml-track 하나가 연주자 하나이고,
  * 그 안의 멜로디·화음1·화음2(·노래)를 각각 화음별 트랙으로 푼다.
  */
-export function readMmi(text: string, names: MmiNames = KO_NAMES): ReadResult {
+/** options.profileId: 어느 게임의 글로 읽을지 (마비꼬는 PC 게임용 도구라 길이 셈이 PC와 같다고 본다. 앱이 고르게 한다) */
+export function readMmi(text: string, names: MmiNames = KO_NAMES, options: ReadGameOption = {}): ReadResult {
+  const game = readProfile(options);
   const score = new Map<string, string>();
   const raws: RawTrack[] = [];
   const markers: Marker[] = [];
@@ -156,6 +160,7 @@ export function readMmi(text: string, names: MmiNames = KO_NAMES): ReadResult {
           name: `${baseName} ${names.parts[partIndex] ?? partIndex + 1}`,
           text: partText,
           player: owner,
+          parse: { lengths: game.length },
           ...(delta ? { offset: tickToRat(delta) } : {}),
         },
         tracks.length,
@@ -167,7 +172,7 @@ export function readMmi(text: string, names: MmiNames = KO_NAMES): ReadResult {
     });
   });
 
-  const base = emptySong({ title: score.get("title") ?? "", author: score.get("author") ?? "", profileId: "mobile" });
+  const base = emptySong({ title: score.get("title") ?? "", author: score.get("author") ?? "", profileId: game.id });
   const song: Song = {
     ...base,
     tempo: mergeTempo(tempo),
@@ -320,11 +325,12 @@ function fitsMmi(track: Track): track is Track & { readonly mml: NonNullable<Tra
 function mmiVerbatim(song: Song, entries: readonly MmiEntry[]): Map<string, string> | undefined {
   const texts = new Map<string, string>();
   const tempo: TempoEvent[] = [];
+  const lengths = songProfile(song).length;
   for (const entry of entries) {
     for (const track of entry.song ? [...entry.parts, entry.song] : entry.parts) {
       if (!fitsMmi(track)) return undefined;
       texts.set(track.id, track.mml.text);
-      tempo.push(...tempoTokens(track.mml));
+      tempo.push(...tempoTokens(track.mml, undefined, lengths));
     }
     const start = entry.parts[0]?.mml?.offset ?? ZERO;
     if (entry.parts.some((t) => cmp(t.mml?.offset ?? ZERO, start) !== 0)) return undefined;
@@ -335,7 +341,7 @@ function mmiVerbatim(song: Song, entries: readonly MmiEntry[]): Map<string, stri
   // 출력기와 같이 곡 템포는 첫 파트(노래 칸만 쓴 mml-track이면 노래 칸)에 넣는다. 음 가운데라 끼울 자리가 없으면 출력기로
   const first = entries[0]?.parts[0] ?? entries[0]?.song;
   if (!first?.mml) return undefined;
-  const source = surgicalSource(first.mml);
+  const source = surgicalSource(first.mml, lengths);
   if (!source) return undefined;
   const edits: { span: [number, number]; text: string }[] = [];
   for (const e of want) {
@@ -345,7 +351,7 @@ function mmiVerbatim(song: Song, entries: readonly MmiEntry[]): Map<string, stri
     edits.push({ span: [at, at], text: `t${e.bpm}` });
   }
   const text = spliceText(first.mml.text, edits);
-  if (!sameTempo(audibleTempo(tempoTokens({ ...first.mml, text })), want)) return undefined;
+  if (!sameTempo(audibleTempo(tempoTokens({ ...first.mml, text }, undefined, lengths)), want)) return undefined;
   texts.set(first.id, text);
   return texts;
 }
@@ -475,7 +481,7 @@ export function writeMmi(whole: Song, options: WriteMmiOptions = {}): { text: st
     const shift = (at: Rat) => sub(at, lead);
     const notes = lead === ZERO ? track.notes : track.notes.map((n) => ({ ...n, start: shift(n.start) }));
     const tempo = tempoWritten ? [] : lead === ZERO ? song.tempo : song.tempo.map((t) => ({ ...t, at: shift(t.at) }));
-    const printed = optimizeMml(notes, { tempo });
+    const printed = optimizeMml(notes, { tempo, profile: songProfile(song) });
     tempoWritten = true;
     // 같은 알림(옥타브째 옮긴 음 등)은 트랙마다 한 번만
     const seen = new Set<string>();
@@ -556,9 +562,11 @@ export function writeMmi(whole: Song, options: WriteMmiOptions = {}): { text: st
     lines.push("[time-signature]");
     for (const t of song.timeSig.slice(1)) lines.push(`${ratToTick(t.at).tick}=${t.beats}/${t.unit}`);
   }
-  if (song.markers.length > 0) {
+  // 작업 메모는 프로젝트 파일에만 둔다 (마비꼬로는 구조 마커만)
+  const markers = structureMarkers(song.markers);
+  if (markers.length > 0) {
     lines.push("[marker]");
-    for (const m of song.markers) lines.push(`${ratToTick(m.at).tick}=${m.label}`);
+    for (const m of markers) lines.push(`${ratToTick(m.at).tick}=${m.label}`);
   }
   return { text: lines.join("\n") + "\n", diagnostics };
 }

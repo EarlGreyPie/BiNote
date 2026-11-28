@@ -26,7 +26,8 @@
     colors: ReadonlyMap<string, string>;
     activeTrackId: string | undefined;
     fileName: string;
-    charLimit: number;
+    /** 트랙마다 글자 수 한도 (게임이 붙여넣는 자리마다 한도가 다를 수 있다) */
+    charLimit: (trackId: string) => number;
     /** 트랙마다 내보낼 때 글자 수 (없거나 아직 안 셌으면 원문 글자 수를 보인다) */
     exportChars?: ReadonlyMap<string, number> | undefined;
     dock: "right" | "bottom";
@@ -126,7 +127,7 @@
             instrumentLabel={trackInstrumentLabel(active.track)}
             pack={trackPack(active.track)}
             {packLabels}
-            {charLimit}
+            charLimit={charLimit(active.track.id)}
             showListen={dock === "bottom" && !portrait}
             reveal={reveal?.trackId === active.track.id ? reveal : undefined}
             {playing}
@@ -160,7 +161,7 @@
               instrumentLabel={trackInstrumentLabel(extra.track)}
               pack={trackPack(extra.track)}
               {packLabels}
-              {charLimit}
+              charLimit={charLimit(extra.track.id)}
               showListen={true}
               reveal={reveal?.trackId === extra.track.id ? reveal : undefined}
               playing={playingOf?.(extra.track.id)}

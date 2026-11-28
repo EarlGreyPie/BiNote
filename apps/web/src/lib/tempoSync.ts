@@ -1,4 +1,4 @@
-import { add, cmp, mul, rat, DEFAULT_BPM, measureStart, meterAt, meterGrid, normalizeTempo, positionToSeconds, sub, toFloat, ZERO, type Note, type Rat, type TempoEvent, type TimeSigEvent } from "@mmlce/core";
+import { add, cmp, mul, rat, DEFAULT_BPM, firstBarNumber, measureStart, meterAt, meterGrid, normalizeTempo, positionToSeconds, sub, toFloat, ZERO, type Note, type Rat, type TempoEvent, type TimeSigEvent } from "@mmlce/core";
 import type { Peaks } from "./waveform";
 
 /**
@@ -134,14 +134,34 @@ export function tapTempos(
 ): TempoPlan | undefined {
   const { slack = 0, unit = "bar", range } = options;
   if (taps.length < 2) return undefined;
-  const marks = tapMarks(timeSig, first, taps.length, unit);
+  for (let i = 0; i + 1 < taps.length; i++) if (!(taps[i + 1]! - taps[i]! > 0.05)) return undefined;
+  return tempoThrough(tempo, tapMarks(timeSig, first, taps.length, unit), taps, { slack, range, minSeconds: 0.05 });
+}
+
+/**
+ * 자리(marks, 위치순)마다 정한 시각(times, 곡 초)에 닿도록 템포를 정한다. 탭 템포와 음 시작 맞추기(tempoSnap)가 같이 쓴다.
+ * 첫 자리는 그대로 두고, 간격마다 템포를 재어 합쳐도 모든 자리가 slack(초) 안이면 한 묶음으로 합친다 (fits).
+ * 정수 반올림 오차는 다음 묶음이 받는다 (묶음마다 실제로 닿은 시각부터 다음 자리까지로 잰다).
+ * 앞과 같은 템포는 생략하고, 마지막 자리부터는 원래 템포로 돌아간다. 그 사이에 있던 템포는 지운다.
+ * 자리가 둘보다 적거나 시각이 앞으로 가지 않으면 undefined. range를 주면 범위 밖 묶음은 끝값으로 넣고 clamped에 적는다.
+ * minSeconds: 묶음 하나에 쓰는 가장 짧은 시간 (탭은 0.05초)
+ */
+export function tempoThrough(
+  tempo: readonly TempoEvent[],
+  marks: readonly Rat[],
+  times: readonly number[],
+  options: { readonly slack?: number; readonly range?: { readonly min: number; readonly max: number } | undefined; readonly minSeconds?: number } = {},
+): TempoPlan | undefined {
+  const { slack = 0, range, minSeconds = 0.001 } = options;
+  if (marks.length < 2 || marks.length !== times.length) return undefined;
+  const first = marks[0]!;
   const last = marks.at(-1)!;
-  // 묶음: 시작 자리, 끝 탭 번호, 시작 자리부터 탭마다 [묶음 시작부터 길이, 걸린 초]
+  // 묶음: 시작 자리, 끝 자리 번호, 시작 자리부터 자리마다 [묶음 시작부터 길이, 걸린 초]
   type Group = { start: Rat; end: number; points: [number, number][] };
   const groups: Group[] = [];
-  for (let i = 0; i + 1 < taps.length; i++) {
-    const seconds = taps[i + 1]! - taps[i]!;
-    if (!(seconds > 0.05)) return undefined;
+  for (let i = 0; i + 1 < times.length; i++) {
+    const seconds = times[i + 1]! - times[i]!;
+    if (!(seconds > 0) || cmp(marks[i + 1]!, marks[i]!) <= 0) return undefined;
     const length = toFloat(sub(marks[i + 1]!, marks[i]!));
     const g = groups.at(-1);
     if (g && fits(g.points, length, seconds, slack)) {
@@ -153,10 +173,10 @@ export function tapTempos(
   const set: TempoEvent[] = [];
   const clamped: { at: Rat; bpm: number }[] = [];
   let current = bpmAt(tempo, first);
-  let reached = taps[0]!;
+  let reached = times[0]!;
   for (const g of groups) {
     const [length] = g.points.at(-1)!;
-    const raw = Math.max(1, Math.round((240 * length) / Math.max(0.05, taps[g.end]! - reached)));
+    const raw = Math.max(1, Math.round((240 * length) / Math.max(minSeconds, times[g.end]! - reached)));
     const bpm = range ? Math.min(range.max, Math.max(range.min, raw)) : raw;
     if (bpm !== raw) clamped.push({ at: g.start, bpm: raw });
     if (bpm !== current) set.push({ at: g.start, bpm });
@@ -267,11 +287,11 @@ export function previousBar(timeSig: readonly TimeSigEvent[], at: Rat): Rat {
   return cmp(at, ZERO) > 0 ? measureStart(timeSig, sub(at, rat(1, 3840 * 64))) : ZERO;
 }
 
-/** 마디 번호(1부터)의 시작 자리 (박자 바뀜을 따라 센다) */
+/** 마디 번호(1부터, 못갖춘마디는 0)의 시작 자리 (박자 바뀜을 따라 센다) */
 export function barStart(timeSig: readonly TimeSigEvent[], bar: number): Rat {
   const sigs = [...timeSig].sort((a, b) => cmp(a.at, b.at));
   const segments = sigs.length === 0 || cmp(sigs[0]!.at, ZERO) > 0 ? [{ at: ZERO, beats: 4, unit: 4 }, ...sigs] : sigs;
-  let first = 1;
+  let first = firstBarNumber(timeSig);
   for (let i = 0; i < segments.length; i++) {
     const sig = segments[i]!;
     const next = segments[i + 1];

@@ -1,5 +1,6 @@
-import { add, cmp, splitPackProgram, toFloat, trackInstrument, type InstrumentRef, type Note, type Song, type Track } from "@mmlce/core";
+import { add, cmp, pickupOf, splitPackProgram, structureMarkers, toFloat, trackInstrument, type InstrumentRef, type Note, type Song, type Track } from "@mmlce/core";
 import { GM_DRUM_KEY, gmProgramOf } from "./gm.js";
+import { PICKUP_MARKER } from "./analyze.js";
 import type { Smf, SmfEvent } from "./smf.js";
 
 /** MIDI 내보내기에서 그대로 옮기지 못한 것. 화면은 `diag.<code>` 문구로 보인다 */
@@ -59,8 +60,11 @@ export function songToSmfReport(
   const conductor: SmfEvent[] = song.tempo.map((t) => ({ tick: tick(t.at), type: "tempo", usPerQuarter: Math.round(60_000_000 / t.bpm) }));
   // 곡 중간 박자 변화도 함께 쓴다
   for (const sig of song.timeSig) conductor.push({ tick: tick(sig.at), type: "timeSig", beats: sig.beats, unit: sig.unit });
-  // 마커도 쓴다 (다시 가져오면 곡 마커로 돌아온다)
-  for (const m of song.markers) conductor.push({ tick: tick(m.at), type: "marker", text: m.label });
+  // 마커도 쓴다 (다시 가져오면 곡 마커로 돌아온다). 작업 메모는 프로젝트 파일에만 둔다
+  // 이름이 못갖춘마디 약속 글자와 같은 마커는 쓰지 않는다 (다시 가져올 때 못갖춘마디로 잘못 읽히지 않게)
+  for (const m of structureMarkers(song.markers)) if (m.label.trim() !== PICKUP_MARKER) conductor.push({ tick: tick(m.at), type: "marker", text: m.label });
+  // 못갖춘마디는 Basic Scriptor와 같은 약속(0에 BS:pickup 마커)으로 적는다. 다시 가져오면 못갖춘마디로 돌아온다
+  if (pickupOf(song.timeSig)) conductor.push({ tick: 0, type: "marker", text: PICKUP_MARKER });
   const tracks = [{ events: conductor }];
   type Span = [number, number, number];
   // 연주자마다 악기와 낼 음. 같은 음 &는 볼륨이 달라도 첫 음 볼륨으로 이어지는 한 음이다 (게임·앱 재생과 같음)

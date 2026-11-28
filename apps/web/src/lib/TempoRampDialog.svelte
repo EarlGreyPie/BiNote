@@ -54,7 +54,7 @@
   const ramp = $derived<TempoRamp>({ startBpm: start, endBpm: end, step: rat(1, step), curve, restore });
   const result = $derived(valid ? preview(ramp) : undefined);
   const clamped = $derived(valid && [start, end].some((b) => b < tempoRange.min || b > tempoRange.max));
-  const over = $derived(result?.rows.some((r) => r.after > limit) ?? false);
+  const over = $derived(result?.rows.some((r) => r.after > r.limit) ?? false);
   const listed = $derived.by(() => {
     const bpms = result?.steps.map((e) => `t${e.bpm}`) ?? [];
     return bpms.length > 10 ? [...bpms.slice(0, 5), "…", ...bpms.slice(-4)].join(" ") : bpms.join(" ");
@@ -114,7 +114,7 @@
       <p class="muted">{t("ui.tempoRampChars", { limit })}</p>
       <ul class="rows">
         {#each result.rows as r (r.trackId)}
-          <li class:warn={r.after > limit}>{r.name}: {r.before} → {r.after}</li>
+          <li class:warn={r.after > r.limit}>{r.name}: {r.before} → {r.after}</li>
         {/each}
       </ul>
     {/if}

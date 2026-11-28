@@ -1,6 +1,7 @@
 import { add, cmp, tieChains, type Command, type GameProfile, type Note, type Rat, type Song, type Track } from "@mmlce/core";
 import { compactResult, keepTextEnd, restoreSong } from "./edit.js";
 import { gameTimeline } from "./game-timeline.js";
+import { fitSlots, type SlotSwap } from "./slot-fit.js";
 import { mergeFit, noteChains } from "./merge.js";
 import { trackEnd } from "./score-end.js";
 
@@ -205,6 +206,8 @@ export interface MergeTracksResult extends MergeTracksPlan {
   readonly kept?: "notes" | "tempo" | "sound";
   /** 화음 음이 빠져 v를 올린 음 (& 사슬은 첫 음만 센다) */
   readonly louder?: readonly { readonly note: Note; readonly vol: number }[];
+  /** 병합한 뒤 자리 맞추기로 자리를 바꾼 악보 (fitSlots, 자리마다 한도가 다른 게임만) */
+  readonly swaps?: readonly SlotSwap[];
 }
 
 /**
@@ -298,16 +301,24 @@ function withoutDropped(song: Song, dropped: readonly DroppedNote[]): Song {
 
 /**
  * 화음 병합 창의 결과: 계획대로 옮기고 뺀 뒤 모든 트랙을 최적화 출력기로 다시 쓴다 (잠근 트랙은 글도 그대로).
- * 게임 출력이 "원래 곡에서 뺀 음만 지운 곡"과 다르면, 비운 트랙을 빈 트랙으로 남겨 다시 보고, 그래도 다르면 곡을 그대로 둔다
+ * 게임 출력이 "원래 곡에서 뺀 음만 지운 곡"과 다르면, 비운 트랙을 빈 트랙으로 남겨 다시 보고, 그래도 다르면 곡을 그대로 둔다.
+ * slots면 받아들인 뒤 자리를 맞춘다 (fitSlots: 트랙이 빠져 뒤 트랙 자리가 바뀌므로)
  */
-export function mergeTracksResult(song: Song, profile: GameProfile, options: MergeTracksOptions, locked?: ReadonlySet<string>): MergeTracksResult {
+export function mergeTracksResult(song: Song, profile: GameProfile, options: MergeTracksOptions, locked?: ReadonlySet<string>, slots = true): MergeTracksResult {
+  const result = mergeTracksOnly(song, profile, options, locked);
+  if (!slots || result.song === song) return result;
+  const fitted = fitSlots(result.song, profile, locked);
+  return fitted.swaps.length > 0 ? { ...result, song: fitted.song, swaps: fitted.swaps } : result;
+}
+
+function mergeTracksOnly(song: Song, profile: GameProfile, options: MergeTracksOptions, locked?: ReadonlySet<string>): MergeTracksResult {
   const safe: MergeTracksOptions = {
     ...options,
     keep: options.keep.filter((id) => !locked?.has(id)),
     remove: options.remove.filter((id) => !locked?.has(id)),
   };
   const players = [...new Set(song.tracks.filter((t) => safe.keep.includes(t.id) || safe.remove.includes(t.id)).map((t) => t.playerId))];
-  const ends = new Map(song.tracks.map((t) => [t.id, trackEnd(t)]));
+  const ends = new Map(song.tracks.map((t) => [t.id, trackEnd(t, profile.length)]));
   let last: MergeTracksResult | undefined;
   for (const keepEmpty of [false, true]) {
     const plan = planTrackMerge(song, safe, keepEmpty);
@@ -326,10 +337,10 @@ export function mergeTracksResult(song: Song, profile: GameProfile, options: Mer
 }
 
 /** 화음 병합 창의 명령 (mergeTracksResult). 실행 취소하면 병합 전 곡으로 돌아간다 */
-export function mergeTracksSong(profile: GameProfile, options: MergeTracksOptions, locked?: ReadonlySet<string>, label = "화음 병합"): Command {
+export function mergeTracksSong(profile: GameProfile, options: MergeTracksOptions, locked?: ReadonlySet<string>, label = "화음 병합", slots = true): Command {
   return {
     label,
-    apply: (song) => mergeTracksResult(song, profile, options, locked).song,
+    apply: (song) => mergeTracksResult(song, profile, options, locked, slots).song,
     invert: (before) => restoreSong(before),
   };
 }

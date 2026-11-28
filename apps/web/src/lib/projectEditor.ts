@@ -1,4 +1,5 @@
 import { defaultLengthLimit, type Extras, type Song } from "@mmlce/core";
+import { isViewMode, type ViewMode } from "./viewRules";
 import type { ProjectEditor, ProjectWriteOptions } from "@mmlce/fileio";
 import { isTuningName, type ScoreTuning, type TuningName } from "./tunings";
 import { NOTE_LENGTHS, type BackgroundVideo, type NoteLength } from "./roll";
@@ -100,7 +101,8 @@ export interface EditorState {
   readonly division?: number;
   /** 새 음 길이 (격자와 따로 고를 때) */
   readonly noteLength?: NoteLength;
-  readonly viewMode?: "roll" | "tab";
+  /** 편집 칸 보기. "staff"(오선보, 실험실)는 옛 판이 모르는 값이라 버리고 기본 보기(피아노롤)로 연다 */
+  readonly viewMode?: ViewMode;
   readonly tuning?: TuningName;
   readonly capo?: number;
   /** 악보(연주자) id → 그 악보의 타브 튜닝. 1.0.0-beta.8 파일만 적었다 (읽기만 한다. 지금은 곡의 Player.tab에 적는다) */
@@ -160,7 +162,7 @@ export function parseEditorState(raw: ProjectEditor, song: Song): EditorState {
   if (isGridDivision(raw.division, defaultLengthLimit())) out.division = raw.division;
   // 새 음 길이: 목록 길이, 또는 게임이 받는 한 토막 (잇단음 "20"·"20." 등)
   if ((NOTE_LENGTHS as readonly unknown[]).includes(raw.noteLength) || isGameLengthName(raw.noteLength, defaultLengthLimit())) out.noteLength = raw.noteLength as NoteLength;
-  if (raw.viewMode === "roll" || raw.viewMode === "tab") out.viewMode = raw.viewMode;
+  if (isViewMode(raw.viewMode)) out.viewMode = raw.viewMode;
   if (validTuning(raw.tuning)) out.tuning = raw.tuning;
   if (validCapo(raw.capo)) out.capo = raw.capo;
   if (isObject(raw.scoreTunings)) {

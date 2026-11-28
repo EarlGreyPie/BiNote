@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chainFadeEnd, chainSampleEnd, decayDbAt, heldMeanDb, foldPitch, getProfile, INSTRUMENTS, instrumentByName, isPending, LAB_STEP_MAX, maxChordsOf, MOBILE_PROFILE, pendingIn, pendingItem, sampleSecondsAt, soundingRangeOf, TRILL_VOLUME_DEPTH_LIMIT, volumeStepMax, type GameProfile } from "../src/index.js";
+import { DEFAULT_PROFILE, songProfile, widestOctave, widestVolume, widestVolumeStepMax, chainFadeEnd, chainSampleEnd, decayDbAt, heldMeanDb, foldPitch, getProfile, INSTRUMENTS, instrumentByName, isPending, LAB_STEP_MAX, maxChordsOf, MOBILE_PROFILE, pendingIn, pendingItem, sampleSecondsAt, soundingRangeOf, TRILL_VOLUME_DEPTH_LIMIT, volumeStepMax, type GameProfile } from "../src/index.js";
 
 describe("MOBILE_PROFILE", () => {
   it("확인된 인게임 한도", () => {
@@ -177,5 +177,20 @@ describe("프로필에서 계산하는 한도", () => {
 
   it("붙인 음을 다시 치지 않는 높이 차는 프로필 값", () => {
     expect(MOBILE_PROFILE.tieBendLimit).toBe(24);
+  });
+});
+
+describe("곡 프로필 읽기 (songProfile)", () => {
+  it("곡의 profileId로 프로필을 찾고, 모르는 id는 기본 프로필", () => {
+    expect(songProfile({ meta: { profileId: "mobile" } })).toBe(MOBILE_PROFILE);
+    expect(songProfile({ meta: { profileId: "nope" } })).toBe(DEFAULT_PROFILE);
+  });
+
+  it("곡과 상관없는 설정 범위는 등록된 모든 프로필을 덮는다 (지금은 모바일 하나라 모바일 값과 같다)", () => {
+    expect(widestVolumeStepMax()).toBe(volumeStepMax(MOBILE_PROFILE));
+    expect(widestVolume()).toEqual(MOBILE_PROFILE.volume);
+    expect(widestOctave()).toEqual(MOBILE_PROFILE.octave);
+    expect(LAB_STEP_MAX).toBe(widestVolumeStepMax());
+    expect(TRILL_VOLUME_DEPTH_LIMIT).toBe(widestVolumeStepMax());
   });
 });

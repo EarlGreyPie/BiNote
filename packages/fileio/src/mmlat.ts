@@ -1,6 +1,6 @@
 import { add, cmp, DEFAULT_BPM, emptySong, INSTRUMENTS, rat, ZERO, type InstrumentRef, type Note, type Player, type Rat, type Song, type Track } from "@mmlce/core";
 import { padTrackEnd, scoreEnd } from "@mmlce/mml";
-import { channelToTrack, idMaker, mergeTempo, trackColor, type ChannelTempo, type FileDiagnostic } from "./common.js";
+import { channelToTrack, idMaker, readProfile, type ReadGameOption, mergeTempo, trackColor, type ChannelTempo, type FileDiagnostic } from "./common.js";
 import type { ReadResult } from "./threemle.js";
 
 /**
@@ -98,7 +98,7 @@ export function findMmlAtBlocks(text: string, names: readonly InstrumentName[] =
   return blocks;
 }
 
-export interface MmlAtOptions {
+export interface MmlAtOptions extends ReadGameOption {
   /** 연주자 악기. 글에는 악기 정보가 없으므로 고른 악기를 쓴다 (기본 피아노). 머리줄에서 악기를 읽으면 그것이 먼저다 */
   readonly instrument?: InstrumentRef;
   /** 연주자 이름 앞부분 (기본 "연주자"). 머리줄에 짧은 이름이 있으면 그것을 쓴다 */
@@ -155,6 +155,8 @@ export function readMmlAt(text: string, options: MmlAtOptions = {}): MmlAtRead {
   const piano = INSTRUMENTS.find((i) => i.id === "piano")!;
   const instrument: InstrumentRef = options.instrument ?? { canonical: piano.id, program: piano.program! };
   const prefix = options.playerName ?? "연주자";
+  const game = readProfile(options);
+  const parse = { lengths: game.length };
   const diagnostics: FileDiagnostic[] = [];
   const players: Player[] = [];
   const tracks: Track[] = [];
@@ -176,9 +178,19 @@ export function readMmlAt(text: string, options: MmlAtOptions = {}): MmlAtRead {
     };
     players.push(player);
     playerBlocks[player.id] = group;
+    // 파트마다 이어 읽는 악보책(PC 자브키엘의 악보집)은 장마다 같은 파트의 글을 그대로 잇는다: 장 머리는 템포·옥타브·길이를
+    // 다시 적지 않고(splitParts) 게임도 앞 장에 이어 읽으므로, 이은 글 하나를 한 트랙으로 읽는다 (모바일처럼 권마다 시간으로 잇지 않는다)
+    if (group.length > 1 && game.scoreBook.perPart) {
+      const count = Math.max(...group.map((b) => blocks[b]!.parts.length));
+      for (let i = 0; i < count; i++) {
+        const part = group.map((b) => blocks[b]!.parts[i] ?? "").join("");
+        tracks.push(channelToTrack({ name: `${player.name}-${i + 1}`, text: part, player, parse }, tracks.length, nextNoteId, tempo, diagnostics));
+      }
+      return;
+    }
     if (group.length === 1) {
       first.parts.forEach((part, i) => {
-        tracks.push(channelToTrack({ name: `${player.name}-${i + 1}`, text: part, player }, tracks.length, nextNoteId, tempo, diagnostics));
+        tracks.push(channelToTrack({ name: `${player.name}-${i + 1}`, text: part, player, parse }, tracks.length, nextNoteId, tempo, diagnostics));
       });
       return;
     }
@@ -192,14 +204,14 @@ export function readMmlAt(text: string, options: MmlAtOptions = {}): MmlAtRead {
     group.forEach((b, v) => {
       let own: ChannelTempo[] = [];
       const parts = blocks[b]!.parts.map((part, i) =>
-        channelToTrack({ name: `${player.name}-${i + 1} [${v + 1}]`, text: part, player, offset }, base + i, nextNoteId, own, diagnostics),
+        channelToTrack({ name: `${player.name}-${i + 1} [${v + 1}]`, text: part, player, offset, parse }, base + i, nextNoteId, own, diagnostics),
       );
       parts.forEach((p, i) => (channels[i] ??= []).push(...p.notes));
       // 게임은 권마다 빠르기를 기본값(t120)부터 읽으므로, 첫머리에 t가 없는 권은 그 자리에 기본 빠르기를 둔다
       if (v > 0 && !own.some((e) => cmp(e.at, offset) === 0)) own.push({ at: offset, bpm: DEFAULT_BPM, channel: base });
       // 앞 권 끝 빠르기를 권 첫머리에 다시 적은 t는 소리를 바꾸지 않으므로 지도에 넣지 않는다
       if (v > 0) own = own.filter((e) => cmp(e.at, offset) !== 0 || e.bpm !== bpm);
-      const length = scoreEnd(parts);
+      const length = scoreEnd(parts, undefined, game.length);
       const end = cmp(length, offset) > 0 ? length : offset;
       const before = bpm;
       const bpmAt = (events: readonly ChannelTempo[]) =>
@@ -234,7 +246,7 @@ export function readMmlAt(text: string, options: MmlAtOptions = {}): MmlAtRead {
   });
 
   let song: Song = {
-    ...emptySong({ title: "", author: "", profileId: "mobile" }),
+    ...emptySong({ title: "", author: "", profileId: game.id }),
     tempo: mergeTempo(tempo),
     players,
     tracks,
@@ -243,7 +255,7 @@ export function readMmlAt(text: string, options: MmlAtOptions = {}): MmlAtRead {
     // 음이 가장 늦게 끝나는 트랙 하나에 붙인다 (악보 길이는 가장 긴 채널이 정하므로 하나면 된다)
     const joined = song.tracks.filter((t) => trackIds.includes(t.id));
     const longest = joined.reduce<Track | undefined>((best, t) => (!best || cmp(lastEnd(t), lastEnd(best)) > 0 ? t : best), undefined);
-    if (longest && cmp(end, scoreEnd(joined)) > 0) song = padTrackEnd(song, longest.id, end);
+    if (longest && cmp(end, scoreEnd(joined, undefined, game.length)) > 0) song = padTrackEnd(song, longest.id, end);
   }
   return { song, diagnostics, blocks, playerBlocks };
 }

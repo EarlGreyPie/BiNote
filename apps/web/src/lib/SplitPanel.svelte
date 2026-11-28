@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { barBeatAt, positionToSeconds, toFloat, type Rat, type Song } from "@mmlce/core";
-  import { playerScores, type BookSpread, type FewerBooks, type SplitChoice, type SplitResult } from "@mmlce/mml";
+  import { barBeatAt, positionToSeconds, structureMarkers, toFloat, type Rat, type Song } from "@mmlce/core";
+  import { playerScores, type BookSpread, type FewerBooks, type SplitChoice, type SplitResult, type BookFit } from "@mmlce/mml";
   import { t } from "./i18n.svelte";
   import { lostText } from "./splitView";
 
@@ -23,7 +23,8 @@
     /** 트랙 사이 음을 고르게 옮기면 권이 줄어드는지 (checking: 계산 중) */
     fewer?: FewerBooks | "checking" | undefined;
     /** 고르게 옮기고 다시 나누기·편집 중인 곡에도 적용 (distributeChords에 줄 채널 글자 수) */
-    onfewer: (limit: number) => void;
+    /** 음을 옮겨 적용 (fit: 악보책 몇 권에 맞출 채널 길이, 없으면 한 권) */
+    onfewer: (fit: BookFit | undefined) => void;
     /** 닫기 단추 (글자 수 맞추기 창 안이면 없다) */
     onclose?: (() => void) | undefined;
     /** 고정한 자르는 자리 */
@@ -35,9 +36,11 @@
     onunfixall?: (() => void) | undefined;
     /** 곡 위치로 커서와 피아노롤을 옮긴다 */
     onseek?: ((at: Rat) => void) | undefined;
+    /** 악보책 하나에 담는 권 수 한도 (profile.scoreBook.maxScores). 넘으면 경고 */
+    maxBooks?: number | undefined;
   }
 
-  let { song, result, spread, spreadOn, thoroughOn, onspread, onthorough, limit, maxChords, pasteLimit, fewer, onfewer, onclose, fixed = [], cursor, onfix, onunfixall, onseek }: Props = $props();
+  let { song, result, spread, spreadOn, thoroughOn, onspread, onthorough, limit, maxChords, pasteLimit, fewer, onfewer, onclose, fixed = [], cursor, onfix, onunfixall, onseek, maxBooks }: Props = $props();
 
   /** 마디·박 자리 글 */
   const place = (at: Rat) => {
@@ -102,10 +105,11 @@
       {t("ui.splitThorough")}
     </label>
   </div>
+  {#if maxBooks !== undefined && result.parts.length > maxBooks}<p class="warn">{t("ui.splitOverMax", { max: maxBooks, count: result.parts.length })}</p>{/if}
   {#if spread}
     <p class="fewer">
       {spread.from === undefined ? t("ui.splitSpreadOne", { moved: spread.moved }) : t("ui.splitSpreadDone", { from: spread.from, to: spread.to, moved: spread.moved })}
-      <button class="small" onclick={() => onfewer(spread.limit)}>{t("ui.splitSpreadApply")}</button>
+      <button class="small" onclick={() => onfewer(spread.fit)}>{t("ui.splitSpreadApply")}</button>
     </p>
   {/if}
   {#if fewer === "checking"}
@@ -113,7 +117,7 @@
   {:else if fewer}
     <p class="fewer">
       {t("ui.splitFewer", { from: fewer.from, to: fewer.to, moved: fewer.moved })}
-      <button class="small" onclick={() => onfewer(fewer.limit)}>{t("ui.splitFewerApply")}</button>
+      <button class="small" onclick={() => onfewer(fewer.fit)}>{t("ui.splitFewerApply")}</button>
     </p>
   {/if}
   <p class="muted help">{t("ui.splitHelp")}</p>
@@ -128,7 +132,7 @@
           <rect x={xOf(part.end) - (part.fixed ? 2 : 1)} y="0" width={part.fixed ? 4 : 2} height="30" class={part.fixed ? "cut fixed" : "cut"} />
         {/if}
       {/each}
-      {#each song.markers as m (m.id)}
+      {#each structureMarkers(song.markers) as m (m.id)}
         <rect x={xOf(m.at) - 0.5} y="26" width="1" height="4" class="marker" />
       {/each}
     </svg>

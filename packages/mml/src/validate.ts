@@ -1,9 +1,10 @@
-import { INSTRUMENTS, add, chainFadeEnd, chainSampleEnd, cmp, crossesTimbre, dbOfVolume, decayDbAt, eq, foldPitch, isSoloInstrument, soundingRangeOf, tempoClock, timbreBoundaries, trackInstrument, volumeForDb, type GameProfile, type Note, type Rat, type Song, type Track } from "@mmlce/core";
+import { INSTRUMENTS, add, barAt, chainFadeEnd, chainSampleEnd, cmp, crossesTimbre, dbOfVolume, decayDbAt, eq, foldPitch, isSoloInstrument, normalizeTempo, soundingRangeOf, tempoClock, timbreBoundaries, trackInstrument, volumeForDb, type GameProfile, type Note, type Rat, type Song, type Track, sub, type LengthLimit } from "@mmlce/core";
 import { chordsPerScore } from "./clipboard.js";
 import { type Diagnostic, type ParseResult } from "./parser.js";
-import { mmlPitchRange } from "./printer.js";
+import { canWriteExactly, mmlPitchRange } from "./printer.js";
 import { scoreTrackIds } from "./tempo-placement.js";
 import { tempoMismatch } from "./tempo-text.js";
+import { widestLimit } from "./track-limits.js";
 
 const NAMES = ["c", "c+", "d", "d+", "e", "f", "f+", "g", "g+", "a", "a+", "b"];
 
@@ -15,10 +16,10 @@ function noteName(midi: number): string {
 /**
  * 채널 하나를 프로필 한도로 검사한다. 문법 오류는 파서가 이미 냈으므로 여기서는
  * 게임 한도(글자 수, 값 범위, MML로 쓸 수 있는 음 높이)만 본다. 범위 밖 값은 편집기 안에서는 쓸 수 있으므로 경고다.
+ * limit: 이 트랙 자리의 글자 수 한도 (부르는 쪽이 trackLimits에서 넘긴다. 생략하면 가장 큰 자리 한도)
  */
-export function validateChannel(text: string, parsed: ParseResult, profile: GameProfile): Diagnostic[] {
+export function validateChannel(text: string, parsed: ParseResult, profile: GameProfile, limit = widestLimit(profile)): Diagnostic[] {
   const out: Diagnostic[] = [];
-  const limit = profile.charLimitPerScore;
   if (text.length > limit) {
     out.push({ level: "error", code: "char-limit", params: { count: text.length, limit }, span: [limit, text.length] });
   }
@@ -128,6 +129,11 @@ export interface ValidateSongOptions {
   readonly fadeDb?: number;
   /** true면 실험실 "연주 누락음 검사"(fast-run-drop)을 본다. 기준은 profile.fastRunDrop (실측 전, pending fastRunDrop) */
   readonly fastRunDrop?: boolean;
+  /**
+   * true면 실험실 "범위 밖 템포를 길이로 풀기": 게임 템포 끝값(profile.tempo의 min·max)과 같은 템포를 정보로 알린다 (tempo-at-limit).
+   * 탭 템포 등이 범위 밖 값을 끝값으로 막아 실제 값이 사라진 자리일 수 있어 찾기 쉽게 한다 (곡 끝 뒤 템포는 세지 않는다)
+   */
+  readonly tempoAtLimit?: boolean;
 }
 
 /** 트랙이 실제로 소리 내는 악기 (재생과 같이 트랙에서 고른 팩의 실제 악기) */
@@ -442,9 +448,22 @@ export function validateSong(song: Song, profile: GameProfile, options: Validate
       });
     }
   }
+  if (options.tempoAtLimit) {
+    const last = song.tracks.reduce<Rat | undefined>((e, t) => t.notes.reduce((m, n) => (m === undefined || cmp(end(n), m) > 0 ? end(n) : m), e), undefined);
+    const hits = normalizeTempo(song.tempo).filter((e) => (e.bpm === profile.tempo.min || e.bpm === profile.tempo.max) && last !== undefined && cmp(e.at, last) < 0);
+    if (hits.length > 0) {
+      const bars = [...new Set(hits.map((e) => barAt(song.timeSig, e.at)))];
+      const shown = bars.slice(0, 8).join(", ") + (bars.length > 8 ? ", …" : "");
+      out.push({ level: "info", code: "tempo-at-limit", params: { count: hits.length, min: profile.tempo.min, max: profile.tempo.max, bars: shown } });
+    }
+  }
   // 원문의 t와 곡 템포가 어긋나면 3MLE 저장 때 원문 대신 다시 쓴 글이 나간다
   if (tempoMismatch(song)) out.push({ level: "warning", code: "tempo-mismatch" });
 
+  // 정확한 분수로 연주하는 게임(모바일)인데 틱 칸에서 온 길이(19/384 등)라 출력기가 정확히 쓸 수 없는 음: 잇단음 되살리기로 고친다
+  for (const track of song.tracks) {
+    for (const n of unwritableNotes(track, profile.length)) out.push({ level: "warning", code: "length-unwritable", trackId: track.id, noteId: n.id });
+  }
   return out;
 }
 
@@ -465,3 +484,20 @@ function sameNoteOverlaps(aNotes: readonly Note[], bNotes: readonly Note[]): Not
   }
   return hits;
 }
+
+/** 이 트랙에서 곡의 길이 셈으로 정확히 쓸 수 없는 음 (길이나 앞 쉼표를 쓸 수 없음) */
+export function unwritableNotes(track: Track, limit: LengthLimit): Note[] {
+  if (limit.ticks) return [];
+  const sorted = [...track.notes].sort((a, b) => cmp(a.start, b.start));
+  const out: Note[] = [];
+  let end: Rat = { n: 0, d: 1 };
+  for (const n of sorted) {
+    const gap = sub(n.start, end);
+    const restOk = cmp(gap, { n: 0, d: 1 }) <= 0 || canWriteExactly(gap, limit);
+    if (!restOk || !canWriteExactly(n.dur, limit)) out.push(n);
+    const e = add(n.start, n.dur);
+    if (cmp(e, end) > 0) end = e;
+  }
+  return out;
+}
+

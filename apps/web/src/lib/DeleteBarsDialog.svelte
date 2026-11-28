@@ -84,6 +84,9 @@
     {#if result.made > 0}
       <p class="warn">{t("ui.deleteBarsMade", { count: result.made })}</p>
     {/if}
+    {#if result.memos > 0}
+      <p class="warn">{t("ui.deleteBarsMemos", { count: result.memos })}</p>
+    {/if}
     {#if shiftMs > 0}
       <p class="muted">{t("ui.deleteBarsReferenceShift", { seconds: shiftMs / 1000, ms: shiftMs })}</p>
     {/if}

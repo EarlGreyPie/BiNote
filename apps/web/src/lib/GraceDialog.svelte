@@ -1,6 +1,6 @@
 <script lang="ts">
   import { untrack } from "svelte";
-  import { canWriteExactly, optimizeMml } from "@mmlce/mml";
+  import { canWriteExactly, optimizeMml, limitOf, trackLimits, widestLimit } from "@mmlce/mml";
   import { cmp, graceMax, planGrace, toFloat, type GameProfile, type GraceResult, type Note, type Rat, type Song } from "@mmlce/core";
   import { t } from "./i18n.svelte";
   import { lengthLabel } from "./Toolbar.svelte";
@@ -125,14 +125,20 @@
     if (result.changes.length === 0) return undefined;
     let delta = 0;
     let over = false;
+    /** 넘친 트랙 자리의 한도 (자리마다 한도가 다를 수 있다) */
+    let overLimit: number | undefined;
+    const limits = trackLimits(song, profile);
     for (const c of result.changes) {
       const track = song.tracks.find((tr) => tr.id === c.trackId);
       if (!track) continue;
       const after = optimizeMml(c.notes, { lengths: profile.length }).text.length;
       delta += after - optimizeMml(track.notes, { lengths: profile.length }).text.length;
-      if (after > profile.charLimitPerScore) over = true;
+      if (after > limitOf(limits, c.trackId, profile)) {
+        over = true;
+        overLimit ??= limitOf(limits, c.trackId, profile);
+      }
     }
-    return { delta, over };
+    return { delta, over, limit: overLimit ?? widestLimit(profile) };
   });
 
   // 미리 보기: 고른 음 앞뒤 구간의 바뀐 트랙 음을 작은 롤로 (만든 꾸밈음과 본음은 강조)
@@ -210,7 +216,7 @@
     <p class="muted">
       {t("ui.graceMade", { n: result.made, count })}{#if chars}{` · ${t("ui.slideChars", { n: chars.delta })}`}{/if}
     </p>
-    {#if chars?.over}<p class="warn">{t("ui.slideCharsOver", { limit: profile.charLimitPerScore })}</p>{/if}
+    {#if chars?.over}<p class="warn">{t("ui.slideCharsOver", { limit: chars.limit })}</p>{/if}
     {#if s.tied + s.short + s.unwritable + s.locked + s.range > 0}
       <p class="muted">{t("ui.graceSkipped", { tied: s.tied, short: s.short + s.unwritable, locked: s.locked, range: s.range })}</p>
     {/if}

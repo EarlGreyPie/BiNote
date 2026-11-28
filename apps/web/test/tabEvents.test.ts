@@ -288,3 +288,24 @@ describe("화면 배율: 마디 번호 줄 두께", () => {
     expect(tabZone([], 300, TAB_RULER + d + 1, 500, 11, false, TAB_EVENT_FONT, TAB_RULER + d)).toBe("tempo");
   });
 });
+
+describe("타브 변속 줄의 조표 글자", () => {
+  it("조표는 박자·마커와 같은 아래 칸에 놓이고, 같은 자리 박자 옆으로 밀린다", () => {
+    const spots = layoutTabEvents(
+      [
+        { kind: "meter", at: rat(0), text: "4/4" },
+        { kind: "key", at: rat(0), text: "G/e" },
+        { kind: "key", at: rat(2), text: "F/d" },
+      ],
+      xOf,
+      widthOf,
+    );
+    expect(spots.map((s) => [s.kind, s.row])).toEqual([
+      ["meter", 1],
+      ["key", 1],
+      ["key", 1],
+    ]);
+    expect(spots[1]!.left).toBeGreaterThanOrEqual(spots[0]!.right);
+    expect(tabEventAt(spots, 210, 1)).toMatchObject({ kind: "key", text: "F/d" });
+  });
+});

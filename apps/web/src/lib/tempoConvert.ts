@@ -1,5 +1,5 @@
 import { barBeatAt, cmp, normalizeTempo, rat, type Rat, type Song } from "@mmlce/core";
-import { parseMml, type TempoConvertFailure, type TempoConvertResult } from "@mmlce/mml";
+import { parseMml, type RespaceFailure, type TempoConvertResult } from "@mmlce/mml";
 import type { MessageKey, Params } from "@mmlce/i18n";
 import type { TempoAdvice } from "./output";
 
@@ -52,7 +52,7 @@ function where(song: Song, at: Rat): { bar: number; beat: number } {
 }
 
 /** 거절 까닭 한 곳을 글로. song은 바꾸기 전 곡 (거절하면 곡이 그대로라 자리도 그 곡 기준이다) */
-function failureText(song: Song, f: TempoConvertFailure, maxLength: number, t: Translate): string {
+function failureText(song: Song, f: RespaceFailure, maxLength: number, t: Translate): string {
   const name = (id: string) => song.tracks.find((tr) => tr.id === id)?.name ?? id;
   switch (f.kind) {
     case "length":
@@ -68,14 +68,21 @@ function failureText(song: Song, f: TempoConvertFailure, maxLength: number, t: T
       return t("ui.outputTempoConvertTempo", { ...where(song, f.at), bpm: f.bpm });
     case "meter":
       return t("ui.outputTempoConvertMeter", { bar: where(song, f.at).bar, beats: f.beats, unit: f.unit });
+    // 템포를 음 길이로 바꾸기에서만 (respace)
+    case "range":
+      return t("ui.tempoLengthFailRange", { ...where(song, f.at), bpm: f.bpm });
+    case "crowded":
+      return t("ui.tempoLengthFailCrowded", where(song, f.at));
+    case "grid":
+      return t("ui.tempoLengthFailGrid", { ...where(song, f.at), grid: `1/${f.grid.d / f.grid.n}`, length: `${f.length.n}/${f.length.d}` });
   }
 }
 
 /**
  * 거절 까닭을 한 줄로. 같은 트랙에서 같은 까닭으로 여러 곳이 걸리면 첫 곳만 적고, 앞 몇 곳 뒤는 "외 N곳"으로 센다
  */
-export function tempoConvertFailedText(song: Song, failed: readonly TempoConvertFailure[], maxLength: number, t: Translate): string {
-  const kindKey = (f: TempoConvertFailure) => (f.kind === "length" ? `length|${f.trackId}|${f.rest}` : f.kind === "end" ? `end|${f.trackId}` : `${f.kind}|${f.at.n}/${f.at.d}`);
+export function tempoConvertFailedText(song: Song, failed: readonly RespaceFailure[], maxLength: number, t: Translate): string {
+  const kindKey = (f: RespaceFailure) => (f.kind === "length" ? `length|${f.trackId}|${f.rest}` : f.kind === "end" ? `end|${f.trackId}` : `${f.kind}|${f.at.n}/${f.at.d}`);
   const seen = new Set<string>();
   const distinct = [...failed]
     .sort((a, b) => cmp(a.at, b.at))

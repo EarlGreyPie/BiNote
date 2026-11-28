@@ -1,6 +1,7 @@
 <script lang="ts">
   import { isSoloInstrument, type GameProfile, type Rat, type Song, type TempoEvent } from "@mmlce/core";
-  import { gamePaste, pasteTempoChoices } from "@mmlce/mml";
+  import { gamePaste, pasteTempoChoices, slotLimitsDiffer, widestLimit } from "@mmlce/mml";
+  import type { MessageKey } from "@mmlce/i18n";
   import { instrumentName, t } from "./i18n.svelte";
   import Icon from "./Icon.svelte";
   import { isCopied, nextExportPick, pasteOrderAdd, pasteOrderMove, pasteOrderOf, pasteOrderRemove, pasteOrderShift, trackStamp, type OutputRow, type PasteOrder, type TempoAdvice } from "./output";
@@ -44,7 +45,9 @@
   }
 
   let { song, rows, tempo, profile, chordsOf, copied, colors, oncopied, ontrack, onseek, onconvert, ondistribute, onsplit, onchecks, onclose }: Props = $props();
-  const limit = $derived(profile.charLimitPerScore);
+  const limit = $derived(widestLimit(profile));
+  /** 자리마다 한도가 다른 게임(PC)은 붙이는 순서 = 자리라서 순서를 바꾸면 한도가 달라진다. 늘 곡 순서로만 붙인다 */
+  const fixedOrder = $derived(slotLimitsDiffer(profile));
   const tempoRange = $derived(profile.tempo);
   /** 붙여넣기 한 번에 넣을 수 있는 트랙 수 */
   const pickLimit = $derived(profile.maxChordsPerPlayer);
@@ -72,7 +75,7 @@
   /** 곡이 바뀌어 없어진 트랙은 고른 것에서 빼고, 곡 순서일 때는 지금 곡 순서로 세운다 */
   const order = $derived(
     pasteOrderOf(
-      { ids: picked.ids.filter((id) => song.tracks.some((tr) => tr.id === id)), custom: picked.custom },
+      { ids: picked.ids.filter((id) => song.tracks.some((tr) => tr.id === id)), custom: picked.custom && !fixedOrder },
       songIds,
     ),
   );
@@ -114,11 +117,12 @@
 
   /** 붙여넣는 글 안의 칸 차례 (곡 구조는 그대로). 곡 순서가 기본이고 목록에서 직접 옮기면 그 순서 */
   const pasteOrder = $derived(chosen);
-  const reordered = $derived(order.custom);
+  const reordered = $derived(!fixedOrder && order.custom);
   /** 트랙이 든 악보 번호 (순서 목록에 같은 이름 트랙을 가리려고) */
   const scoreNumberOf = (id: string) => rows.find((r) => r.tracks.some((tr) => tr.trackId === id))?.number;
   let orderList = $state<HTMLOListElement>();
   async function shiftOrder(id: string, step: -1 | 1) {
+    if (fixedOrder) return;
     picked = pasteOrderShift(order, id, step, songIds);
     justCopied = 0;
     // 옮긴 뒤에도 같은 줄의 단추에 초점을 둔다 (끝 칸에 닿아 그 단추가 꺼지면 반대 단추로)
@@ -171,10 +175,12 @@
     chosen.length > 0 ? gamePaste(song, chosen, chordsOf, pickLimit, { tempo: withTempo, tempoMap, charLimit: limit, order: pasteOrder }) : undefined,
   );
   const pastedCount = (id: string) => paste?.written.get(id)?.length;
-  const pasteOver = $derived(paste ? [...paste.written.values()].some((text) => text.length > limit) : false);
+  /** 붙여넣는 글 안 그 트랙 자리의 글자 수 한도 (게임이 자리마다 한도가 다를 수 있다) */
+  const pastedLimit = (id: string) => paste?.limits.get(id) ?? limit;
+  const pasteOver = $derived(paste ? [...paste.written].some(([id, text]) => text.length > pastedLimit(id)) : false);
   const silent = $derived(paste ? paste.pasted.filter((id): id is string => id !== null && !paste.trackIds.includes(id)) : []);
   const nameOf = (id: string) => song.tracks.find((tr) => tr.id === id)?.name ?? id;
-  const silentOver = $derived(silent.filter((id) => (pastedCount(id) ?? 0) > limit).map(nameOf));
+  const silentOver = $derived(silent.filter((id) => (pastedCount(id) ?? 0) > pastedLimit(id)).map(nameOf));
   /** 오르골·축음기 트랙이 붙여넣는 글의 소리 칸(앞 화음 수만큼) 밖에 놓였다 */
   const soloMuted = $derived(
     paste
@@ -250,6 +256,7 @@
     <button class="small" onclick={() => dialog.close()}>{t("ui.close")}</button>
   </header>
   <p class="muted help">{t("ui.outputHelp", { max: pickLimit })}</p>
+  {#if profile.exportNotice}<p class="note warn">{t(profile.exportNotice as MessageKey)}</p>{/if}
 
   {#if tempo.length > 0 || overCount > 0 || (shownNote && !shownNote.key)}
     <ul class="advice">
@@ -308,8 +315,9 @@
             {#each row.tracks as tr (tr.trackId)}
               {@const on = chosen.includes(tr.trackId)}
               {@const count = on ? (pastedCount(tr.trackId) ?? tr.count) : tr.count}
+              {@const cap = on ? pastedLimit(tr.trackId) : tr.limit}
               {@const was = copied?.has(tr.trackId) ?? false}
-              <div class="track" class:full={count > limit}>
+              <div class="track" class:full={count > cap}>
                 <label class="pick" title={!on && full ? t("ui.exportLimit", { max: pickLimit }) : undefined}>
                   <input type="checkbox" checked={on} disabled={!on && full} onchange={() => toggleTrack(tr.trackId)} />
                 </label>
@@ -318,8 +326,8 @@
                   {@const slot = pasteOrder.indexOf(tr.trackId) + 1}
                   <span class="slot" title={t("ui.exportOrderSlot", { n: slot })} aria-label={t("ui.exportOrderSlot", { n: slot })}>{slot}</span>
                 {/if}
-                <span class="bar"><span style:width="{Math.min(100, (count / limit) * 100)}%"></span></span>
-                <span class="count">{count}/{limit}</span>
+                <span class="bar"><span style:width="{Math.min(100, (count / cap) * 100)}%"></span></span>
+                <span class="count">{count}/{cap}</span>
                 {#if done(tr.trackId)}<span class="badge ok">{t("ui.exportCopiedMark")}</span>{:else if was}<span class="badge warn">{t("ui.exportChangedMark")}</span>{/if}
               </div>
             {/each}
@@ -350,7 +358,9 @@
     {:else if keptTempo}
       <p class="muted note">{t("ui.exportTempoKept", { tempo: tempoText(keptTempo) })}</p>
     {/if}
-    {#if pasteOrder.length > 1}
+    {#if pasteOrder.length > 1 && fixedOrder}
+      <p class="muted note">{t("ui.exportOrderFixed")}</p>
+    {:else if pasteOrder.length > 1}
       <div class="paste-order">
         <div class="order-head">
           <span class="muted" title={t("ui.exportOrderHelp")}>{t("ui.exportOrder")}</span>

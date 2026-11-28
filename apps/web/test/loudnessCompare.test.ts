@@ -115,6 +115,9 @@ describe("원곡 대조 셈여림", () => {
     const whole = barSegments(sig, rat(3));
     expect(whole.map((x) => toFloat(x.start))).toEqual(barStarts(sig, rat(3)).map(toFloat));
     expect(whole.every((x) => x.half === undefined)).toBe(true);
+    // 못갖춘마디 곡은 첫 마디가 0번, 그 뒤 1번부터 (마디 번호 줄과 같다)
+    const pickup = [{ at: rat(0), beats: 1, unit: 4, pickup: true }, { at: rat(1, 4), beats: 4, unit: 4 }];
+    expect(barSegments(pickup, rat(9, 4)).map((x) => [x.bar, toFloat(x.start)])).toEqual([[0, 0], [1, 0.25], [2, 1.25]]);
   });
 
   it("반 마디로 나눠 보면 마디 안에서 원곡이 커지는 반을 찾는다 (끄면 전과 같다)", () => {

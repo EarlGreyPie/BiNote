@@ -1,6 +1,6 @@
 import { add, cmp, div, mul, rat, sub, type Rat } from "./rat.js";
 import type { Note, Song } from "./model.js";
-import { foldPitch, MOBILE_PROFILE, soundingRangeOf, volumeStepMax, type GameProfile } from "./profile.js";
+import { foldPitch, soundingRangeOf, volumeStepMax, widestVolumeStepMax, type GameProfile } from "./profile.js";
 import { shortestLength } from "./note-length.js";
 import { isCleanTrack, replaceNotes, trackIndex, type TrackIndex } from "./note-edit.js";
 
@@ -90,10 +90,10 @@ export interface TrillResult {
 }
 
 /**
- * v 깊이·전체 낮추기 입력 상한 (v 범위 전체). 곡 프로필이 닿지 않는 설정 읽기에서만 쓰고,
+ * v 깊이·전체 낮추기 입력 상한 (v 범위 전체). 등록된 모든 프로필을 덮는 값. 곡 프로필이 닿지 않는 설정 읽기에서만 쓰고,
  * 창은 volumeStepMax(곡 프로필)를 쓴다
  */
-export const TRILL_VOLUME_DEPTH_LIMIT = volumeStepMax(MOBILE_PROFILE);
+export const TRILL_VOLUME_DEPTH_LIMIT = widestVolumeStepMax();
 
 /**
  * 나눈 음 하나하나의 v. starts: 음마다 시작 자리 (박마다 세게에 쓴다). 결과는 프로필 v 범위 안으로 자른다

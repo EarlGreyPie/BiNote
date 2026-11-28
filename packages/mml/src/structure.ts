@@ -1,4 +1,4 @@
-import { add, clampFifths, cmp, type KeyEvent, div, emptySong, fitNotes, INSTRUMENTS, tieChains, removeNotes, replaceNotes, meterGrid, trackInstrument, rat, sub, ZERO, type Command, type InstrumentRef, type Note, type Player, type PlayerTab, samePlayerTab, type Rat, type Song, type Track, type TrackRole } from "@mmlce/core";
+import { add, clampFifths, cmp, type KeyEvent, type Marker, div, emptySong, fitNotes, INSTRUMENTS, tieChains, removeNotes, replaceNotes, meterGrid, trackInstrument, rat, sub, ZERO, type Command, type InstrumentRef, type Note, type Player, type PlayerTab, samePlayerTab, type Rat, type Song, type Track, type TrackRole, DEFAULT_PROFILE } from "@mmlce/core";
 import { keepTextEnd, setTracksNotes } from "./edit.js";
 import { newTrackColor } from "./track-color.js";
 
@@ -69,7 +69,7 @@ function blankTrack(song: Pick<Song, "tracks">, id: string, playerId: string, na
 
 /** 빈 악보: 연주자 하나(기본 피아노)와 빈 트랙 하나, 기본 템포(t120), 4/4 */
 export function newSong(options: { title?: string; playerName: string; trackName: string; canonical?: string; profileId?: string }): Song {
-  const base = emptySong({ title: options.title ?? "", author: "", profileId: options.profileId ?? "mobile" });
+  const base = emptySong({ title: options.title ?? "", author: "", profileId: options.profileId ?? DEFAULT_PROFILE.id });
   const player: Player = { id: "p1", name: options.playerName, instrument: instrumentRef(options.canonical ?? "piano") };
   return {
     ...base,
@@ -478,25 +478,85 @@ export function removeMeter(at: Rat, label = "박자 지우기"): Command {
   );
 }
 
-/** 마커를 넣거나(id 없음) 이름·위치를 고친다. 빈 이름은 무시 */
+/** 마커를 넣거나(id 없음) 이름·위치를 고친다. 빈 이름은 무시. 고칠 때 메모 표시(kind·done)는 그대로 둔다 */
 export function setMarker(id: string | undefined, at: Rat, text: string, label = "마커"): Command {
   return replaceWith(label, (song) => {
     const name = text.trim();
     if (!name) return song;
     const markers = id && song.markers.some((m) => m.id === id)
-      ? song.markers.map((m) => (m.id === id ? { ...m, at, label: name } : m))
+      ? song.markers.map((m) => (m.id === id ? withEnd({ ...m, at, label: name }, m.end) : m))
       : [...song.markers, { id: nextId("m", song.markers.map((m) => m.id)), at, label: name }];
     return { ...song, markers: [...markers].sort((a, b) => cmp(a.at, b.at)) };
   });
 }
 
-/** 마커를 옮긴다 */
+/** 범위 끝을 붙인다. 끝이 시작보다 뒤가 아니면 끝을 떼어 한 자리 메모로 */
+function withEnd(m: Marker, end: Rat | undefined): Marker {
+  const { end: _old, ...rest } = m;
+  return end && cmp(end, m.at) > 0 ? { ...rest, end } : rest;
+}
+
+/** 마커를 옮긴다 (범위 메모는 끝도 같은 만큼 옮겨 길이를 지킨다) */
 export function moveMarker(id: string, to: Rat, label = "마커 옮기기"): Command {
   return replaceWith(label, (song) => {
     const marker = song.markers.find((m) => m.id === id);
     if (!marker || cmp(marker.at, to) === 0) return song;
-    return { ...song, markers: song.markers.map((m) => (m.id === id ? { ...m, at: to } : m)).sort((a, b) => cmp(a.at, b.at)) };
+    const move = (m: Marker): Marker => ({ ...m, at: to, ...(m.end ? { end: add(m.end, sub(to, m.at)) } : {}) });
+    return { ...song, markers: song.markers.map((m) => (m.id === id ? move(m) : m)).sort((a, b) => cmp(a.at, b.at)) };
   });
+}
+
+/** 작업 메모에 적는 것. end가 있으면 범위 메모 [at, end) */
+export interface MemoInput {
+  readonly at: Rat;
+  readonly end?: Rat | undefined;
+  readonly text: string;
+  readonly done?: boolean | undefined;
+}
+
+/**
+ * 작업 메모를 넣거나(id 없음) 고친다 (글·자리·범위·끝냄). 빈 글은 무시.
+ * 작업 메모는 프로젝트 파일에만 저장하고 내보내기(MML·마비꼬·3MLE·MIDI)와 악보책 나누기는 보지 않는다
+ */
+export function setMemo(id: string | undefined, input: MemoInput, label = "작업 메모"): Command {
+  return replaceWith(label, (song) => {
+    const text = input.text.trim();
+    if (!text || cmp(input.at, ZERO) < 0) return song;
+    const old = id ? song.markers.find((m) => m.id === id) : undefined;
+    // 고칠 때는 id와 모르는 칸(extras)을 지키고, 메모 칸(kind·done·end)은 새로 적는다 (끝냄을 끄면 done 칸을 뗀다)
+    const { kind: _k, done: _d, end: _e, ...base } = old ?? { id: nextId("m", song.markers.map((m) => m.id)), at: input.at, label: text };
+    const done = input.done ?? old?.done ?? false;
+    const memo = withEnd({ ...base, at: input.at, label: text, kind: "memo", ...(done ? { done: true } : {}) }, input.end);
+    if (old && sameMarker(old, memo)) return song;
+    const markers = old ? song.markers.map((m) => (m.id === old.id ? memo : m)) : [...song.markers, memo];
+    return { ...song, markers: [...markers].sort((a, b) => cmp(a.at, b.at)) };
+  });
+}
+
+/** 작업 메모를 끝냄 / 안 끝냄으로 */
+export function setMemoDone(id: string, done: boolean, label = "작업 메모 끝냄"): Command {
+  return replaceWith(label, (song) => {
+    const memo = song.markers.find((m) => m.id === id);
+    if (!memo || memo.kind !== "memo" || !!memo.done === done) return song;
+    return { ...song, markers: song.markers.map((m) => (m.id === id ? (done ? { ...m, done: true } : (({ done: _d, ...rest }) => rest)(m)) : m)) };
+  });
+}
+
+/**
+ * 구조 마커를 작업 메모로(memo = true), 작업 메모를 구조 마커로(memo = false) 바꾼다.
+ * 마커로 되돌리면 끝냄·범위 끝은 뗀다 (구조 마커는 한 자리 이름이다)
+ */
+export function setMarkerMemo(id: string, memo: boolean, label = memo ? "마커를 메모로" : "메모를 마커로"): Command {
+  return replaceWith(label, (song) => {
+    const marker = song.markers.find((m) => m.id === id);
+    if (!marker || (marker.kind === "memo") === memo) return song;
+    const { kind: _k, done: _d, end: _e, ...rest } = marker;
+    return { ...song, markers: song.markers.map((m) => (m.id === id ? (memo ? { ...rest, kind: "memo" as const } : rest) : m)) };
+  });
+}
+
+function sameMarker(a: Marker, b: Marker): boolean {
+  return a.label === b.label && cmp(a.at, b.at) === 0 && !!a.done === !!b.done && a.kind === b.kind && (a.end && b.end ? cmp(a.end, b.end) === 0 : !a.end && !b.end);
 }
 
 /** 마커를 지운다 */

@@ -28,7 +28,7 @@
   });
 
   const total = $derived(rows.reduce((sum, r) => ({ before: sum.before + r.before, after: sum.after + r.after }), { before: 0, after: 0 }));
-  const stillOver = $derived(rows.filter((r) => r.after > limit).length);
+  const stillOver = $derived(rows.filter((r) => r.after > r.limit).length);
 
   function apply() {
     if (blocked) return;
@@ -49,8 +49,8 @@
         {#each rows as r (r.trackId)}
           <tr>
             <td><span class="muted">{where(r.trackId)}</span> {r.name}</td>
-            <td class="num" class:full={r.before > limit}>{r.before}</td>
-            <td class="num" class:full={r.after > limit}>{r.after} <span class="muted">({r.after - r.before >= 0 ? "+" : ""}{r.after - r.before})</span></td>
+            <td class="num" class:full={r.before > r.limit}>{r.before}</td>
+            <td class="num" class:full={r.after > r.limit}>{r.after} <span class="muted">({r.after - r.before >= 0 ? "+" : ""}{r.after - r.before})</span></td>
           </tr>
         {/each}
       </tbody>

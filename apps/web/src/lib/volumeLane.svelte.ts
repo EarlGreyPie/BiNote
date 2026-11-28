@@ -23,6 +23,8 @@ interface Stored {
   mode: LaneMode;
   /** 여러 트랙에 그릴 때 멜로디 아닌 음의 높이 자리마다 더하는 차이 */
   offsets: { top: number; middle: number; bottom: number };
+  /** 원곡 세기 안내선 (실험실, 원곡을 불러온 곡에서만 보인다). 기본 끔 */
+  guide: boolean;
 }
 
 /** EarlGreyPie 악보 습관에서 온 기본값: 화음은 멜로디보다 낮게, 안쪽 성부를 가장 낮게 */
@@ -35,7 +37,7 @@ function offsetOf(raw: unknown, fallback: number): number {
 function load(): Stored {
   // 폰 폭은 처음에 접어 둔다 (음 칸이 좁아서)
   const phone = typeof matchMedia === "function" && matchMedia("(max-width: 600px)").matches;
-  const fallback: Stored = { state: phone ? "collapsed" : "compact", size: LANE_DEFAULT, mode: "brush", offsets: { ...DEFAULT_OFFSETS } };
+  const fallback: Stored = { state: phone ? "collapsed" : "compact", size: LANE_DEFAULT, mode: "brush", offsets: { ...DEFAULT_OFFSETS }, guide: false };
   return loadStored(KEY, (raw) => {
     if (!raw) return fallback;
     try {
@@ -49,6 +51,7 @@ function load(): Stored {
           middle: offsetOf(o.offsets?.middle, DEFAULT_OFFSETS.middle),
           bottom: offsetOf(o.offsets?.bottom, DEFAULT_OFFSETS.bottom),
         },
+        guide: o.guide === true,
       };
     } catch {
       return fallback;
@@ -60,7 +63,7 @@ export const volumeLane = $state<Stored>(load());
 
 export function saveVolumeLane(change: Partial<Stored>): void {
   Object.assign(volumeLane, change);
-  saveStored(KEY, JSON.stringify({ state: volumeLane.state, size: volumeLane.size, mode: volumeLane.mode, offsets: volumeLane.offsets }));
+  saveStored(KEY, JSON.stringify({ state: volumeLane.state, size: volumeLane.size, mode: volumeLane.mode, offsets: volumeLane.offsets, guide: volumeLane.guide }));
 }
 
 /** 지금 상태의 값 칸 두께 (접으면 0) */

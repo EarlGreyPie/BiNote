@@ -26,11 +26,17 @@
     keySig: { readonly fifths: number; readonly here: boolean };
     /** 곡 처음 박자는 지울 수 없다 / 곡 처음 템포를 지우면 t120 */
     atStart: boolean;
-    onapply: (changes: EventChanges) => void;
+    /**
+     * 실험실 범위 밖 템포를 길이로 풀기: 범위 밖 템포를 풀 배율과 넣을 템포 (4배로도 못 풀면 to 없음, 범위 안이면 undefined).
+     * 주면 범위 밖일 때 "길이로 풀어 넣기"를 권한다
+     */
+    fold?: ((bpm: number) => { readonly scale?: string | undefined; readonly to?: number | undefined } | undefined) | undefined;
+    /** fold: 템포를 넣은 뒤 그 조각을 음 길이로 푼다 (실행 취소 한 칸) */
+    onapply: (changes: EventChanges, fold?: boolean) => void;
     onclose: () => void;
   }
 
-  let { kind, where, tempoRange, tempo, meter, marker, keySig, atStart, onapply, onclose }: Props = $props();
+  let { kind, where, tempoRange, tempo, meter, marker, keySig, atStart, fold, onapply, onclose }: Props = $props();
 
   let dialog: HTMLDialogElement;
   // svelte-ignore state_referenced_locally
@@ -60,10 +66,23 @@
       Object.keys(changes).length > 0,
   );
   const outOfRange = $derived(on.tempo && Number.isInteger(bpm) && (bpm < tempoRange.min || bpm > tempoRange.max));
+  /** 길이로 풀어 넣기 제안 (실험실). 값은 그대로여도(이미 범위 밖 템포) 풀 수 있다 */
+  const offer = $derived(outOfRange && fold ? fold(bpm) : undefined);
+  /** 다른 칸 값도 맞아야 한다 (바뀐 것이 템포 하나도 없어도 된다) */
+  const foldReady = $derived(
+    offer?.to !== undefined &&
+      (!(on.meter || meterLocked) || (Number.isInteger(beats) && beats >= 1 && beats <= 32)) &&
+      (!on.marker || text.trim() !== ""),
+  );
 
   function apply() {
     if (!valid) return;
     onapply(changes);
+    dialog.close();
+  }
+  function applyFolded() {
+    if (!foldReady) return;
+    onapply(changes, true);
     dialog.close();
   }
 
@@ -109,13 +128,21 @@
   </div>
   {#if on.key}<p class="muted">{t("ui.keyEventHelp")}</p>{/if}
   {#if outOfRange}<p class="warn">{t("ui.tempoOutOfRange", { min: tempoRange.min, max: tempoRange.max })}</p>{/if}
+  {#if offer}
+    {#if offer.to !== undefined}
+      <p class="muted">{t("ui.tempoFoldOffer", { bpm, to: offer.to, scale: offer.scale ?? "" })}</p>
+    {:else}
+      <p class="muted">{t("ui.tempoFoldTooFarShort", { bpm })}</p>
+    {/if}
+  {/if}
   {#if tempo.here && atStart && !on.tempo}<p class="muted">{t("ui.tempoStartDelete")}</p>{/if}
   {#if on.meter && !meter.here}<p class="muted">{t("ui.meterHelpAt")}</p>{/if}
   <p class="muted">{t("ui.eventTogetherHelp")}</p>
   <div class="actions">
     <span class="spacer"></span>
     <button onclick={() => dialog.close()}>{t("ui.cancel")}</button>
-    <button class="primary" disabled={!valid} onclick={apply}>{t("ui.eventApply")}</button>
+    {#if offer?.to !== undefined}<button class="primary" disabled={!foldReady} onclick={applyFolded}>{t("ui.tempoFoldApply")}</button>{/if}
+    <button class:primary={offer?.to === undefined} disabled={!valid} onclick={apply}>{t("ui.eventApply")}</button>
   </div>
 </dialog>
 

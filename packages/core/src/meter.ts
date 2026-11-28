@@ -17,11 +17,33 @@ export function meterGrid(sig: Pick<TimeSigEvent, "beats" | "unit">): { unit: Ra
   return { unit, beat: compound ? mul(unit, rat(3)) : unit, measure: mul(unit, rat(Math.max(1, sig.beats))) };
 }
 
+/**
+ * 곡 처음이 못갖춘마디인지. 0에 pickup 박자표가 있고 그 뒤에 본 박자표가 있을 때만. length = 못갖춘마디 길이(본 박자표 자리)
+ */
+export function pickupOf<T extends Pick<TimeSigEvent, "at" | "pickup">>(timeSig: readonly T[]): { readonly length: Rat; readonly main: T } | undefined {
+  const sigs = [...timeSig].sort((a, b) => cmp(a.at, b.at));
+  const first = sigs[0];
+  const main = sigs.find((s) => cmp(s.at, ZERO) > 0);
+  if (!first?.pickup || cmp(first.at, ZERO) !== 0 || !main) return undefined;
+  return { length: main.at, main };
+}
+
+/** 첫 마디의 번호: 못갖춘마디면 0, 아니면 1 */
+export function firstBarNumber(timeSig: readonly Pick<TimeSigEvent, "at" | "pickup">[]): number {
+  return pickupOf(timeSig) ? 0 : 1;
+}
+
+/** 화면에 쓸 박자표 표시 (못갖춘마디 박자표는 빼고 본 박자표만) */
+export function shownMeters<T extends Pick<TimeSigEvent, "at" | "pickup">>(timeSig: readonly T[]): T[] {
+  const pickup = pickupOf(timeSig);
+  return pickup ? timeSig.filter((s) => !(s.pickup && cmp(s.at, ZERO) === 0)) : [...timeSig];
+}
+
 export interface GridLine {
   /** 곡 위치 (온음표 단위, 실수) */
   readonly at: number;
   readonly kind: "measure" | "beat" | "unit";
-  /** 마디선이면 마디 번호 (1부터) */
+  /** 마디선이면 마디 번호 (1부터, 못갖춘마디는 0) */
   readonly bar?: number;
 }
 
@@ -33,7 +55,7 @@ export function gridLines(timeSig: readonly TimeSigEvent[], from: number, to: nu
   const sigs = [...timeSig].sort((a, b) => cmp(a.at, b.at));
   const segments = sigs.length === 0 || cmp(sigs[0]!.at, ZERO) > 0 ? [{ at: ZERO, beats: 4, unit: 4 }, ...sigs] : sigs;
   const out: GridLine[] = [];
-  let bar = 1;
+  let bar = firstBarNumber(timeSig);
   segments.forEach((sig, i) => {
     const next = segments[i + 1]?.at;
     const { unit, beat, measure } = meterGrid(sig);
@@ -77,7 +99,7 @@ export function measureStart(timeSig: readonly TimeSigEvent[], at: Rat): Rat {
 export function barBeatAt(timeSig: readonly TimeSigEvent[], at: Rat): { bar: number; beat: number } {
   const sigs = [...timeSig].sort((a, b) => cmp(a.at, b.at));
   const segments = sigs.length === 0 || cmp(sigs[0]!.at, ZERO) > 0 ? [{ at: ZERO, beats: 4, unit: 4 }, ...sigs] : sigs;
-  let bar = 1;
+  let bar = firstBarNumber(timeSig);
   for (let i = 0; i < segments.length; i++) {
     const sig = segments[i]!;
     const next = segments[i + 1];
@@ -103,7 +125,7 @@ function floorDiv(a: Rat, b: Rat): number {
 export function barAt(timeSig: readonly TimeSigEvent[], at: Rat): number {
   const sigs = [...timeSig].sort((a, b) => cmp(a.at, b.at));
   const segments = sigs.length === 0 || cmp(sigs[0]!.at, ZERO) > 0 ? [{ at: ZERO, beats: 4, unit: 4 }, ...sigs] : sigs;
-  let bar = 1;
+  let bar = firstBarNumber(timeSig);
   for (let i = 0; i < segments.length; i++) {
     const sig = segments[i]!;
     const next = segments[i + 1];
@@ -122,7 +144,7 @@ export function barAt(timeSig: readonly TimeSigEvent[], at: Rat): number {
 export function barBounds(timeSig: readonly TimeSigEvent[], bar: number): readonly [Rat, Rat] {
   const sigs = [...timeSig].sort((a, b) => cmp(a.at, b.at));
   const segments = sigs.length === 0 || cmp(sigs[0]!.at, ZERO) > 0 ? [{ at: ZERO, beats: 4, unit: 4 }, ...sigs] : sigs;
-  let first = 1;
+  let first = firstBarNumber(timeSig);
   for (let i = 0; i < segments.length; i++) {
     const sig = segments[i]!;
     const next = segments[i + 1];

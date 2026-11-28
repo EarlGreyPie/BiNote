@@ -1,9 +1,10 @@
 <script lang="ts">
   import { type Command, type GameProfile, type Rat, type Song } from "@mmlce/core";
-  import { autoSpreadSpans, findSpreadSpans, spansOverlap, spreadCandidates, spreadResult, spreadSong, type SpreadResult, type SpreadSpan } from "@mmlce/mml";
+  import { autoSpreadSpans, findSpreadSpans, limitOf, trackLimits, widestLimit, spansOverlap, spreadCandidates, spreadResult, spreadSong, type SpreadResult, type SpreadSpan } from "@mmlce/mml";
   import { untrack } from "svelte";
   import { t } from "./i18n.svelte";
   import { previewRows } from "./output";
+  import SlotSwapNote from "./SlotSwapNote.svelte";
   import { defaultSpreadSource, gameCharsOf, songEnd, spanX } from "./chordTools";
 
   /**
@@ -40,14 +41,18 @@
   function finish() {
     if (!embedded) (dialog as HTMLDialogElement).close();
   }
-  const limit = $derived(profile.charLimitPerScore);
+  /** 트랙마다 자리 글자 수 한도 (자리마다 다를 수 있다) */
+  const limits = $derived(trackLimits(song, profile));
+  const limitFor = (id: string) => limitOf(limits, id, profile);
   /**
    * 트랙 글자 수는 게임 글자 수 (가장 짧게 다시 쓴 글, 창 위 막대와 같은 수)로 본다. 분산은 옮긴 트랙을 가장 짧게 다시 쓰므로
    * 원문 글자 수로 넘침을 보면, 원문만 길고 게임에서는 한도 안인 트랙을 넘친다고 하고 자동 고르기는 아무것도 못 고른다
    */
   const chars = $derived(gameCharsOf(song, profile));
   // svelte-ignore state_referenced_locally
-  let source = $state(defaultSpreadSource(song, profile.charLimitPerScore, locked, initialSource, gameCharsOf(song, profile)) ?? "");
+  let source = $state(defaultSpreadSource(song, (id) => limitOf(trackLimits(song, profile), id, profile), locked, initialSource, gameCharsOf(song, profile)) ?? "");
+  /** 보내는 트랙 자리의 글자 수 한도 */
+  const limit = $derived(limitFor(source));
   const candidates = $derived(source ? spreadCandidates(song, profile, source, locked) : []);
   /** 받을 트랙 (처음엔 받을 수 있는 트랙 모두) */
   let targets = $state<string[]>([]);
@@ -81,7 +86,10 @@
   /** 적용한 결과 (체크를 바꾸면 잠깐 뒤에 다시 센다: 출력기로 모든 트랙을 다시 써 봐야 해서 느리다) */
   let result = $state.raw<SpreadResult | undefined>(undefined);
   let busy = $state(false);
+  /** 자리 맞추기 (자리마다 한도가 다른 게임만) */
+  let slots = $state(true);
   $effect(() => {
+    const fit = slots;
     const chosen = pickedSpans;
     const from = source;
     const base = song;
@@ -92,14 +100,14 @@
     }
     busy = true;
     const timer = setTimeout(() => {
-      result = spreadResult(base, profile, from, chosen, locked);
+      result = spreadResult(base, profile, from, chosen, locked, fit);
       busy = false;
     }, 120);
     return () => clearTimeout(timer);
   });
-  const rows = $derived(result && result.moved > 0 ? previewRows(song, result.song, limit, (s) => (s === song ? chars : gameCharsOf(s, profile))) : []);
+  const rows = $derived(result && result.moved > 0 ? previewRows(song, result.song, profile, (s) => (s === song ? chars : gameCharsOf(s, profile))) : []);
   const sourceChars = $derived(source ? chars(source) : 0);
-  const stillOver = $derived(result && result.moved > 0 ? rows.filter((r) => r.after > limit).length : sourceChars > limit ? 1 : 0);
+  const stillOver = $derived(result && result.moved > 0 ? rows.filter((r) => r.after > r.limit).length : sourceChars > limit ? 1 : 0);
 
   let picking = $state(false);
   /** 자동 고르기가 더 고르지 못했다 (받을 트랙에 여유가 없음). 고르기를 바꾸면 지운다 */
@@ -141,7 +149,7 @@
 
   function apply() {
     if (!result || result.moved === 0 || busy) return;
-    onapply(spreadSong(profile, source, pickedSpans, locked, t("ui.distribute")));
+    onapply(spreadSong(profile, source, pickedSpans, locked, t("ui.distribute"), slots));
     finish();
   }
 </script>
@@ -155,7 +163,7 @@
     <select bind:value={source} onchange={unpick}>
       {#each song.tracks.filter((tr) => !locked.has(tr.id)) as tr (tr.id)}
         {@const count = chars(tr.id)}
-        <option value={tr.id}>{where(tr.id)} {tr.name} · {t("ui.spreadChars", { count })}{count > limit ? " ⚠" : ""}</option>
+        <option value={tr.id}>{where(tr.id)} {tr.name} · {t("ui.spreadChars", { count })}{count > limitFor(tr.id) ? " ⚠" : ""}</option>
       {/each}
     </select>
   </label>
@@ -234,6 +242,7 @@
     <p class="warn">{t(result.kept === "sound" ? "ui.spreadKeptSound" : result.kept === "tempo" ? "ui.compactKeptTempo" : "ui.compactKept")}</p>
   {:else if result && result.moved > 0}
     <p>{t("ui.spreadSummary", { moved: result.moved })}</p>
+    <SlotSwapNote {profile} swaps={result.swaps} name={(id) => song.tracks.find((tr) => tr.id === id)?.name ?? id} bind:on={slots} />
     <table>
       <thead>
         <tr><th>{t("ui.previewTrack")}</th><th>{t("ui.previewBefore")}</th><th>{t("ui.previewAfter")}</th></tr>
@@ -242,8 +251,8 @@
         {#each rows as r (r.trackId)}
           <tr>
             <td><span class="muted">{where(r.trackId)}</span> {r.name}</td>
-            <td class="num" class:full={r.before > limit}>{r.before}</td>
-            <td class="num" class:full={r.after > limit}>{r.after} <span class="muted">({r.after - r.before >= 0 ? "+" : ""}{r.after - r.before})</span></td>
+            <td class="num" class:full={r.before > r.limit}>{r.before}</td>
+            <td class="num" class:full={r.after > r.limit}>{r.after} <span class="muted">({r.after - r.before >= 0 ? "+" : ""}{r.after - r.before})</span></td>
           </tr>
         {/each}
       </tbody>
@@ -251,7 +260,7 @@
   {/if}
   {#if !busy && stillOver > 0}
     <p class="warn">
-      {t("ui.previewStillOver", { count: stillOver, limit })}
+      {t("ui.previewStillOver", { count: stillOver, limit: source ? limitFor(source) : widestLimit(profile) })}
       <button class="small" onclick={onsplit}>{t("ui.split")}…</button>
     </p>
   {/if}

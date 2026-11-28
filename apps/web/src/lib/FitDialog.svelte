@@ -1,10 +1,12 @@
 <script lang="ts">
   import { type Command, type GameProfile, type Rat, type Song } from "@mmlce/core";
-  import { scoreChunks, type BookPlan, type BookProgress, type FewerBooks } from "@mmlce/mml";
+  import { fitSlots, fitSlotsSong, limitOf, scoreChunks, slotLimitsDiffer, splitParts, trackLimits, widestLimit, type BookFit, type BookPlan, type BookProgress, type FewerBooks } from "@mmlce/mml";
   import { t } from "./i18n.svelte";
   import MergeDialog from "./MergeDialog.svelte";
   import SpreadDialog from "./SpreadDialog.svelte";
   import SplitPanel from "./SplitPanel.svelte";
+  import ScrollPanel from "./ScrollPanel.svelte";
+  import SlotSwapNote from "./SlotSwapNote.svelte";
   import type { FitTab } from "./splitView";
 
   /**
@@ -38,7 +40,7 @@
     /** 나누기에 실패했으면 그 알림 */
     splitError?: string | undefined;
     fewer: FewerBooks | "checking" | undefined;
-    onfewer: (limit: number) => void;
+    onfewer: (fit: BookFit | undefined) => void;
     spreadOn: boolean;
     thoroughOn: boolean;
     onspread: (on: boolean) => void;
@@ -65,13 +67,21 @@
     dialog.showModal();
   });
 
-  const limit = $derived(p.profile.charLimitPerScore);
+  /** 안내 문구의 한도 (가장 큰 자리 한도). 트랙마다 막대·넘침은 그 트랙 자리 한도로 본다 */
+  const limit = $derived(widestLimit(p.profile));
+  const limits = $derived(trackLimits(p.song, p.profile));
+  const limitFor = (id: string) => limitOf(limits, id, p.profile);
   /** 악보마다 트랙 (게임에 붙여넣는 단위) */
   const scores = $derived(scoreChunks(p.song, p.chordsOf));
   const nameOf = (id: string) => p.song.tracks.find((tr) => tr.id === id)?.name ?? id;
   const color = (id: string) => p.colors?.get(id) ?? p.song.tracks.find((tr) => tr.id === id)?.color ?? "var(--muted)";
-  const over = $derived(p.chars ? [...p.chars.values()].filter((n) => n > limit).length : 0);
-  const books = $derived(p.split?.result.needed ? p.split.result.parts.length : undefined);
+  const over = $derived(p.chars ? [...p.chars].filter(([id, n]) => n > limitFor(id)).length : 0);
+  /** 파트마다 이어 읽는 악보책(PC)이면 장 수, 아니면 나눈 권 수 */
+  const perPart = $derived(p.profile.scoreBook.perPart);
+  const scrolls = $derived(perPart ? splitParts(p.song, p.profile).scrolls : 0);
+  const books = $derived(perPart ? (scrolls > 1 ? scrolls : undefined) : p.split?.result.needed ? p.split.result.parts.length : undefined);
+  /** 자리 맞추기로 넘침이 줄면 바꿀 자리 (자리마다 한도가 다른 게임만) */
+  const slotFit = $derived(slotLimitsDiffer(p.profile) ? fitSlots(p.song, p.profile, p.locked) : undefined);
   const tabs = [
     { id: "spread", label: "ui.distribute" },
     { id: "merge", label: "ui.merge" },
@@ -97,8 +107,14 @@
       {:else}
         <span>{t("ui.fitAllIn", { limit })}</span>
       {/if}
-      {#if books !== undefined}<span class="muted">· {t("ui.splitCount", { count: books })}</span>{/if}
+      {#if books !== undefined}<span class="muted">· {t(perPart ? "ui.scrollCount" : "ui.splitCount", { count: books })}</span>{/if}
     </div>
+    {#if slotFit && slotFit.swaps.length > 0}
+      <div class="slot-fit">
+        <button class="small" title={t("ui.slotFitHelp")} onclick={() => p.onapply(fitSlotsSong(p.profile, p.locked, t("ui.slotFit")))}>{t("ui.slotFit")}</button>
+        <SlotSwapNote profile={p.profile} swaps={slotFit.swaps} name={nameOf} />
+      </div>
+    {/if}
     <div class="scores">
       {#each scores as score (`${score.playerId}:${score.index}`)}
         <div class="score">
@@ -106,8 +122,8 @@
             {@const n = p.chars?.get(id)}
             <div class="bar-row" title={`${p.where(id)} ${nameOf(id)}`}>
               <span class="name"><span class="dot" style:background={color(id)}></span>{p.where(id)} {nameOf(id)}</span>
-              <span class="bar"><span class="fill" class:full={(n ?? 0) > limit} style:width={`${Math.min(100, ((n ?? 0) / limit) * 100)}%`}></span></span>
-              <span class="num" class:warn={(n ?? 0) > limit}>{n ?? "…"}</span>
+              <span class="bar"><span class="fill" class:full={(n ?? 0) > limitFor(id)} style:width={`${Math.min(100, ((n ?? 0) / limitFor(id)) * 100)}%`}></span></span>
+              <span class="num" class:warn={(n ?? 0) > limitFor(id)}>{n ?? "…"}</span>
             </div>
           {/each}
         </div>
@@ -164,6 +180,8 @@
           onclose={() => {}}
         />
       {/key}
+    {:else if perPart}
+      <ScrollPanel song={p.song} profile={p.profile} locked={p.locked} onfewer={p.onfewer} />
     {:else if p.splitProgress}
       <p class="muted" role="status">
         {p.progressLabel(p.splitProgress)} {Math.round(p.splitProgress.fraction * 100)}%
@@ -187,6 +205,7 @@
         onfix={p.onfix}
         onunfixall={p.onunfixall}
         onseek={p.onseek}
+        maxBooks={p.profile.scoreBook.maxScores}
       />
     {:else if p.splitError}
       <p class="warn">{p.splitError}</p>

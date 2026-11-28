@@ -1,4 +1,4 @@
-import { cmp, DEFAULT_BPM, getProfile, ZERO, type GameProfile, type Song, type TempoEvent, type Track, type TrackText } from "@mmlce/core";
+import { charLimitAt, cmp, DEFAULT_BPM, ZERO, songProfile, type GameProfile, type LengthLimit, type Song, type TempoEvent, type Track, type TrackText } from "@mmlce/core";
 import { mmlAt, pasteTrackIds, scoreChunks, type ScoreChunk } from "./clipboard.js";
 import { sameSound } from "./compare.js";
 import { trackSource } from "./edit.js";
@@ -22,12 +22,12 @@ function rewritten(track: Track, tempo: readonly TempoEvent[], profile: GameProf
   const hit = rewriteCache.get(track);
   if (hit && hit.key === key) return hit.text;
   const notes = [...track.notes].sort((a, b) => cmp(a.start, b.start));
-  const optimized = optimizeMml(notes, { tempo, lengths: profile.length }).text;
+  const optimized = optimizeMml(notes, { tempo, profile }).text;
   // 템포까지 맞는 글이 없으면 음만 맞는 출력기 글을 쓴다 (지금까지와 같다). 출력기가 64분보다 촘촘한 템포 바꿈을
   // 한 자리에 겹쳐 써서 조금 어긋난 것이라, 화면의 글을 그대로 쓰면(asIs) 이 트랙에 맡긴 템포가 모두 빠지는 것보다 낫다
   const out =
-    shortestWriting(notes, tempo, [optimized, track.mml ? gameSource(track.mml, tempo, profile) : undefined]) ??
-    (sameSound(parseMml(optimized).notes, notes) ? optimized : undefined);
+    shortestWriting(notes, tempo, [optimized, track.mml ? gameSource(track.mml, tempo, profile) : undefined], profile.length) ??
+    (sameSound(parseMml(optimized, { lengths: profile.length }).notes, notes) ? optimized : undefined);
   rewriteCache.set(track, { key, text: out });
   return out;
 }
@@ -43,8 +43,8 @@ export function withoutDefaultStart(tempo: readonly TempoEvent[]): TempoEvent[] 
 
 /** 게임에 붙여넣을 악보 하나 */
 export interface GameScore extends ScoreChunk {
-  /** 트랙마다 넣을 글 (악보 안 트랙 순서) */
-  readonly texts: readonly { readonly trackId: string; readonly text: string }[];
+  /** 트랙마다 넣을 글과 그 글이 들어갈 자리의 글자 수 한도 (악보 안 트랙 순서, charLimitAt) */
+  readonly texts: readonly { readonly trackId: string; readonly text: string; readonly limit: number }[];
   /** 붙여넣을 글 전체 (MML@트랙1,트랙2,...;). 오르골·축음기는 소리 내지 않는 나머지 트랙도 뒤에 붙는다 (pasteTrackIds) */
   readonly text: string;
   /** 붙여넣는 글의 채널 (null은 빈 채널). 오르골·축음기는 소리 칸 뒤에 소리 내지 않는 나머지 트랙이 붙는다 */
@@ -67,11 +67,14 @@ export function gameScores(
   maxChords: number | ((playerId: string) => number),
   /** 게임 악보 하나의 트랙 한도 (profile.maxChordsPerPlayer). 주면 오르골·축음기 악보에 나머지 트랙을 붙인다 */
   pasteLimit?: number,
-  /** 트랙당 글자 한도 (profile.charLimitPerScore). 주면 끝 채움을 붙인 뒤에도 한도 안인 글에 먼저 붙인다 */
+  /**
+   * 트랙당 글자 한도 (widestLimit). 주면 끝 채움을 붙인 뒤에도 한도 안인 글에 먼저 붙인다.
+   * 붙여넣는 자리마다 한도가 다른 게임(profile.trackCharLimits)이면 자리마다 둘 가운데 작은 값
+   */
   charLimit?: number,
 ): GameScore[] {
   const moved = new Map<string, TempoMove[]>();
-  const profile = getProfile(song.meta.profileId);
+  const profile = songProfile(song);
   // 높이와 상관없는 타악기(큰북·심벌즈)는 한 높이로 쓴다 (게임에 넣을 글에만)
   song = pitchlessForOutput(song, profile);
   const lengths = profile.length;
@@ -84,19 +87,39 @@ export function gameScores(
     const text = rewritten(t, placed.get(t.id) ?? [], profile);
     written.set(id, text !== undefined ? { text, asIs: false } : { text: gameReadyText(trackSource(song, t).text), asIs: true });
   }
+  const pastedOf = new Map(chunks.map((chunk) => [chunk, pasteTrackIds(song, chunk, maxChords, pasteLimit)] as const));
+  const limitsOf = (chunk: ScoreChunk) => slotLimits(chunk.trackIds, pastedOf.get(chunk)!, profile);
   // 다시 쓴 글이 원문 끝 쉼표를 잃어 악보가 짧아지지 않게 악보 길이를 지킨다 (score-end.ts)
   for (const chunk of chunks) {
     const tracks = chunk.trackIds.map((id) => song.tracks.find((x) => x.id === id)!);
-    const end = scoreEnd(tracks);
-    const padded = padScore(chunk.trackIds.map((id) => written.get(id)!.text), end, bpmBefore(song.tempo, end), lengths, undefined, charLimit);
+    const end = scoreEnd(tracks, undefined, lengths);
+    const limit = charLimit === undefined ? undefined : limitsOf(chunk).map((x) => Math.min(x, charLimit));
+    const padded = padScore(chunk.trackIds.map((id) => written.get(id)!.text), end, bpmBefore(song.tempo, end), lengths, undefined, limit);
     chunk.trackIds.forEach((id, k) => written.set(id, { ...written.get(id)!, text: padded[k]! }));
   }
   return chunks.map((chunk) => {
-    const texts = chunk.trackIds.map((trackId) => ({ trackId, text: written.get(trackId)!.text }));
+    const limits = limitsOf(chunk);
+    const texts = chunk.trackIds.map((trackId, k) => ({ trackId, text: written.get(trackId)!.text, limit: limits[k]! }));
     const asIs = chunk.trackIds.filter((id) => written.get(id)!.asIs);
-    const pasted = pasteTrackIds(song, chunk, maxChords, pasteLimit);
+    const pasted = pastedOf.get(chunk)!;
     return { ...chunk, texts, text: mmlAt(pasted.map((id) => (id === null ? "" : written.get(id)!.text))), pasted, asIs, moved: moved.get(chunk.trackIds[0]!) ?? [] };
   });
+}
+
+/** 트랙마다 붙여넣는 자리(pasted 안 위치)의 글자 수 한도. 자리에 없는 트랙은 맨 앞 자리로 본다 */
+function slotLimits(trackIds: readonly string[], pasted: readonly (string | null)[], profile: GameProfile): number[] {
+  return trackIds.map((id) => charLimitAt(profile, Math.max(0, pasted.indexOf(id))));
+}
+
+/** 트랙마다 게임에 넣을 글의 글자 수와 그 자리의 글자 수 한도 (gameScores 한 번으로) */
+export function gameChars(
+  song: Song,
+  maxChords: number | ((playerId: string) => number),
+  pasteLimit?: number,
+  charLimit?: number,
+): { readonly counts: Map<string, number>; readonly limits: Map<string, number> } {
+  const texts = gameScores(song, maxChords, pasteLimit, charLimit).flatMap((s) => s.texts);
+  return { counts: new Map(texts.map((x) => [x.trackId, x.text.length])), limits: new Map(texts.map((x) => [x.trackId, x.limit])) };
 }
 
 /**
@@ -124,6 +147,8 @@ export interface GamePaste {
   readonly pasted: readonly (string | null)[];
   /** 붙여넣는 모든 채널의 글 (소리 없는 트랙 포함) */
   readonly written: ReadonlyMap<string, string>;
+  /** 붙여넣는 트랙마다 그 자리의 글자 수 한도 (charLimitAt) */
+  readonly limits: ReadonlyMap<string, number>;
   readonly asIs: readonly string[];
   readonly moved: readonly TempoMove[];
 }
@@ -148,8 +173,8 @@ export function orderPasted(pasted: readonly (string | null)[], selected: readon
 }
 
 /** 원문에서 t를 모두 지운다 (문법 오류가 있어 손댈 수 없으면 그대로) */
-function withoutTempo(source: TrackText): string {
-  const s = surgicalSource(source);
+function withoutTempo(source: TrackText, lengths: LengthLimit): string {
+  const s = surgicalSource(source, lengths);
   return s ? spliceText(source.text, s.tokens.map((t) => ({ span: t.span, text: "" }))) : source.text;
 }
 
@@ -166,7 +191,7 @@ export function gamePaste(
   pasteLimit: number,
   options: GamePasteOptions,
 ): GamePaste {
-  const profile = getProfile(song.meta.profileId);
+  const profile = songProfile(song);
   song = pitchlessForOutput(song, profile);
   const lengths = profile.length;
   const order = song.tracks.map((t) => t.id);
@@ -175,12 +200,12 @@ export function gamePaste(
   const pasted = orderPasted(chunk ? pasteTrackIds(song, chunk, maxChords, pasteLimit) : trackIds, trackIds, options.order);
   const ids = pasted.filter((id): id is string => id !== null);
   const tracks = ids.map((id) => song.tracks.find((t) => t.id === id)!);
-  const end = scoreEnd(tracks);
+  const end = scoreEnd(tracks, undefined, lengths);
   const map = audibleTempo(options.tempoMap ?? song.tempo);
   const startsAtZero = map.length > 0 && cmp(map[0]!.at, ZERO) === 0;
   const tempo = options.tempo ? withoutDefaultStart(tempoBefore(startsAtZero ? map : [{ at: ZERO, bpm: DEFAULT_BPM }, ...map], cmp(end, ZERO) > 0 ? end : { n: 1, d: 1 })) : [];
   const moved: TempoMove[] = [];
-  const placed = placeTempo(tracks.map((t) => t.notes), tempo, moved);
+  const placed = placeTempo(tracks.map((t) => t.notes), tempo, moved, undefined, undefined, lengths);
   const written = new Map<string, string>();
   const asIs: string[] = [];
   tracks.forEach((t, k) => {
@@ -188,11 +213,14 @@ export function gamePaste(
     if (text !== undefined) written.set(t.id, text);
     else {
       const source = trackSource(song, t);
-      written.set(t.id, gameReadyText(options.tempo ? source.text : withoutTempo(source)));
+      written.set(t.id, gameReadyText(options.tempo ? source.text : withoutTempo(source, lengths)));
       asIs.push(t.id);
     }
   });
-  const padded = padScore(ids.map((id) => written.get(id)!), end, options.tempo ? bpmBefore(tempo, end) : DEFAULT_BPM, lengths, undefined, options.charLimit);
+  const slots = slotLimits(ids, pasted, profile);
+  const charLimit = options.charLimit;
+  const limit = charLimit === undefined ? undefined : slots.map((x) => Math.min(x, charLimit));
+  const padded = padScore(ids.map((id) => written.get(id)!), end, options.tempo ? bpmBefore(tempo, end) : DEFAULT_BPM, lengths, undefined, limit);
   ids.forEach((id, k) => written.set(id, padded[k]!));
   return {
     trackIds,
@@ -200,6 +228,7 @@ export function gamePaste(
     text: mmlAt(pasted.map((id) => (id === null ? "" : written.get(id)!))),
     pasted,
     written,
+    limits: new Map(ids.map((id, k) => [id, slots[k]!])),
     asIs: trackIds.filter((id) => asIs.includes(id)),
     moved,
   };
@@ -222,14 +251,15 @@ export interface PasteTempoChoice {
  */
 export function pasteTempoChoices(song: Song, selected: readonly string[], maxChords: number | ((playerId: string) => number)): PasteTempoChoice[] {
   const chunks = scoreChunks(song, maxChords);
+  const lengths = songProfile(song).length;
   const picked = song.tracks.filter((t) => selected.includes(t.id));
-  const end = scoreEnd(picked);
+  const end = scoreEnd(picked, undefined, lengths);
   const songTempo = audibleTempo(tempoBefore(song.tempo, end));
   const out: { key: string; scores: number[]; tempo: TempoEvent[] }[] = [];
   chunks.forEach((chunk, k) => {
     if (!chunk.trackIds.some((id) => selected.includes(id))) return;
     const tracks = chunk.trackIds.map((id) => song.tracks.find((t) => t.id === id)!);
-    const own = audibleTempo(tempoBefore(tracks.flatMap((t) => (t.mml ? tempoTokens(t.mml).map(({ at, bpm }) => ({ at, bpm })) : [])), scoreEnd(tracks)));
+    const own = audibleTempo(tempoBefore(tracks.flatMap((t) => (t.mml ? tempoTokens(t.mml, undefined, lengths).map(({ at, bpm }) => ({ at, bpm })) : [])), scoreEnd(tracks, undefined, lengths)));
     const tempo = own.length > 0 ? tempoBefore(own, end) : songTempo;
     const same = out.find((c) => sameTempo(c.tempo, tempo));
     if (same) same.scores.push(k);

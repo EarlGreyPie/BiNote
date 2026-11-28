@@ -21,3 +21,4 @@ export * from "./arpeggio-guess.js";
 export * from "./chord-attenuation.js";
 export * from "./staff.js";
 export * from "./key.js";
+export * from "./tick-grid.js";

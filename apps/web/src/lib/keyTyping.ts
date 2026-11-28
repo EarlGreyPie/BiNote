@@ -1,4 +1,4 @@
-import { add, inKey, keyAt, ZERO, type KeyEvent, type Rat } from "@mmlce/core";
+import { add, inKey, keyAt, ZERO, type KeyEvent, type LengthLimit, type Rat } from "@mmlce/core";
 import { parseMml } from "@mmlce/mml";
 
 /** MML 음 글자 → 음 번호 % 12 (제자리음) */
@@ -19,9 +19,16 @@ export function accidentalFor(letter: string, fifths: number): "" | "+" | "-" {
  * 편집기에서 커서 앞 글(before) 뒤에 음 글자를 칠 때 붙일 올림·내림. 커서 자리의 곡 위치는 앞 글을 읽어 잰다
  * (offset = 트랙 원문 시작 자리). 주석 안이면 붙이지 않는다
  */
-export function typedAccidental(before: string, letter: string, offset: Rat | undefined, keys: readonly KeyEvent[] | undefined): "" | "+" | "-" {
+export function typedAccidental(
+  before: string,
+  letter: string,
+  offset: Rat | undefined,
+  keys: readonly KeyEvent[] | undefined,
+  /** 곡 프로필의 길이 한도 (커서 자리의 곡 위치를 잴 때) */
+  lengths?: LengthLimit,
+): "" | "+" | "-" {
   if (LETTER_PC[letter] === undefined) return "";
-  const parsed = parseMml(before);
+  const parsed = parseMml(before, { lengths });
   if (parsed.diagnostics.some((d) => d.code === "unclosed-comment")) return "";
   return accidentalFor(letter, keyAt(keys, add(offset ?? ZERO, parsed.end)));
 }

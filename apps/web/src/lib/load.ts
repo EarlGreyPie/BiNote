@@ -12,13 +12,15 @@ import {
   type ReadResult,
 } from "@mmlce/fileio";
 import { t } from "./i18n.svelte";
+import { importGameId } from "./labs.svelte";
 
 /** 프로젝트 파일이면 편집 화면 상태와 모르는 맨 위 필드도 함께 */
 export type OpenResult = ReadResult & { readonly editor?: ProjectEditor; readonly extras?: Extras };
 
 /**
  * 확장자로 형식을 고른다. 프로젝트 확장자(PROJECT_EXTENSIONS)는 MMLCE 프로젝트, .mmi는 마비꼬, 게임 MML@ 글이면 그것으로,
- * 나머지(.mml·.txt)는 3MLE 형식으로 읽는다. 프로젝트를 열 수 없으면 ProjectError를 던진다
+ * 나머지(.mml·.txt)는 3MLE 형식으로 읽는다. 프로젝트를 열 수 없으면 ProjectError를 던진다.
+ * 프로젝트가 아닌 글은 실험실 "불러올 때 게임"으로 고른 게임의 셈으로 읽는다 (프로젝트는 곡에 적힌 게임)
  */
 export async function openScore(file: File): Promise<OpenResult> {
   const bytes = new Uint8Array(await file.arrayBuffer());
@@ -26,10 +28,11 @@ export async function openScore(file: File): Promise<OpenResult> {
   if (isProjectFileName(file.name)) return readProject(new TextDecoder().decode(bytes));
   const text = decodeText(bytes);
   if (looksLikeProject(text)) return readProject(text);
+  const profileId = importGameId();
   if (/\.mmi$/i.test(file.name)) {
     const parts = [t("ui.mmiMelody"), t("ui.mmiChord", { n: 1 }), t("ui.mmiChord", { n: 2 }), t("ui.mmiSong")] as const;
-    return readMmi(text, { parts, songPlayer: (name) => t("ui.mmiSongPlayer", { name }) });
+    return readMmi(text, { parts, songPlayer: (name) => t("ui.mmiSongPlayer", { name }) }, { profileId });
   }
-  if (looksLikeMmlAt(text)) return readMmlAt(text, { playerName: t("ui.pastePlayer") });
-  return read3mle(text, { scoreName: (n) => t("ui.scoreN", { n }) });
+  if (looksLikeMmlAt(text)) return readMmlAt(text, { playerName: t("ui.pastePlayer"), profileId });
+  return read3mle(text, { scoreName: (n) => t("ui.scoreN", { n }), profileId });
 }

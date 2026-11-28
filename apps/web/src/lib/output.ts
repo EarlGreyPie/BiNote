@@ -1,5 +1,5 @@
-import { barBeatAt, maxChordsOf, type GameProfile, type Rat, type Song, type Track } from "@mmlce/core";
-import { gameScores, trackSource, type Diagnostic, type SongDiagnostic } from "@mmlce/mml";
+import { barBeatAt, charLimitAt, maxChordsOf, type GameProfile, type Rat, type Song, type Track } from "@mmlce/core";
+import { gameScores, limitOf, trackLimits, widestLimit, trackSource, type Diagnostic, type SongDiagnostic } from "@mmlce/mml";
 
 /** 출력 점검판의 악보 한 줄 */
 export interface OutputRow {
@@ -10,7 +10,8 @@ export interface OutputRow {
   readonly index: number;
   readonly instrument: string;
   readonly maxChords: number;
-  readonly tracks: readonly { readonly trackId: string; readonly name: string; readonly count: number; readonly over: boolean }[];
+  /** 트랙마다 글자 수와 그 자리의 한도 (게임이 붙여넣는 자리마다 한도가 다를 수 있다) */
+  readonly tracks: readonly { readonly trackId: string; readonly name: string; readonly count: number; readonly limit: number; readonly over: boolean }[];
   /** 게임에 붙여넣을 글 (MML@...;) */
   readonly text: string;
   /** 글자 수 한도를 넘는 트랙이 있다 */
@@ -55,7 +56,7 @@ export function outputRows(
   profile: GameProfile,
   diagnostics: { readonly tracks: readonly { readonly track: { readonly id: string }; readonly diagnostics: readonly Diagnostic[] }[]; readonly song: readonly SongDiagnostic[] },
 ): OutputRow[] {
-  const limit = profile.charLimitPerScore;
+  const limit = widestLimit(profile);
   const instrumentOf = (playerId: string) => song.players.find((p) => p.id === playerId)?.instrument.canonical;
   const byTrack = new Map<string, { level: string; code: string }[]>();
   for (const a of diagnostics.tracks) byTrack.set(a.track.id, [...a.diagnostics]);
@@ -65,14 +66,17 @@ export function outputRows(
   const written = new Map(scores.flatMap((s) => s.texts.map((x) => [x.trackId, x.text] as const)));
   return scores.map((score, k) => {
     const list = score.trackIds.flatMap((id) => byTrack.get(id) ?? []).filter((d) => !SHOWN_ELSEWHERE.has(d.code));
+    // 붙여넣는 자리의 한도 (게임이 자리마다 한도가 다를 수 있다)
+    const slotLimit = (trackId: string) => charLimitAt(profile, Math.max(0, score.pasted.indexOf(trackId)));
     const tracks = score.texts.map(({ trackId, text }) => ({
       trackId,
       name: song.tracks.find((t) => t.id === trackId)?.name ?? trackId,
       count: text.length,
-      over: text.length > limit,
+      limit: slotLimit(trackId),
+      over: text.length > slotLimit(trackId),
     }));
     const silentOver = score.pasted
-      .filter((id): id is string => id !== null && !score.trackIds.includes(id) && (written.get(id)?.length ?? 0) > limit)
+      .filter((id, k): id is string => id !== null && !score.trackIds.includes(id) && (written.get(id)?.length ?? 0) > charLimitAt(profile, k))
       .map((id) => song.tracks.find((t) => t.id === id)?.name ?? id);
     return {
       number: k + 1,
@@ -119,10 +123,15 @@ export interface PreviewRow {
   readonly name: string;
   readonly before: number;
   readonly after: number;
+  /** 바뀐 뒤 그 트랙 자리의 글자 수 한도 (trackLimits) */
+  readonly limit: number;
 }
 
-/** 두 곡의 트랙별 MML 글자 수 (트랙 목록에 보이는 수와 같은 글). 바뀐 트랙과 한도를 넘는 트랙만 */
-export function previewRows(before: Song, after: Song, limit: number, count?: (song: Song) => (id: string) => number): PreviewRow[] {
+/** 두 곡의 트랙별 MML 글자 수 (트랙 목록에 보이는 수와 같은 글). 바뀐 트랙과 자리 한도를 넘는 트랙만 */
+export function previewRows(before: Song, after: Song, profile: GameProfile, count?: (song: Song) => (id: string) => number): PreviewRow[] {
+  const was = trackLimits(before, profile);
+  const now = trackLimits(after, profile);
+  const limit = (id: string) => now.get(id) ?? limitOf(was, id, profile);
   // count를 주면 그 수로 센다 (화음 분산·병합 칸은 게임 글자 수). 없으면 원문 글자 수 (MML 글 정리처럼 원문을 바꾸는 편집)
   const counters = count ? new Map([before, after].map((s) => [s, count(s)] as const)) : undefined;
   const length = (song: Song, id: string) => {
@@ -133,8 +142,8 @@ export function previewRows(before: Song, after: Song, limit: number, count?: (s
   // 화음 병합으로 지운 트랙은 0자로 보인다
   const gone = before.tracks.filter((t) => !after.tracks.some((x) => x.id === t.id));
   return [...after.tracks, ...gone]
-    .map((t) => ({ trackId: t.id, name: t.name, before: length(before, t.id), after: length(after, t.id) }))
-    .filter((r) => r.before !== r.after || r.after > limit);
+    .map((t) => ({ trackId: t.id, name: t.name, before: length(before, t.id), after: length(after, t.id), limit: limit(t.id) }))
+    .filter((r) => r.before !== r.after || r.after > r.limit);
 }
 
 /**

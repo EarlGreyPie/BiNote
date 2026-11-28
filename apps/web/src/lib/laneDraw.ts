@@ -16,6 +16,8 @@ export interface LaneDraw {
   readonly label?: string | undefined;
   /** 박 선도 옅게 긋는다 (타브 아래 띠: 위 지판에 박 선이 없어 음량 막대로 박 자리를 맞춰 본다) */
   readonly beatLines?: boolean | undefined;
+  /** 원곡 세기 안내선 (실험실): 사슬 첫 음 id → 원곡 세기를 따르는 v. 레인에 그리는 막대 위에 짧은 가로선으로 보인다 */
+  readonly guide?: ReadonlyMap<string, number> | undefined;
 }
 
 export interface LaneDrawContext {
@@ -131,6 +133,7 @@ export function drawVolumeLane(g: CanvasRenderingContext2D, c: LaneDrawContext, 
     }
   }
   g.globalAlpha = 1;
+  if (l.guide && l.guide.size > 0) drawGuide(g, c, l.guide, l.items, l.changes, { from, to, horizontal, span });
   if (l.line) {
     // 직선 긋는 중: 누른 자리에서 손까지
     const a = { t: timeToScreen(v, l.line.t0), v: laneValueToScreen(v, l.line.v0, vr) };
@@ -156,6 +159,58 @@ export function drawVolumeLane(g: CanvasRenderingContext2D, c: LaneDrawContext, 
     else g.fillText(l.readout.text, box.x + 3, Math.max(12, p - 6));
     g.font = font;
   }
+}
+
+/**
+ * 원곡 세기 안내선: 막대마다 목표 v 높이에 짧은 가로선, 지금 높이와 다르면 그 사이를 점선으로 잇는다 (올릴지 내릴지 보이게).
+ * 막대 색과 섞이지 않게 글자색에 바탕색 테두리
+ */
+function drawGuide(
+  g: CanvasRenderingContext2D,
+  c: LaneDrawContext,
+  guide: ReadonlyMap<string, number>,
+  items: readonly LaneItem[],
+  changes: LaneChanges | undefined,
+  o: { from: number; to: number; horizontal: boolean; span: (a: number, b: number) => readonly [number, number] },
+): void {
+  const v = c.view;
+  const vr = c.range;
+  g.save();
+  for (const it of items) {
+    const want = guide.get(it.bar.head.id);
+    if (want === undefined) continue;
+    const a = toFloat(it.bar.start);
+    const b = toFloat(it.bar.end);
+    if (b < o.from || a > o.to) continue;
+    const [p, len] = o.span(a, b);
+    const w = Math.max(5, Math.min(len - 1, 18));
+    const at = laneValueToScreen(v, want, vr);
+    const now = laneValueToScreen(v, changes?.get(it.trackId)?.get(it.bar.head.id) ?? it.bar.vol, vr);
+    g.globalAlpha = 0.9;
+    if (Math.abs(at - now) >= 2) {
+      g.strokeStyle = c.css("--text");
+      g.lineWidth = 1;
+      g.setLineDash([2, 2]);
+      g.beginPath();
+      const mid = p + w / 2;
+      if (o.horizontal) {
+        g.moveTo(mid, now);
+        g.lineTo(mid, at);
+      } else {
+        g.moveTo(now, mid);
+        g.lineTo(at, mid);
+      }
+      g.stroke();
+      g.setLineDash([]);
+    }
+    g.fillStyle = c.css("--bg");
+    if (o.horizontal) g.fillRect(p - 1, at - 2, w + 2, 4);
+    else g.fillRect(at - 2, p - 1, 4, w + 2);
+    g.fillStyle = c.css("--text");
+    if (o.horizontal) g.fillRect(p, at - 1, w, 2);
+    else g.fillRect(at - 1, p, 2, w);
+  }
+  g.restore();
 }
 
 /** 띠 이름과 v 눈금 (막대 아래에 깔린다). 얇은 띠는 모서리 이름표로 충분해 그리지 않고, 넓으면 맨 위·가운데·맨 아래 v 숫자까지 */

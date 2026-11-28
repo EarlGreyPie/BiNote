@@ -1,5 +1,6 @@
-import { add, cmp, eq, rat, sub, trackInstrument, type GameProfile, type Note, type Rat, type Song, type Track } from "@mmlce/core";
+import { add, cmp, DEFAULT_PROFILE, eq, rat, sub, trackInstrument, type GameProfile, type Note, type Rat, type Song, type Track } from "@mmlce/core";
 import { chordsPerScore, scoreChunks } from "./clipboard.js";
+import { limitOf, trackLimits } from "./track-limits.js";
 import { optimizeMml } from "./optimizer.js";
 import { parseMml } from "./parser.js";
 import { sameSound } from "./compare.js";
@@ -57,9 +58,12 @@ export function mergeChords(song: Song, profile: GameProfile, options: MergeOpti
   const notes = song.tracks.map((t) => [...t.notes].sort((a, b) => cmp(a.start, b.start)));
   const tempo = audibleTempo(song.tempo).map((e) => e.at);
   let moved = 0;
+  // 받는 트랙마다 그 자리 한도 (자리마다 한도가 다를 수 있다)
+  const limits = trackLimits(song, profile);
   for (const mine of groups.values()) {
     if (mine.length < 2) continue;
-    const r = mergeVoices(mine.map((k) => notes[k]!), { limit: profile.charLimitPerScore, tempo });
+    const limit = mine.map((k) => limitOf(limits, song.tracks[k]!.id, profile));
+    const r = mergeVoices(mine.map((k) => notes[k]!), { limit, tempo, profile });
     mine.forEach((k, j) => (notes[k] = r.tracks[j]!));
     moved += r.moved;
   }
@@ -88,8 +92,11 @@ export function mergeChords(song: Song, profile: GameProfile, options: MergeOpti
 }
 
 export interface MergeVoiceOptions {
-  /** 채널 글자 수 한도 (게임 악보 한 권). 받는 트랙이 이 한도를 새로 넘거나 악보책 권 수가 늘 만큼 길어지면 옮기지 않는다 */
-  readonly limit: number;
+  /**
+   * 채널 글자 수 한도 (게임 악보 한 권). 받는 트랙이 이 한도를 새로 넘거나 악보책 권 수가 늘 만큼 길어지면 옮기지 않는다.
+   * 목록이면 트랙(tracks와 같은 차례)마다 그 자리 한도
+   */
+  readonly limit: number | readonly number[];
   /**
    * 곡 템포 자리. 옮기기 전에 그 자리에 템포를 정확히 쓸 수 있던 트랙은 옮긴 뒤에도 쓸 수 있어야 한다
    * (못 쓰면 출력기가 템포를 뒤 음 경계로 미뤄 게임에서 빠르기가 바뀌는 자리가 달라진다)
@@ -97,6 +104,8 @@ export interface MergeVoiceOptions {
   readonly tempo?: readonly Rat[];
   /** 채널 글자 수. 생략하면 최적화 출력기 글자 수. 출력기가 그대로 쓰지 못하면(다시 읽은 음이 다르면) undefined */
   readonly length?: (notes: readonly Note[]) => number | undefined;
+  /** 곡의 게임 프로필 (글자 수를 셀 때 길이·옥타브 한도). 생략하면 기본 프로필 */
+  readonly profile?: GameProfile;
 }
 
 /** 받는 트랙의 앞뒤 음과 이보다 멀면(반음) 넣지 않는다: 완전5도. 선율이 튀고 옥타브 명령이 붙는다 */
@@ -113,8 +122,9 @@ const NEAR = rat(1, 1);
  * 한꺼번에 안 되면 받는 트랙마다 따로 따져 된 것만 옮긴다.
  */
 export function mergeVoices(tracks: readonly (readonly Note[])[], options: MergeVoiceOptions): { tracks: Note[][]; moved: number } {
-  const length = options.length ?? printedLength;
-  const limit = options.limit;
+  const length = options.length ?? ((notes: readonly Note[]) => printedLength(notes, options.profile));
+  const lengths = (options.profile ?? DEFAULT_PROFILE).length;
+  const limitAt = (k: number) => (typeof options.limit === "number" ? options.limit : (options.limit[k] ?? Infinity));
   const tempo = options.tempo ?? [];
   const out = tracks.map((t) => [...t].sort((a, b) => cmp(a.start, b.start)));
   const count = out.map((t) => t.length);
@@ -126,8 +136,8 @@ export function mergeVoices(tracks: readonly (readonly Note[])[], options: Merge
   };
   // 음이 적은 트랙부터 보낸다. 같으면 아래 트랙부터 (위 트랙이 이어받게)
   const order = out.map((_, k) => k).filter((k) => count[k]! > 0).sort((a, b) => count[a]! - count[b]! || b - a);
-  const books = (n: number) => Math.max(1, Math.ceil(n / limit));
-  const roomy = (before: number, after: number) => after <= limit || books(after) <= books(before);
+  const books = (k: number, n: number) => Math.max(1, Math.ceil(n / limitAt(k)));
+  const roomy = (k: number, before: number, after: number) => after <= limitAt(k) || books(k, after) <= books(k, before);
   let moved = 0;
 
   order.forEach((from, rank) => {
@@ -172,7 +182,7 @@ export function mergeVoices(tracks: readonly (readonly Note[])[], options: Merge
         // 옮긴 뒤 출력기가 쓰지 못하는 길이(예: 1/96 쉼)가 생기면 옮기지 않는다
         if (grown === undefined) return false;
         const was = size(to) ?? Infinity;
-        if (!roomy(was, grown)) return false;
+        if (!roomy(to, was, grown)) return false;
         nextSizes.set(to, grown);
         before += was;
         after += grown;
@@ -193,9 +203,9 @@ export function mergeVoices(tracks: readonly (readonly Note[])[], options: Merge
     /** 템포를 정확히 쓸 수 있던 트랙은 옮긴 뒤에도 쓸 수 있다. 보내는 트랙이 비면 그 몫은 같은 악기 다른 트랙이 맡아야 한다 */
     function keepsTempo(source: readonly Note[], next: ReadonlyMap<number, Note[]>): boolean {
       for (const at of tempo) {
-        for (const [to, notes] of next) if (canPlaceTempoAt(out[to]!, at) && !canPlaceTempoAt(notes, at)) return false;
-        if (!canPlaceTempoAt(out[from]!, at)) continue;
-        if (source.length > 0 ? !canPlaceTempoAt(source, at) : !out.some((t, k) => k !== from && t.length > 0 && canPlaceTempoAt(next.get(k) ?? t, at))) return false;
+        for (const [to, notes] of next) if (canPlaceTempoAt(out[to]!, at, lengths) && !canPlaceTempoAt(notes, at, lengths)) return false;
+        if (!canPlaceTempoAt(out[from]!, at, lengths)) continue;
+        if (source.length > 0 ? !canPlaceTempoAt(source, at, lengths) : !out.some((t, k) => k !== from && t.length > 0 && canPlaceTempoAt(next.get(k) ?? t, at, lengths))) return false;
       }
       return true;
     }
@@ -206,10 +216,10 @@ export function mergeVoices(tracks: readonly (readonly Note[])[], options: Merge
 }
 
 /** 최적화 출력기 글자 수. 다시 읽은 음이 원래 음과 다르면(쓸 수 없는 길이) undefined */
-function printedLength(notes: readonly Note[]): number | undefined {
+function printedLength(notes: readonly Note[], profile: GameProfile | undefined): number | undefined {
   if (notes.length === 0) return 0;
-  const text = optimizeMml(notes).text;
-  return sameSound(notes, parseMml(text).notes) ? text.length : undefined;
+  const text = optimizeMml(notes, { profile }).text;
+  return sameSound(notes, parseMml(text, { lengths: profile?.length }).notes) ? text.length : undefined;
 }
 
 function insert(track: readonly Note[], unit: readonly Note[]): Note[] {

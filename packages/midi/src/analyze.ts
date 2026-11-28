@@ -1,4 +1,4 @@
-import { rat, type Rat, type TempoEvent, type TimeSigEvent } from "@mmlce/core";
+import { cmp, rat, ZERO, type Rat, type TempoEvent, type TimeSigEvent } from "@mmlce/core";
 import type { Smf } from "./smf.js";
 import { suggestInstrument, type InstrumentSuggestion } from "./gm.js";
 
@@ -44,12 +44,20 @@ export interface MidiAnalysis {
   /** 마커 (FF 06, 모든 트랙에서 모아 위치 순). 곡 마커로 가져온다. 없으면 마커 없이 */
   readonly markers?: readonly MidiMarker[];
   /**
+   * 첫 마디가 못갖춘마디다 (0에 BS:pickup 마커가 있고, 0의 박자표 뒤에 본 박자표가 있을 때). 그 박자표 자리까지가 못갖춘마디이고,
+   * 가져오기 격자는 그 자리(본 마디 시작)에 맞춘다. 그 마커는 곡 마커로 옮기지 않는다
+   */
+  readonly pickup?: boolean;
+  /**
    * 템포·박자 위치를 그대로 쓴다 (가져오기 격자에 맞추지 않음). 받아 적은 음을 지금 곡의 템포에 놓을 때, 곡의 분수 위치를 지킨다
    */
   readonly keepTiming?: boolean;
 }
 
 /** MIDI 마커. 위치는 tick을 그대로 옮긴 정확한 분수(온음표 단위) */
+/** 첫 마디가 못갖춘마디라는 표시 (Basic Scriptor와 정한 약속: 0번 트랙 tick 0의 마커) */
+export const PICKUP_MARKER = "BS:pickup";
+
 export interface MidiMarker {
   readonly at: Rat;
   readonly label: string;
@@ -178,8 +186,13 @@ export function analyzeMidi(smf: Smf): MidiAnalysis {
   });
 
   const tempo: TempoEvent[] = tempoTicks.map((t) => ({ at: toWhole(t.tick), bpm: 60_000_000 / t.us }));
-  const markers: MidiMarker[] = markerTicks.map((m) => ({ at: toWhole(m.tick), label: m.label }));
-  return { ppq: quarter, parts, tempo, timeSig, ...(markers.length > 0 ? { markers } : {}) };
+  // 못갖춘마디 표시는 0의 박자표와 그 뒤 본 박자표가 있어야 뜻이 있다. 마커는 곡 마커로 옮기지 않는다
+  const pickupMark = markerTicks.some((m) => m.tick === 0 && m.label.trim() === PICKUP_MARKER);
+  const sigTicks = timeSig.map((s) => s.at);
+  const pickup = pickupMark && sigTicks.some((at) => cmp(at, ZERO) === 0) && sigTicks.some((at) => cmp(at, ZERO) > 0);
+  // 다른 자리에 있는 BS:pickup도 뜻이 없는 약속 글자라 곡 마커(구조 목록·작업 메모 목록)에 넣지 않는다
+  const markers: MidiMarker[] = markerTicks.filter((m) => m.label.trim() !== PICKUP_MARKER).map((m) => ({ at: toWhole(m.tick), label: m.label }));
+  return { ppq: quarter, parts, tempo, timeSig, ...(markers.length > 0 ? { markers } : {}), ...(pickup ? { pickup } : {}) };
 }
 
 /** tick → 초 (템포 지도를 따라) */

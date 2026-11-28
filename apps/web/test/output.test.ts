@@ -78,7 +78,7 @@ describe("previewRows", () => {
     const before = song([track("a", "p1", "c4 c4 c4"), track("b", "p1", "d1"), track("c", "p1", "e1e1e1e1e1")]);
     // 첫 트랙 원문에도 템포를 적어 다른 트랙 글은 그대로 (원문에 템포가 없으면 원문 없는 다음 트랙이 템포를 받는다)
     const after: Song = { ...before, tracks: before.tracks.map((t) => (t.id === "a" ? { ...t, mml: { text: "t120ccc" } } : t)) };
-    const rows = previewRows(before, after, 3);
+    const rows = previewRows(before, after, { ...MOBILE_PROFILE, charLimitPerScore: 3 });
     expect(rows.map((r) => [r.trackId, r.after])).toEqual([
       ["a", 7],
       ["c", rows.find((r) => r.trackId === "c")!.before],
@@ -90,7 +90,7 @@ describe("previewRows", () => {
     const before = song([track("a", "p1", "c4 c4 c4"), track("b", "p1", "d1")]);
     const after: Song = { ...before, tracks: before.tracks.map((t) => (t.id === "a" ? { ...t, notes: t.notes.slice(1) } : t)) };
     const count = (s: Song) => (id: string) => (s === before ? 10 : id === "a" ? 6 : 10);
-    expect(previewRows(before, after, 100, count).map((r) => [r.trackId, r.before, r.after])).toEqual([["a", 10, 6]]);
+    expect(previewRows(before, after, { ...MOBILE_PROFILE, charLimitPerScore: 100 }, count).map((r) => [r.trackId, r.before, r.after])).toEqual([["a", 10, 6]]);
   });
 });
 

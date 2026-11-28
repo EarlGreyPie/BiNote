@@ -36,6 +36,8 @@ interface Entry {
    * 뒤 단계(만든 것 되돌리기·다시 고치기 계획)가 낡은 것으로 보고 아무 일도 하지 않았고, 저장한 곡과 같은지도 알아보지 못했다
    */
   undone?: { readonly from: Song; readonly to: Song };
+  /** 이 단계의 결과를 settle로 맞췄는지. 다시 실행할 때도 같은 맞춤을 거친다 */
+  settled?: true;
 }
 
 /** 기록에 맡겨 둔 악보 튜닝과 그 표시 (History.tabMarks) */
@@ -49,6 +51,12 @@ interface SavedTab {
  * 모든 편집이 run 한 곳을 지나므로 검사도 여기 한 곳에 둔다 (편집하는 길마다 따로 붙이지 않는다)
  */
 export type EditGuard = (before: Song, after: Song, command: Command) => boolean;
+
+/**
+ * 편집 결과를 기록에 넣기 전에 곡의 규칙에 맞춘다 (틱 칸을 쓰는 게임이면 음 자리를 틱으로: settleToTicks).
+ * 바꿀 것이 없으면 after 그대로 돌려준다. 검사(guard)는 맞춘 결과를 본다
+ */
+export type EditSettle = (before: Song, after: Song) => Song;
 
 /** 실행 취소·다시 실행 스택. 텍스트와 피아노롤이 같은 스택을 쓴다. */
 export class History {
@@ -71,6 +79,7 @@ export class History {
   constructor(
     private current: Song,
     private readonly guard?: EditGuard,
+    private readonly settle?: EditSettle,
   ) {
     this.rememberTabs();
   }
@@ -143,8 +152,14 @@ export class History {
   run(command: Command, options?: { readonly unchecked?: boolean }): Song {
     const before = this.current;
     let after: Song;
+    let settled = false;
     try {
       after = command.apply(before);
+      if (this.settle && after !== before) {
+        const fitted = this.settle(before, after);
+        settled = fitted !== after;
+        after = fitted;
+      }
       this.lastRefusal =
         !options?.unchecked && after !== before && this.guard !== undefined && !this.guard(before, after, command) ? "guard" : undefined;
     } catch (e) {
@@ -173,6 +188,7 @@ export class History {
       backward: command.invert(before),
       ...(tabs ? { tabs, marks } : {}),
       ...(removed ? { removed } : {}),
+      ...(settled ? { settled: true as const } : {}),
     });
     this.redoStack = [];
     this.rememberTabs();
@@ -210,8 +226,13 @@ export class History {
     const second = this.undoStack[n - 1]!;
     for (const e of [first, second]) if (e.tabs || e.marks || e.removed || e.gone) return false;
     const label = second.forward.label;
-    const forward: Command = { label, apply: (song) => second.forward.apply(first.forward.apply(song)), invert: () => backward };
+    const step = (e: Entry, song: Song) => {
+      const out = e.forward.apply(song);
+      return e.settled && this.settle ? this.settle(song, out) : out;
+    };
+    const forward: Command = { label, apply: (song) => step(second, step(first, song)), invert: () => backward };
     const backward: Command = { label, apply: (song) => first.backward.apply(second.backward.apply(song)), invert: () => forward };
+    // 묶은 forward 안에서 단계마다 맞추므로 묶은 단계에는 settled를 두지 않는다
     this.undoStack.splice(n - 2, 2, { forward, backward });
     return true;
   }
@@ -261,7 +282,11 @@ export class History {
     // 실행 취소한 뒤의 곡에서 이어 가면 실행 취소 전의 곡을 그대로 돌려놓는다. 그사이 바뀐 음소거·튜닝은 아래에서 다시 얹는다
     const memo = entry.undone?.from === this.current ? entry.undone.to : undefined;
     delete entry.undone;
-    const next = keepTabs(keepListening(this.current, memo ?? entry.forward.apply(this.current), this.listening), this.tabs);
+    const again = (): Song => {
+      const out = entry.forward.apply(this.current);
+      return entry.settled && this.settle ? this.settle(this.current, out) : out;
+    };
+    const next = keepTabs(keepListening(this.current, memo ?? again(), this.listening), this.tabs);
     // 음소거·튜닝을 얹어 객체가 달라졌으면, 다음에 다시 실행할 단계도 이 곡에서 이어지게 한다
     if (memo && next !== memo) this.retarget(memo, next);
     const removed = this.removedTabs(this.current, next);

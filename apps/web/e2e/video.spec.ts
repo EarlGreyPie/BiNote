@@ -262,3 +262,24 @@ test("원곡 고정을 켜면 파형 띠를 끌어도 원곡 어긋남이 바뀌
   await openReference(page);
   await expect(offset).toBeDisabled();
 });
+
+test("원곡을 안 불러온 프로젝트도 원곡 줄에 적힌 어긋남이 보이고, 그 줄에서 불러오면 그 값을 쓴다", async ({ page }, testInfo) => {
+  await openApp(page);
+  await pasteAsNewSong(page, "MML@t120l4cdefgab>c;");
+  await openReference(page);
+  const referenceOffset = page.getByLabel("어긋남(ms, 원곡이 늦으면 +)", { exact: true });
+  await referenceOffset.fill("-767");
+  await referenceOffset.press("Enter");
+  const project = await savedProject(page, testInfo.outputPath("memo.mme"));
+  // 원곡을 빼고 프로젝트만 다시 연다 (원곡은 안 불러온 상태)
+  await page.getByRole("button", { name: "영상 빼기", exact: true }).click();
+  await expect(referenceOffset).toHaveCount(0);
+  await openScoreFile(page, "memo.mme", JSON.stringify(project));
+  await expect(page.getByText("tone.wav (안 불러옴)")).toBeVisible();
+  await expect(page.getByText("어긋남 -767ms")).toBeVisible();
+  const chooser = page.waitForEvent("filechooser");
+  await page.getByRole("button", { name: "원곡 불러오기…" }).click();
+  await (await chooser).setFiles(TONE);
+  await expect(referenceOffset).toHaveValue("-767");
+  await expect(page.getByText("tone.wav (안 불러옴)")).toHaveCount(0);
+});

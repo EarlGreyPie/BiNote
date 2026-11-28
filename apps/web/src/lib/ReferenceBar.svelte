@@ -3,6 +3,7 @@
   import { t } from "./i18n.svelte";
   import { clock } from "./time";
   import type { BarDragMode } from "./tempoSync";
+  import { signedMs } from "./referenceSaved";
 
   /** 원곡 동시재생 설정 줄: 어긋남(ms, 원곡이 늦으면 양수)과 원곡 음량 */
   interface Props {
@@ -18,12 +19,18 @@
     /** 파형 띠 마디선 끌기 방식 */
     barDragMode: BarDragMode;
     onbardrag: (mode: BarDragMode) => void;
+    /** 원곡이 영상 파일이면 그 화면을 떠 있는 창으로 띄우기 */
+    canVideo?: boolean;
+    videoOpen?: boolean;
+    onvideo?: () => void;
     /** 원곡 고정: 켜면 파형 띠 끌기·어긋남 칸·단추로 원곡을 옮기지 못한다 */
     locked: boolean;
     onlock: (on: boolean) => void;
+    /** 프로젝트에 적힌 다른 이름 원곡의 맞춤값 (지금 원곡과 이름이 달라 자동으로 쓰지 않은 것). 누르면 그 어긋남을 쓴다 */
+    saved?: { readonly name: string; readonly offsetMs: number } | undefined;
   }
 
-  let { reference, onoffset, onvolume, onremove, showWave = $bindable(), tapOpen, ontaptempo, barDragMode, onbardrag, locked, onlock }: Props = $props();
+  let { reference, onoffset, onvolume, onremove, showWave = $bindable(), tapOpen, ontaptempo, barDragMode, onbardrag, canVideo = false, videoOpen = false, onvideo, locked, onlock, saved }: Props = $props();
 </script>
 
 <div class="video-bar">
@@ -38,6 +45,12 @@
       <button class="small" disabled={locked} onclick={() => onoffset(reference.offsetMs + d)}>{d > 0 ? `+${d}` : d}</button>
     {/each}
   </span>
+  {#if saved && saved.offsetMs !== reference.offsetMs}
+    <!-- 같은 원곡을 다른 이름(영상 소리, 다른 형식)으로 불러왔을 때 적어 둔 값을 손으로 옮겨 적지 않게 -->
+    <button class="small" disabled={locked} title={t("ui.referenceSavedUseHelp", { name: saved.name })} onclick={() => onoffset(saved.offsetMs)}>
+      {t("ui.referenceSavedUse", { ms: signedMs(saved.offsetMs) })}
+    </button>
+  {/if}
   <button class="small" class:on={locked} title={t("ui.referenceLockHelp")} aria-pressed={locked} onclick={() => onlock(!locked)}>
     <Icon name={locked ? "lock" : "lock-open"} />
     {t("ui.referenceLock")}
@@ -58,6 +71,9 @@
       <option value="pair">{t("ui.barDragPair")}</option>
     </select>
   </label>
+  {#if canVideo}
+    <button class="small" class:on={videoOpen} title={t("ui.referenceVideoHelp")} onpointerdown={(e) => e.preventDefault()} onclick={onvideo}>{t("ui.referenceVideoShow")}</button>
+  {/if}
   <button class="small" class:on={tapOpen} title={t("ui.tapTempoHelp")} onclick={ontaptempo}>{t("ui.tapTempo")}</button>
   <button class="small" onclick={onremove}>{t("ui.videoRemove")}</button>
 </div>

@@ -1,4 +1,4 @@
-import { cmp, DEFAULT_BPM, keyShort, defaultLengthLimit, isGameLength, mul, normalizeTempo, rat, toFloat, type LengthLimit, type Rat, type TempoEvent } from "@mmlce/core";
+import { cmp, DEFAULT_BPM, keyShort, shownMeters, defaultLengthLimit, isGameLength, mul, normalizeTempo, rat, toFloat, type LengthLimit, type Rat, type TempoEvent } from "@mmlce/core";
 
 /**
  * 피아노롤 좌표 계산. 가로는 시간이 오른쪽으로 흐르고 건반이 왼쪽,
@@ -579,6 +579,11 @@ export function stepNoteLength(now: Rat, factor: 2 | 0.5, limit: LengthLimit = d
   return [...lengthsFor(limit), ...lengthsFor(limit, extra)].find((l): l is Exclude<NoteLength, "grid"> => l !== "grid" && cmp(noteLengthOf(l, 1), want) === 0);
 }
 
+/** 작업 메모 라벨 글자: 쪽지 표시(끝낸 것은 체크) + 글 */
+export function memoLabelText(text: string, done: boolean): string {
+  return `${done ? "✓" : "✎"} ${text}`;
+}
+
 /** 이벤트 줄 라벨 종류 */
 export type EventKind = "tempo" | "meter" | "marker" | "key";
 
@@ -592,6 +597,10 @@ export interface EventLabel {
   readonly text: string;
   /** 곡 처음에 적은 템포가 없어 기본값(t120)을 보이는 라벨. 고치면 곡 처음에 t를 넣는다 */
   readonly implicit?: boolean;
+  /** 작업 메모 라벨 (마커 칸에 다른 색·쪽지 표시로 그린다). done = 끝낸 메모 (흐리게) */
+  readonly memo?: "open" | "done";
+  /** 범위 메모의 끝 (곡 위치) */
+  readonly end?: Rat;
   readonly x: number;
   readonly y: number;
   readonly w: number;
@@ -651,8 +660,8 @@ export function eventLabels(
   v: RollView,
   events: {
     readonly tempo: readonly { at: Rat; bpm: number }[];
-    readonly timeSig: readonly { at: Rat; beats: number; unit: number }[];
-    readonly markers: readonly { id: string; at: Rat; label: string }[];
+    readonly timeSig: readonly { at: Rat; beats: number; unit: number; pickup?: boolean }[];
+    readonly markers: readonly { id: string; at: Rat; label: string; kind?: "memo"; done?: boolean; end?: Rat }[];
     readonly keys?: readonly { at: Rat; fifths: number }[] | undefined;
   },
 ): EventLabel[] {
@@ -660,19 +669,24 @@ export function eventLabels(
   const size = eventRowSize(v);
   const char = (eventFontSize(v) * 6) / 11;
   const width = (text: string) => Math.max(20, Math.round(text.length * char + 6));
-  const place = (kind: EventKind, at: Rat, text: string, id?: string, implicit?: boolean): EventLabel => {
+  const place = (kind: EventKind, at: Rat, text: string, id?: string, implicit?: boolean, memo?: Pick<EventLabel, "memo" | "end">): EventLabel => {
     const p = timeToScreen(v, toFloat(at));
     const row = kind === "tempo" ? 0 : 1;
     const w = width(text);
-    const extra = { ...(id ? { id } : {}), ...(implicit ? { implicit } : {}) };
+    const extra = { ...(id ? { id } : {}), ...(implicit ? { implicit } : {}), ...memo };
     return v.orientation === "horizontal"
       ? { kind, at, text, x: p, y: barRowSize(v) + row * size, w, h: size, ...extra }
       : { kind, at, text, x: 2, y: p + row * size, w, h: size, ...extra };
   };
   const labels = [
     ...shownTempo(events.tempo).map((e) => place("tempo", e.at, `t${e.bpm}`, undefined, e.implicit)),
-    ...events.timeSig.map((e) => place("meter", e.at, `${e.beats}/${e.unit}`)),
-    ...events.markers.map((e) => place("marker", e.at, e.label, e.id)),
+    // 못갖춘마디 박자표는 쓰지 않고 본 박자표만 보인다
+    ...shownMeters(events.timeSig).map((e) => place("meter", e.at, `${e.beats}/${e.unit}`)),
+    ...events.markers.map((e) =>
+      e.kind === "memo"
+        ? place("marker", e.at, memoLabelText(e.label, !!e.done), e.id, false, { memo: e.done ? "done" : "open", ...(e.end ? { end: e.end } : {}) })
+        : place("marker", e.at, e.label, e.id),
+    ),
     ...(events.keys ?? []).map((e) => place("key", e.at, keyShort(e.fifths))),
   ];
   // 같은 칸에서 앞 라벨과 겹치면 밀어 쓴다 (같은 자리의 박자와 마커 등): 가로 롤은 오른쪽으로, 세로 롤은 아래로 한 칸씩.

@@ -1,6 +1,8 @@
-import { add, cmp, toFloat, type GameProfile, type Note, type Rat, type Song, type Track } from "@mmlce/core";
+import { add, cmp, songProfile, toFloat, type GameProfile, type Note, type Rat, type Song, type Track } from "@mmlce/core";
 import {
+  limitOf,
   parseTrackText,
+  trackLimits,
   trackSource,
   validateChannel,
   validateSong,
@@ -18,6 +20,7 @@ export interface TrackAnalysis {
 
 interface ChannelResult {
   readonly profile: GameProfile;
+  readonly limit: number;
   readonly text: string;
   readonly diagnostics: readonly Diagnostic[];
   /** 음마다 원문 위치 (트랙 음 순서와 같다) */
@@ -26,16 +29,17 @@ interface ChannelResult {
 
 const cache = new WeakMap<Track, ChannelResult>();
 
-function channel(song: Song, track: Track, profile: GameProfile): ChannelResult {
+function channel(song: Song, track: Track, profile: GameProfile, limit: number): ChannelResult {
   const hit = track.mml ? cache.get(track) : undefined;
-  if (hit && hit.profile === profile) return hit;
+  if (hit && hit.profile === profile && hit.limit === limit) return hit;
   const source = trackSource(song, track);
-  const { parsed } = parseTrackText(track.id, source);
+  const { parsed } = parseTrackText(track.id, source, profile.length);
   const result: ChannelResult = {
     profile,
+    limit,
     text: source.text,
     // 원문 글자 수는 게임에 넣는 글 수가 아니다 (주석·줄바꿈·겹친 v·l은 내보낼 때 빠진다). 한도는 내보낼 때 글자 수로 본다 (gameCharCounts)
-    diagnostics: [...parsed.diagnostics, ...validateChannel(source.text, parsed, profile).filter((d) => !(track.mml && d.code === "char-limit"))],
+    diagnostics: [...parsed.diagnostics, ...validateChannel(source.text, parsed, profile, limit).filter((d) => !(track.mml && d.code === "char-limit"))],
     spans: parsed.notes.map((n) => n.span),
   };
   // 원문에서 읽은 트랙만 담아 둔다 (출력한 글은 곡 템포에 따라 달라짐)
@@ -59,7 +63,9 @@ export function analyzeSong(song: Song, profile: GameProfile, options: ValidateS
   const loose: SongDiagnostic[] = [];
   const located = new Map<string, Diagnostic[]>();
 
-  const tracks = song.tracks.map((track) => ({ track, result: channel(song, track, profile) }));
+  // 트랙마다 그 자리 글자 수 한도 (출력 점검판과 같은 숫자)
+  const limits = trackLimits(song, profile);
+  const tracks = song.tracks.map((track) => ({ track, result: channel(song, track, profile, limitOf(limits, track.id, profile)) }));
 
   for (const d of songDiagnostics) {
     const entry = d.trackId ? tracks.find((t) => t.track.id === d.trackId) : undefined;
@@ -90,7 +96,7 @@ export function analyzeSong(song: Song, profile: GameProfile, options: ValidateS
  * 음이 템포 때문에 나뉘었을 수 있어 같은 높이로 그 위치에 걸린 첫 조각을 고른다
  */
 export function noteSpan(song: Song, track: Track, note: Note): readonly [number, number] | undefined {
-  const { parsed, notes } = parseTrackText(track.id, trackSource(song, track));
+  const { parsed, notes } = parseTrackText(track.id, trackSource(song, track), songProfile(song).length);
   if (track.mml) {
     const k = track.notes.findIndex((n) => n.id === note.id);
     if (k >= 0 && parsed.notes[k]) return parsed.notes[k]!.span;
@@ -117,7 +123,7 @@ export function textTimeline(song: Song, track: Track): readonly TimedSpan[] {
   const hit = timelines.get(track);
   const first = song.tracks[0]?.id === track.id;
   if (hit && (track.mml || (hit.tempo === song.tempo && hit.first === first))) return hit.list;
-  const { parsed, notes } = parseTrackText(track.id, trackSource(song, track));
+  const { parsed, notes } = parseTrackText(track.id, trackSource(song, track), songProfile(song).length);
   const out = notes
     .map((n, k) => ({ start: toFloat(n.start), end: toFloat(add(n.start, n.dur)), span: parsed.notes[k]?.span }))
     .filter((x): x is TimedSpan => x.span !== undefined)
@@ -168,7 +174,7 @@ let lastItems: { song: Song; track: Track; value: TextItems } | undefined;
 export function textItems(song: Song, track: Track): TextItems {
   if (lastItems && lastItems.song === song && lastItems.track === track) return lastItems.value;
   const source = trackSource(song, track);
-  const { parsed, notes } = parseTrackText(track.id, source);
+  const { parsed, notes } = parseTrackText(track.id, source, songProfile(song).length);
   const shift = (r: Rat) => (source.offset ? add(r, source.offset) : r);
   const items = [
     ...parsed.notes.map((n, k) => ({ span: n.span, start: notes[k]!.start, k })),

@@ -4,6 +4,7 @@ import {
   cmp,
   dbOfVolume,
   div,
+  firstBarNumber,
   meterGrid,
   mul,
   positionToSeconds,
@@ -127,7 +128,8 @@ export function barSegments(timeSig: Song["timeSig"], end: Rat, halves = false):
   const sigs = [...timeSig].sort((a, b) => cmp(a.at, b.at));
   const segments = sigs.length === 0 || cmp(sigs[0]!.at, ZERO) > 0 ? [{ at: ZERO, beats: 4, unit: 4 }, ...sigs] : sigs;
   const out: BarSegment[] = [];
-  let bar = 0;
+  // 못갖춘마디 곡은 첫 마디가 0번 (core barAt과 같은 번호)
+  let bar = firstBarNumber(timeSig) - 1;
   segments.forEach((sig, i) => {
     const next = segments[i + 1]?.at;
     const { beat, measure } = meterGrid(sig);

@@ -1,7 +1,7 @@
-import { add, cmp, defaultLengthLimit, gameLengths, MOBILE_PROFILE, sub, ZERO, type LengthLimit, type Rat } from "@mmlce/core";
+import { add, cmp, gameLengths, lengthLimitKey, sub, ZERO, type LengthLimit, type Rat } from "@mmlce/core";
 import { continues, mergeTies, sameSound } from "./compare.js";
 import { parseMml } from "./parser.js";
-import { mmlPitchRange, printMml, splitDuration, type PrintableNote, type PrintOptions, type PrintResult } from "./printer.js";
+import { mmlPitchRange, preferredPiece, printLengths, printMml, printOctaves, splitDuration, type PrintableNote, type PrintOptions, type PrintResult } from "./printer.js";
 
 /**
  * 글자 수를 줄이는 출력기 (설계 6장).
@@ -17,10 +17,10 @@ import { mmlPitchRange, printMml, splitDuration, type PrintableNote, type PrintO
  */
 export function optimizeMml(notes: readonly PrintableNote[], options: OptimizeOptions = {}): PrintResult {
   const fallback = printMml(notes, options);
-  const lengths = options.lengths ?? defaultLengthLimit();
+  const lengths = printLengths(options);
   const optimized = optimizeText(notes, options, lengths);
   if (optimized === undefined || optimized.length >= fallback.text.length) return fallback;
-  const check = parseMml(optimized, { octave: options.octave ?? 4, volume: options.volume ?? 8 });
+  const check = parseMml(optimized, { octave: options.octave ?? 4, volume: options.volume ?? 8, lengths });
   if (!sameSound(check.notes, mergeTies(notes))) return fallback;
   return { text: optimized, diagnostics: fallback.diagnostics };
 }
@@ -67,7 +67,7 @@ function optimizeText(
   const maxDots = lengths.dots;
   const notes = mergeTies(input);
   // 쓸 수 없는 높이가 있으면 단순 출력기가 옥타브를 옮겨 쓰고 알린다
-  const writable = mmlPitchRange(options.octaves ?? MOBILE_PROFILE.octave);
+  const writable = mmlPitchRange(printOctaves(options));
   if (notes.some((n) => n.pitch < writable.low || n.pitch > writable.high)) return undefined;
   const tempo = [...(options.tempo ?? [])].sort((a, b) => cmp(a.at, b.at));
   const table = pieces(lengths);
@@ -250,7 +250,7 @@ function solve(elements: readonly Element[], options: OptimizeOptions, maxDots: 
 
   const start = options.octave ?? 4;
   // 옥타브 상태는 o로 쓸 수 있는 범위 안에서만 둔다. 범위 끝 음(o0c-, o9b+)은 경계 이름으로 쓴다 (o-1·o10을 쓰지 않게)
-  const range = options.octaves ?? MOBILE_PROFILE.octave;
+  const range = printOctaves(options);
   const inRange = (o: number) => o >= range.min && o <= range.max;
   let low = start;
   let high = start;
@@ -400,9 +400,19 @@ function solve(elements: readonly Element[], options: OptimizeOptions, maxDots: 
   return out.join("");
 }
 
-/** 게임이 받는 한 토막 길이 (gameLengths, 짧은 순서 그대로) */
+/**
+ * 게임이 받는 한 토막 길이 (gameLengths, 짧은 순서 그대로). 틱 모형에서 같은 값을 내는 숫자가 여럿이면
+ * (l23·l24 = 16틱) 출력기가 고르는 표기 하나만 둔다 (preferredPiece). 정확한 분수 모형은 지금처럼 모두 둔다
+ */
+const piecesCache = new Map<string, readonly Piece[]>();
 function pieces(lengths: LengthLimit): readonly Piece[] {
-  return gameLengths(lengths);
+  if (!lengths.ticks) return gameLengths(lengths);
+  const key = lengthLimitKey(lengths);
+  const hit = piecesCache.get(key);
+  if (hit) return hit;
+  const out = gameLengths(lengths).filter((p) => preferredPiece(p.value, lengths) === p);
+  piecesCache.set(key, out);
+  return out;
 }
 
 const ratKey = (r: Rat) => `${r.n}/${r.d}`;

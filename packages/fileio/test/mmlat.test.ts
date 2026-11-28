@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { add, eq, MOBILE_PROFILE, type Note } from "@mmlce/core";
-import { gameScores, scoreEnd, songChordsPerScore, splitSong } from "@mmlce/mml";
+import { add, eq, MOBILE_PROFILE, PC_PROFILE, type Note } from "@mmlce/core";
+import { gameScores, scoreEnd, songChordsPerScore, splitParts, splitSong } from "@mmlce/mml";
 import { findMmlAt, findMmlAtBlocks, looksLikeMmlAt, readMmlAt } from "../src/index.js";
 
 describe("MML@ 글 읽기", () => {
@@ -140,5 +140,19 @@ describe("악보책 나누기 글을 권으로 이어 다시 읽기", () => {
     expect(heads.filter((n) => !known.has(key(n)))).toEqual([]);
     const cut = parts.reduce((sum, p) => sum + p.cut, 0);
     expect(heads.length).toBeGreaterThanOrEqual(original.tracks[0]!.notes.length - cut);
+  });
+});
+
+describe("PC 악보집(파트마다 이어 읽는 악보책) 다시 읽기", () => {
+  it("장마다 같은 파트 글을 이어 읽어, 장 머리에 템포·옥타브·길이가 없어도 원래 곡과 같다", () => {
+    const original = readMmlAt(`MML@t90o5l8${"c".repeat(1300)};`, { profileId: "pc" }).song;
+    const split = splitParts(original, PC_PROFILE);
+    expect(split.scrolls).toBe(2);
+    const text = split.books[0]!.scrolls.map((sc, k) => `${k + 1}권\n${sc.text}`).join("\n");
+    const back = readMmlAt(text, { mode: "book", profileId: "pc", gapMs: PC_PROFILE.scoreBookGapMs }).song;
+    expect(back.tracks).toHaveLength(1);
+    expect(back.tempo.map((e) => e.bpm)).toEqual([90]);
+    const shape = (s: typeof original) => s.tracks[0]!.notes.map((n) => `${n.start.n}/${n.start.d}+${n.dur.n}/${n.dur.d}:${n.pitch}`);
+    expect(shape(back)).toEqual(shape(original));
   });
 });

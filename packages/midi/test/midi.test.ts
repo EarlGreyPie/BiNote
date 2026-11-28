@@ -269,6 +269,125 @@ describe("quantize", () => {
     expect(quantize([{ id: "a", notes }], tempo, { grid: 16, triplets: false }).quintupletBeats).toBe(0);
   });
 
+  it("4분 7잇단은 1/28, 4분 9잇단은 1/36 칸으로 맞추고, 이웃 16분음표 박은 그대로 둔다", () => {
+    // 박 하나 = 480tick. 7잇단·9잇단 자리를 반올림한 tick에 ±6tick(약 6ms) 흔들림
+    const wobble = [0, 5, -4, 6, -6, 3, -5, 4, -3];
+    const tuplet = (beat: number, n: number) => Array.from({ length: n }, (_, i) => raw(Math.max(0, beat * 480 + Math.round((i * 480) / n) + wobble[i]!), 60));
+    const sixteenths = (beat: number) => [0, 120, 240, 360].map((t) => raw(beat * 480 + t, 110));
+    const seven = quantize([{ id: "a", notes: [...tuplet(0, 7), ...sixteenths(1)] }], tempo);
+    expect(seven.grid).toBe(16);
+    expect(seven.septupletBeats).toBe(1);
+    expect(seven.nonupletBeats).toBe(0);
+    expect(seven.notes.map((n) => key(n.start))).toEqual(["0/1", "1/28", "1/14", "3/28", "1/7", "5/28", "3/14", "1/4", "5/16", "3/8", "7/16"]);
+    expect(seven.notes.slice(0, 7).map((n) => key(n.dur))).toEqual(Array(7).fill("1/28"));
+
+    const nine = quantize([{ id: "a", notes: [...sixteenths(0), ...tuplet(1, 9)] }], tempo);
+    expect(nine.grid).toBe(16);
+    expect(nine.nonupletBeats).toBe(1);
+    expect(nine.notes.map((n) => key(n.start))).toEqual(["0/1", "1/16", "1/8", "3/16", ...Array.from({ length: 9 }, (_, i) => key(rat(9 + i, 36)))]);
+    expect(nine.notes.slice(4).map((n) => key(n.dur))).toEqual(Array(9).fill("1/36"));
+
+    // 한 박에 하나 빠진 잇단(쉼표 하나)도 잇단으로 맞춘다
+    const gap = quantize([{ id: "a", notes: [...tuplet(0, 7).filter((_, i) => i !== 4), ...sixteenths(1)] }], tempo);
+    expect(gap.septupletBeats).toBe(1);
+    expect(gap.notes.slice(0, 6).map((n) => key(n.start))).toEqual(["0/1", "1/28", "1/14", "3/28", "5/28", "3/14"]);
+
+    // 셋잇단을 끄면 7·9잇단도 쓰지 않는다
+    const off = quantize([{ id: "a", notes: [...tuplet(0, 7), ...tuplet(1, 9)] }], tempo, { grid: 16, triplets: false });
+    expect(off.septupletBeats + off.nonupletBeats).toBe(0);
+  });
+
+  it("8분음표가 대부분인 곡의 7·9잇단 한 박을 8분 격자로 뭉개지 않는다 (빠른 곡 포함)", () => {
+    // 240 BPM이면 8분 격자로 옮겨도 잇단 음이 모두 60ms 안이라, 거리로만 따지면 8분 격자를 골라 같은 높이 음이 합쳐졌다
+    for (const bpm of [120, 240]) {
+      for (const n of [7, 9]) {
+        const at = (tick: number, len: number) => ({ ...raw(tick, len), seconds: (tick / PPQ) * (60 / bpm) });
+        const eighths = Array.from({ length: 256 }, (_, i) => at(480 * 8 + i * 240, 200));
+        const tuplet = Array.from({ length: n }, (_, i) => at(Math.round((i * 480) / n), 40));
+        const q = quantize([{ id: "a", notes: [...tuplet, ...eighths] }], [{ at: rat(0), bpm }]);
+        expect(q.grid).toBe(16);
+        expect(n === 7 ? q.septupletBeats : q.nonupletBeats).toBe(1);
+        expect(q.notes.slice(0, n).map((x) => key(x.start))).toEqual(Array.from({ length: n }, (_, i) => key(rat(i, n * 4))));
+      }
+    }
+  });
+
+  it("32분음표 연타·16분 셋잇단은 7·9잇단으로 잘못 보지 않는다", () => {
+    // 16분 격자를 직접 골라도 32분음표 8개는 9잇단 칸으로 옮기지 않는다
+    const thirtySeconds = Array.from({ length: 8 }, (_, i) => raw(i * 60, 50));
+    expect(quantize([{ id: "a", notes: thirtySeconds }], tempo, { grid: 16 }).nonupletBeats).toBe(0);
+    const auto = quantize([{ id: "a", notes: thirtySeconds }], tempo);
+    expect(auto.grid).toBe(32);
+    expect(auto.nonupletBeats + auto.septupletBeats).toBe(0);
+    // 16분 셋잇단(한 박 6음)은 셋잇단 칸 그대로
+    const sextuplet = Array.from({ length: 6 }, (_, i) => raw(i * 80, 70));
+    const q = quantize([{ id: "a", notes: sextuplet }], tempo, { grid: 16 });
+    expect(q.septupletBeats + q.nonupletBeats + q.quintupletBeats).toBe(0);
+    expect(q.notes.map((n) => key(n.start))).toEqual(Array.from({ length: 6 }, (_, i) => key(rat(i, 24))));
+  });
+
+  it("박을 넘는 8분 5잇단(2박에 l10 다섯)과 4분음표 5잇단(한 마디에 l5 다섯)를 맞추고, 다른 파트의 박 음은 그대로 둔다", () => {
+    const wobble = [0, 6, -5, 4, -6];
+    for (const bpm of [60, 120, 180]) {
+      const at = (tick: number, len: number, pitch = 72) => ({ ...raw(tick, len, pitch), seconds: (tick / PPQ) * (60 / bpm) });
+      const group = (from: number, span: number, len: number) => Array.from({ length: 5 }, (_, i) => at(Math.max(0, from + Math.round((i * span) / 5) + wobble[i]!), len, 72 + i));
+      const sixteenths = (from: number, beats: number) => Array.from({ length: beats * 4 }, (_, i) => at(from + i * 120, 100, 60));
+      const tempoAt = [{ at: rat(0), bpm }];
+      // 1마디: 앞 2박 8분 5잇단 + 뒤 2박 16분음표, 왼손은 4분음표
+      const eighth = quantize(
+        [
+          { id: "r", notes: [...group(0, 960, 150), ...sixteenths(960, 2)] },
+          { id: "l", notes: [0, 480, 960, 1440].map((t) => at(t, 400, 48)) },
+        ],
+        tempoAt,
+      );
+      expect(eighth.grid).toBe(16);
+      expect(eighth.eighthQuintuplets).toBe(1);
+      expect(eighth.barQuintuplets).toBe(0);
+      const right = eighth.notes.filter((n) => n.part === "r");
+      expect(right.slice(0, 5).map((n) => key(n.start))).toEqual(["0/1", "1/10", "1/5", "3/10", "2/5"]);
+      expect(right.slice(5).map((n) => key(n.start))).toEqual(Array.from({ length: 8 }, (_, i) => key(rat(8 + i, 16))));
+      expect(eighth.notes.filter((n) => n.part === "l").map((n) => key(n.start))).toEqual(["0/1", "1/4", "1/2", "3/4"]);
+
+      // 2마디: 한 마디에 l5 다섯, 왼손 2분음표 + 다음 마디 16분음표
+      const half = quantize(
+        [
+          { id: "r", notes: [...group(0, 1920, 300), ...sixteenths(1920, 4)] },
+          { id: "l", notes: [0, 960].map((t) => at(t, 900, 48)) },
+        ],
+        tempoAt,
+      );
+      expect(half.barQuintuplets).toBe(1);
+      expect(half.eighthQuintuplets).toBe(0);
+      expect(half.notes.filter((n) => n.part === "r").slice(0, 5).map((n) => key(n.start))).toEqual(["0/1", "1/5", "2/5", "3/5", "4/5"]);
+      expect(half.notes.filter((n) => n.part === "l").map((n) => key(n.start))).toEqual(["0/1", "1/2"]);
+    }
+  });
+
+  it("하나 빠진 박을 넘는 5잇단도 맞추고, 셋잇단을 끄면 쓰지 않는다", () => {
+    const notes = [0, 192, 576, 768].map((t, i) => raw(t + [0, 5, -4, 6][i]!, 150));
+    const q = quantize([{ id: "a", notes: [...notes, ...[960, 1080, 1200, 1320].map((t) => raw(t, 100))] }], tempo);
+    expect(q.eighthQuintuplets).toBe(1);
+    expect(q.notes.slice(0, 4).map((n) => key(n.start))).toEqual(["0/1", "1/10", "3/10", "2/5"]);
+    const off = quantize([{ id: "a", notes }], tempo, { grid: 16, triplets: false });
+    expect(off.eighthQuintuplets + off.barQuintuplets).toBe(0);
+  });
+
+  it("흔들린 8분·점음표·4분 리듬은 박을 넘는 5잇단으로 잘못 보지 않는다", () => {
+    const shake = [0, 9, -8, 7, -9, 8, -7, 9];
+    const rhythms = [
+      [0, 240, 480, 720, 960, 1200, 1440, 1680],
+      [0, 360, 480, 840, 960, 1320, 1440, 1800],
+      [0, 480, 960, 1440],
+      [0, 320, 640, 960, 1280, 1600],
+    ];
+    for (const ticks of rhythms) {
+      const notes = [0, 1, 2, 3].flatMap((bar) => ticks.map((t, i) => raw(bar * 1920 + Math.max(0, t + shake[i]!), 100)));
+      const q = quantize([{ id: "a", notes }], tempo);
+      expect(q.eighthQuintuplets + q.barQuintuplets).toBe(0);
+    }
+  });
+
   it("흔들려 친 정규 리듬(엇박 16분·점음표·16분 연타)은 셋잇단·5잇단으로 잘못 보지 않는다", () => {
     // 엇박 16분만 있는 박이 이어지는 곳, 점8분+16분, 16분 4음, 8분. ±15ms 안팎으로 흔든다
     const bar = [120, 600, 960, 1320, 1440, 1560, 1680, 1800, 2280, 2400, 2760, 3120, 3240, 3600];
@@ -286,6 +405,8 @@ describe("quantize", () => {
       expect(q.grid).toBe(16);
       expect(q.tripletBeats).toBe(0);
       expect(q.quintupletBeats).toBe(0);
+      expect(q.septupletBeats + q.nonupletBeats).toBe(0);
+      expect(q.eighthQuintuplets + q.barQuintuplets).toBe(0);
       const want = [0, 1, 2, 3].flatMap((b) => bar.map((t) => key(rat(b * 3840 + t, 1920))));
       expect(q.notes.map((n) => key(n.start))).toEqual(want);
     }
@@ -410,6 +531,15 @@ describe("midiToSong", () => {
     expect(notes.slice(0, 6).map((n) => key(n.dur))).toEqual(Array(6).fill("1/6"));
     expect(notes.slice(6, 11).map((n) => key(n.start))).toEqual(["1/1", "21/20", "11/10", "23/20", "6/5"]);
     expect(optimizeMml(r.song.tracks[0]!.notes).text).toMatch(/l6cc\+dd\+ef>l20cc\+dd\+e/);
+  });
+
+  it("박을 넘는 5잇단을 가져오면 l10·l5로 적는다", () => {
+    const eighth = [0, 192, 384, 576, 768].map((t, i): [number, number, number] => [72 + i, t + [0, 4, -3, 5, -4][i]!, 180]);
+    const bar = [0, 384, 768, 1152, 1536].map((t, i): [number, number, number] => [72 + i, 1920 + t + [0, -5, 4, -4, 5][i]!, 370]);
+    const r = song(120, [[...eighth, [60, 960, 480], [62, 1440, 480], ...bar, [60, 3840, 480]]], [{ parts: [0], chords: 1 }], {});
+    expect(count(r)).toBe(13);
+    expect(optimizeMml(r.song.tracks[0]!.notes).text).toMatch(/l10cc\+dd\+e/);
+    expect(optimizeMml(r.song.tracks[0]!.notes).text).toMatch(/l5c4d4>cc\+dd\+e/);
   });
 
   it("밀린 음 곧게 맞추기를 켜면 64분 격자에서 조금씩 밀어 친 정규 음을 셋잇단으로 맞추지 않는다", () => {
@@ -840,3 +970,72 @@ describe("MIDI 마커 (FF 06)", () => {
     expect(reopened.markers).toEqual(imported.markers);
   });
 });
+
+describe("못갖춘마디 (BS:pickup)", () => {
+  // 120 BPM. 첫 마디 59/64(1770 tick), 그다음 4/4. 못갖춘마디 안 음 하나(한 박 앞) + 본 마디 8분음표 (조금씩 흔들림)
+  const P = 1770;
+  const jitter = [0, 9, -7, 5, -10, 6, -4, 8];
+  const conductor = (marker: boolean): SmfEvent[] => [
+    { tick: 0, type: "tempo", usPerQuarter: 500_000 },
+    { tick: 0, type: "timeSig", beats: 59, unit: 64 },
+    { tick: P, type: "timeSig", beats: 4, unit: 4 },
+    ...(marker ? [{ tick: 0, type: "marker" as const, text: "BS:pickup" }] : []),
+  ];
+  const body = [
+    on(P - 480, 67),
+    off(P - 260, 67),
+    ...Array.from({ length: 16 }, (_, i) => [on(P + i * 240 + jitter[i % 8]!, 60 + (i % 5)), off(P + i * 240 + 200, 60 + (i % 5))]).flat(),
+  ];
+
+  it("0의 BS:pickup 마커를 읽고 곡 마커로는 옮기지 않는다", () => {
+    const a = analyzeMidi(smf(conductor(true), body));
+    expect(a.pickup).toBe(true);
+    expect(a.markers).toBeUndefined();
+    expect(analyzeMidi(smf(conductor(false), body)).pickup).toBeUndefined();
+    // 다른 자리의 BS:pickup도 곡 마커(구조 목록·작업 메모 목록)에 들어가지 않는다. 다른 마커는 그대로
+    const stray = analyzeMidi(smf([...conductor(false), { tick: 960, type: "marker", text: "BS:pickup" }, { tick: 1920, type: "marker", text: "A" }], body));
+    expect(stray.pickup).toBeUndefined();
+    expect(stray.markers?.map((m) => m.label)).toEqual(["A"]);
+  });
+
+  it("이름이 BS:pickup인 곡 마커는 MIDI로 내보내지 않아, 다시 가져올 때 못갖춘마디로 잘못 읽히지 않는다", () => {
+    const a = analyzeMidi(smf(conductor(false), body));
+    const song = midiToSong(a, suggestPlan(a, MOBILE_PROFILE), MOBILE_PROFILE).song;
+    const marked = { ...song, markers: [{ id: "m1", at: rat(0), label: "BS:pickup" }, { id: "m2", at: rat(1), label: "B" }] };
+    const back = analyzeMidi(readSmf(writeSmf(songToSmf(marked as typeof song))));
+    expect(back.pickup).toBeUndefined();
+    expect(back.markers?.map((m) => m.label)).toEqual(["B"]);
+  });
+
+  it("칸 맞춤을 본 마디 시작에 맞추고, 박자표는 [못갖춘마디, 본 박자]로 둔다", () => {
+    const a = analyzeMidi(smf(conductor(true), body));
+    const r = midiToSong(a, suggestPlan(a, MOBILE_PROFILE), MOBILE_PROFILE);
+    expect(r.grid).toBe(8);
+    expect(r.song.timeSig).toEqual([
+      { at: rat(0), beats: 59, unit: 64, pickup: true },
+      { at: rat(59, 64), beats: 4, unit: 4 },
+    ]);
+    const starts = r.song.tracks.flatMap((t) => t.notes).map((n) => n.start).sort((x, y) => toFloatOf(x) - toFloatOf(y));
+    expect(starts.map(key)).toEqual([key(rat(43, 64)), ...Array.from({ length: 16 }, (_, i) => key(add(rat(59, 64), rat(i, 8))))]);
+    expect(r.song.tempo.map((t) => [key(t.at), t.bpm])).toEqual([["0/1", 120]]);
+  });
+
+  it("마커가 없으면 0을 기준으로 맞추던 그대로다 (박자가 바뀌는 곡)", () => {
+    const a = analyzeMidi(smf(conductor(false), body));
+    const r = midiToSong(a, suggestPlan(a, MOBILE_PROFILE), MOBILE_PROFILE);
+    expect(r.song.timeSig.some((s) => s.pickup)).toBe(false);
+  });
+
+  it("MIDI로 내보내고 다시 가져와도, .mme로 저장하고 열어도 못갖춘마디가 남는다", () => {
+    const a = analyzeMidi(smf(conductor(true), body));
+    const song = midiToSong(a, suggestPlan(a, MOBILE_PROFILE), MOBILE_PROFILE).song;
+    const back = analyzeMidi(readSmf(writeSmf(songToSmf(song))));
+    expect(back.pickup).toBe(true);
+    const again = midiToSong(back, suggestPlan(back, MOBILE_PROFILE), MOBILE_PROFILE).song;
+    expect(again.timeSig).toEqual(song.timeSig);
+    expect(again.tracks.flatMap((t) => t.notes).map((n) => key(n.start))).toEqual(song.tracks.flatMap((t) => t.notes).map((n) => key(n.start)));
+    expect(readProject(writeProject(song)).song.timeSig).toEqual(song.timeSig);
+  });
+});
+
+const toFloatOf = (r: Rat) => r.n / r.d;

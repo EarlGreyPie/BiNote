@@ -4,6 +4,7 @@
   import { untrack } from "svelte";
   import { t } from "./i18n.svelte";
   import { previewRows } from "./output";
+  import SlotSwapNote from "./SlotSwapNote.svelte";
   import { loadStored, saveStored } from "./persist";
   import {
     defaultMergeRoles,
@@ -63,7 +64,6 @@
   function finish() {
     if (!embedded) (dialog as HTMLDialogElement).close();
   }
-  const limit = $derived(profile.charLimitPerScore);
   /** 트랙 글자 수는 게임 글자 수로 본다 (창 위 막대·화음 분산 칸과 같은 수). 원문 글자 수는 다시 쓰면 줄어드는 몫까지 들어 있다 */
   const chars = $derived(gameCharsOf(song, profile));
   // 창은 열 때마다 새로 만들고, 열 때의 곡으로 묶음을 정한다 (적용하면 닫힌다)
@@ -97,7 +97,10 @@
   /** 계산 결과 (고르기를 바꾸면 잠깐 뒤에 다시 센다) */
   let result = $state.raw<MergeTracksResult | undefined>(undefined);
   let busy = $state(false);
+  /** 자리 맞추기 (자리마다 한도가 다른 게임만) */
+  let slots = $state(true);
   $effect(() => {
+    const fit = slots;
     const opts = options;
     const base = song;
     if (!ready) {
@@ -107,13 +110,13 @@
     }
     busy = true;
     const timer = setTimeout(() => {
-      result = mergeTracksResult(base, profile, opts, locked);
+      result = mergeTracksResult(base, profile, opts, locked, fit);
       busy = false;
     }, 120);
     return () => clearTimeout(timer);
   });
   const changed = $derived(!!result && !result.kept && (result.emptied.length > 0 || result.partial.length > 0));
-  const rows = $derived(changed && result ? previewRows(song, result.song, limit, (s) => (s === song ? chars : gameCharsOf(s, profile))) : []);
+  const rows = $derived(changed && result ? previewRows(song, result.song, profile, (s) => (s === song ? chars : gameCharsOf(s, profile))) : []);
   /** 뺀 음 (시간 순) */
   const dropped = $derived(changed && result ? [...result.dropped].sort((a, b) => cmp(a.note.start, b.note.start)) : []);
   const droppedBy = $derived(
@@ -236,7 +239,7 @@
 
   function apply() {
     if (!changed || busy) return;
-    onapply(mergeTracksSong(profile, options, locked, t("ui.merge")));
+    onapply(mergeTracksSong(profile, options, locked, t("ui.merge"), slots));
     finish();
   }
 </script>
@@ -323,6 +326,7 @@
             <span class="muted">{t("ui.mergeNoDrop")}</span>
           {/if}
         </p>
+        <SlotSwapNote {profile} swaps={result.swaps} {name} bind:on={slots} />
         {#if canListen}
           <div class="listen" role="group" aria-label={t("ui.mergeListen")}>
             <div class="row">
@@ -390,8 +394,8 @@
               {#each rows as r (r.trackId)}
                 <tr>
                   <td><span class="muted">{where(r.trackId)}</span> {r.name}</td>
-                  <td class="num" class:full={r.before > limit}>{r.before}</td>
-                  <td class="num" class:full={r.after > limit}>{r.after} <span class="muted">({r.after - r.before >= 0 ? "+" : ""}{r.after - r.before})</span></td>
+                  <td class="num" class:full={r.before > r.limit}>{r.before}</td>
+                  <td class="num" class:full={r.after > r.limit}>{r.after} <span class="muted">({r.after - r.before >= 0 ? "+" : ""}{r.after - r.before})</span></td>
                 </tr>
               {/each}
             </tbody>

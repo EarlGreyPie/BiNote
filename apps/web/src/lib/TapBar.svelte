@@ -48,9 +48,13 @@
     review: TapReview | undefined;
     /** 튀는 자리로 가기 (온음표) */
     onjump: (at: number) => void;
+    /** 원곡이 영상 파일이면 그 화면을 떠 있는 창으로 띄우기 (영상에는 재생선이 없으니 탭 수·마디 번호로 맞춘다) */
+    canVideo?: boolean;
+    videoOpen?: boolean;
+    onvideo?: () => void;
   }
 
-  let { playing, count, key, result, merge, onmerge, unit, onunit, ontap, onfinish, onclear, onclose, resumeBar, resuming, canResume, onresume, flag, onflag, snap, snapReady, onsnap, speed, speeds, onspeed, close, onclosemode, review, onjump }: Props = $props();
+  let { playing, count, key, result, merge, onmerge, unit, onunit, ontap, onfinish, onclear, onclose, resumeBar, resuming, canResume, onresume, flag, onflag, snap, snapReady, onsnap, speed, speeds, onspeed, close, onclosemode, review, onjump, canVideo = false, videoOpen = false, onvideo }: Props = $props();
 
   const MERGE_LABELS = ["ui.tapMergeOff", "ui.tapMergeWeak", "ui.tapMergeNormal", "ui.tapMergeStrong"] as const;
   const FLAG_PERCENT = [0, 10, 20, 35] as const;
@@ -89,6 +93,9 @@
     </select>
   </label>
   <span class="count">{t("ui.tapCount", { n: count })}</span>
+  {#if canVideo}
+    <button class="small" class:on={videoOpen} title={t("ui.referenceVideoHelp")} onpointerdown={(e) => e.preventDefault()} onclick={onvideo}>{t("ui.referenceVideoShow")}</button>
+  {/if}
   <button class="small" disabled={count < 2} onpointerdown={(e) => e.preventDefault()} onclick={onfinish}>{t("ui.tapFinish")}</button>
   <button class="small" disabled={count === 0} onpointerdown={(e) => e.preventDefault()} onclick={onclear}>{t("ui.tapClear")}</button>
   <span class="seg">

@@ -1,4 +1,4 @@
-import { add, cmp, instrumentByProgram, normalizeTempo, type Note, type Song, type Player, type Rat, type TempoEvent, type Track } from "@mmlce/core";
+import { add, cmp, DEFAULT_PROFILE, instrumentByProgram, normalizeTempo, PROFILES, songProfile, type GameProfile, type Note, type Song, type Player, type Rat, type TempoEvent, type Track } from "@mmlce/core";
 import { audibleTempo, parseMml, sameTempo, scoresMissingTempo, type Diagnostic, type ParseOptions } from "@mmlce/mml";
 
 /** 파일을 읽다 생긴 문제. 어느 채널(트랙)에서 났는지 함께 남긴다 */
@@ -99,6 +99,16 @@ export function instrumentFromProgram(program: number) {
   return { canonical: instrumentByProgram(program)?.id ?? `mabi:${program}`, program };
 }
 
+/** 파일을 어느 게임의 글로 읽을지 (길이 숫자의 값이 게임마다 다를 수 있다). 모르는 게임이거나 없으면 기본 게임 */
+export interface ReadGameOption {
+  readonly profileId?: string | undefined;
+}
+
+/** 읽기에 쓸 게임 프로필 */
+export function readProfile(options: ReadGameOption): GameProfile {
+  return (options.profileId !== undefined ? PROFILES[options.profileId] : undefined) ?? DEFAULT_PROFILE;
+}
+
 export interface ChannelInput {
   readonly name: string;
   readonly text: string;
@@ -197,10 +207,11 @@ export function decodeText(bytes: Uint8Array): string {
 export function verbatimTexts(song: Song): string[] | undefined {
   const texts: string[] = [];
   const tempo: TempoEvent[] = [];
+  const lengths = songProfile(song).length;
   for (const track of song.tracks) {
     if (!track.mml || track.mml.offset) return undefined;
     texts.push(track.mml.text);
-    tempo.push(...parseMml(track.mml.text).tempo);
+    tempo.push(...parseMml(track.mml.text, { lengths }).tempo);
   }
   if (!sameTempo(audibleTempo(tempo), audibleTempo(song.tempo))) return undefined;
   return scoresMissingTempo(song).length === 0 ? texts : undefined;

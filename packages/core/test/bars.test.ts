@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { barAt, barBeatAt, barsOfRange, chainsInBars, changeVolumes, headsInBars, inBars, MOBILE_PROFILE, parseBarList, rat, volumeSpan, type Note } from "../src/index.js";
+import { barAt, barBeatAt, barBounds, barsOfRange, chainsInBars, changeVolumes, firstBarNumber, gridLines, headsInBars, inBars, MOBILE_PROFILE, parseBarList, pickupOf, rat, shownMeters, staffBars, volumeSpan, type Note } from "../src/index.js";
 
 describe("마디 번호 (분수로 정확히)", () => {
   it("박자표가 없으면 4/4, 마디선 위는 그 마디", () => {
@@ -79,6 +79,43 @@ describe("마디만 볼륨 바꾸기", () => {
   it("여러 범위와 끝까지", () => {
     const picked = headsInBars(notes, [], parseBarList("1, 3-")!);
     expect([...picked].sort()).toEqual(["a", "b", "c", "d", "i"]);
+  });
+});
+
+describe("못갖춘마디 마디 번호", () => {
+  const sigs = [
+    { at: rat(0), beats: 3, unit: 8, pickup: true },
+    { at: rat(3, 8), beats: 4, unit: 4 },
+  ];
+  it("첫 마디는 0번, 본 박자표 자리부터 1번", () => {
+    expect(barAt(sigs, rat(0))).toBe(0);
+    expect(barAt(sigs, rat(1, 4))).toBe(0);
+    expect(barAt(sigs, rat(3, 8))).toBe(1);
+    expect(barAt(sigs, rat(11, 8))).toBe(2);
+    expect(barBeatAt(sigs, rat(3, 8))).toEqual({ bar: 1, beat: 1 });
+    expect(barBeatAt(sigs, rat(1, 8))).toEqual({ bar: 0, beat: 2 });
+    expect(barBounds(sigs, 0)).toEqual([rat(0), rat(3, 8)]);
+    expect(barBounds(sigs, 1)).toEqual([rat(3, 8), rat(11, 8)]);
+    expect(gridLines(sigs, 0, 2.5).filter((g) => g.kind === "measure").map((g) => [g.at, g.bar])).toEqual([
+      [0, 0],
+      [0.375, 1],
+      [1.375, 2],
+      [2.375, 3],
+    ]);
+  });
+  it("화면 박자표는 본 박자표만, 본 박자표가 없으면 못갖춘마디로 보지 않는다", () => {
+    expect(shownMeters(sigs)).toEqual([sigs[1]]);
+    expect(firstBarNumber(sigs)).toBe(0);
+    expect(pickupOf([sigs[0]!])).toBeUndefined();
+    expect(barAt([sigs[0]!], rat(0))).toBe(1);
+    expect(shownMeters([sigs[0]!])).toEqual([sigs[0]]);
+  });
+  it("오선보도 0번 마디부터 세고 첫 마디에 본 박자표를 그린다", () => {
+    const bars = staffBars({ tracks: [{ notes: [{ start: rat(1), dur: rat(1, 4) }] }] as never, timeSig: sigs, tempo: [] }).slice(0, 2);
+    expect(bars.map((b) => [b.number, b.beats, b.unit, b.showSig, b.shownSig])).toEqual([
+      [0, 3, 8, true, { beats: 4, unit: 4 }],
+      [1, 4, 4, false, undefined],
+    ]);
   });
 });
 

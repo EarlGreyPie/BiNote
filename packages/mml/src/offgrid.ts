@@ -1,4 +1,4 @@
-import { add, cmp, eq, getProfile, isGameLength, normalizeTempo, noteLengthValue, PROFILES, rat, sub, toFloat, type Command, type LengthLimit, type Rat, type Song } from "@mmlce/core";
+import { add, cmp, eq, isGameLength, lengthTicks, normalizeTempo, noteLengthValue, rat, sub, toFloat, songProfile, type Command, type LengthLimit, type Rat, type Song } from "@mmlce/core";
 import { parseMml } from "./parser.js";
 import { parseTrackText, setTrackText } from "./edit.js";
 
@@ -121,7 +121,7 @@ function rewrite(text: string, el: Element, pieces: readonly string[]): string |
  * 서로소 길이가 쌓여 분수가 너무 커지면 그 트랙은 찾지 않는다
  */
 export function findTrackOffgrid(text: string, limit: LengthLimit, offset?: Rat): Omit<OffgridFix, "trackId">[] {
-  const parsed = parseMml(text);
+  const parsed = parseMml(text, { lengths: limit });
   const els: Element[] = [
     ...parsed.notes.map((n) => ({ kind: "note" as const, start: n.start, dur: n.dur, pitch: n.pitch, span: n.span })),
     ...parsed.rests.map((r) => ({ kind: "rest" as const, start: r.start, dur: r.dur, span: r.span })),
@@ -266,12 +266,15 @@ function joinedRewrite(text: string, odd: readonly Element[], room: Rat, limit: 
 
 /** 곡 프로필의 길이 한도 */
 export function offgridLimit(song: Song): LengthLimit {
-  return (PROFILES[song.meta.profileId] ?? getProfile("mobile")).length;
+  return songProfile(song).length;
 }
 
 /** 곡 전체에서 고칠 자리. 원문이 있는 트랙만 본다 (원문 없는 트랙은 BiNote가 쓴 글이라 칸에 맞다) */
 export function findOffgrid(song: Song): OffgridFix[] {
   const limit = offgridLimit(song);
+  // 길이 숫자를 정수 틱으로 읽는 게임(PC 등)의 곡은 마비꼬와 같은 셈으로 이미 읽으므로 고칠 "어긋난 길이"가 없다
+  // (그 곡의 잇단음은 일부러 틱으로 나눈 것이다: l20ccc19cc)
+  if (limit.ticks) return [];
   return song.tracks.flatMap((t) => {
     if (!t.mml) return [];
     const find = t.mmlDialect === "mabiicco" ? findTrackOffgridMabiicco : findTrackOffgrid;
@@ -280,7 +283,7 @@ export function findOffgrid(song: Song): OffgridFix[] {
 }
 
 /** 글 범위 고치기 (뒤에서부터 바꿔 앞 범위가 밀리지 않게) */
-function splice(text: string, edits: readonly OffgridEdit[]): string {
+export function spliceOffgrid(text: string, edits: readonly OffgridEdit[]): string {
   let out = text;
   for (const e of [...edits].sort((a, b) => b.span[0] - a.span[0])) {
     if (out.slice(e.span[0], e.span[1]) !== e.from) return text;
@@ -300,7 +303,7 @@ export function fixOffgrid(fixes: readonly OffgridFix[], label = "어긋난 길�
       for (const [trackId, edits] of byTrack) {
         const track = next.tracks.find((t) => t.id === trackId);
         if (!track?.mml) continue;
-        const text = splice(track.mml.text, edits);
+        const text = spliceOffgrid(track.mml.text, edits);
         if (text !== track.mml.text) next = setTrackText(trackId, text).apply(next);
       }
       return mabiiccoTempo(song, next, [...byTrack.keys()]);
@@ -322,9 +325,10 @@ function mabiiccoTempo(before: Song, after: Song, edited: readonly string[]): So
   const mabiicco = (id: string) => before.tracks.find((t) => t.id === id)?.mmlDialect === "mabiicco";
   if (!edited.some(mabiicco)) return after;
   const bpms = before.tempo.map((e) => e.bpm).join(",");
-  const carrier = before.tracks.find((t) => t.mml && t.mmlDialect === "mabiicco" && parseTrackText(t.id, t.mml).tempo.map((e) => e.bpm).join(",") === bpms);
+  const lengths = songProfile(before).length;
+  const carrier = before.tracks.find((t) => t.mml && t.mmlDialect === "mabiicco" && parseTrackText(t.id, t.mml, lengths).tempo.map((e) => e.bpm).join(",") === bpms);
   const fixed = carrier && edited.includes(carrier.id) ? after.tracks.find((t) => t.id === carrier.id)?.mml : undefined;
-  const moved = fixed ? normalizeTempo(parseTrackText(carrier!.id, fixed).tempo) : undefined;
+  const moved = fixed ? normalizeTempo(parseTrackText(carrier!.id, fixed, lengths).tempo) : undefined;
   return { ...after, tempo: moved && moved.length === before.tempo.length ? moved : before.tempo };
 }
 
@@ -345,7 +349,7 @@ export function parseOffgridLength(input: string, limit: LengthLimit): { pieces:
     const dots = m[2]!.length;
     if (!isGameLength(limit, length, dots)) return undefined;
     pieces.push(`${length}${m[2]}`);
-    value = add(value, noteLengthValue(length, dots));
+    value = add(value, noteLengthValue(length, dots, limit));
   }
   return { pieces, value };
 }
@@ -540,7 +544,7 @@ function greedyPieces(x: Rat, limit: LengthLimit, max: number): string[] | undef
   const table: { text: string; value: Rat }[] = [];
   for (const n of CLEAN_LENGTHS) {
     if (n < limit.min || n > limit.max) continue;
-    for (let dots = 0; dots <= Math.min(1, limit.dots); dots++) table.push({ text: `${n}${".".repeat(dots)}`, value: noteLengthValue(n, dots) });
+    for (let dots = 0; dots <= Math.min(1, limit.dots); dots++) table.push({ text: `${n}${".".repeat(dots)}`, value: noteLengthValue(n, dots, limit) });
   }
   table.sort((a, b) => cmp(b.value, a.value));
   const out: string[] = [];
@@ -600,15 +604,9 @@ function chunkEdit(text: string, els: readonly Element[], chunk: Chunk, pieces: 
 
 const onLanding = (p: Rat) => OFFGRID_LANDINGS.some((g) => g % p.d === 0);
 
-/** 마비꼬가 길이 숫자 하나를 읽는 틱 (온음표 384틱): 384 / 숫자를 버리고, 점마다 앞에 더한 틱의 절반을 버려 더한다 */
+/** 마비꼬가 길이 숫자 하나를 읽는 틱 (온음표 384틱): 384 / 숫자를 버리고, 점마다 앞에 더한 틱의 절반을 버려 더한다 (core lengthTicks) */
 export function mabiiccoTicks(length: number, dots: number): number {
-  let piece = Math.floor(OFFGRID_CLEAN / length);
-  let total = piece;
-  for (let k = 0; k < dots; k++) {
-    piece = Math.floor(piece / 2);
-    total += piece;
-  }
-  return total;
+  return lengthTicks(length, dots, OFFGRID_CLEAN);
 }
 
 /** 틱으로 읽으면 칸에 놓이는 트랙에서 묶음을 끝내는 칸: 64분음표와 셋잇단 32분음표 */
@@ -777,7 +775,7 @@ function scanMabiiccoTicks(
 
 /** 마비꼬 트랙 원문 하나에서 고칠 자리를 찾는다 (위 설명의 규칙) */
 export function findTrackOffgridMabiicco(text: string, limit: LengthLimit, offset?: Rat): Omit<OffgridFix, "trackId">[] {
-  const parsed = parseMml(text);
+  const parsed = parseMml(text, { lengths: limit });
   const els: Element[] = [
     ...parsed.notes.map((n) => ({ kind: "note" as const, start: n.start, dur: n.dur, pitch: n.pitch, span: n.span })),
     ...parsed.rests.map((r) => ({ kind: "rest" as const, start: r.start, dur: r.dur, span: r.span })),

@@ -1,4 +1,4 @@
-import { add, cmp, defaultLengthLimit, eq, gameLengths, MOBILE_PROFILE, sub, ZERO, type GameProfile, type LengthLimit, type Rat, type TempoEvent } from "@mmlce/core";
+import { add, cmp, DEFAULT_PROFILE, eq, gameLengths, lengthLimitKey, sub, ZERO, type GameProfile, type LengthLimit, type Rat, type TempoEvent } from "@mmlce/core";
 import type { Diagnostic } from "./parser.js";
 import { continues, dropDanglingTies } from "./compare.js";
 
@@ -16,10 +16,22 @@ export interface PrintOptions {
   readonly tempo?: readonly TempoEvent[];
   readonly octave?: number;
   readonly volume?: number;
-  /** 한 토막으로 쓸 수 있는 음길이 한도 (GameProfile.length). 없으면 defaultLengthLimit() */
+  /** 곡의 게임 프로필. lengths·octaves를 따로 주지 않으면 이 프로필 값을 쓴다. 둘 다 없으면 DEFAULT_PROFILE */
+  readonly profile?: GameProfile | undefined;
+  /** 한 토막으로 쓸 수 있는 음길이 한도 (GameProfile.length). 없으면 profile의 값 */
   readonly lengths?: LengthLimit;
-  /** o 명령으로 쓸 수 있는 옥타브 (GameProfile.octave). 없으면 모바일 프로필 값 */
+  /** o 명령으로 쓸 수 있는 옥타브 (GameProfile.octave). 없으면 profile의 값 */
   readonly octaves?: GameProfile["octave"];
+}
+
+/** 출력에 쓸 음길이 한도 (lengths → profile → DEFAULT_PROFILE) */
+export function printLengths(options: Pick<PrintOptions, "profile" | "lengths">): LengthLimit {
+  return options.lengths ?? (options.profile ?? DEFAULT_PROFILE).length;
+}
+
+/** 출력에 쓸 옥타브 범위 (octaves → profile → DEFAULT_PROFILE) */
+export function printOctaves(options: Pick<PrintOptions, "profile" | "octaves">): GameProfile["octave"] {
+  return options.octaves ?? (options.profile ?? DEFAULT_PROFILE).octave;
 }
 
 export interface PrintResult {
@@ -37,9 +49,9 @@ const NAMES = ["c", "c+", "d", "d+", "e", "f", "f+", "g", "g+", "a", "a+", "b"] 
 
 /**
  * MML로 쓸 수 있는 음 높이 [low, high] (MIDI 번호). 가장 낮은 옥타브의 c-부터 가장 높은 옥타브의 b+까지다
- * (모바일 o0~o9면 o0c- = 11부터 o9b+ = 132까지). 밖의 음은 o-1처럼 다시 읽을 수 없는 옥타브가 있어야 쓸 수 있다
+ * (o0~o9면 o0c- = 11부터 o9b+ = 132까지). 밖의 음은 o-1처럼 다시 읽을 수 없는 옥타브가 있어야 쓸 수 있다
  */
-export function mmlPitchRange(octaves: GameProfile["octave"] = MOBILE_PROFILE.octave): { readonly low: number; readonly high: number } {
+export function mmlPitchRange(octaves: GameProfile["octave"] = DEFAULT_PROFILE.octave): { readonly low: number; readonly high: number } {
   return { low: (octaves.min + 1) * 12 - 1, high: (octaves.max + 1) * 12 + 12 };
 }
 
@@ -60,12 +72,21 @@ function spell(pitch: number, octaves: GameProfile["octave"]): { readonly octave
 
 const tableCache = new Map<string, Piece[]>();
 
-/** 게임이 받는 한 토막 길이 표 (gameLengths). 긴 것부터, 같은 값이면 짧게 쓰이는 표기(점 없는 쪽)부터 */
+/**
+ * 게임이 받는 한 토막 길이 표 (gameLengths). 긴 것부터, 같은 값이면 짧게 쓰이는 표기(점 없는 쪽)부터.
+ * 틱 모형에서는 여러 숫자가 같은 값이 될 수 있어 (온음표 384틱이면 l23·l24 = 16틱) 점 수가 같으면
+ * 글자가 짧은 쪽, 그다음 틱이 나머지 없이 나뉘는 쪽(l24)을 먼저 둔다. 정확한 분수 모형에서는 점 수가 같은 두 표기가
+ * 같은 값일 수 없어 뒤의 두 기준은 순서를 바꾸지 않는다
+ */
 function pieceTable(limit: LengthLimit): Piece[] {
-  const key = `${limit.min}/${limit.max}/${limit.dots}`;
+  const key = lengthLimitKey(limit);
   const cached = tableCache.get(key);
   if (cached) return cached;
-  const built = [...gameLengths(limit)].sort((a, b) => cmp(b.value, a.value) || a.dots - b.dots);
+  const perWhole = limit.ticks?.perWhole;
+  const uneven = (p: Piece) => (perWhole !== undefined && perWhole % p.length !== 0 ? 1 : 0);
+  const built = [...gameLengths(limit)].sort(
+    (a, b) => cmp(b.value, a.value) || a.dots - b.dots || String(a.length).length - String(b.length).length || uneven(a) - uneven(b),
+  );
   tableCache.set(key, built);
   return built;
 }
@@ -100,6 +121,11 @@ export function restText(dur: Rat, limit: LengthLimit): string {
 export function lengthPieces(dur: Rat, limit: LengthLimit): string[] | undefined {
   const split = splitDuration(dur, pieceTable(limit));
   return split.rest.n === 0 && split.pieces.length > 0 ? split.pieces.map((p) => `${p.length}${".".repeat(p.dots)}`) : undefined;
+}
+
+/** 이 값을 숫자 하나로 쓸 때 출력기가 고르는 표기 (같은 값을 내는 표기가 여럿이면 pieceTable 순서에서 앞의 것). 없으면 undefined */
+export function preferredPiece(value: Rat, limit: LengthLimit): { readonly length: number; readonly dots: number; readonly value: Rat } | undefined {
+  return pieceTable(limit).find((p) => eq(p.value, value));
 }
 
 export function canWriteExactly(dur: Rat, limit: LengthLimit): boolean {
@@ -175,8 +201,7 @@ function findExact(target: Rat, table: readonly Piece[]): Piece[] | undefined {
  * (최적화기는 4단계). 결과를 다시 parseMml로 읽으면 같은 음이 나와야 한다.
  */
 export function printMml(notes: readonly PrintableNote[], options: PrintOptions = {}): PrintResult {
-  const lengths = options.lengths ?? defaultLengthLimit();
-  const table = pieceTable(lengths);
+  const table = pieceTable(printLengths(options));
   // 한 번 써 보고 가장 많이 나온 점 없는 토막 길이를 l 기본값으로 삼아 다시 쓴다
   const draft = printWith(notes, options, table, 4);
   let best = 4;
@@ -204,7 +229,7 @@ function printWith(
 
   let octave = options.octave ?? 4;
   let volume = options.volume ?? 8;
-  const octaves = options.octaves ?? MOBILE_PROFILE.octave;
+  const octaves = printOctaves(options);
   const writable = mmlPitchRange(octaves);
   if (defaultLength !== 4) out.push(`l${defaultLength}`);
 
@@ -245,7 +270,7 @@ function printWith(
       diagnostics.push({
         level: "warning",
         code: "unrepresentable-length",
-        params: { min: (options.lengths ?? defaultLengthLimit()).min, max: (options.lengths ?? defaultLengthLimit()).max },
+        params: { min: printLengths(options).min, max: printLengths(options).max },
         span: [0, 0],
       });
     }

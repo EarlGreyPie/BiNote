@@ -109,3 +109,16 @@ export function clockStats(samples: readonly ClockPair[]): { rate: number; maxSt
   for (let i = 1; i < samples.length; i++) maxStep = Math.max(maxStep, samples[i]!.audio - samples[i - 1]!.audio);
   return { rate: wall > 0 ? (last.audio - first.audio) / wall : 0, maxStepMs: maxStep * 1000 };
 }
+
+/**
+ * 소리 장치 목록의 지문 (무선 헤드셋을 켜고 끄면 바뀐다). 출력 장치를 알려 주는 브라우저는 출력만 보고,
+ * 출력을 감추는 브라우저(사파리 등)는 소리 입력·출력 전체를 본다. 카메라는 보지 않는다
+ */
+export function audioDeviceSignature(devices: readonly { readonly kind: string; readonly deviceId: string; readonly groupId: string }[]): string {
+  const outputs = devices.filter((d) => d.kind === "audiooutput");
+  const list = outputs.length > 0 ? outputs : devices.filter((d) => d.kind === "audioinput");
+  return list
+    .map((d) => `${d.kind}:${d.deviceId}:${d.groupId}`)
+    .sort()
+    .join("|");
+}

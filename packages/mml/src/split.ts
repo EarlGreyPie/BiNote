@@ -1,4 +1,4 @@
-import { add, cmp, DEFAULT_BPM, defaultLengthLimit, eq, maxChordsOf, normalizeTempo, positionToSeconds, rat, sub, ZERO, type GameProfile, type LengthLimit, type Rat, type Song, type TempoEvent } from "@mmlce/core";
+import { add, cmp, DEFAULT_BPM, structureMarkers, eq, maxChordsOf, normalizeTempo, positionToSeconds, rat, sub, ZERO, type GameProfile, type Rat, type Song, type TempoEvent, DEFAULT_PROFILE } from "@mmlce/core";
 import { scoreChunks } from "./clipboard.js";
 import { optimizeMml } from "./optimizer.js";
 import { printMml, restText, type PrintableNote } from "./printer.js";
@@ -8,6 +8,7 @@ import { sameSound } from "./compare.js";
 import { audibleTempo } from "./tempo-text.js";
 import { bpmBefore, padScore, scoreEnd } from "./score-end.js";
 import { pitchlessForOutput } from "./pitchless.js";
+import { widestLimit } from "./track-limits.js";
 
 /**
  * 악보책 나누기 (설계 8장). 채널 하나라도 글자 수 한도를 넘으면 곡을 여러 권으로 나눈다.
@@ -106,7 +107,7 @@ export interface SplitResult {
 export function splitSong(song: Song, profile: GameProfile, options: SplitOptions = {}): SplitResult {
   // 높이와 상관없는 타악기(큰북·심벌즈)는 한 높이로 쓴다 (나눈 권은 게임에 넣을 글이다)
   song = pitchlessForOutput(song, profile);
-  const limit = profile.charLimitPerScore;
+  const limit = widestLimit(profile);
   const window = options.window ?? 0.25;
   const gapMs = options.gapMs === undefined ? profile.scoreBookGapMs : options.gapMs;
   const minCarry = options.minCarrySec ?? MIN_CARRY_SEC;
@@ -116,12 +117,12 @@ export function splitSong(song: Song, profile: GameProfile, options: SplitOption
   const scores = scoreIndexes(song, options.maxChords ?? ((id) => maxChordsOf(profile, song.players.find((p) => p.id === id)?.instrument.canonical)));
 
   // 악보마다 길이 (원문 끝 쉼표 포함). 곡 끝은 가장 긴 악보 끝이다
-  const ends = scores.map((score) => scoreEnd(score.map((k) => song.tracks[k]!)));
+  const ends = scores.map((score) => scoreEnd(score.map((k) => song.tracks[k]!), undefined, profile.length));
   let lastNote: Rat = ZERO;
   for (const notes of tracks) for (const n of notes) lastNote = max(lastNote, add(n.start, n.dur));
   const songEnd = ends.reduce(max, lastNote);
 
-  const whole = render(song, scores, ends, tracks, tempo, ZERO, songEnd, false, false, true, 0, limit, profile.length);
+  const whole = render(song, scores, ends, tracks, tempo, ZERO, songEnd, false, false, true, 0, limit, profile);
   if (whole.texts.every((t) => t.text.length <= limit)) {
     return { parts: [{ start: ZERO, end: songEnd, texts: whole.texts, cut: 0, trim: ZERO, moved: whole.moved, lossy: whole.lossy, ...LAST }], needed: false, ignored: [...(options.fixed ?? [])] };
   }
@@ -148,13 +149,14 @@ export function splitSong(song: Song, profile: GameProfile, options: SplitOption
   }
   // 마지막 음 끝에서는 자르지 않는다 (그 뒤는 끝 쉼표뿐이라 빈 권이 된다)
   const candidates = [...keys.values()].filter(usable).sort(cmp);
-  const markers = song.markers.map((m) => m.at);
+  // 구조 마커만 나눌 자리로 먼저 본다 (작업 메모는 곡 구조가 아니다)
+  const markers = structureMarkers(song.markers).map((m) => m.at);
 
   /** [start, end)를 한 권으로 쓴 결과. 끝이 곡 끝이 아니면 다음 권 지연만큼 앞당겨 끝내고, 그 길이를 끝 쉼표로 채운다 */
   const part = (start: Rat, end: Rat, quick = false, verify = false) => {
     const trim = cmp(end, songEnd) < 0 ? gapAt(tempo, end, gapMs, start) : ZERO;
     const until = sub(end, trim);
-    return { trim, until, ...render(song, scores, ends, tracks, tempo, start, until, quick, cmp(end, songEnd) < 0, verify, minCarry, limit, profile.length) };
+    return { trim, until, ...render(song, scores, ends, tracks, tempo, start, until, quick, cmp(end, songEnd) < 0, verify, minCarry, limit, profile) };
   };
   // 실제로 내보낼 글(앞당김·끝 쉼표 포함)로 한도를 검사한다. 단순 출력이 들어가면 최적화 출력도 들어간다.
   // 같은 구간을 여러 번 묻게 되므로(최소 권 수 계산 + 자리 고르기) 결과를 기억해 둔다
@@ -632,11 +634,12 @@ function render(
   minCarry = 0,
   /** 트랙당 글자 한도. 마지막 권 끝 채움을 붙인 뒤에도 한도 안인 글에 먼저 붙인다 */
   limit = Infinity,
-  /** 끝 쉼표를 쓸 음길이 한도 (곡 프로필) */
-  lengths: LengthLimit = defaultLengthLimit(),
+  /** 곡 프로필 (끝 쉼표와 글을 쓸 음길이·옥타브 한도) */
+  profile: GameProfile = DEFAULT_PROFILE,
 ): { texts: { trackId: string; text: string }[]; moved: number; lossy: string[] } {
   // 앞 권에서 넘어온 음의 남은 부분이 아주 짧으면 다시 치지 않는다 (곡 처음부터 쓰는 권은 넘어온 음이 없다).
   // 마지막 권(padEnd가 아님)은 버리지 않는다: 버리면 곡 길이가 줄고, 남은 것이 그것뿐이면 빈 권(t만)이 생긴다
+  const lengths = profile.length;
   const shortCarry = (n: PrintableNote, noteEnd: Rat) =>
     n.tie !== "next" && positionToSeconds(tempo, noteEnd) - positionToSeconds(tempo, start) < minCarry - 1e-9;
   const chunks = tracks.map((notes) => clip(notes, start, end, minCarry > 0 && padEnd && cmp(start, ZERO) > 0 ? shortCarry : undefined));
@@ -651,15 +654,11 @@ function render(
     // 이미 끝난 악보는 그때 템포 하나만 적는다 (지금까지처럼 빈 악보로 두지 않는다)
     const until = padEnd ? end : max(start, min(end, ends[s]!));
     const local = tempoIn(tempo, start, until);
-    const placed = placeTempo(
-      score.map((k) => chunks[k]!),
-      local,
-      moves,
-    );
+    const placed = placeTempo(score.map((k) => chunks[k]!), local, moves, undefined, undefined, lengths);
     placedBy[s] = placed;
-    const simple = score.map((k, i) => printMml(chunks[k]!, { tempo: placed[i] ?? [] }).text);
+    const simple = score.map((k, i) => printMml(chunks[k]!, { tempo: placed[i] ?? [], profile }).text);
     score.forEach((k, i) => {
-      out[k] = { trackId: song.tracks[k]!.id, text: quick ? simple[i]! : optimizeMml(chunks[k]!, { tempo: placed[i] ?? [] }).text };
+      out[k] = { trackId: song.tracks[k]!.id, text: quick ? simple[i]! : optimizeMml(chunks[k]!, { tempo: placed[i] ?? [], profile }).text };
     });
     const bookEnd = sub(until, start);
     if (!padEnd) {
@@ -701,7 +700,7 @@ function render(
    * 악보 길이도 본다: 게임 길이(맨 끝 쉼표 뺀)가 권 길이와 다르면 그 악보의 다음 권이나 곡 끝이 어긋난다
    */
   function check(score: readonly number[], placed: readonly (readonly TempoEvent[])[], bookEnd: Rat) {
-    const parsed = score.map((k) => parseMml(out[k]!.text));
+    const parsed = score.map((k) => parseMml(out[k]!.text, { lengths }));
     const gameEnd = parsed.reduce<Rat>((m, p) => max(m, p.gameEnd), ZERO);
     score.forEach((k, i) => {
       if (!eq(gameEnd, bookEnd) || !writesExactly(parsed[i]!, chunks[k]!, placed[i] ?? [], bookEnd)) lossy.push(song.tracks[k]!.id);

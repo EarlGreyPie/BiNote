@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { add, rat, staffBars, staffDynamic, staffPitch, staffTrack, toFloat, type Note, type Rat, type StaffItem, type TimeSigEvent } from "../src/index.js";
+import { add, keyAlter, rat, staffBars, staffDynamic, staffPitch, staffSpell, staffTrack, toFloat, type KeyEvent, type Note, type Rat, type StaffItem, type TimeSigEvent } from "../src/index.js";
 
 const VOL = { min: 0, max: 15 };
 let id = 0;
@@ -16,8 +16,8 @@ function line(parts: readonly (readonly [Rat, number?])[], from: Rat = rat(0)): 
   }
   return out;
 }
-function view(notes: Note[], timeSig: TimeSigEvent[] = [], tempo: { at: Rat; bpm: number }[] = []) {
-  const bars = staffBars({ tracks: [{ notes } as never], timeSig, tempo });
+function view(notes: Note[], timeSig: TimeSigEvent[] = [], tempo: { at: Rat; bpm: number }[] = [], keys: KeyEvent[] = []) {
+  const bars = staffBars({ tracks: [{ notes } as never], timeSig, tempo, keys });
   return { bars, track: staffTrack(notes, bars, VOL) };
 }
 /** 조각을 짧게 적는다: 4 = 4분, 8. = 점8분, r = 쉼, ~ = 붙임줄, [3] = 셋잇단, ? = 맞춤 */
@@ -165,5 +165,83 @@ describe("어떤 곡이든 마디를 빈틈없이 채운다", () => {
       const shown = new Set(track.measures.flatMap((m) => m.items.map((i) => i.noteId)));
       expect(notes.filter((n) => !shown.has(n.id)).length).toBe(track.hidden);
     }
+  });
+});
+
+describe("조표 (Song.keys)", () => {
+  const acc = (items: readonly StaffItem[]) => items.filter((i) => !i.rest).map((i) => i.accidental ?? "");
+
+  it("조표가 붙이는 올림·내림: 올림표는 F C G D A E B, 내림표는 B E A D G C F 차례", () => {
+    expect(["f", "c", "g", "d", "a", "e", "b"].map((l) => keyAlter(l, 2))).toEqual([1, 1, 0, 0, 0, 0, 0]);
+    expect(["f", "c", "g", "d", "a", "e", "b"].map((l) => keyAlter(l, -3))).toEqual([0, 0, 0, 0, -1, -1, -1]);
+    expect(["f", "c", "g", "d", "a", "e", "b"].map((l) => keyAlter(l, 7))).toEqual(Array(7).fill(1));
+    expect(["f", "c", "g", "d", "a", "e", "b"].map((l) => keyAlter(l, -7))).toEqual(Array(7).fill(-1));
+  });
+
+  it("조 안 음은 조표대로, 조 밖 검은 건반은 올림표 조·다장조면 올림표, 내림표 조면 내림표로 적는다", () => {
+    expect(staffSpell(66, 1)).toEqual({ letter: "f", alter: 1, octave: 4 });
+    expect(staffSpell(70, -1)).toEqual({ letter: "b", alter: -1, octave: 4 });
+    expect(staffSpell(61, -2)).toEqual({ letter: "d", alter: -1, octave: 4 });
+    expect(staffSpell(61, 0)).toEqual({ letter: "c", alter: 1, octave: 4 });
+    // F# 장조의 E#, C# 장조의 B# (가온 도 = B#3), G♭ 장조의 C♭ (B4 = C♭5)
+    expect(staffSpell(65, 6)).toEqual({ letter: "e", alter: 1, octave: 4 });
+    expect(staffSpell(60, 7)).toEqual({ letter: "b", alter: 1, octave: 3 });
+    expect(staffSpell(71, -6)).toEqual({ letter: "c", alter: -1, octave: 5 });
+    // 조표가 바꾸는 글자의 제자리음
+    expect(staffSpell(65, 1)).toEqual({ letter: "f", alter: 0, octave: 4 });
+    // 예전 이름 (조표 없이 올림표)
+    expect(staffPitch(61)).toEqual({ letter: "c", sharp: true, octave: 4 });
+  });
+
+  it("마디의 조표에 견줘 임시표를 붙인다: 조 안 음은 없음, 조가 바꾼 글자의 제자리음은 제자리표", () => {
+    const g = [{ at: rat(0), fifths: 1 }];
+    // G장조: F# (조 안), F (제자리표), F (그대로), F# (올림표 다시)
+    const notes = line([[rat(1, 4), 66], [rat(1, 4), 65], [rat(1, 4), 65], [rat(1, 4), 66]]);
+    expect(acc(view(notes, [], [], g).track.measures[0]!.items)).toEqual(["", "n", "", "#"]);
+    // F장조: B♭ (조 안), B (제자리표), E♭ (내림표), A♭ (내림표)
+    const f = [{ at: rat(0), fifths: -1 }];
+    expect(acc(view(line([[rat(1, 4), 70], [rat(1, 4), 71], [rat(1, 4), 63], [rat(1, 4), 68]]), [], [], f).track.measures[0]!.items)).toEqual(["", "n", "b", "b"]);
+    // 다음 마디는 다시 조표대로
+    const two = line([[rat(1, 4), 65], [rat(3, 4)], [rat(1, 4), 66]]);
+    const t = view(two, [], [], g).track;
+    expect(acc(t.measures[0]!.items)).toEqual(["n"]);
+    expect(acc(t.measures[1]!.items)).toEqual([""]);
+  });
+
+  it("마디마다 조표를 싣고, 첫 마디(다장조 아님)와 조가 바뀐 마디에만 그린다. 앞 조표는 지울 때 쓴다", () => {
+    const notes = [note(rat(0), rat(5))];
+    const keys = [{ at: rat(0), fifths: 2 }, { at: rat(2), fifths: -3 }, { at: rat(4), fifths: 0 }];
+    const { bars } = view(notes, [], [], keys);
+    expect(bars.map((b) => [b.fifths, b.showKey, b.cancelKey])).toEqual([
+      [2, true, undefined],
+      [2, false, undefined],
+      [-3, true, 2],
+      [-3, false, undefined],
+      [0, true, -3],
+    ]);
+    // 조표가 없으면 다장조, 그리지 않는다
+    expect(view(notes).bars.every((b) => b.fifths === 0 && !b.showKey)).toBe(true);
+  });
+
+  it("마디 중간의 조 바뀜은 다음 마디부터 적고, 그 마디 남은 음은 앞 조표에 임시표로 적어 소리가 맞다", () => {
+    // 1마디 앞 반은 다장조, 가운데서 D장조. F#은 1마디에서 올림표, 2마디에서는 조 안
+    const keys = [{ at: rat(1, 2), fifths: 2 }];
+    const { bars, track } = view(line([[rat(1, 2), 60], [rat(1, 2), 66], [rat(1, 2), 66], [rat(1, 2), 61]]), [], [], keys);
+    expect(bars.map((b) => [b.fifths, b.showKey])).toEqual([
+      [0, false],
+      [2, true],
+    ]);
+    expect(acc(track.measures[0]!.items)).toEqual(["", "#"]);
+    expect(acc(track.measures[1]!.items)).toEqual(["", ""]);
+  });
+
+  it("화음 음도 같은 마디 상태로 임시표를 정한다", () => {
+    const keys = [{ at: rat(0), fifths: -2 }];
+    const bars = staffBars({ tracks: [{ notes: [] } as never], timeSig: [], tempo: [], keys });
+    const head = note(rat(0), rat(1, 4), 70);
+    const t = staffTrack([head], bars, VOL, { chords: new Map([[head.id, [note(rat(0), rat(1, 4), 74), note(rat(0), rat(1, 4), 64)]]]) });
+    const item = t.measures[0]!.items.find((i) => !i.rest)!;
+    expect(item.accidental).toBeUndefined();
+    expect(item.chord!.map((c) => c.accidental ?? "")).toEqual(["", "n"]);
   });
 });

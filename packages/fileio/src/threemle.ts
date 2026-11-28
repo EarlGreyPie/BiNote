@@ -1,7 +1,7 @@
-import { emptySong, getProfile, mul, PROFILES, rat, trackInstrument, ZERO, type Player, type Rat, type Song, type TempoEvent, type Track } from "@mmlce/core";
-import { bpmBefore, optimizeMml, padScore, placeTempoByScore, scoreEnd, scoreTrackIds, songChordsPerScore, type TempoMove } from "@mmlce/mml";
+import { emptySong, mul, pickupOf, rat, trackInstrument, ZERO, type Player, type Rat, type Song, type TempoEvent, type Track, songProfile } from "@mmlce/core";
+import { bpmBefore, optimizeMml, padScore, placeTempoByScore, scoreEnd, scoreTrackIds, songChordsPerScore, type TempoMove, limitOf, trackLimits } from "@mmlce/mml";
 import { encodeCp949 } from "./cp949.js";
-import { channelToTrack, idMaker, instrumentFromProgram, mergeTempo, type ChannelTempo, verbatimTexts, type FileDiagnostic } from "./common.js";
+import { channelToTrack, idMaker, readProfile, type ReadGameOption, instrumentFromProgram, mergeTempo, type ChannelTempo, verbatimTexts, type FileDiagnostic } from "./common.js";
 
 /**
  * 3MLE .mml 파일. 공개된 파일 구조만 보고 독자 구현한다.
@@ -88,7 +88,7 @@ export interface ReadResult {
  * 3MLE 파일을 곡으로 읽는다. 채널 하나가 트랙 하나가 되고,
  * 3MLE에는 연주자 개념이 없으므로 같은 악기(Patch)의 채널을 한 연주자로 묶는다.
  */
-export interface Read3mleOptions {
+export interface Read3mleOptions extends ReadGameOption {
   /** 악보 하나에 담을 화음(트랙) 수. 기본 6 (모바일 프로필) */
   readonly chordsPerScore?: number;
   /** 악보(연주자) 이름. 앱이 화면 언어로 넘긴다 (기본 "악보 n") */
@@ -122,6 +122,7 @@ export function read3mle(text: string, options: Read3mleOptions = {}): ReadResul
 
   // 채널 순서대로 화음 수(기본 6)씩 끊어 악보 하나로 묶는다. 게임은 악보 하나에 연주자 여럿이 들어가고
   // 연주자마다 악기가 따로라, 악기(Patch)가 다른 채널도 같은 악보 안 트랙 악기로 둔다
+  const game = readProfile(options);
   const perScore = Math.max(1, options.chordsPerScore ?? 6);
   const channels = [...bodies.keys()].sort((a, b) => a - b);
   channels.forEach((num, index) => {
@@ -131,7 +132,7 @@ export function read3mle(text: string, options: Read3mleOptions = {}): ReadResul
     if (index % perScore === 0) players.push({ id: `p${players.length + 1}`, name: (options.scoreName ?? ((n) => `악보 ${n}`))(players.length + 1), instrument });
     const player = players[players.length - 1]!;
     const name = p?.get("Name") || `Channel${num}`;
-    const read = channelToTrack({ name, text: bodies.get(num)!, player }, index, nextNoteId, tempo, diagnostics);
+    const read = channelToTrack({ name, text: bodies.get(num)!, player, parse: { lengths: game.length } }, index, nextNoteId, tempo, diagnostics);
     const track = instrument.canonical === player.instrument.canonical && instrument.program === player.instrument.program ? read : { ...read, instrument };
     // 편집기가 쓰지 않는 채널 볼륨·팬도 저장할 때 돌려주도록 남긴다
     const volume = Number(p?.get("Volume"));
@@ -146,7 +147,7 @@ export function read3mle(text: string, options: Read3mleOptions = {}): ReadResul
   const nn = Number(settings.get("TimeSignatureNN"));
   const dd = Number(settings.get("TimeSignatureDD"));
   const memo = settings.get("Memo");
-  const base = emptySong({ title: settings.get("Title") ?? "", author: settings.get("Source") ?? "", profileId: "mobile", ...(memo ? { memo } : {}) });
+  const base = emptySong({ title: settings.get("Title") ?? "", author: settings.get("Source") ?? "", profileId: game.id, ...(memo ? { memo } : {}) });
   const song: Song = {
     ...base,
     tempo: mergeTempo(tempo),
@@ -192,7 +193,8 @@ export function write3mle(song: Song, options: Write3mleOptions = {}): { text: s
     ? song.tracks.map((t) => (t.id === options.tempoTrackId ? [...song.tempo] : []))
     : byScore!.placed;
   if (byScore && byScore.moved > 0) diagnostics.push({ level: "warning", code: "tempo-moved", params: { count: byScore.moved }, span: [0, 0], where: "" });
-  const sig = song.timeSig[0];
+  // 3MLE는 박자표 하나만 적는다. 못갖춘마디 곡은 본 박자표를 쓴다
+  const sig = pickupOf(song.timeSig)?.main ?? song.timeSig[0];
   // 이 파일에는 처음 박자표 하나만 적고 마커는 적지 않는다. 말없이 빠지지 않게 알린다
   if (song.timeSig.length > 1) diagnostics.push({ level: "warning", code: "3mle-meter-dropped", params: { count: song.timeSig.length - 1 }, span: [0, 0], where: "" });
   if (song.markers.length > 0) diagnostics.push({ level: "warning", code: "3mle-markers-dropped", params: { count: song.markers.length }, span: [0, 0], where: "" });
@@ -217,7 +219,7 @@ export function write3mle(song: Song, options: Write3mleOptions = {}): { text: s
   const bodies = song.tracks.map((track, index) => {
     const body = verbatim?.[index]?.replace(/\r?\n/g, "\r\n");
     if (body !== undefined) return body;
-    const printed = optimizeMml(track.notes, { tempo: placed[index] ?? [] });
+    const printed = optimizeMml(track.notes, { tempo: placed[index] ?? [], profile: songProfile(song) });
     for (const d of printed.diagnostics) diagnostics.push({ ...d, where: track.name });
     return printed.text;
   });
@@ -225,9 +227,10 @@ export function write3mle(song: Song, options: Write3mleOptions = {}): { text: s
   if (!verbatim) {
     for (const ids of scoreTrackIds(song, songChordsPerScore(song))) {
       const ks = ids.map((id) => song.tracks.findIndex((t) => t.id === id)).filter((k) => k >= 0);
-      const end = scoreEnd(ks.map((k) => song.tracks[k]!));
-      const profile = PROFILES[song.meta.profileId] ?? getProfile("mobile");
-      const padded = padScore(ks.map((k) => bodies[k]!), end, bpmBefore(song.tempo, end), profile.length, undefined, profile.charLimitPerScore);
+      const profile = songProfile(song);
+      const limits = trackLimits(song, profile);
+      const end = scoreEnd(ks.map((k) => song.tracks[k]!), undefined, profile.length);
+      const padded = padScore(ks.map((k) => bodies[k]!), end, bpmBefore(song.tempo, end), profile.length, undefined, ks.map((k) => limitOf(limits, song.tracks[k]!.id, profile)));
       ks.forEach((k, j) => (bodies[k] = padded[j]!));
     }
   }

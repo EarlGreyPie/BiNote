@@ -1,4 +1,4 @@
-import { add, cmp, defaultLengthLimit, eq, normalizeTempo, sub, type Rat, type Song, type TempoEvent, type Track } from "@mmlce/core";
+import { add, charLimitAt, cmp, defaultLengthLimit, eq, normalizeTempo, songProfile, sub, type LengthLimit, type Rat, type Song, type TempoEvent, type Track } from "@mmlce/core";
 import { scoreChunks } from "./clipboard.js";
 import { parseMml } from "./parser.js";
 import { canWriteExactly, type PrintableNote } from "./printer.js";
@@ -23,7 +23,9 @@ export interface TempoMove {
  *          (3) 음 가운데지만 &로 나눈 두 토막을 정확히 쓸 수 있는 채널
  *          (4) 그래도 없으면 음을 버리지 않도록 뒤쪽 가장 가까운 음 경계로 옮겨 쓴다 (moved에 적는다).
  *              옮길 경계가 어느 채널에도 없으면(모든 음이 끝난 뒤) 그 자리 그대로 첫 채널에 쓴다
- * 같은 순위면 글자가 덜 찬 채널(음 수 + 이미 넣은 템포 글자로 어림)을 고른다.
+ * 같은 순위면 글자가 덜 찬 채널(음 수 + 이미 넣은 템포 글자로 어림)을 고른다. limits(채널마다 글자 수 한도)를 주면
+ * 찬 비율(어림 ÷ 한도)이 낮은 채널을 고른다: 자리마다 한도가 다른 게임(PC)에서 한도가 큰 채널에만 몰리지 않게.
+ * 한도가 모두 같으면(모바일) 비율 순서가 글자 순서와 같아 고르는 채널도 같다.
  * 같은 위치에 템포가 여러 개면(3MLE 파일은 채널마다 같은 템포를 적곤 한다) 마지막 하나만 쓴다.
  * 옮긴 자리까지 다음 템포가 이미 바뀌면 옮긴 템포는 들리지 않으므로 쓰지 않는다.
  */
@@ -35,12 +37,19 @@ export function placeTempo(
   nextOf?: (event: TempoEvent) => Rat | undefined,
   /** 정확한 자리에 쓸 수 없고 옮기면 다음 템포를 넘어 아무 데도 쓰지 않은 템포 */
   dropped?: TempoEvent[],
+  /** 쉼표·음을 나눠 쓸 수 있는지 볼 음길이 한도 (곡 프로필의 length). 없으면 기본 프로필 */
+  lengths: LengthLimit = defaultLengthLimit(),
+  /** 채널마다 글자 수 한도 (없으면 모두 같다고 본다) */
+  limits?: readonly number[],
 ): TempoEvent[][] {
   const out: TempoEvent[][] = channels.map(() => []);
   if (channels.length === 0) return out;
   const sorted = channels.map((c) => [...c].sort((a, b) => cmp(a.start, b.start)));
   // 음 하나에 평균 3자 정도로 어림한 채널 글자 수
   const load = sorted.map((notes) => notes.length * 3);
+  // 찬 비율 비교 (load[a] / limit[a] < load[b] / limit[b]). 나누지 않고 곱해 정수로 정확히 비교한다
+  const room = (index: number) => Math.max(1, limits?.[index] ?? 1);
+  const lighter = (a: number, b: number) => load[a]! * room(b) < load[b]! * room(a);
   const events = normalizeTempo(tempo);
 
   events.forEach((t, k) => {
@@ -48,11 +57,11 @@ export function placeTempo(
     let bestRank = 6;
     let bestSnap: Rat | undefined;
     sorted.forEach((notes, index) => {
-      const { rank, snap } = rankAt(notes, t.at);
+      const { rank, snap } = rankAt(notes, t.at, lengths);
       const better =
         rank < bestRank ||
         (rank === bestRank && rank === 4 && cmp(snap!, bestSnap!) < 0) ||
-        (rank === bestRank && (rank !== 4 || cmp(snap!, bestSnap!) === 0) && load[index]! < load[best]!);
+        (rank === bestRank && (rank !== 4 || cmp(snap!, bestSnap!) === 0) && lighter(index, best));
       if (better) {
         best = index;
         bestRank = rank;
@@ -78,33 +87,28 @@ export function placeTempo(
 }
 
 /** 이 채널(시작 순)이 그 자리에 템포를 음을 쪼개거나 옮기지 않고 정확히 쓸 수 있는지 */
-export function canPlaceTempoAt(notes: readonly PrintableNote[], at: Rat): boolean {
-  return rankAt(notes, at).rank <= 3;
+export function canPlaceTempoAt(notes: readonly PrintableNote[], at: Rat, lengths: LengthLimit = defaultLengthLimit()): boolean {
+  return rankAt(notes, at, lengths).rank <= 3;
 }
 
 /** 이 채널에 템포를 쓰기 좋은 정도 (작을수록 좋다). 4면 snap(뒤쪽 가장 가까운 음 경계)으로 옮겨야 하고, 5면 옮길 곳도 없다 */
-/**
- * 템포 자리를 고를 때 쉼표·음을 나눠 쓸 수 있는지 보는 음길이 한도. 템포 자리 고르기는 음만 받아 곡 프로필이 닿지 않으므로
- * 기본 한도를 쓴다 (한도가 넓어지면 여기만 곡 프로필을 받게 바꾼다)
- */
-const LENGTHS = defaultLengthLimit();
-
-function rankAt(notes: readonly PrintableNote[], at: Rat): { rank: number; snap?: Rat } {
+/** lengths: 쉼표·음을 나눠 쓸 수 있는지 보는 음길이 한도 (곡 프로필의 length) */
+function rankAt(notes: readonly PrintableNote[], at: Rat, lengths: LengthLimit): { rank: number; snap?: Rat } {
   let prevEnd: Rat = { n: 0, d: 1 };
   for (const n of notes) {
     const end = add(n.start, n.dur);
     if (eq(n.start, at) || eq(end, at)) return { rank: 1 };
     if (cmp(at, n.start) < 0) {
       // prevEnd ~ n.start 사이 쉼표 안
-      return canWriteExactly(sub(at, prevEnd), LENGTHS) && canWriteExactly(sub(n.start, at), LENGTHS) ? { rank: 2 } : { rank: 4, snap: n.start };
+      return canWriteExactly(sub(at, prevEnd), lengths) && canWriteExactly(sub(n.start, at), lengths) ? { rank: 2 } : { rank: 4, snap: n.start };
     }
     if (cmp(at, end) < 0) {
-      return canWriteExactly(sub(at, n.start), LENGTHS) && canWriteExactly(sub(end, at), LENGTHS) ? { rank: 3 } : { rank: 4, snap: end };
+      return canWriteExactly(sub(at, n.start), lengths) && canWriteExactly(sub(end, at), lengths) ? { rank: 3 } : { rank: 4, snap: end };
     }
     prevEnd = end;
   }
   // 마지막 음 뒤: 쉼표 하나로 자리를 만든다
-  return cmp(at, prevEnd) === 0 || canWriteExactly(sub(at, prevEnd), LENGTHS) ? { rank: cmp(at, prevEnd) === 0 ? 1 : 2 } : { rank: 5 };
+  return cmp(at, prevEnd) === 0 || canWriteExactly(sub(at, prevEnd), lengths) ? { rank: cmp(at, prevEnd) === 0 ? 1 : 2 } : { rank: 5 };
 }
 
 /** 악보마다 곡 트랙 id. 연주자 목록에 없는 트랙(읽다 만 곡 등)은 연주자 id끼리 악보 하나로 본다 */
@@ -135,16 +139,20 @@ export function placeTempoByScore(
 ): Map<string, TempoEvent[]> {
   const out = new Map<string, TempoEvent[]>();
   const songTempo = audibleTempo(song.tempo);
+  const profile = songProfile(song);
+  const lengths = profile.length;
   for (const ids of scoreTrackIds(song, maxChords)) {
     const tracks = ids.map((id) => song.tracks.find((t) => t.id === id)!);
     // 악보가 끝난 뒤 템포는 그 악보에 쓰지 않는다
-    const all = tempoBefore(songTempo, scoreEnd(tracks, ends));
+    const all = tempoBefore(songTempo, scoreEnd(tracks, ends, lengths));
     const open = fixed ? tracks.filter((t) => !fixed.has(t.id)) : tracks;
     if (open.length === 0) continue;
     // 잠근 트랙 글에 이미 적힌 템포 (같은 자리·같은 빠르기)는 이 악보에 있는 것으로 친다
-    const written = tracks.filter((t) => fixed?.has(t.id)).flatMap(writtenTempo);
+    const written = tracks.filter((t) => fixed?.has(t.id)).flatMap((t) => writtenTempo(t, lengths));
     const tempo = written.length > 0 ? all.filter((e) => !written.some((w) => eq(w.at, e.at) && w.bpm === e.bpm)) : all;
     const list: TempoMove[] = [];
+    // 악보 안 자리마다 글자 수 한도 (자리 = 악보 트랙 순서)
+    const limits = open.map((t) => charLimitAt(profile, ids.indexOf(t.id)));
     const placed = placeTempo(
       open.map((t) => t.notes),
       tempo,
@@ -152,6 +160,8 @@ export function placeTempoByScore(
       // 옮긴 템포가 들리는지는 잠근 트랙에 적힌 템포까지 넣은 곡 템포로 본다
       tempo === all ? undefined : (event) => all.find((e) => cmp(e.at, event.at) > 0)?.at,
       dropped,
+      lengths,
+      limits,
     );
     open.forEach((t, k) => out.set(t.id, placed[k] ?? []));
     if (list.length > 0) moved?.set(ids[0]!, list);
@@ -160,8 +170,8 @@ export function placeTempoByScore(
 }
 
 /** 트랙 원문에 적힌 들리는 템포 (원문이 없으면 없다). 같은 자리에 여럿 적혔으면(t90t120) 마지막 것만 들린다 */
-function writtenTempo(track: Track): TempoEvent[] {
+function writtenTempo(track: Track, lengths: LengthLimit): TempoEvent[] {
   if (!track.mml) return [];
   const offset = track.mml.offset;
-  return normalizeTempo(parseMml(track.mml.text).tempo.map((t) => (offset ? { ...t, at: add(t.at, offset) } : t)));
+  return normalizeTempo(parseMml(track.mml.text, { lengths }).tempo.map((t) => (offset ? { ...t, at: add(t.at, offset) } : t)));
 }

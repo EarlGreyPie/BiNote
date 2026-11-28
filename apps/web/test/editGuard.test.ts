@@ -356,16 +356,17 @@ describe("앱의 곡 바꾸기 길 목록 (새 길이 검사를 건너뛰지 않
 
   it("App.svelte는 실행 취소 기록을 newHistory로만 만들고 history.run은 commit 안에서만 부른다", () => {
     expect(app.match(/new History\(/g)).toHaveLength(1);
-    expect(app).toContain("return new History(next, guardEdit);");
+    expect(app).toContain("return new History(next, guardEdit, PC_GAME_ON ? settleToTicks : undefined);");
     expect(app.match(/history\.run\(/g)).toHaveLength(1);
     expect(app).toContain("const next = history.run(command, options);");
   });
 
-  it("검사를 일부러 건너뛰는 길은 MML 글 직접 입력과 MML 글 붙여 더하기 둘뿐", () => {
+  it("검사를 일부러 건너뛰는 길은 MML 글 직접 입력, MML 글 붙여 더하기, 게임 바꾸기 셋뿐", () => {
     const skips = app.split("\n").filter((line) => line.includes("unchecked: true"));
     expect(skips.map((line) => line.trim())).toEqual([
       "commit(setTrackText(trackId, text), { unchecked: true });",
       "const next = commit(appendSong(other), { unchecked: true });",
+      'if (!commit(setSongProfile(profileId, t("ui.labGameProfile")), { unchecked: true })) return;',
     ]);
   });
 

@@ -1,4 +1,4 @@
-import { add, cmp, getProfile, normalizeTempo, PROFILES, sub, ZERO, type GameProfile, type Rat, type Song, type TempoEvent, type TrackText } from "@mmlce/core";
+import { add, cmp, normalizeTempo, sub, ZERO, songProfile, type GameProfile, type LengthLimit, type Rat, type Song, type TempoEvent, type TrackText } from "@mmlce/core";
 import { sameSound } from "./compare.js";
 import { parseMml, type ParseResult } from "./parser.js";
 import type { PrintableNote } from "./printer.js";
@@ -18,7 +18,9 @@ export interface TempoToken {
   readonly span: readonly [number, number];
 }
 
-export function tempoTokens(source: TrackText, parsed: ParseResult = parseMml(source.text)): TempoToken[] {
+/** lengths: 곡 프로필의 길이 한도 (parsed를 주지 않아 원문을 읽을 때) */
+export function tempoTokens(source: TrackText, parsed?: ParseResult, lengths?: LengthLimit): TempoToken[] {
+  parsed ??= parseMml(source.text, { lengths });
   // 파서는 t를 읽을 때 템포와 값(kind "tempo")을 같은 순서로 하나씩 넣는다
   const spans = parsed.values.filter((v) => v.kind === "tempo");
   return parsed.tempo.map((e, k) => ({ at: source.offset ? add(e.at, source.offset) : e.at, bpm: e.bpm, span: spans[k]!.span }));
@@ -55,8 +57,8 @@ export function spliceText(text: string, edits: readonly { readonly span: readon
 }
 
 /** 원문 하나를 수술할 수 있는지 (문법 오류가 있으면 손대지 않는다) */
-export function surgicalSource(source: TrackText): { parsed: ParseResult; tokens: TempoToken[] } | undefined {
-  const parsed = parseMml(source.text);
+export function surgicalSource(source: TrackText, lengths?: LengthLimit): { parsed: ParseResult; tokens: TempoToken[] } | undefined {
+  const parsed = parseMml(source.text, { lengths });
   if (parsed.diagnostics.some((d) => d.level === "error")) return undefined;
   return { parsed, tokens: tempoTokens(source, parsed) };
 }
@@ -97,7 +99,7 @@ export function gameReadyText(text: string): string {
  */
 export function gameSource(source: TrackText, tempo: readonly TempoEvent[], profile: GameProfile): string | undefined {
   if (source.offset && cmp(source.offset, ZERO) !== 0) return undefined;
-  const parsed = parseMml(source.text);
+  const parsed = parseMml(source.text, { lengths: profile.length });
   if (parsed.diagnostics.length > 0) return undefined;
   const inRange = parsed.values.every((v) => {
     if (v.kind === "tempo") return true;
@@ -124,12 +126,18 @@ export function gameSource(source: TrackText, tempo: readonly TempoEvent[], prof
  * 후보 글 가운데 다시 읽은 음이 notes와 같고 들리는 템포가 tempo와 같은 가장 짧은 글 (길이가 같으면 앞 후보).
  * 맞는 글이 없으면 undefined. 게임 출력·글자 수 줄이기가 원문보다 길게 쓰지 않으려고 쓴다
  */
-export function shortestWriting(notes: readonly PrintableNote[], tempo: readonly TempoEvent[], candidates: readonly (string | undefined)[]): string | undefined {
+export function shortestWriting(
+  notes: readonly PrintableNote[],
+  tempo: readonly TempoEvent[],
+  candidates: readonly (string | undefined)[],
+  /** 곡 프로필의 길이 한도 (후보 글을 다시 읽을 때) */
+  lengths?: LengthLimit,
+): string | undefined {
   const expected = audibleTempo(tempo);
   let best: string | undefined;
   for (const text of candidates) {
     if (text === undefined || (best !== undefined && text.length >= best.length)) continue;
-    const parsed = parseMml(text);
+    const parsed = parseMml(text, { lengths });
     if (sameSound(parsed.notes, notes) && sameTempo(audibleTempo(parsed.tempo), expected)) best = text;
   }
   return best;
@@ -174,17 +182,19 @@ export function tempoAtPosition(map: readonly TempoEvent[], at: Rat): number | u
  */
 export function tempoMismatch(song: Song): boolean {
   if (song.tracks.length === 0) return false;
-  const chords = chordsPerScore(song, PROFILES[song.meta.profileId] ?? getProfile("mobile"));
+  const profile = songProfile(song);
+  const lengths = profile.length;
+  const chords = chordsPerScore(song, profile);
   const scores = scoreTrackIds(song, chords).map((ids) => song.tracks.filter((t) => ids.includes(t.id)));
   const declared = normalizeTempo(
     scores.flatMap((tracks) =>
       tempoBefore(
-        tracks.flatMap((t) => (t.mml ? tempoTokens(t.mml).map(({ at, bpm }) => ({ at, bpm })) : [])),
-        scoreEnd(tracks),
+        tracks.flatMap((t) => (t.mml ? tempoTokens(t.mml, undefined, lengths).map(({ at, bpm }) => ({ at, bpm })) : [])),
+        scoreEnd(tracks, undefined, lengths),
       ),
     ),
   );
-  const map = normalizeTempo(tempoBefore(song.tempo, scoreEnd(song.tracks)));
+  const map = normalizeTempo(tempoBefore(song.tempo, scoreEnd(song.tracks, undefined, lengths)));
   if (song.tracks.some((t) => !t.mml)) return !declared.every((d) => tempoAtPosition(map, d.at) === d.bpm);
   return !sameTempo(audibleTempo(declared), audibleTempo(map));
 }

@@ -217,10 +217,10 @@ describe("고른 마디 지우기 (deleteBars)", () => {
   it("마디에 걸친 음은 밖 부분만 남고, 미리 보기가 지울 음·잘릴 음을 센다", () => {
     // c2. (0~3/4) d4 (3/4~1) e1 (1~2) f2 (2~5/2): 2마디(e1)를 지우면 c·d는 그대로
     const base = song("c2.d4e1f2");
-    expect(checkDeleteBars(base, [[2, 2]])).toEqual({ bars: 1, removed: 1, cut: 0, made: 0 });
+    expect(checkDeleteBars(base, [[2, 2]])).toEqual({ bars: 1, removed: 1, cut: 0, made: 0, memos: 0 });
     // c1. (0~3/2)은 2마디에 걸쳐 잘린다
     const cross = song("c1.d2e1");
-    expect(checkDeleteBars(cross, [[2, 2]])).toEqual({ bars: 1, removed: 1, cut: 1, made: 0 });
+    expect(checkDeleteBars(cross, [[2, 2]])).toEqual({ bars: 1, removed: 1, cut: 1, made: 0, memos: 0 });
     expect(starts(deleteBars([[2, 2]]).apply(cross))).toEqual([[0, 1, 60], [1, 1, 64]]);
   });
 

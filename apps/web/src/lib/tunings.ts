@@ -1,4 +1,4 @@
-import { MOBILE_PROFILE, STANDARD_TUNING, type PlayerTab } from "@mmlce/core";
+import { STANDARD_TUNING, widestOctave, type PlayerTab } from "@mmlce/core";
 import type { MessageKey } from "@mmlce/i18n";
 
 /** 타브 보기 튜닝. 줄은 1번(가장 높은 줄)부터 개방현 MIDI 번호 */
@@ -59,9 +59,12 @@ export function tuningStrings(t: ScoreTuning): readonly number[] {
   return TUNINGS[t.tuning].strings;
 }
 
-/** 직접 입력 줄·타브 숫자가 낼 수 있는 높이: MML로 쓸 수 있는 o0c(12)~o9g(127) (프로필의 옥타브 범위, MIDI 127까지) */
-export const LOWEST_PITCH = (MOBILE_PROFILE.octave.min + 1) * 12;
-export const HIGHEST_PITCH = Math.min(127, (MOBILE_PROFILE.octave.max + 1) * 12 + 11);
+/**
+ * 직접 입력 줄·타브 숫자가 낼 수 있는 높이: MML로 쓸 수 있는 o0c(12)~o9g(127) (등록된 모든 프로필의 옥타브 범위, MIDI 127까지).
+ * 튜닝은 곡과 상관없는 설정이라 모든 프로필을 덮는 범위를 쓴다
+ */
+export const LOWEST_PITCH = (widestOctave().min + 1) * 12;
+export const HIGHEST_PITCH = Math.min(127, (widestOctave().max + 1) * 12 + 11);
 
 /** 모든 줄을 반음 semis개만큼 옮긴다. 한 줄이라도 쓸 수 있는 높이(LOWEST_PITCH~HIGHEST_PITCH)를 넘으면 undefined */
 export function shiftStrings(strings: readonly number[], semis: number): readonly number[] | undefined {

@@ -14,7 +14,7 @@ import {
   limiterWorkletSource,
   PeakLimiter,
 } from "@mmlce/audio/browser";
-import { getProfile, positionToSeconds, type GameProfile, type Rat, type Song } from "@mmlce/core";
+import { DEFAULT_PROFILE, positionToSeconds, songProfile, type GameProfile, type Rat, type Song } from "@mmlce/core";
 import type { WorkletSynthesizer } from "spessasynth_lib";
 import processorUrl from "spessasynth_lib/dist/spessasynth_processor.min.js?url";
 import { computePeaks, type Peaks } from "./waveform";
@@ -26,7 +26,7 @@ import { preparePlay } from "./playPlan";
 import type { WavRequest } from "./jobs";
 import { nextSynthLag, SynthClock, synthLagOf, type ClockPing } from "./synthClock";
 import { effectiveOutputDelay, OutputDelay, outputDelayOf } from "./outputDelay";
-import { audioLag, CLOCK_STOP_SLACK, LATENCY_JUMP, clockMoves, clockStats, FROZEN_MS, isTouchWebKit, needsRebuild, settlesWithin, staleAfterReturn, type ClockPair } from "./audioHealth";
+import { audioDeviceSignature, audioLag, CLOCK_STOP_SLACK, LATENCY_JUMP, clockMoves, clockStats, FROZEN_MS, isTouchWebKit, needsRebuild, settlesWithin, staleAfterReturn, type ClockPair } from "./audioHealth";
 
 /** CC 0 = 뱅크 선택(MSB) */
 const BANK_SELECT = 0;
@@ -115,6 +115,13 @@ export class Engine {
   private latencyBefore = 0;
   /** 오디오 상태 칸에 마지막으로 남긴 출력 지연(초) */
   private latencyNoted = 0;
+  /** 소리 장치 목록 지문 (바뀌었는지 보려고). 아직 못 읽었으면 undefined */
+  private deviceSignature: string | undefined;
+  /**
+   * 소리를 낸 뒤 소리 장치가 바뀌었을 때 (무선 헤드셋 켜고 끄기, 출력 지연이 크게 바뀜). 앱이 알림을 띄운다:
+   * 출력이 바뀌면 소리·원곡·영상 싱크가 밀릴 수 있다
+   */
+  onoutputchange: ((reason: string) => void) | undefined;
   /** 아이패드·아이폰인지 (화면 잠금 뒤 오디오를 새로 만들지 정할 때 쓴다) */
   private readonly touchWebKit = typeof navigator !== "undefined" && isTouchWebKit(navigator.userAgent, navigator.maxTouchPoints ?? 0);
   /** 마지막 심장 박동(1초마다 부르는 타이머)에서 읽은 시계. 오디오 시계가 멈췄었는지 보려고 */
@@ -168,6 +175,24 @@ export class Engine {
     // 앱으로 띄운 아이패드는 화면을 잠가도 가려짐 알림이 오지 않을 때가 있다. 1초마다 시계를 읽어
     // 타이머가 오래 멈췄으면(페이지가 얼었음) 잠금으로, 오디오 시계만 덜 갔으면 오디오가 멈췄던 것으로 본다
     setInterval(() => this.heartbeat(), 1000);
+    const media = typeof navigator !== "undefined" ? navigator.mediaDevices : undefined;
+    if (media && typeof media.enumerateDevices === "function") {
+      const read = () =>
+        media.enumerateDevices().then(
+          (list) => audioDeviceSignature(list),
+          () => undefined,
+        );
+      void read().then((sig) => (this.deviceSignature = sig));
+      media.addEventListener?.("devicechange", () => {
+        void read().then((sig) => {
+          const before = this.deviceSignature;
+          this.deviceSignature = sig;
+          if (sig === undefined || before === undefined || sig === before) return;
+          this.note("audio devices changed");
+          if (this.warmed) this.onoutputchange?.("devices");
+        });
+      });
+    }
     // 뒤로 가기 캐시에서 돌아온 페이지도 오디오가 멈춰 있을 수 있다
     window.addEventListener("pageshow", (e) => {
       if (!e.persisted) return;
@@ -370,6 +395,7 @@ export class Engine {
     if (Math.abs(latency - this.latencyNoted) > LATENCY_JUMP) {
       this.note(`latency ${(this.latencyNoted * 1000).toFixed(0)}ms -> ${(latency * 1000).toFixed(0)}ms`);
       this.latencyNoted = latency;
+      this.onoutputchange?.("latency");
     }
     const lag = audioLag(last, this.beat!);
     if (lag > CLOCK_STOP_SLACK) {
@@ -697,7 +723,7 @@ export class Engine {
     let last: Unresolved[] = [];
     const ready = await preparePlay({
       plan: () => {
-        const schedule = buildSchedule(song, getProfile(song.meta.profileId), { ...(from ? { from } : {}), canonicalOf: this.canonicalOf });
+        const schedule = buildSchedule(song, songProfile(song), { ...(from ? { from } : {}), canonicalOf: this.canonicalOf });
         const { patches, unresolved } = assignPatches(schedule, this.registry, this.gains);
         last = unresolved;
         this.ensureChannels(Math.max(-1, ...patches.map((p) => p.channel)));
@@ -747,7 +773,7 @@ export class Engine {
     if (!run || !player?.playing || run.request !== this.playRequest || run.endless) return { result: "idle" };
     if (song.meta.profileId !== run.profileId || JSON.stringify(song.tempo) !== run.tempo || audibleTrackIds(song).join("\n") !== run.tracks) return { result: "restart" };
     const plan = () => {
-      const schedule = buildSchedule(song, getProfile(song.meta.profileId), { ...(run.from ? { from: run.from } : {}), canonicalOf: this.canonicalOf });
+      const schedule = buildSchedule(song, songProfile(song), { ...(run.from ? { from: run.from } : {}), canonicalOf: this.canonicalOf });
       return { schedule, ...assignPatches(schedule, this.registry, this.gains) };
     };
     const version = this.packVersion;
@@ -820,7 +846,7 @@ export class Engine {
    */
   async wavRequest(song: Song): Promise<{ request: WavRequest; unresolved: Unresolved[] } | undefined> {
     if (this.packFiles.size === 0) return undefined;
-    const schedule = buildSchedule(song, getProfile(song.meta.profileId), { canonicalOf: this.canonicalOf });
+    const schedule = buildSchedule(song, songProfile(song), { canonicalOf: this.canonicalOf });
     const { patches, unresolved } = assignPatches(schedule, this.registry, this.gains);
     const used = new Set(patches.map((p) => p.packId));
     const packs = await Promise.all(
@@ -957,7 +983,7 @@ export class Engine {
     program: number | undefined,
     pitch: number,
     velocity: number,
-    profile: GameProfile = getProfile("mobile"),
+    profile: GameProfile = DEFAULT_PROFILE,
     pack?: string,
   ): Promise<void> {
     this.previewHeld.add(pitch);

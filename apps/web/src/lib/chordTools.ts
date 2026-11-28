@@ -1,5 +1,5 @@
 import { add, barAt, barBounds, cmp, positionToSeconds, toFloat, ZERO, type GameProfile, type Note, type Rat, type Song, type Track } from "@mmlce/core";
-import { chordsPerScore, gameCharCounts, soundGroups, trackSource, type MergeLevel, type MergeTracksPlan } from "@mmlce/mml";
+import { chordsPerScore, gameCharCounts, soundGroups, trackSource, widestLimit, type MergeLevel, type MergeTracksPlan } from "@mmlce/mml";
 
 /**
  * 화음 분산·병합 창(곡 메뉴)이 함께 쓰는 계산. 곡을 바꾸지 않는다 (바꾸는 명령은 @mmlce/mml spread·merge-tracks).
@@ -18,7 +18,7 @@ export function trackChars(song: Song, id: string): number {
  */
 export function gameChars(song: Song, profile: GameProfile): Map<string, number> {
   try {
-    return gameCharCounts(song, chordsPerScore(song, profile), profile.maxChordsPerPlayer, profile.charLimitPerScore);
+    return gameCharCounts(song, chordsPerScore(song, profile), profile.maxChordsPerPlayer, widestLimit(profile));
   } catch {
     return new Map();
   }
@@ -31,14 +31,21 @@ export function gameCharsOf(song: Song, profile: GameProfile): (id: string) => n
 }
 
 /**
- * 분산 창이 처음 고를 보내는 트랙: 주면 그 트랙, 아니면 한도를 가장 많이 넘는 잠그지 않은 트랙, 없으면 가장 긴 트랙.
+ * 분산 창이 처음 고를 보내는 트랙: 주면 그 트랙, 아니면 자리 한도를 가장 많이 넘는 잠그지 않은 트랙, 없으면 가장 긴 트랙.
  * chars는 트랙 글자 수 (분산 창은 게임 글자 수를 넘긴다)
  */
-export function defaultSpreadSource(song: Song, limit: number, locked: ReadonlySet<string>, wanted?: string, chars: (id: string) => number = (id) => trackChars(song, id)): string | undefined {
+export function defaultSpreadSource(
+  song: Song,
+  limit: (trackId: string) => number,
+  locked: ReadonlySet<string>,
+  wanted?: string,
+  chars: (id: string) => number = (id) => trackChars(song, id),
+): string | undefined {
   const open = song.tracks.filter((t) => !locked.has(t.id));
   if (wanted && open.some((t) => t.id === wanted)) return wanted;
-  const sized = open.map((t) => ({ id: t.id, chars: chars(t.id) })).sort((a, b) => b.chars - a.chars);
-  return sized.find((x) => x.chars > limit)?.id ?? sized[0]?.id;
+  const sized = open.map((t) => ({ id: t.id, chars: chars(t.id), over: chars(t.id) - limit(t.id) }));
+  const over = sized.filter((x) => x.over > 0).sort((a, b) => b.over - a.over)[0];
+  return over?.id ?? [...sized].sort((a, b) => b.chars - a.chars)[0]?.id;
 }
 
 /** 병합할 수 있는 트랙 묶음: 같은 악보·같은 악기(끄기·솔로·채널 볼륨·팬도 같음)인 잠그지 않은 트랙이 둘 이상 */

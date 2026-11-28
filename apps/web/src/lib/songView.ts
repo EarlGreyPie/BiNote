@@ -17,6 +17,8 @@ export interface SongViewReset {
   /** 이벤트 줄에서 고른 템포·마커, 열린 템포·마커 창 (마커 id는 곡마다 m1부터라 다른 곡의 같은 id를 가리킬 수 있다) */
   readonly pickedEvent: undefined;
   readonly eventEdit: undefined;
+  /** 열린 작업 메모 창 (옛 곡의 메모 id) */
+  readonly memoEdit: undefined;
   /** 곡 검사에서 누른 트랙·자리, 음량 레인에 같이 그리던 트랙, 아래 편집기 칸에 고른 트랙 (모두 옛 트랙 id) */
   readonly reveal: undefined;
   readonly laneExtra: readonly string[];
@@ -35,6 +37,10 @@ export interface SongViewReset {
   readonly voicing: undefined;
   readonly tempoChangeOpen: false;
   readonly tempoRampOpen: false;
+  /** 실험실 음 시작을 원곡에 맞추기·템포 정리 창 */
+  readonly tempoSnapOpen: undefined;
+  /** 실험실 템포를 음 길이로 바꾸기 창 */
+  readonly tempoLengthOpen: false;
   readonly meterOpen: false;
   /** 곡 정보 창 (옛 곡의 제목·지은이·메모를 들고 있다) */
   readonly songInfoOpen: false;
@@ -61,6 +67,7 @@ export function freshSongView(viewGen: number): SongViewReset {
     tabCursor: undefined,
     pickedEvent: undefined,
     eventEdit: undefined,
+    memoEdit: undefined,
     reveal: undefined,
     laneExtra: [],
     extraChosen: [],
@@ -76,6 +83,8 @@ export function freshSongView(viewGen: number): SongViewReset {
     voicing: undefined,
     tempoChangeOpen: false,
     tempoRampOpen: false,
+    tempoSnapOpen: undefined,
+    tempoLengthOpen: false,
     meterOpen: false,
     songInfoOpen: false,
     offgridOpen: false,

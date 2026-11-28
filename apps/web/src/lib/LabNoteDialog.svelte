@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { optimizeMml } from "@mmlce/mml";
+  import { optimizeMml, limitOf, trackLimits, widestLimit } from "@mmlce/mml";
   import { planGhost, planHarmonic, planLabClear, volumeStepMax, type GameProfile, type HarmonicType, type LabResult, type Note, type Song } from "@mmlce/core";
   import { t } from "./i18n.svelte";
   import { loadStored, parseJson, saveStored } from "./persist";
@@ -65,14 +65,20 @@
     if (result.changes.length === 0) return undefined;
     let delta = 0;
     let over = false;
+    /** 넘친 트랙 자리의 한도 (자리마다 한도가 다를 수 있다) */
+    let overLimit: number | undefined;
+    const limits = trackLimits(song, profile);
     for (const c of result.changes) {
       const track = song.tracks.find((tr) => tr.id === c.trackId);
       if (!track) continue;
       const after = optimizeMml(c.notes, { lengths: profile.length }).text.length;
       delta += after - optimizeMml(track.notes, { lengths: profile.length }).text.length;
-      if (after > profile.charLimitPerScore) over = true;
+      if (after > limitOf(limits, c.trackId, profile)) {
+        over = true;
+        overLimit ??= limitOf(limits, c.trackId, profile);
+      }
     }
-    return { delta, over };
+    return { delta, over, limit: overLimit ?? widestLimit(profile) };
   });
 
   const title = $derived(kind === "ghost" ? t("ui.labGhost") : t("ui.labHarmonic"));
@@ -124,7 +130,7 @@
   <p class="muted">
     {t("ui.labMade", { n: result.made })}{#if volumes}{` · ${volumes}`}{/if}{#if chars}{` · ${t("ui.slideChars", { n: chars.delta })}`}{/if}
   </p>
-  {#if chars?.over}<p class="warn">{t("ui.slideCharsOver", { limit: profile.charLimitPerScore })}</p>{/if}
+  {#if chars?.over}<p class="warn">{t("ui.slideCharsOver", { limit: chars.limit })}</p>{/if}
   {#if s.tied + s.locked + s.fret + s.range + s.same > 0}
     <p class="muted">{t("ui.labSkipped", { tied: s.tied, locked: s.locked, fret: s.fret, range: s.range, same: s.same })}</p>
   {/if}

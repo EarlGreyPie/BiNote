@@ -1,6 +1,6 @@
 <script lang="ts">
   import { barBeatAt, type GameProfile, type Rat, type Song } from "@mmlce/core";
-  import { lengthPieces, type FastRunFitResult, type FastRunFixResult, type FastRunMoment } from "@mmlce/mml";
+  import { lengthPieces, type FastRunFitResult, type FastRunFixResult, type FastRunMoment, widestLimit } from "@mmlce/mml";
   import { t } from "./i18n.svelte";
 
   /**
@@ -122,21 +122,21 @@
         </li>
       {/each}
     </ul>
-    <label class="choice"><input type="checkbox" bind:checked={limitOn} /> {t("ui.fastRunLimitOn", { limit: profile.charLimitPerScore })}</label>
+    <label class="choice"><input type="checkbox" bind:checked={limitOn} /> {t("ui.fastRunLimitOn", { limit: widestLimit(profile) })}</label>
     <label class="choice sub"><input type="checkbox" bind:checked={distributeOn} disabled={!limitOn} /> {t("ui.fastRunDistributeOn")}</label>
     {#if !current}
       <p class="muted">{t("ui.fastRunCounting")}</p>
     {:else}
       <p class="muted">
-        {t("ui.fastRunNotes", { n: current.plan.delays.length })} · {t("ui.fastRunFitChars", { n: signed(current.chars.delta), longest: current.chars.longest, limit: profile.charLimitPerScore })}{#if current.books}{` · ${t("ui.fastRunBooks", { from: current.books.from, to: current.books.to })}`}{/if}
+        {t("ui.fastRunNotes", { n: current.plan.delays.length })} · {t("ui.fastRunFitChars", { n: signed(current.chars.delta), longest: current.chars.longest, limit: widestLimit(profile) })}{#if current.books}{` · ${t("ui.fastRunBooks", { from: current.books.from, to: current.books.to })}`}{/if}
       </p>
       {#if current.moved > 0}<p class="muted">{t("ui.fastRunMoved", { n: current.moved })}</p>{/if}
       {#if limitOn && current.overLimit.length > 0}
         <p class="warn">{t("ui.fastRunOverLimit", { n: current.overLimit.length })}</p>
         {#if current.distributeKept}<p class="muted">{t("ui.fastRunNoDistribute")}</p>{/if}
-        {#if current.fullOver > 0}<p class="muted">{t("ui.fastRunFullOver", { n: current.fullOver, limit: profile.charLimitPerScore })}</p>{/if}
+        {#if current.fullOver > 0}<p class="muted">{t("ui.fastRunFullOver", { n: current.fullOver, limit: widestLimit(profile) })}</p>{/if}
       {/if}
-      {#if !limitOn && !current.books && current.chars.longest > profile.charLimitPerScore}<p class="warn">{t("ui.slideCharsOver", { limit: profile.charLimitPerScore })}</p>{/if}
+      {#if !limitOn && !current.books && (current.plan.chars?.over ?? current.chars.longest > widestLimit(profile))}<p class="warn">{t("ui.slideCharsOver", { limit: widestLimit(profile) })}</p>{/if}
     {/if}
     {#if skippedCount(all) > 0}<p class="muted">{skippedText(all)}</p>{/if}
     {#if all.changes.length > 0 && all.left}<p class="warn">{t("ui.fastRunLeft", { n: all.left })}</p>{/if}

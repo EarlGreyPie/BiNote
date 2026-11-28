@@ -6,7 +6,15 @@
 export interface GameProfile {
   readonly id: string;
   readonly label: string;
+  /** 트랙 하나에 넣을 수 있는 글자 수. 붙여넣는 자리마다 한도가 다르면(trackCharLimits) 그 가운데 가장 큰 값 */
   readonly charLimitPerScore: number;
+  /**
+   * 붙여넣는 자리(MML@ 몇 번째 채널, 0부터)마다 다른 글자 수 한도. 목록보다 뒤 자리와, 목록이 없는 게임은 charLimitPerScore.
+   * 값은 charLimitAt 한 곳에서 읽는다
+   */
+  readonly trackCharLimits?: readonly number[];
+  /** 내보내기·복사 창에 보일 안내 (i18n 키). 이 프로필로 맞춘 글을 게임에 넣으려면 해야 할 일 (예: 노래 파트 제외 켜기) */
+  readonly exportNotice?: string;
   readonly maxChordsPerPlayer: number;
   /** 악기마다 한 번에 내는 화음 수가 더 적으면 (오르골 3). 악보 하나에 이만큼씩 나눠 담는다 */
   readonly instrumentMaxChords: Readonly<Record<string, number>>;
@@ -18,7 +26,17 @@ export interface GameProfile {
   /** 2단계 압축 목표 화음 수 후보 */
   readonly ensembleChordHint: readonly number[];
   readonly tempo: { readonly min: number; readonly max: number };
-  readonly length: { readonly min: number; readonly max: number; readonly dots: number };
+  /**
+   * 게임이 받는 길이 숫자(min~max)와 점 수(dots). ticks가 있으면 길이 숫자의 값이 정확한 분수가 아니라
+   * 정수 틱이다 (마비꼬와 같은 셈: 온음표 perWhole틱, lN = floor(perWhole / N)틱, 점마다 앞에 더한 틱의 절반을 버려 더한다).
+   * 없으면 정확한 분수 (l5 다섯 개 = 온음표). 값은 note-length.ts의 noteLengthValue 한 곳에서 계산한다
+   */
+  readonly length: {
+    readonly min: number;
+    readonly max: number;
+    readonly dots: number;
+    readonly ticks?: LengthTicks;
+  };
   /** o 명령으로 받아들이는 옥타브 (범위 밖이어도 오류 없음) */
   readonly octave: { readonly min: number; readonly max: number };
   /**
@@ -27,11 +45,23 @@ export interface GameProfile {
    */
   readonly soundingRange: PitchRange;
   readonly instrumentRanges: Readonly<Record<string, PitchRange>>;
+  /**
+   * 악기(canonical)별로 MML 음보다 몇 옥타브 높게 소리 나는지. 없는 악기는 0 (적은 높이 그대로 소리 난다).
+   * 오선보 보기가 음자리표에 8va를 붙일 때 읽는다 (적은 음은 MML 높이 그대로)
+   */
+  readonly soundingOctave: Readonly<Record<string, number>>;
   readonly volume: { readonly min: number; readonly max: number };
   /** v 값마다 음량(dB). 길이는 volume.max - volume.min + 1 */
   readonly volumeCurve: readonly number[];
   /** 악보책에서 다음 악보로 넘어갈 때 더해지는 지연(ms). 모르면 null */
   readonly scoreBookGapMs: number | null;
+  /**
+   * 악보책 모양. perPart면 악보책이 파트(자리)마다 글을 따로 이어 읽는다 (PC 자브키엘의 악보집):
+   * 파트마다 글을 자리 한도에서 끊어 k번째 조각끼리 한 장으로 담고, 장 머리에 상태를 다시 적지 않는다 (splitParts).
+   * 아니면 장마다 곡을 시간으로 잘라 따로 붙여넣는 악보로 만든다 (모바일 악보책, splitSong).
+   * maxScores: 한 책에 담는 장 수 한도. choices: 아이템마다 다른 한도 (고를 수 있으면)
+   */
+  readonly scoreBook: { readonly perPart: boolean; readonly maxScores: number; readonly choices?: readonly number[] };
   /** 악기(canonical)별 음색 경계. 경계 바로 위 음의 MIDI 번호 목록 */
   readonly sampleBoundaries: Readonly<Record<string, readonly number[]>>;
   /** 타악기(큰북·심벌즈)를 칠 때 쓰는 음 높이 (MIDI 번호). 큰북은 높이를 바꿔도 소리가 옮겨지지 않았다 */
@@ -122,6 +152,14 @@ export interface DecayZone {
 /** 감쇠 시각을 아는 깊이(dB). 이 밖은 앞뒤 점을 이어 어림한다 */
 export const DECAY_STEPS = [6, 12, 20, 40] as const;
 
+/** 길이 숫자를 정수 틱으로 읽는 게임의 틱 모형 */
+export interface LengthTicks {
+  /** 온음표 하나의 틱 수 (4분음표 96틱이면 384) */
+  readonly perWhole: number;
+  /** 길이 숫자 → 틱: 나눈 값을 버린다 (지금 아는 셈은 이것뿐) */
+  readonly rounding: "floor";
+}
+
 export interface PitchRange {
   readonly low: number;
   readonly high: number;
@@ -139,7 +177,11 @@ export type PendingKey =
   | "lengthAfterTie"
   | "octaveCrossingAccidental"
   | "nCommand"
-  | "fastRunDrop";
+  | "fastRunDrop"
+  | "lengthTicks"
+  | "borrowedMeasurements"
+  | "trackCharLimits"
+  | "scoreBookParts";
 
 /**
  * 실측 전 항목이 걸린 곳.
@@ -227,9 +269,13 @@ export const MOBILE_PROFILE: GameProfile = {
     chalumeau: { low: 41, high: 100 },
     "cat-harmonica": { low: 69, high: 100 },
   },
+  // 실로폰: 2026-10-14 실측(접힘 범위 녹음). 오르골: 2026-10-28 녹음 분석, 가장 센 성분이 적은 음의 정확히 2배
+  soundingOctave: { xylophone: 1, "music-box": 1 },
   volume: { min: 0, max: 15 },
   volumeCurve: measuredCurve(0, 15),
   scoreBookGapMs: 1010,
+  // 악보책 최대 20권 (EarlGreyPie 확인 2026-11-16)
+  scoreBook: { perPart: false, maxScores: 20 },
   sampleBoundaries: { piano: E_BOUNDARIES, lute: E_BOUNDARIES, harp: E_BOUNDARIES },
   percussionPitch: 60,
   // 큰북·심벌즈: 높이와 상관없이 같은 소리 (게임 녹음 MTS_2초, 28~100 짝수 음 37개: 6옥타브 내내 피크 고정
@@ -446,9 +492,115 @@ export const MOBILE_PROFILE: GameProfile = {
   ],
 };
 
+/**
+ * PC 마비노기 (실버바인 엔진). 2026-11-16 기준 게임에서 잰 값은 없다.
+ * - 길이 숫자: 마비꼬와 같은 셈(온음표 384틱, lN = floor(384/N), 점은 앞 틱 절반을 버려 더함)으로 둔다.
+ *   PC에서 연주하는 사람에게 들은 말("마비꼬와 같다")과 공개 자료(4분음표 96틱)를 따른 것이고 녹음으로 확인하지 않았다 (pending lengthTicks).
+ * - 그 밖의 값(글자 수, 화음 수, 옥타브·템포·볼륨 범위, 음색 경계, 감쇠, 볼륨 곡선, 악보책 틈, 빠른 음 빠짐)은
+ *   모바일에서 잰 값을 빌려 쓴다 (pending borrowedMeasurements).
+ * - 악보 하나 = 연주자 한 명의 멜로디·화음1·화음2 세 트랙, 자리마다 글자 수 한도가 다르다 (알려진 값 가운데 작은 쪽, pending trackCharLimits).
+ * 앱은 이 프로필의 이름(id)을 보고 다르게 움직이지 않는다: 다른 점은 모두 아래 값으로만 드러난다
+ */
+export const PC_PROFILE: GameProfile = {
+  ...MOBILE_PROFILE,
+  id: "pc",
+  label: "마비노기 PC",
+  charLimitPerScore: 1200,
+  trackCharLimits: [1200, 800, 500],
+  // 자브키엘의 악보집: 파트마다 이어 읽고 장 사이 지연 없음 (EarlGreyPie 확인 2026-11-16). 5장·10장 아이템 (pending scoreBookParts)
+  scoreBookGapMs: 0,
+  scoreBook: { perPart: true, maxScores: 10, choices: [5, 10] },
+  maxChordsPerPlayer: 3,
+  ensembleChordHint: [3, 6, 9, 12],
+  length: { ...MOBILE_PROFILE.length, ticks: { perWhole: 384, rounding: "floor" } },
+  pending: [
+    ...MOBILE_PROFILE.pending,
+    {
+      key: "lengthTicks",
+      scope: "syntax",
+      note:
+        "길이 숫자를 온음표 384틱으로 읽고 나눈 나머지를 버린다고 본다(마비꼬와 같은 셈, PC에서 연주하는 사람에게 들은 말). " +
+        "녹음으로 확인하지 않았다. 확인 방법: 한 악보에 l7 음 112개와 l4 음 64개를 두 트랙으로 넣어 끝 음이 함께 나는지(t120에서 384틱 내림이면 l7 쪽이 0.5초 빠름)",
+      since: "2026-11-16",
+    },
+    {
+      key: "borrowedMeasurements",
+      scope: "sound",
+      note:
+        "PC에서 잰 값이 없어 옥타브·템포·볼륨 범위와 소리 측정값(음색 경계, 감쇠, 볼륨 곡선, 악보책 틈, 빠른 음 빠짐)을 " +
+        "모바일 값으로 빌려 쓴다",
+      since: "2026-11-16",
+    },
+    {
+      key: "trackCharLimits",
+      scope: "syntax",
+      note:
+        "악보 하나에 멜로디·화음1·화음2 세 트랙, 글자 수 한도는 작곡 1랭크 기본값 1200/800/500으로 둔다. " +
+        "알려진 값: 랭크가 낮으면 더 적고(F랭크 400/200/100), 노래 파트 제외를 켜면 1600/1200/900(2021-11 패치). 노래 파트(4번째 자리, 1랭크 1200)는 마이크 전용이라 넣지 않는다. " +
+        "게임에서 확인하지 않았다",
+      since: "2026-11-16",
+    },
+    {
+      key: "scoreBookParts",
+      scope: "sound",
+      note:
+        "자브키엘의 악보집은 파트마다 글을 이어 읽는다고 본다 (마비꼬 분할 복사 결과: 파트마다 한도에서 그대로 끊고 장 머리에 다시 적지 않음). " +
+        "장 사이 지연 0과 5장·10장은 EarlGreyPie 확인. 우리는 명령 경계에서 끊는다. 게임에서 이어 붙인 소리는 녹음으로 확인하지 않았다",
+      since: "2026-11-16",
+    },
+  ],
+};
+
+/**
+ * PC 마비노기, 악보마다 고르는 "노래 파트 제외"를 켠 악보 (2021-11-18 패치). 노래 파트를 못 쓰는 대신 트랙마다 글자 수가 늘어난다
+ * (작곡 1랭크 1600/1200/900). 나머지는 PC_PROFILE과 같다. 이 한도로 맞춘 악보는 옵션을 켜지 않은 사람에게는 넘치므로 기본은 PC_PROFILE
+ */
+export const PC_NO_SONG_PROFILE: GameProfile = {
+  ...PC_PROFILE,
+  id: "pc-nosong",
+  label: "마비노기 PC (노래 파트 제외)",
+  charLimitPerScore: 1600,
+  trackCharLimits: [1600, 1200, 900],
+  exportNotice: "ui.exportNotice.noSongPart",
+};
+
 export const PROFILES: Readonly<Record<string, GameProfile>> = {
   [MOBILE_PROFILE.id]: MOBILE_PROFILE,
+  [PC_PROFILE.id]: PC_PROFILE,
+  [PC_NO_SONG_PROFILE.id]: PC_NO_SONG_PROFILE,
 };
+
+/**
+ * 곡에 프로필이 없거나 모르는 프로필일 때 쓰는 프로필 (마비노기 모바일).
+ * 코드가 특정 게임을 직접 가리키는 곳은 여기 한 곳뿐이다. 나머지는 곡 프로필(songProfile)이나
+ * 등록된 모든 프로필을 덮는 값(widest…)을 읽는다
+ */
+export const DEFAULT_PROFILE: GameProfile = MOBILE_PROFILE;
+
+/** 이 곡의 게임 프로필. 모르는 id면 DEFAULT_PROFILE */
+export function songProfile(song: { readonly meta: { readonly profileId: string } }): GameProfile {
+  return PROFILES[song.meta.profileId] ?? DEFAULT_PROFILE;
+}
+
+/**
+ * 곡과 상관없는 설정(실험실·트릴·잔향 기본값, 튜닝)을 읽을 때 쓰는 범위: 등록된 모든 프로필을 덮는다.
+ * 곡 프로필이 닿는 창은 늘 곡 프로필 값을 쓴다
+ */
+export function widestVolumeStepMax(): number {
+  return Math.max(...Object.values(PROFILES).map(volumeStepMax));
+}
+
+/** 등록된 모든 프로필의 볼륨 범위를 덮는 범위 */
+export function widestVolume(): GameProfile["volume"] {
+  const all = Object.values(PROFILES);
+  return { min: Math.min(...all.map((p) => p.volume.min)), max: Math.max(...all.map((p) => p.volume.max)) };
+}
+
+/** 등록된 모든 프로필의 o 명령 옥타브 범위를 덮는 범위 */
+export function widestOctave(): GameProfile["octave"] {
+  const all = Object.values(PROFILES);
+  return { min: Math.min(...all.map((p) => p.octave.min)), max: Math.max(...all.map((p) => p.octave.max)) };
+}
 
 /** 이 악기가 그 높이로 소리 내는 범위 */
 export function soundingRangeOf(profile: GameProfile, instrument: string | undefined): PitchRange {
@@ -680,6 +832,11 @@ export function heldMeanDb(profile: GameProfile, instrument: string | undefined,
 }
 
 /** 이 악기로 악보 하나에 담는 트랙 수 */
+/** 붙여넣는 자리(MML@ 몇 번째 채널, 0부터)의 글자 수 한도 */
+export function charLimitAt(profile: GameProfile, slot: number): number {
+  return profile.trackCharLimits?.[slot] ?? profile.charLimitPerScore;
+}
+
 export function maxChordsOf(profile: GameProfile, instrument: string | undefined): number {
   return (instrument !== undefined ? profile.instrumentMaxChords[instrument] : undefined) ?? profile.maxChordsPerPlayer;
 }

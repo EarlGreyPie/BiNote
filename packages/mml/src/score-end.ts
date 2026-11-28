@@ -11,14 +11,15 @@ import { restText } from "./printer.js";
  * 원문 없는 트랙은 끝 쉼표를 알 수 없으므로 마지막 음 끝이 길이다.
  */
 
-/** 원문의 게임 길이 (맨 끝 쉼표는 게임이 길이에서 뺀다), 곡 위치로 */
-export function textEnd(mml: TrackText, parsed: ParseResult = parseMml(mml.text)): Rat {
-  return mml.offset ? add(mml.offset, parsed.gameEnd) : parsed.gameEnd;
+/** 원문의 게임 길이 (맨 끝 쉼표는 게임이 길이에서 뺀다), 곡 위치로. lengths: 곡 프로필의 길이 한도 (원문을 읽을 때) */
+export function textEnd(mml: TrackText, parsed?: ParseResult, lengths?: LengthLimit): Rat {
+  const p = parsed ?? parseMml(mml.text, { lengths });
+  return mml.offset ? add(mml.offset, p.gameEnd) : p.gameEnd;
 }
 
-/** 트랙 길이: 원문이 있으면 원문의 게임 길이, 없으면 마지막 음 끝 */
-export function trackEnd(track: Track): Rat {
-  if (track.mml) return textEnd(track.mml);
+/** 트랙 길이: 원문이 있으면 원문의 게임 길이, 없으면 마지막 음 끝. lengths: 곡 프로필의 길이 한도 */
+export function trackEnd(track: Track, lengths?: LengthLimit): Rat {
+  if (track.mml) return textEnd(track.mml, undefined, lengths);
   let end: Rat = ZERO;
   for (const n of track.notes) {
     const e = add(n.start, n.dur);
@@ -27,11 +28,11 @@ export function trackEnd(track: Track): Rat {
   return end;
 }
 
-/** 악보 길이: 가장 긴 트랙 길이. ends를 주면 그 트랙은 그 길이로 본다 (음을 옮기기 전 길이 등) */
-export function scoreEnd(tracks: readonly Track[], ends?: ReadonlyMap<string, Rat>): Rat {
+/** 악보 길이: 가장 긴 트랙 길이. ends를 주면 그 트랙은 그 길이로 본다 (음을 옮기기 전 길이 등). lengths: 곡 프로필의 길이 한도 */
+export function scoreEnd(tracks: readonly Track[], ends?: ReadonlyMap<string, Rat>, lengths?: LengthLimit): Rat {
   let end: Rat = ZERO;
   for (const t of tracks) {
-    const e = ends?.get(t.id) ?? trackEnd(t);
+    const e = ends?.get(t.id) ?? trackEnd(t, lengths);
     if (cmp(e, end) > 0) end = e;
   }
   return end;
@@ -53,13 +54,13 @@ export function bpmBefore(tempo: readonly TempoEvent[], at: Rat): number {
  * 한 악보의 글들이 게임 길이 end(글 위치)까지 가게 한다. 이미 어느 글이 end까지 가면 그대로 둔다.
  * 아니면 한 글 끝에 모자란 쉼표와 템포 하나(bpm, 그 자리 빠르기라 소리는 그대로)를 붙인다:
  * 쉼표 뒤에 명령이 있으면 게임이 그 쉼표를 길이에 넣는다. 맨 끝 쉼표가 이미 end를 넘는 글에는 붙이지 않는다.
- * 붙일 글은 (1) 붙인 뒤 글자 수가 limit(트랙당 한도) 안, (2) 잠근 트랙 아님, (3) 그중 가장 멀리 가는(채울 길이가 가장 짧은) 글.
+ * 붙일 글은 (1) 붙인 뒤 글자 수가 limit(트랙당 한도, 목록이면 글마다 그 자리의 한도) 안, (2) 잠근 트랙 아님, (3) 그중 가장 멀리 가는(채울 길이가 가장 짧은) 글.
  * 한도 안에 드는 글이 없으면 가장 멀리 가는 글에 붙인다 (길이를 잃는 것보다 한도 경고가 낫다).
  * lengths: 쉼표를 쓸 음길이 한도 (곡 프로필의 length)
  */
-export function padScore(texts: readonly string[], end: Rat, bpm: number, lengths: LengthLimit, editable?: readonly boolean[], limit = Infinity): string[] {
+export function padScore(texts: readonly string[], end: Rat, bpm: number, lengths: LengthLimit, editable?: readonly boolean[], limit: number | readonly number[] = Infinity): string[] {
   if (cmp(end, ZERO) <= 0 || texts.length === 0) return [...texts];
-  const parsed = texts.map((t) => parseMml(t));
+  const parsed = texts.map((t) => parseMml(t, { lengths }));
   if (parsed.some((p) => cmp(p.gameEnd, end) >= 0)) return [...texts];
   const padded = (k: number) => {
     const fill = sub(end, parsed[k]!.end);
@@ -72,7 +73,8 @@ export function padScore(texts: readonly string[], end: Rat, bpm: number, length
     .sort((x, y) => cmp(y.p.end, x.p.end) || x.k - y.k)
     .map(({ k }) => k);
   if (order.length === 0) return [...texts];
-  const pick = order.find((k) => padded(k).length <= limit) ?? order[0]!;
+  const limitOf = (k: number) => (typeof limit === "number" ? limit : (limit[k] ?? Infinity));
+  const pick = order.find((k) => padded(k).length <= limitOf(k)) ?? order[0]!;
   const out = [...texts];
   out[pick] = padded(pick);
   return out;

@@ -22,7 +22,8 @@
     checks?: ReadonlyMap<string, number>;
     colors: ReadonlyMap<string, string>;
     activeTrackId: string | undefined;
-    charLimit: number;
+    /** 트랙마다 글자 수 한도 (게임이 붙여넣는 자리마다 한도가 다를 수 있다) */
+    charLimit: (trackId: string) => number;
     /** 트랙 악기 (악보 악기와 다르면 줄에 알약으로 보인다) */
     trackInstrument: (track: Track) => string;
     actions: TrackActions;
@@ -306,10 +307,10 @@
               onclick={(e) => (e.stopPropagation(), e.shiftKey ? actions.listenAll({ kind: track.mute ? "unmute" : "mute" }) : actions.listen(id, { mute: !track.mute }))}>{t("ui.muteShort")}</button
             >
             <button class="ms" class:lit={track.solo} title={t("ui.solo")} onclick={(e) => (e.stopPropagation(), actions.listen(id, { solo: !track.solo }))}>{t("ui.soloShort")}</button>
-            <span class="bar" class:over={count > charLimit} title={`${count} / ${charLimit}`}>
-              <span style:width="{Math.min(100, (count / charLimit) * 100)}%"></span>
+            <span class="bar" class:over={count > charLimit(id)} title={`${count} / ${charLimit(id)}`}>
+              <span style:width="{Math.min(100, (count / charLimit(id)) * 100)}%"></span>
             </span>
-            <span class="count" class:over={count > charLimit}>{count}</span>
+            <span class="count" class:over={count > charLimit(id)}>{count}</span>
             <button class="ms more" title={t("ui.trackMenu")} aria-label={t("ui.trackMenu")} onclick={(e) => menuButton(e, track, g.playerId)}
               ><Icon name="ellipsis" size={14} /></button
             >

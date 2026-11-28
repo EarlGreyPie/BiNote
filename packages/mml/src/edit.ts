@@ -10,6 +10,7 @@ import {
   barBounds,
   barsOfRange,
   pruneMade,
+  songProfile,
   type BarRange,
   METER_UNITS,
   carryTabStrings,
@@ -17,16 +18,16 @@ import {
   cmp,
   eq,
   sub,
+  toFloat,
   ZERO,
   DEFAULT_BPM,
   normalizeTempo,
   tempoClock,
-  getProfile,
-  PROFILES,
   type Command,
   type GameProfile,
   type LengthLimit,
   type MadeRecord,
+  type Marker,
   type Note,
   type Rat,
   type Song,
@@ -41,10 +42,12 @@ import { canWriteExactly, lengthPieces, restText } from "./printer.js";
 import { bpmBefore, padScore, scoreEnd, tempoBefore, textEnd, trackEnd } from "./score-end.js";
 import { placeTempo, placeTempoByScore, scoreTrackIds, type TempoMove } from "./tempo-placement.js";
 import { chordsPerScore } from "./clipboard.js";
-import { distributeChords } from "./distribute.js";
+import { limitOf, trackLimits } from "./track-limits.js";
+import { distributeChords, type BookFit } from "./distribute.js";
 import { mergeChords, type MergeResult } from "./merge.js";
 import { gameTimeline } from "./game-timeline.js";
 import { TRACK_COLORS } from "./track-color.js";
+import { fitSlots } from "./slot-fit.js";
 import { gameScores, withoutDefaultStart } from "./game-output.js";
 import { pitchlessForOutput } from "./pitchless.js";
 import { mergeTies, sameSound } from "./compare.js";
@@ -52,7 +55,7 @@ import { audibleTempo, gameSource, localAt, shortestWriting, spliceText, surgica
 
 /** 곡 프로필로 연주자마다 악보 하나에 담는 트랙 수 (모르는 프로필이면 모바일) */
 export function songChordsPerScore(song: Song): (playerId: string) => number {
-  return chordsPerScore(song, PROFILES[song.meta.profileId] ?? getProfile("mobile"));
+  return chordsPerScore(song, songProfile(song));
 }
 
 /** 곡의 게임 악보마다 트랙 id (출력·악보책 나누기와 같은 묶음) */
@@ -83,9 +86,10 @@ function inWindow(token: { readonly at: Rat; readonly bpm: number }, w: TempoWin
  */
 function scoreTempo(song: Song, ids: readonly string[]): { generated: Map<string, TempoEvent[]>; missing: TempoEvent[] } {
   const tracks = ids.map((id) => song.tracks.find((t) => t.id === id)!);
-  const declared = tracks.flatMap((t) => (t.mml ? tempoTokens(t.mml) : []));
+  const lengths = songProfile(song).length;
+  const declared = tracks.flatMap((t) => (t.mml ? tempoTokens(t.mml, undefined, lengths) : []));
   // 악보가 끝난 뒤 템포는 그 악보에 쓰지 않는다 (score-end.ts)
-  const end = scoreEnd(tracks);
+  const end = scoreEnd(tracks, undefined, lengths);
   const open = tempoWindows(song.tempo).filter((w) => cmp(w.event.at, end) < 0 && !declared.some((d) => inWindow(d, w)));
   const free = tracks.filter((t) => !t.mml);
   const generated = new Map<string, TempoEvent[]>();
@@ -96,6 +100,8 @@ function scoreTempo(song: Song, ids: readonly string[]): { generated: Map<string
     open.map((w) => w.event),
     undefined,
     (e) => open.find((w) => eq(w.event.at, e.at))?.next,
+    undefined,
+    lengths,
   );
   generated.set(free[0]!.id, placed ?? []);
   return { generated, missing: [] };
@@ -108,7 +114,7 @@ function scoreTempo(song: Song, ids: readonly string[]): { generated: Map<string
 export function trackSource(song: Song, track: Track): TrackText {
   if (track.mml) return track.mml;
   const score = songScores(song).find((ids) => ids.includes(track.id)) ?? [track.id];
-  return { text: optimizeMml(track.notes, { tempo: scoreTempo(song, score).generated.get(track.id) ?? [] }).text };
+  return { text: optimizeMml(track.notes, { tempo: scoreTempo(song, score).generated.get(track.id) ?? [], profile: songProfile(song) }).text };
 }
 
 export interface ParsedTrackText {
@@ -118,9 +124,12 @@ export interface ParsedTrackText {
   readonly tempo: TempoEvent[];
 }
 
-/** 원문을 읽어 트랙 음과 템포로. 음 id는 트랙 id + 순번이라 같은 글이면 같은 id가 나온다 */
-export function parseTrackText(trackId: string, source: TrackText): ParsedTrackText {
-  const parsed = parseMml(source.text);
+/**
+ * 원문을 읽어 트랙 음과 템포로. 음 id는 트랙 id + 순번이라 같은 글이면 같은 id가 나온다.
+ * lengths: 곡 프로필의 길이 한도 (길이 숫자의 값). 곡이 닿는 곳은 늘 songProfile(song).length를 넘긴다
+ */
+export function parseTrackText(trackId: string, source: TrackText, lengths?: LengthLimit): ParsedTrackText {
+  const parsed = parseMml(source.text, { lengths });
   const shift = (r: Rat) => (source.offset ? add(r, source.offset) : r);
   const notes = parsed.notes.map((n, k) => ({
     id: `${trackId}.${k + 1}`,
@@ -186,10 +195,11 @@ export function setTrackText(trackId: string, text: string): Command {
       if (!track) return song;
       const before = trackSource(song, track);
       const next: TrackText = before.offset ? { text, offset: before.offset } : { text };
-      const old = parseTrackText(trackId, before);
-      const now = parseTrackText(trackId, next);
+      const lengths = songProfile(song).length;
+      const old = parseTrackText(trackId, before, lengths);
+      const now = parseTrackText(trackId, next, lengths);
       // 읽을 때 여러 트랙에 같이 적힌 템포는 하나로 합쳐졌으므로, 다른 트랙 원문에 아직 적혀 있는 템포는 빼지 않는다
-      const others = song.tracks.filter((t) => t.id !== trackId && t.mml).flatMap((t) => parseTrackText(t.id, t.mml!).tempo);
+      const others = song.tracks.filter((t) => t.id !== trackId && t.mml).flatMap((t) => parseTrackText(t.id, t.mml!, lengths).tempo);
       const stillDeclared = (e: TempoEvent) => others.some((o) => o.bpm === e.bpm && cmp(o.at, e.at) === 0);
       // 지도에 없던 옛 원문의 t(다른 악보 때문에 음 경계로 옮겨 적은 t)가 그대로 남아 있으면 지도에 더하지 않는다
       const mirror = (e: TempoEvent) =>
@@ -271,7 +281,7 @@ export function compactResult(song: Song, profile?: GameProfile, locked?: Readon
   const placed = placeTempoByScore(song, chords, moved, locked, dropped, ends);
   // 어느 채널에도 쓸 수 없는 템포가 있으면 (잠근 트랙만 경계가 맞는 등) 그대로 둔다. 뒤 음 경계로 옮겨 쓴 템포는 출력과 같으므로 괜찮다
   if (dropped.length > 0) return { song, kept: "tempo" };
-  const songProfile = profile ?? PROFILES[song.meta.profileId] ?? getProfile("mobile");
+  const outProfile = profile ?? songProfile(song);
   const tracks: Track[] = [];
   for (const t of song.tracks) {
     // 잠근 트랙은 글도 그대로 둔다
@@ -280,26 +290,26 @@ export function compactResult(song: Song, profile?: GameProfile, locked?: Readon
       continue;
     }
     const tempo = placed.get(t.id) ?? [];
-    const optimized = optimizeMml(t.notes, { tempo }).text;
+    const optimized = optimizeMml(t.notes, { tempo, profile: outProfile }).text;
     // 출력기는 원문을 보지 않아 원문보다 길게 쓸 때가 있다. 템포만 고친 원문이 음·템포가 같고 더 짧으면 그것을 쓴다
-    const source = t.mml ? gameSource(t.mml, tempo, songProfile) : undefined;
-    const shorter = source !== undefined && source.length < optimized.length ? shortestWriting(t.notes, tempo, [source]) : undefined;
+    const source = t.mml ? gameSource(t.mml, tempo, outProfile) : undefined;
+    const shorter = source !== undefined && source.length < optimized.length ? shortestWriting(t.notes, tempo, [source], outProfile.length) : undefined;
     const mml: TrackText = { text: shorter ?? optimized };
-    const notes = carryTabStrings(t.notes, parseTrackText(t.id, mml).notes);
+    const notes = carryTabStrings(t.notes, parseTrackText(t.id, mml, outProfile.length).notes);
     // 출력기가 쓸 수 없는 길이(아주 짧은 셋잇단 등)는 버려지므로, 다시 읽은 음이 원래 음과 다르면
     // 곡을 그대로 둔다 (글자 수를 줄이려다 음을 잃지 않게)
     if (!sameSound(t.notes, notes)) return { song, kept: "notes" };
     tracks.push({ ...t, notes, mml });
   }
   // 원문 끝 쉼표가 사라져 악보가 짧아지지 않게 악보 길이를 지킨다 (score-end.ts). 쉼표와 그 자리 템포만 붙으므로 음은 그대로.
-  // 붙인 뒤에도 트랙당 글자 한도 안인 글을 먼저 고른다
-  const charLimit = songProfile.charLimitPerScore;
+  // 붙인 뒤에도 그 트랙 자리 글자 한도 안인 글을 먼저 고른다
+  const limits = trackLimits(song, outProfile);
   const scoreEnds = new Map<string, Rat>();
   for (const ids of scoreTrackIds(song, chords)) {
-    const end = scoreEnd(ids.map((id) => song.tracks.find((x) => x.id === id)!), ends);
+    const end = scoreEnd(ids.map((id) => song.tracks.find((x) => x.id === id)!), ends, outProfile.length);
     ids.forEach((id) => scoreEnds.set(id, end));
     const at = ids.map((id) => tracks.findIndex((x) => x.id === id));
-    const padded = padScore(at.map((k) => tracks[k]!.mml?.text ?? ""), end, bpmBefore(song.tempo, end), songProfile.length, ids.map((id) => !locked?.has(id)), charLimit);
+    const padded = padScore(at.map((k) => tracks[k]!.mml?.text ?? ""), end, bpmBefore(song.tempo, end), outProfile.length, ids.map((id) => !locked?.has(id)), ids.map((id) => limitOf(limits, id, outProfile)));
     at.forEach((k, i) => {
       const t = tracks[k]!;
       if (t.mml && padded[i] !== t.mml.text) tracks[k] = { ...t, mml: { text: padded[i]! } };
@@ -331,7 +341,7 @@ export function compactResult(song: Song, profile?: GameProfile, locked?: Readon
       normalizeTempo(
         ids.flatMap((id) => {
           const t = tracks.find((x) => x.id === id);
-          return t?.mml ? tempoBefore(parseTrackText(t.id, t.mml).tempo, end) : [];
+          return t?.mml ? tempoBefore(parseTrackText(t.id, t.mml, outProfile.length).tempo, end) : [];
         }),
       ),
     );
@@ -400,7 +410,7 @@ function timelineBefore(song: Song, profile: GameProfile, player: string): strin
 export function settleDistributed(song: Song, moved: Song, profile: GameProfile, locked?: ReadonlySet<string>): DistributedResult {
   if (moved === song) return { song };
   // 음을 옮긴 트랙은 원문이 지워지므로, 옮기기 전 트랙 길이(원문 끝 쉼표 포함)를 지킬 길이로 넘긴다
-  const compact = compactResult(moved, profile, locked, new Map(song.tracks.map((t) => [t.id, trackEnd(t)])));
+  const compact = compactResult(moved, profile, locked, new Map(song.tracks.map((t) => [t.id, trackEnd(t, songProfile(song).length)])));
   if (compact.kept) return { song, kept: compact.kept };
   const players = new Set(moved.tracks.filter((t, k) => t !== song.tracks[k]).map((t) => t.playerId));
   for (const player of players) {
@@ -413,17 +423,20 @@ export function settleDistributed(song: Song, moved: Song, profile: GameProfile,
  * 화음 분산 명령. 음을 옮긴 뒤 모든 트랙을 최적화 출력기로 다시 쓴다
  * (곡 템포를 채널마다 다시 나눠 넣어야 하므로 옮기지 않은 트랙의 표기도 바뀐다). 잠근 트랙은 음도 글도 그대로 둔다.
  * 다시 쓸 수 없거나 게임 소리가 달라지면 곡을 그대로 둔다 (settleDistributed).
+ * slots면 먼저 자리를 맞춘다(fitSlots: 자리마다 한도가 다른 게임에서 큰 트랙을 큰 자리로). 모바일은 그대로다
  */
-export function distributeSong(profile: GameProfile, label = "화음 분산", limit?: number, locked?: ReadonlySet<string>): Command {
+export function distributeSong(profile: GameProfile, label = "화음 분산", fit?: BookFit, locked?: ReadonlySet<string>, slots = true): Command {
   return {
     label,
-    apply: (song) =>
-      settleDistributed(
-        song,
-        distributeChords(song, profile, { ...(limit === undefined ? {} : { limit }), ...(locked ? { locked } : {}) }).song,
+    apply: (song) => {
+      const fitted = slots ? fitSlots(song, profile, locked).song : song;
+      return settleDistributed(
+        fitted,
+        distributeChords(fitted, profile, { ...(fit === undefined ? {} : { fit }), ...(locked ? { locked } : {}) }).song,
         profile,
         locked,
-      ).song,
+      ).song;
+    },
     invert: (before) => restoreSong(before),
   };
 }
@@ -438,7 +451,14 @@ export function distributeSong(profile: GameProfile, label = "화음 분산", li
  * 연주자마다 따로 병합해 보고 같은 연주자만 받아들인다. 병합 안의 다른 검사(겹침·도약·글자 수·템포 자리)는
  * 이 검사에서 떨어질 이동을 미리 거르는 것일 뿐이다
  */
-export function mergeResult(song: Song, profile: GameProfile, locked?: ReadonlySet<string>): MergeResult {
+export function mergeResult(song: Song, profile: GameProfile, locked?: ReadonlySet<string>, slots = true): MergeResult {
+  const merged = mergeOnly(song, profile, locked);
+  // 병합으로 트랙이 빠지면 뒤 트랙 자리가 바뀌므로, 병합한 뒤에 자리를 맞춘다 (모바일은 그대로)
+  if (!slots || merged.moved === 0) return merged;
+  return { ...merged, song: fitSlots(merged.song, profile, locked).song };
+}
+
+function mergeOnly(song: Song, profile: GameProfile, locked?: ReadonlySet<string>): MergeResult {
   const players = [...new Set(song.tracks.filter((t) => !locked?.has(t.id)).map((t) => t.playerId))].filter(
     (id) => song.tracks.filter((t) => t.playerId === id && !locked?.has(t.id)).length > 1,
   );
@@ -451,6 +471,9 @@ export function mergeResult(song: Song, profile: GameProfile, locked?: ReadonlyS
     // 악보는 연주자마다 따로 쓰므로 그 연주자 악보만 비교하면 된다
     const before = gameTimeline(song, profile, id);
     let merged = mergeChords(current, profile, options);
+    if (merged.moved === 0) continue;
+    // 비운 트랙을 지우면 뒤 트랙이 앞 자리로 당겨진다. 자리 한도가 줄어드는 트랙이 생기면(자리마다 한도가 다른 게임) 빈 트랙으로 남긴다
+    if (merged.removed.length > 0 && limitsShrink(current, merged.song, profile)) merged = mergeChords(current, profile, { ...options, keepEmpty: true });
     if (merged.moved === 0) continue;
     if (gameTimeline(merged.song, profile, id) !== before) {
       // 비운 트랙을 지우면 뒤 트랙이 앞 악보로 당겨져 악보 나뉨이 바뀐다. 빈 트랙으로 남겨 다시 본다
@@ -469,11 +492,26 @@ export function mergeResult(song: Song, profile: GameProfile, locked?: ReadonlyS
   return { song: compact.song, moved, removed };
 }
 
-/** 화음 병합 명령 (mergeResult). 실행 취소하면 병합 전 곡으로 돌아간다 */
-export function mergeSong(profile: GameProfile, label = "화음 병합", locked?: ReadonlySet<string>): Command {
+/** 곡을 바꾼 뒤 자리 한도가 줄어든 트랙이 있는지 (병합으로 트랙을 지워 뒤 트랙이 앞 자리로 당겨질 때) */
+function limitsShrink(before: Song, after: Song, profile: GameProfile): boolean {
+  const was = trackLimits(before, profile);
+  return [...trackLimits(after, profile)].some(([id, limit]) => limit < (was.get(id) ?? limit));
+}
+
+/** 자리 맞추기 명령 (fitSlots, 글자 수 맞추기 창). 실행 취소하면 바꾸기 전 곡으로 돌아간다 */
+export function fitSlotsSong(profile: GameProfile, locked?: ReadonlySet<string>, label = "자리 맞추기"): Command {
   return {
     label,
-    apply: (song) => mergeResult(song, profile, locked).song,
+    apply: (song) => fitSlots(song, profile, locked).song,
+    invert: (before) => restoreSong(before),
+  };
+}
+
+/** 화음 병합 명령 (mergeResult). 실행 취소하면 병합 전 곡으로 돌아간다 */
+export function mergeSong(profile: GameProfile, label = "화음 병합", locked?: ReadonlySet<string>, slots = true): Command {
+  return {
+    label,
+    apply: (song) => mergeResult(song, profile, locked, slots).song,
     invert: (before) => restoreSong(before),
   };
 }
@@ -509,7 +547,7 @@ export function appendSong(other: Song, label = "악보 더하기"): Command {
       const tracks = other.tracks.map((t) => {
         const id = trackId();
         // 더하는 곡의 만든 기록은 가져오지 않으므로 그 표시도 뗀다
-        const notes = unmarkNotes(t.mml ? carryTabStrings(t.notes, parseTrackText(id, t.mml).notes) : t.notes.map((n, k) => ({ ...n, id: `${id}.${k + 1}` })));
+        const notes = unmarkNotes(t.mml ? carryTabStrings(t.notes, parseTrackText(id, t.mml, songProfile(other).length).notes) : t.notes.map((n, k) => ({ ...n, id: `${id}.${k + 1}` })));
         return { ...t, id, playerId: players.get(t.playerId)?.id ?? t.playerId, notes };
       });
       // 트랙 색을 트랙마다 정해 두지 않은 곡(MML 글 등)은 그동안 보이던 대로 악보 안 위치 색을 준다
@@ -548,14 +586,15 @@ export function insertTime(at: Rat, length: Rat, label = "마디 넣기"): Comma
   return {
     label,
     apply(song) {
-      const lengths = (PROFILES[song.meta.profileId] ?? getProfile("mobile")).length;
+      const lengths = songProfile(song).length;
       const next: Song = {
         ...song,
         // 곡 처음(0)의 템포·박자는 그대로 둔다. 밀면 넣은 마디가 기본 템포(t120)로 연주된다.
         // 넣는 자리 뒤의 변화는 함께 민다
         tempo: insertTempo(song.tempo, at, length),
         timeSig: song.timeSig.map((s) => (cmp(s.at, ZERO) === 0 ? s : { ...s, at: shift(s.at) })),
-        markers: song.markers.map((m) => ({ ...m, at: shift(m.at) })),
+        // 범위 메모의 끝은 넣는 자리보다 뒤일 때만 민다 (끝이 넣는 자리와 같으면 범위를 늘리지 않는다)
+        markers: song.markers.map((m) => ({ ...m, at: shift(m.at), ...(m.end ? { end: cmp(m.end, at) > 0 ? add(m.end, length) : m.end } : {}) })),
         ...(song.keys ? { keys: song.keys.map((k) => (cmp(k.at, ZERO) === 0 ? k : { ...k, at: shift(k.at) })) } : {}),
         tracks: song.tracks.map((t) => {
           if (!t.notes.some((n) => cmp(n.start, at) >= 0)) return keepText(t, t.mml && insertTextTime(t.mml, at, length, lengths));
@@ -589,6 +628,20 @@ function removeSpan<T extends { readonly at: Rat }>(events: readonly T[], at: Ra
 }
 
 /**
+ * 마디 빼기의 마커: 구간 안 마커(한 자리)는 지우고 뒤는 당긴다.
+ * 범위 메모는 구간 밖으로 남는 부분이 있으면 남기고 (구간 안 끝은 at으로), 모두 구간 안이면 지운다
+ */
+function removeMarkerSpan(markers: readonly Marker[], at: Rat, end: Rat, length: Rat): Marker[] {
+  const pull = (r: Rat) => (cmp(r, at) < 0 ? r : cmp(r, end) >= 0 ? sub(r, length) : at);
+  return markers.flatMap((m) => {
+    if (!m.end) return cmp(m.at, at) < 0 || cmp(m.at, end) >= 0 ? [{ ...m, at: pull(m.at) }] : [];
+    const from = pull(m.at);
+    const to = pull(m.end);
+    return cmp(to, from) > 0 ? [{ ...m, at: from, end: to }] : [];
+  });
+}
+
+/**
  * 마디 빼기: [at, at+length) 구간을 지우고 뒤를 당긴다. 구간 안의 음은 지우고,
  * 구간에 걸친 음은 구간 밖 부분만 남긴다. 구간 안의 템포·박자는 마지막 값을 at에 남긴다.
  * &로 이어 주던 다음 음이 지워졌거나 더 이상 바로 붙지 않으면 &를 푼다.
@@ -601,7 +654,7 @@ export function deleteTime(at: Rat, length: Rat, label = "마디 빼기"): Comma
   return {
     label,
     apply(song) {
-      const lengths = (PROFILES[song.meta.profileId] ?? getProfile("mobile")).length;
+      const lengths = songProfile(song).length;
       const tempo = removeSpan(song.tempo, at, end, length);
       // 구간 끝(end)에 템포가 있으면 그것이 at으로 당겨지고, 구간 안 템포는 하나도 남지 않는다 (removeSpan)
       const left = { bpm: tempoAtPosition(tempo, at), endTempo: song.tempo.some((e) => eq(e.at, end)) };
@@ -610,7 +663,7 @@ export function deleteTime(at: Rat, length: Rat, label = "마디 빼기"): Comma
         ...song,
         tempo,
         timeSig: removeSpan(song.timeSig, at, end, length),
-        markers: song.markers.filter((m) => cmp(m.at, at) < 0 || cmp(m.at, end) >= 0).map((m) => ({ ...m, at: back(m.at) })),
+        markers: removeMarkerSpan(song.markers, at, end, length),
         ...(song.keys ? { keys: removeSpan(song.keys, at, end, length) } : {}),
         tracks: song.tracks.map((t) => {
           const touched = t.notes.some((n) => cmp(add(n.start, n.dur), at) > 0);
@@ -672,7 +725,7 @@ function breakMade(song: Song, broken: ReadonlySet<string>): Song {
 /** 곡에서 지울 마디 구간 [시작, 끝) 목록 (앞에서부터, 붙은 범위는 하나로). 곡 끝 뒤 마디는 뺀다 ("20-"는 곡 끝 마디까지) */
 export function barSpans(song: Song, ranges: readonly BarRange[]): (readonly [Rat, Rat])[] {
   // 원문 길이(끝 쉼표 포함)와 음 끝 가운데 늦은 쪽
-  let songEnd = scoreEnd(song.tracks);
+  let songEnd = scoreEnd(song.tracks, undefined, songProfile(song).length);
   for (const t of song.tracks) if (cmp(notesEnd(t.notes), songEnd) > 0) songEnd = notesEnd(t.notes);
   if (cmp(songEnd, ZERO) <= 0) return [];
   const lastBar = barsOfRange(song.timeSig, ZERO, songEnd)[1];
@@ -694,6 +747,14 @@ export interface DeleteBarsCheck {
   readonly removed: number;
   readonly cut: number;
   readonly made: number;
+  /** 지워지는 안 끝낸 작업 메모 수 (할 일이 조용히 사라지지 않게 창에 적는다) */
+  readonly memos: number;
+}
+
+/** before에 있던 안 끝낸 작업 메모 가운데 after에 없는 것의 수 (마디 빼기·지우기로 사라진 할 일) */
+export function lostOpenMemos(before: Song, after: Song): number {
+  const kept = new Set(after.markers.map((m) => m.id));
+  return before.markers.filter((m) => m.kind === "memo" && !m.done && !kept.has(m.id)).length;
 }
 
 export function checkDeleteBars(song: Song, ranges: readonly BarRange[]): DeleteBarsCheck {
@@ -716,7 +777,8 @@ export function checkDeleteBars(song: Song, ranges: readonly BarRange[]): Delete
       if (n.made !== undefined) made.add(n.made);
     }
   const live = new Set((song.made ?? []).map((r) => r.id));
-  return { bars, removed, cut, made: [...made].filter((id) => live.has(id)).length };
+  const memos = song.markers.some((m) => m.kind === "memo" && !m.done) ? lostOpenMemos(song, deleteBars(ranges).apply(song)) : 0;
+  return { bars, removed, cut, made: [...made].filter((id) => live.has(id)).length, memos };
 }
 
 /**
@@ -832,7 +894,7 @@ function restPieces(dur: Rat, lengths: LengthLimit): string | undefined {
 function insertTextTime(mml: TrackText, at: Rat, length: Rat, lengths: LengthLimit): TrackText {
   const offset = mml.offset ?? ZERO;
   if (cmp(offset, ZERO) > 0 && cmp(at, offset) <= 0) return { ...mml, offset: add(offset, length) };
-  const source = surgicalSource(mml);
+  const source = surgicalSource(mml, lengths);
   if (!source) return mml;
   const { parsed, tokens } = source;
   const local = sub(at, offset);
@@ -880,7 +942,7 @@ function deleteTextTime(
   const end = add(at, length);
   const offset = mml.offset ?? ZERO;
   if (cmp(offset, ZERO) > 0 && cmp(offset, end) >= 0) return { ...mml, offset: sub(offset, length) };
-  const source = surgicalSource(mml);
+  const source = surgicalSource(mml, lengths);
   if (!source) return mml;
   const { parsed, tokens } = source;
   // 원문 안 위치로 본 구간
@@ -915,7 +977,7 @@ function deleteTextTime(
     }
     if (edits.length === 0 && !moved) return mml;
     const text = spliceText(mml.text, edits);
-    if (eq(parseMml(text).gameEnd, want)) return { ...mml, text, ...(moved ? { offset: at } : {}) };
+    if (eq(parseMml(text, { lengths }).gameEnd, want)) return { ...mml, text, ...(moved ? { offset: at } : {}) };
   }
   return mml;
 }
@@ -940,12 +1002,13 @@ function writtenBpmAt(song: Song, trackId: string, text: string, at: Rat): numbe
   const score = songScores(song).find((ids) => ids.includes(trackId)) ?? [trackId];
   // 원문 없는 트랙의 템포는 출력기가 그 트랙에 쓰는 템포(scoreTempo)다. 글을 다시 쓰고 읽지 않고 악보마다 한 번 계산한다
   let generated: Map<string, TempoEvent[]> | undefined;
+  const lengths = songProfile(song).length;
   const written = normalizeTempo(
     score.flatMap((tid) => {
-      if (tid === trackId) return parseTrackText(trackId, { text }).tempo;
+      if (tid === trackId) return parseTrackText(trackId, { text }, lengths).tempo;
       const t = song.tracks.find((x) => x.id === tid);
       if (!t) return [];
-      if (t.mml) return textTempo(t.id, t.mml);
+      if (t.mml) return textTempo(t.id, t.mml, lengths);
       generated ??= scoreTempo(song, score).generated;
       return generated.get(t.id) ?? [];
     }),
@@ -955,11 +1018,16 @@ function writtenBpmAt(song: Song, trackId: string, text: string, at: Rat): numbe
   return bpm;
 }
 
-/** 원문의 템포 (곡 위치). 원문 글은 바뀌지 않는 값이라 글마다 한 번만 읽는다 (여러 트랙 일괄 편집에서 같은 글을 되풀이해 읽지 않게) */
-const textTempoCache = new WeakMap<TrackText, TempoEvent[]>();
-function textTempo(trackId: string, mml: TrackText): TempoEvent[] {
-  let tempo = textTempoCache.get(mml);
-  if (!tempo) textTempoCache.set(mml, (tempo = parseTrackText(trackId, mml).tempo));
+/**
+ * 원문의 템포 (곡 위치). 원문 글은 바뀌지 않는 값이라 글마다 한 번만 읽는다 (여러 트랙 일괄 편집에서 같은 글을 되풀이해 읽지 않게).
+ * 길이 한도가 다르면 같은 글도 템포 자리가 달라 다시 읽는다
+ */
+const textTempoCache = new WeakMap<TrackText, { readonly lengths: LengthLimit; readonly tempo: TempoEvent[] }>();
+function textTempo(trackId: string, mml: TrackText, lengths: LengthLimit): TempoEvent[] {
+  const hit = textTempoCache.get(mml);
+  if (hit && hit.lengths === lengths) return hit.tempo;
+  const tempo = parseTrackText(trackId, mml, lengths).tempo;
+  textTempoCache.set(mml, { lengths, tempo });
   return tempo;
 }
 
@@ -975,17 +1043,17 @@ function textTempo(trackId: string, mml: TrackText): TempoEvent[] {
  * 다시 읽은 음이 고친 음과 다르면(출력기가 쓸 수 없는 길이 등) 전처럼 원문 없이 둔다
  */
 export function keepTextEnd(before: Song, after: Song, trackIds: readonly string[], mode: "same-end" | "tail" = "same-end"): Song {
-  const lengths = (PROFILES[after.meta.profileId] ?? getProfile("mobile")).length;
+  const lengths = songProfile(after).length;
   let out = after;
   for (const id of trackIds) {
     const old = before.tracks.find((t) => t.id === id);
     const now = out.tracks.find((t) => t.id === id);
     if (!old?.mml || !now || now.mml) continue;
-    const end = textEnd(old.mml);
+    const end = textEnd(old.mml, undefined, lengths);
     const last = notesEnd(now.notes);
     const kept = mode === "tail" ? cmp(end, notesEnd(old.notes)) > 0 : eq(notesEnd(old.notes), last);
     if (!kept || cmp(end, last) <= 0) continue;
-    const mml = paddedText(out, now, textTempo(id, old.mml), end, lengths);
+    const mml = paddedText(out, now, textTempo(id, old.mml, lengths), end, lengths);
     if (mml) out = { ...out, tracks: out.tracks.map((t) => (t.id === id ? { ...now, mml } : t)) };
   }
   return out;
@@ -998,7 +1066,7 @@ export function keepTextEnd(before: Song, after: Song, trackIds: readonly string
 export function padTrackEnd(song: Song, trackId: string, end: Rat): Song {
   const track = song.tracks.find((t) => t.id === trackId);
   if (!track || track.mml || cmp(end, notesEnd(track.notes)) <= 0) return song;
-  const mml = paddedText(song, track, [], end, (PROFILES[song.meta.profileId] ?? getProfile("mobile")).length);
+  const mml = paddedText(song, track, [], end, songProfile(song).length);
   return mml ? { ...song, tracks: song.tracks.map((t) => (t.id === trackId ? { ...track, mml } : t)) } : song;
 }
 
@@ -1010,7 +1078,7 @@ function paddedText(song: Song, track: Track, own: readonly TempoEvent[], end: R
   const base = withTailTempo(trackSource(song, track).text, own, end, lengths);
   const text = padScore([base], end, writtenBpmAt(song, track.id, base, end), lengths)[0]!;
   const mml: TrackText = { text };
-  return eq(textEnd(mml), end) && sameSound(track.notes, parseTrackText(track.id, mml).notes) ? mml : undefined;
+  return eq(textEnd(mml, undefined, lengths), end) && sameSound(track.notes, parseTrackText(track.id, mml, lengths).notes) ? mml : undefined;
 }
 
 /**
@@ -1020,18 +1088,20 @@ function paddedText(song: Song, track: Track, own: readonly TempoEvent[], end: R
  * (마디 빼기로 구간 안 템포가 다른 트랙의 템포로 바뀌었을 수 있다). 지킬 수 없으면 전처럼 원문 없이 둔다.
  * extra: 원문이 적지 않았어도 끝 쉼표 사이에 적을 지도 템포 자리 (템포 변환이 새로 넣은 구간 처음·끝 템포. 고친 곡 자리)
  */
-function keepMovedEnd(before: Song, after: Song, move: (r: Rat) => Rat, extra: readonly Rat[] = []): Song {
-  const lengths = (PROFILES[after.meta.profileId] ?? getProfile("mobile")).length;
+export function keepMovedEnd(before: Song, after: Song, move: (r: Rat) => Rat, extra: readonly Rat[] = []): Song {
+  const lengths = songProfile(after).length;
+  // 원문은 바꾸기 전 곡의 게임 셈으로 읽는다 (게임 바꾸기에서는 두 셈이 다르다)
+  const was = songProfile(before).length;
   let out = after;
   for (const old of before.tracks) {
     const now = out.tracks.find((t) => t.id === old.id);
     if (!old.mml || !now || now.mml) continue;
-    const oldEnd = textEnd(old.mml);
+    const oldEnd = textEnd(old.mml, undefined, was);
     if (cmp(oldEnd, notesEnd(old.notes)) <= 0) continue;
     const end = move(oldEnd);
     if (cmp(end, notesEnd(now.notes)) <= 0) continue;
     const own = [
-      ...textTempo(old.id, old.mml).map((e) => {
+      ...textTempo(old.id, old.mml, was).map((e) => {
         const at = move(e.at);
         return { at, bpm: tempoAtPosition(out.tempo, at) ?? e.bpm };
       }),
@@ -1048,7 +1118,7 @@ function keepMovedEnd(before: Song, after: Song, move: (r: Rat) => Rat, extra: r
  * 다시 쓴 글이 그 자리에 같은 빠르기를 이미 적었으면 두 번 적지 않는다. 한 자리에 여럿 적힌 템포는 마지막 것만 다시 적는다
  */
 function withTailTempo(text: string, own: readonly TempoEvent[], end: Rat, lengths: LengthLimit): string {
-  const parsed = parseMml(text);
+  const parsed = parseMml(text, { lengths });
   let at = parsed.end;
   let out = text;
   // 같은 자리에 둘 이상 적혔으면 마지막 것이 그 자리 빠르기다 (적힌 순서를 지키는 정렬 뒤 자리마다 마지막만)
@@ -1182,8 +1252,9 @@ export function tempoChangeTargets(song: Song, from: Rat = ZERO, to?: Rat): Temp
   const map = normalizeTempo(song.tempo);
   const startBpm = map.filter((e) => cmp(e.at, from) <= 0).at(-1)?.bpm ?? DEFAULT_BPM;
   const tokens = new Map<string, TempoToken[]>();
+  const lengths = songProfile(song).length;
   for (const t of song.tracks) {
-    const hits = (t.mml ? surgicalSource(t.mml)?.tokens : undefined)?.filter((h) => inside(h.at)) ?? [];
+    const hits = (t.mml ? surgicalSource(t.mml, lengths)?.tokens : undefined)?.filter((h) => inside(h.at)) ?? [];
     if (hits.length > 0) tokens.set(t.id, hits);
   }
   const seen = new Set<string>();
@@ -1309,7 +1380,8 @@ export interface TempoRampResult extends TempoChangeResult {
 export function rampTemposResult(song: Song, ramp: TempoRamp, from: Rat, to: Rat, range?: { readonly min: number; readonly max: number }): TempoRampResult {
   const unchanged = { song, failed: [], steps: [], replaced: 0 };
   if (cmp(to, from) <= 0) return unchanged;
-  const limit = range ?? (PROFILES[song.meta.profileId] ?? getProfile("mobile")).tempo;
+  const limit = range ?? songProfile(song).tempo;
+  const lengths = songProfile(song).length;
   const inside = (at: Rat) => cmp(at, from) >= 0 && cmp(at, to) < 0;
   const before = normalizeTempo(song.tempo);
   const bpmAt = (at: Rat) => before.filter((e) => cmp(e.at, at) <= 0).at(-1)?.bpm ?? DEFAULT_BPM;
@@ -1341,8 +1413,8 @@ export function rampTemposResult(song: Song, ramp: TempoRamp, from: Rat, to: Rat
   // 그런 원문은 지우는 대신 그 자리의 새 템포 값으로 바꿔 적어 게임 길이를 그대로 둔다
   const keptTracks = tracks.map((t, k) => {
     const old = song.tracks[k]!;
-    if (!t.mml || !old.mml || t.mml.text === old.mml.text || eq(textEnd(t.mml), textEnd(old.mml))) return t;
-    return { ...t, mml: { ...old.mml, text: retempoRemoved(old.mml, t.mml, tempo) } };
+    if (!t.mml || !old.mml || t.mml.text === old.mml.text || eq(textEnd(t.mml, undefined, lengths), textEnd(old.mml, undefined, lengths))) return t;
+    return { ...t, mml: { ...old.mml, text: retempoRemoved(old.mml, t.mml, tempo, lengths) } };
   });
   const failures = new Map<number, Set<TempoEdgeFailure>>();
   const next = edges.reduce<Song>(
@@ -1367,9 +1439,9 @@ export function rampTemposResult(song: Song, ramp: TempoRamp, from: Rat, to: Rat
  * 계단 템포가 지운 원문 t를 지우지 않고 바꿔 적은 글. old에 있던 t 중 now에 남지 않은 것(같은 순서로 맞춰 본다)을
  * 그 자리에서 tempo 지도가 울리는 값으로 바꾼다. t 자리·글 길이 구조는 그대로라 게임 길이가 바뀌지 않는다
  */
-function retempoRemoved(old: TrackText, now: TrackText, tempo: readonly TempoEvent[]): string {
-  const was = tempoTokens(old);
-  const left = tempoTokens(now);
+function retempoRemoved(old: TrackText, now: TrackText, tempo: readonly TempoEvent[], lengths: LengthLimit): string {
+  const was = tempoTokens(old, undefined, lengths);
+  const left = tempoTokens(now, undefined, lengths);
   const removed: TempoToken[] = [];
   let j = 0;
   for (const k of was) {
@@ -1398,6 +1470,12 @@ export type TempoConvertFailure =
   | { readonly kind: "end"; readonly trackId: string; readonly at: Rat }
   | { readonly kind: "tempo"; readonly at: Rat; readonly bpm: number }
   | { readonly kind: "meter"; readonly at: Rat; readonly beats: number; readonly unit: number };
+
+/** convertTempoResult 선택 */
+export interface ConvertTempoOptions {
+  /** 구간 안 템포(바꾸기 전 자리, 원래 값)마다 쓸 정수 템포. undefined면 반올림 (범위 밖 템포 풀기가 쌓이는 오차를 줄이려고 올림·내림을 고른다) */
+  readonly bpm?: (at: Rat, bpm: number) => number | undefined;
+}
 
 /** 실제 시간 유지 템포 변환 결과. failed가 있으면 song은 바꾸기 전 곡 그대로다 */
 export interface TempoConvertResult {
@@ -1437,17 +1515,17 @@ function scaledMeter(sig: { readonly beats: number; readonly unit: number }, sca
  * 게임 음길이(profile.length)로 정확히 쓸 수 없는 길이가 새로 생기거나, 바꾼 템포를 게임 출력이 그 자리에 쓰지 못하면
  * 곡을 바꾸지 않고 failed로 알린다 (바꾸기 전부터 쓸 수 없던 길이는 탓하지 않는다)
  */
-export function convertTempoResult(song: Song, scale: Rat, from: Rat = ZERO, to?: Rat): TempoConvertResult {
+export function convertTempoResult(song: Song, scale: Rat, from: Rat = ZERO, to?: Rat, options: ConvertTempoOptions = {}): TempoConvertResult {
   const unchanged: TempoConvertResult = { song, failed: [], rounded: [] };
   if (scale.n <= 0 || eq(scale, rat(1))) return unchanged;
-  const songEnd = scoreEnd(song.tracks);
+  const songEnd = scoreEnd(song.tracks, undefined, songProfile(song).length);
   // 구간이 곡 끝을 넘으면 곡 끝까지로 본다 (끝에 다시 적을 템포·박자표가 필요 없다)
   const until = to !== undefined && cmp(to, songEnd) < 0 ? to : undefined;
   if (cmp(songEnd, from) <= 0 || (until !== undefined && cmp(until, from) <= 0)) return unchanged;
-  const lengths = (PROFILES[song.meta.profileId] ?? getProfile("mobile")).length;
+  const lengths = songProfile(song).length;
   // 구간이 늘어나거나 준 만큼 (구간 뒤를 그만큼 민다)
   const grow = until === undefined ? ZERO : mul(sub(until, from), sub(scale, rat(1)));
-  const move = (r: Rat): Rat => (cmp(r, from) <= 0 ? r : until === undefined || cmp(r, until) <= 0 ? add(from, mul(sub(r, from), scale)) : add(r, grow));
+  const move = convertMove(scale, from, until);
   const newUntil = until === undefined ? undefined : move(until);
   const back = (r: Rat): Rat => (cmp(r, from) <= 0 ? r : newUntil === undefined || cmp(r, newUntil) <= 0 ? add(from, div(sub(r, from), scale)) : sub(r, grow));
   const inside = (at: Rat) => cmp(at, from) >= 0 && (until === undefined || cmp(at, until) < 0);
@@ -1457,10 +1535,11 @@ export function convertTempoResult(song: Song, scale: Rat, from: Rat = ZERO, to?
   const before = normalizeTempo(song.tempo);
   const bpmAt = (at: Rat) => tempoAtPosition(before, at) ?? DEFAULT_BPM;
   // 바꾼 템포 (정수, 1~999)
-  const scaledBpm = (bpm: number) => Math.min(999, Math.max(1, Math.round((bpm * scale.n) / scale.d)));
+  // 바꾼 템포: 부르는 쪽이 자리마다 정수를 골라 주면(options.bpm) 그 값, 아니면 반올림
+  const scaledBpm = (bpm: number, at?: Rat) => Math.min(999, Math.max(1, (at && options.bpm?.(at, bpm)) ?? Math.round((bpm * scale.n) / scale.d)));
   const rounded: { at: Rat; bpm: number; to: number }[] = [];
   const scaled = (at: Rat, bpm: number) => {
-    const to = scaledBpm(bpm);
+    const to = scaledBpm(bpm, at);
     if (to * scale.d !== bpm * scale.n) rounded.push({ at, bpm, to });
     return to;
   };
@@ -1528,7 +1607,7 @@ export function convertTempoResult(song: Song, scale: Rat, from: Rat = ZERO, to?
   };
   // 구간 앞에서 끝난 트랙(음·원문 길이·원문의 t가 모두 구간 앞)은 그대로 둔다
   const untouched = (t: Track) =>
-    cmp(notesEnd(t.notes), from) <= 0 && (!t.mml || (cmp(textEnd(t.mml), from) <= 0 && tempoTokens(t.mml).every((k) => cmp(k.at, from) < 0)));
+    cmp(notesEnd(t.notes), from) <= 0 && (!t.mml || (cmp(textEnd(t.mml, undefined, lengths), from) <= 0 && tempoTokens(t.mml, undefined, lengths).every((k) => cmp(k.at, from) < 0)));
   const tracks = song.tracks.map((t) => {
     if (untouched(t)) return t;
     const { mml: _mml, ...rest } = t;
@@ -1552,7 +1631,7 @@ export function convertTempoResult(song: Song, scale: Rat, from: Rat = ZERO, to?
       if (cmp(add(n.start, n.dur), pos) > 0) pos = add(n.start, n.dur);
     }
     const old = song.tracks[k]!;
-    if (old.mml && cmp(textEnd(old.mml), notesEnd(old.notes)) > 0 && cmp(move(textEnd(old.mml)), pos) > 0) check(t.id, pos, move(textEnd(old.mml)), true);
+    if (old.mml && cmp(textEnd(old.mml, undefined, lengths), notesEnd(old.notes)) > 0 && cmp(move(textEnd(old.mml, undefined, lengths)), pos) > 0) check(t.id, pos, move(textEnd(old.mml, undefined, lengths)), true);
   });
   if (failed.length > 0) return { song, failed, rounded };
 
@@ -1564,7 +1643,7 @@ export function convertTempoResult(song: Song, scale: Rat, from: Rat = ZERO, to?
     ...song,
     tempo: normalizeTempo(tempo),
     timeSig,
-    markers: song.markers.map((m) => ({ ...m, at: move(m.at) })),
+    markers: song.markers.map((m) => ({ ...m, at: move(m.at), ...(m.end ? { end: move(m.end) } : {}) })),
     ...(song.keys ? { keys: song.keys.map((k) => ({ ...k, at: move(k.at) })) } : {}),
     tracks,
     ...(song.made ? { made: song.made.map(moveRecord) } : {}),
@@ -1572,14 +1651,26 @@ export function convertTempoResult(song: Song, scale: Rat, from: Rat = ZERO, to?
   // 새로 넣은 구간 처음·끝 템포는 원문 끝 쉼표 사이에도 적는다 (끝 쉼표 안에 쪼갤 자리가 없으면 템포를 채우다 원문을 잃는다)
   const added = [...(before.some((e) => eq(e.at, from)) ? [] : [from]), ...(until === undefined || before.some((e) => eq(e.at, until)) ? [] : [newUntil!])];
   const kept = keepMovedEnd(song, moved, move, added);
-  const next = withFreshTempo(song, kept, (e) => ({ at: move(e.at), bpm: inside(e.at) ? scaledBpm(e.bpm) : e.bpm }));
+  const next = withFreshTempo(song, kept, (e) => ({ at: move(e.at), bpm: inside(e.at) ? scaledBpm(e.bpm, e.at) : e.bpm }));
 
   // 원문 끝 쉼표로 지키던 길이를 다시 쓰지 못한 트랙
   for (const old of song.tracks) {
-    if (!old.mml || cmp(textEnd(old.mml), notesEnd(old.notes)) <= 0) continue;
+    if (!old.mml || cmp(textEnd(old.mml, undefined, lengths), notesEnd(old.notes)) <= 0) continue;
     const now = next.tracks.find((t) => t.id === old.id);
-    if (now && now !== old && !(now.mml && eq(textEnd(now.mml), move(textEnd(old.mml))))) failed.push({ kind: "end", trackId: old.id, at: textEnd(old.mml) });
+    if (now && now !== old && !(now.mml && eq(textEnd(now.mml, undefined, lengths), move(textEnd(old.mml, undefined, lengths))))) failed.push({ kind: "end", trackId: old.id, at: textEnd(old.mml, undefined, lengths) });
   }
+  failed.push(...outputTempoFailures(song, next, move, back, from, newUntil, failed.length > 0));
+  if (failed.length > 0) return { song, failed, rounded };
+  return { song: next, failed: [], rounded };
+}
+
+/**
+ * 음 자리를 옮긴 편집(실제 시간 유지 템포 변환, 템포를 음 길이로 바꾸기)에서 게임 출력이 새로 템포를 제자리에 못 쓰는 곳.
+ * move: 고치기 전 자리 → 고친 자리, back: 알릴 자리를 고치기 전 자리로. [from, until] 밖과 고치기 전에도 그렇던 곳은 빼고 본다.
+ * skipOff가 참이면(이미 다른 까닭으로 거절) 게임 글을 다시 읽는 마지막 검사는 건너뛴다
+ */
+function outputTempoFailures(song: Song, next: Song, move: (r: Rat) => Rat, back: (r: Rat) => Rat, from: Rat, newUntil: Rat | undefined, skipOff: boolean): TempoConvertFailure[] {
+  const failed: TempoConvertFailure[] = [];
   // 게임 출력이 바꾼 템포를 그 자리에 쓰지 못하고 뒤로 옮긴 곳 (바꾸기 전에도 옮기던 곳은 빼고)
   const movedTempo = (s: Song) => gameScores(s, songChordsPerScore(s)).flatMap((score) => score.moved);
   const was = new Set(movedTempo(song).map((m) => `${move(m.from).n}/${move(m.from).d}`));
@@ -1600,7 +1691,7 @@ export function convertTempoResult(song: Song, scale: Rat, from: Rat = ZERO, to?
   }
   // 마지막으로 게임에 넣을 글을 다시 읽어 음마다 실제 시각이 곡과 같은지 본다. 템포 둘이 한 음 안에 붙어
   // 그 사이 틈을 쓸 수 없으면 출력기는 두 t를 이어 써 틈을 잃는다 (바꾸기 전에도 어긋나던 음은 빼고)
-  if (failed.length === 0) {
+  if (!skipOff && failed.length === 0) {
     // 트랙·높이·자리로 견준다 (한 트랙에 이미 있던 어긋남이 다른 트랙의 새 어긋남을 가리지 않게)
     const offKey = (n: { readonly trackId: string; readonly pitch: number }, at: Rat) => `${n.trackId}|${n.pitch}|${at.n}/${at.d}`;
     const wasOff = new Set(offOutput(song).map((n) => offKey(n, move(n.start))));
@@ -1615,8 +1706,7 @@ export function convertTempoResult(song: Song, scale: Rat, from: Rat = ZERO, to?
       break;
     }
   }
-  if (failed.length > 0) return { song, failed, rounded };
-  return { song: next, failed: [], rounded };
+  return failed;
 }
 
 /** 곡 위치를 실제 초로 (분수 그대로) */
@@ -1638,17 +1728,37 @@ function exactSeconds(tempo: readonly TempoEvent[], at: Rat): Rat {
  * 악보마다 그 악보 채널에 적힌 템포로 세고, &로 이은 음은 하나로 본다
  */
 function offOutput(song: Song): { readonly trackId: string; readonly pitch: number; readonly start: Rat; readonly dur: Rat }[] {
+  // 서로 다른 템포 값이 많으면 분수로 세다 넘칠 것이 뻔하므로 처음부터 마이크로초로 센다 (헛계산을 줄인다)
+  if (new Set(song.tempo.map((e) => e.bpm)).size > 24) return offOutputBy(song, "micro");
+  try {
+    return offOutputBy(song, "exact");
+  } catch (e) {
+    // 서로 다른 템포가 아주 많으면(원곡에 음마다 템포로 맞춘 곡) 초 분수의 분모가 안전한 정수를 넘는다.
+    // 그때는 초를 마이크로초로 반올림해 견준다 (출력기가 템포를 옮겨 생기는 어긋남은 밀리초 단위라 충분하다)
+    if (!(e instanceof RangeError)) throw e;
+    return offOutputBy(song, "micro");
+  }
+}
+
+function offOutputBy(song: Song, mode: "exact" | "micro"): { readonly trackId: string; readonly pitch: number; readonly start: Rat; readonly dur: Rat }[] {
   const out: { trackId: string; pitch: number; start: Rat; dur: Rat }[] = [];
   const modelTempo = normalizeTempo(song.tempo);
-  const key = (tempo: readonly TempoEvent[], n: { readonly start: Rat; readonly dur: Rat; readonly pitch: number }) => {
-    const a = exactSeconds(tempo, n.start);
-    const b = exactSeconds(tempo, add(n.start, n.dur));
-    return `${a.n}/${a.d}|${b.n}/${b.d}|${n.pitch}`;
+  const clocks = new WeakMap<readonly TempoEvent[], (pos: Rat) => number>();
+  const seconds = (tempo: readonly TempoEvent[], at: Rat): string => {
+    if (mode === "exact") {
+      const r = exactSeconds(tempo, at);
+      return `${r.n}/${r.d}`;
+    }
+    let clock = clocks.get(tempo);
+    if (!clock) clocks.set(tempo, (clock = tempoClock(tempo)));
+    return String(Math.round(clock(at) * 1e6));
   };
+  const key = (tempo: readonly TempoEvent[], n: { readonly start: Rat; readonly dur: Rat; readonly pitch: number }) =>
+    `${seconds(tempo, n.start)}|${seconds(tempo, add(n.start, n.dur))}|${n.pitch}`;
   // 게임 글은 높이와 상관없는 타악기를 한 높이로 쓰므로 곡 모델도 같게 바꿔 견준다
-  const model = pitchlessForOutput(song, PROFILES[song.meta.profileId] ?? getProfile("mobile"));
+  const model = pitchlessForOutput(song, songProfile(song));
   for (const score of gameScores(song, songChordsPerScore(song))) {
-    const parsed = score.texts.map(({ trackId, text }) => ({ trackId, result: parseMml(text) }));
+    const parsed = score.texts.map(({ trackId, text }) => ({ trackId, result: parseMml(text, { lengths: songProfile(song).length }) }));
     const tempo = normalizeTempo(parsed.flatMap((p) => p.result.tempo));
     for (const { trackId, result } of parsed) {
       const track = model.tracks.find((t) => t.id === trackId);
@@ -1664,6 +1774,18 @@ function offOutput(song: Song): { readonly trackId: string; readonly pitch: numb
     }
   }
   return out;
+}
+
+/** convertTempoResult가 자리를 옮기는 규칙: from 앞은 그대로, [from, until]은 scale배, 그 뒤는 늘거나 준 만큼 민다 (until이 없으면 곡 끝까지) */
+function convertMove(scale: Rat, from: Rat, until: Rat | undefined): (r: Rat) => Rat {
+  const grow = until === undefined ? ZERO : mul(sub(until, from), sub(scale, rat(1)));
+  return (r) => (cmp(r, from) <= 0 ? r : until === undefined || cmp(r, until) <= 0 ? add(from, mul(sub(r, from), scale)) : add(r, grow));
+}
+
+/** convertTempoResult(song, scale, from, to)가 바꾸기 전 자리를 어디로 옮기는지 (구간이 곡 끝을 넘으면 곡 끝까지로 본다) */
+export function tempoConvertMove(song: Song, scale: Rat, from: Rat = ZERO, to?: Rat): (r: Rat) => Rat {
+  const songEnd = scoreEnd(song.tracks, undefined, songProfile(song).length);
+  return convertMove(scale, from, to !== undefined && cmp(to, songEnd) < 0 ? to : undefined);
 }
 
 /** convertTempoResult를 실행 취소 한 칸 명령으로 (거절할 까닭·반올림한 템포는 convertTempoResult로 미리 알아본다) */
@@ -1705,6 +1827,114 @@ export function changeTemposKeepTimeResult(song: Song, change: TempoChange, from
 /** changeTemposKeepTimeResult를 실행 취소 한 칸 명령으로 */
 export function changeTemposKeepTime(change: TempoChange, from: Rat = ZERO, to?: Rat, label = "템포 한꺼번에 바꾸기"): Command {
   return songCommand(label, (song) => changeTemposKeepTimeResult(song, change, from, to).song);
+}
+
+/** 범위 밖 템포를 음 길이로 풀 때 쓰는 배율 (변화가 작은 것부터): 느리면 2배·4배, 빠르면 반·4분의 1 */
+const FOLD_SCALES = { low: [rat(2), rat(4)], high: [rat(1, 2), rat(1, 4)] } as const;
+
+/** 범위 밖 템포 하나를 길이로 풀 배율 (2, 4, 1/2, 1/4 가운데 바꾼 템포가 범위에 드는 가장 작은 변화). 범위 안이거나 못 풀면 undefined */
+export function tempoFoldScale(bpm: number, range: { readonly min: number; readonly max: number }): Rat | undefined {
+  if (bpm >= range.min && bpm <= range.max) return undefined;
+  return (bpm < range.min ? FOLD_SCALES.low : FOLD_SCALES.high).find((s) => {
+    const to = Math.round((bpm * s.n) / s.d);
+    return to >= range.min && to <= range.max;
+  });
+}
+
+/** 길이로 푼 한 곳: 바꾸기 전 자리, 원래 템포, 음 길이·템포에 곱한 배율, 넣은 템포 */
+export interface TempoFold {
+  readonly at: Rat;
+  readonly bpm: number;
+  readonly scale: Rat;
+  readonly to: number;
+}
+
+/** 범위 밖 템포를 길이로 푼 결과. failed가 있으면 song은 바꾸기 전 곡 그대로이고 move도 제자리다 */
+export interface TempoFoldResult {
+  readonly song: Song;
+  readonly folded: readonly TempoFold[];
+  /** 못 푼 까닭 (자리는 바꾸기 전 곡 기준). 배율 4로도 범위에 들지 않는 템포는 kind "tempo" */
+  readonly failed: readonly TempoConvertFailure[];
+  /** 템포 × 배율이 정수가 아니라 반올림한 곳 (convertTempoResult와 같다) */
+  readonly rounded: TempoConvertResult["rounded"];
+  /** 바꾸기 전 자리 → 바꾼 뒤 자리 */
+  readonly move: (at: Rat) => Rat;
+  /** 정수 템포로 적어 생긴, 마지막으로 푼 조각 끝(그 뒤 전체)의 시각 차이 (초, +면 늦게). 반올림이 없으면 0 */
+  readonly shift: number;
+}
+
+/**
+ * 게임 템포 범위(range) 밖 템포를 음 길이로 푼다 (1.1 설계 4번). 템포 조각 [그 템포 자리, 다음 템포 자리)마다
+ * tempoFoldScale 배율로 convertTempoResult를 돌려, 들리는 시각은 그대로 두고 템포를 범위 안으로, 음 길이·마디 길이(박자표)를 그만큼 바꾼다.
+ * only를 주면 그 자리의 템포만 본다 (방금 넣은 템포). 곡 끝 뒤 템포는 음이 없어 보지 않는다.
+ * 같은 배율로 풀 조각이 이어져 있으면 한 구간으로 묶어 바꾼다 (박자표가 조각마다 끊기지 않게).
+ * 앞 변환이 뒤 자리를 밀므로 뒤 구간부터 바꾼다. 하나라도 못 풀면 곡을 바꾸지 않는다 (부르는 쪽이 끝값으로 넣고 알린다)
+ */
+export function foldTempoRangeResult(song: Song, range: { readonly min: number; readonly max: number }, only?: readonly Rat[]): TempoFoldResult {
+  const still = (at: Rat) => at;
+  const map = normalizeTempo(song.tempo);
+  const songEnd = scoreEnd(song.tracks, undefined, songProfile(song).length);
+  const failed: TempoConvertFailure[] = [];
+  const folded: TempoFold[] = [];
+  // 묶은 구간: 시작 자리, 끝(다음 템포 자리, 없으면 곡 끝까지), 배율
+  const groups: { from: Rat; to: Rat | undefined; scale: Rat; last: number }[] = [];
+  map.forEach((e, i) => {
+    if (e.bpm >= range.min && e.bpm <= range.max) return;
+    if (cmp(e.at, songEnd) >= 0 || (only && !only.some((at) => eq(at, e.at)))) return;
+    const scale = tempoFoldScale(e.bpm, range);
+    if (!scale) {
+      failed.push({ kind: "tempo", at: e.at, bpm: e.bpm });
+      return;
+    }
+    folded.push({ at: e.at, bpm: e.bpm, scale, to: Math.round((e.bpm * scale.n) / scale.d) });
+    const to = map[i + 1]?.at;
+    const g = groups.at(-1);
+    if (g && g.last === i - 1 && eq(g.scale, scale)) {
+      g.to = to;
+      g.last = i;
+    } else groups.push({ from: e.at, to, scale, last: i });
+  });
+  if (failed.length > 0) return { song, folded: [], failed, rounded: [], move: still, shift: 0 };
+  // 템포 × 배율이 정수가 아니면(t301의 반) 올림·내림 가운데 그때까지 쌓인 시각 오차를 줄이는 쪽을 고른다
+  // (늘 반올림하면 조각이 여럿일 때 오차가 한쪽으로 쌓인다). 앞에서부터 고르고, 고른 값은 자리로 변환에 넘긴다
+  const chosen = new Map<string, number>();
+  const key = (at: Rat) => `${at.n}/${at.d}`;
+  let shift = 0;
+  for (const f of folded) {
+    const i = map.findIndex((e) => eq(e.at, f.at));
+    const next = map[i + 1]?.at;
+    const end = next === undefined || cmp(next, songEnd) > 0 ? songEnd : next;
+    const length = toFloat(sub(end, f.at));
+    const exact = (f.bpm * f.scale.n) / f.scale.d;
+    const before = (240 * length) / f.bpm;
+    const after = (c: number) => (240 * length * toFloat(f.scale)) / c;
+    const options = [...new Set([Math.floor(exact), Math.ceil(exact)])].filter((c) => c >= range.min && c <= range.max);
+    const pick = options.reduce((best, c) => (Math.abs(shift + after(c) - before) < Math.abs(shift + after(best) - before) ? c : best), options[0] ?? f.to);
+    shift += after(pick) - before;
+    chosen.set(key(f.at), pick);
+  }
+  folded.forEach((f, k) => (folded[k] = { ...f, to: chosen.get(key(f.at)) ?? f.to }));
+  const bpmOption = { bpm: (at: Rat) => chosen.get(key(at)) };
+  let cur = song;
+  const rounded: TempoConvertResult["rounded"][number][] = [];
+  const moves: ((r: Rat) => Rat)[] = [];
+  for (const g of [...groups].reverse()) {
+    const r = convertTempoResult(cur, g.scale, g.from, g.to, bpmOption);
+    if (r.failed.length > 0) {
+      failed.push(...r.failed);
+      continue;
+    }
+    moves.push(tempoConvertMove(cur, g.scale, g.from, g.to));
+    rounded.push(...r.rounded);
+    cur = r.song;
+  }
+  if (failed.length > 0) return { song, folded: [], failed: [...failed].sort((a, b) => cmp(a.at, b.at)), rounded: [], move: still, shift: 0 };
+  return { song: cur, folded, failed: [], rounded: rounded.sort((a, b) => cmp(a.at, b.at)), move: (at) => moves.reduce((p, m) => m(p), at), shift };
+}
+
+/** foldTempoRangeResult를 실행 취소 한 칸 명령으로 (못 풀면 곡 그대로) */
+export function foldTempoRange(range: { readonly min: number; readonly max: number }, only?: readonly Rat[], label = "범위 밖 템포를 길이로 풀기"): Command {
+  return songCommand(label, (song) => foldTempoRangeResult(song, range, only).song);
 }
 
 /** 템포를 바꿀 구간 [from, to) (to가 없으면 곡 끝까지) */
@@ -1786,19 +2016,19 @@ export function changeTemposKeepTimeInSpans(change: TempoChange, spans: readonly
 function insertEdge(song: Song, ids: readonly string[], e: TempoEvent): { song: Song; failed?: readonly TempoEdgeFailure[] } {
   const tracks = ids.map((id) => song.tracks.find((t) => t.id === id)!);
   // 이미 끝난 악보에는 그 뒤 템포가 필요 없다 (출력기도 악보 길이 뒤 템포는 쓰지 않는다: score-end.ts)
-  if (cmp(e.at, scoreEnd(tracks)) >= 0) return { song };
   // 쉼표·음을 나눠 쓸 음길이 한도 (곡 프로필)
-  const lengths = (PROFILES[song.meta.profileId] ?? getProfile("mobile")).length;
+  const lengths = songProfile(song).length;
+  if (cmp(e.at, scoreEnd(tracks, undefined, lengths)) >= 0) return { song };
   const generated = scoreTempo(song, ids).generated;
   const heard = [
-    ...tracks.flatMap((t) => (t.mml ? tempoTokens(t.mml) : [])),
+    ...tracks.flatMap((t) => (t.mml ? tempoTokens(t.mml, undefined, lengths) : [])),
     ...tracks.flatMap((t) => generated.get(t.id) ?? []),
   ].filter((k) => cmp(k.at, e.at) <= 0);
   const last = heard.reduce<Rat | undefined>((m, k) => (m === undefined || cmp(k.at, m) > 0 ? k.at : m), undefined);
   if (last !== undefined && heard.filter((k) => eq(k.at, last)).every((k) => k.bpm === e.bpm)) return { song };
   const t = `t${e.bpm}`;
   const sources = tracks
-    .map((track) => ({ track, mml: track.mml, src: track.mml ? surgicalSource(track.mml) : undefined }))
+    .map((track) => ({ track, mml: track.mml, src: track.mml ? surgicalSource(track.mml, lengths) : undefined }))
     .filter((c): c is { track: Track; mml: TrackText; src: NonNullable<ReturnType<typeof surgicalSource>> } => c.mml !== undefined && c.src !== undefined)
     .sort((a, b) => Number(b.src.tokens.length > 0) - Number(a.src.tokens.length > 0));
   // 끼울 원문이 없으면(원문 없는 트랙뿐) 출력기가 템포를 쓴다
@@ -1810,7 +2040,7 @@ function insertEdge(song: Song, ids: readonly string[], e: TempoEvent): { song: 
   // 게임 길이가 달라지는 수술(마지막 쉼표 뒤에 t를 붙이거나 마지막 쉼표를 나누기)은 하지 않는다
   const write = (id: string, mml: TrackText, span: readonly [number, number], text: string, renote = false): Song | undefined => {
     const next = { ...mml, text: spliceText(mml.text, [{ span, text }]) };
-    if (!eq(textEnd(next), textEnd(mml))) {
+    if (!eq(textEnd(next, undefined, lengths), textEnd(mml, undefined, lengths))) {
       lengthRefused = true;
       return undefined;
     }
@@ -1818,7 +2048,7 @@ function insertEdge(song: Song, ids: readonly string[], e: TempoEvent): { song: 
       ...song,
       tracks: song.tracks.map((tr) => {
         if (tr.id !== id) return tr;
-        return renote ? { ...tr, notes: carryTabStrings(tr.notes, parseTrackText(id, next).notes), mml: next } : { ...tr, mml: next };
+        return renote ? { ...tr, notes: carryTabStrings(tr.notes, parseTrackText(id, next, lengths).notes), mml: next } : { ...tr, mml: next };
       }),
     };
   };
@@ -1888,8 +2118,9 @@ function tokensFor(song: Song, at: Rat): (token: TempoToken) => boolean {
 
 function withTempo(song: Song, at: Rat, bpm: number): Song {
   const represents = tokensFor(song, at);
+  const lengths = songProfile(song).length;
   const tracks = song.tracks.map((t) => {
-    const hits = (t.mml ? surgicalSource(t.mml)?.tokens : undefined)?.filter(represents) ?? [];
+    const hits = (t.mml ? surgicalSource(t.mml, lengths)?.tokens : undefined)?.filter(represents) ?? [];
     if (!t.mml || hits.length === 0) return t;
     return { ...t, mml: { ...t.mml, text: spliceText(t.mml.text, hits.map((h) => ({ span: h.span, text: `t${bpm}` }))) } };
   });
@@ -1898,9 +2129,10 @@ function withTempo(song: Song, at: Rat, bpm: number): Song {
 
 function withoutTempo(song: Song, at: Rat): Song {
   const represents = tokensFor(song, at);
+  const lengths = songProfile(song).length;
   const tracks = song.tracks.map((t) => {
     if (!t.mml) return t;
-    const hits = surgicalSource(t.mml)?.tokens.filter(represents) ?? [];
+    const hits = surgicalSource(t.mml, lengths)?.tokens.filter(represents) ?? [];
     if (hits.length === 0) return t;
     const text = t.mml.text;
     // 앞뒤가 모두 빈칸이면 빈칸 하나도 같이 지워 두 칸이 남지 않게 한다
@@ -1922,10 +2154,11 @@ function withoutTempo(song: Song, at: Rat): Song {
  */
 function fillScore(song: Song, ids: readonly string[], missing: readonly TempoEvent[]): Song {
   let out = song;
+  const lengths = songProfile(song).length;
   for (const e of missing) {
     const tracks = ids.map((id) => out.tracks.find((t) => t.id === id)!);
     if (tracks.some((t) => !t.mml)) break;
-    const sources = tracks.map((t) => surgicalSource(t.mml!));
+    const sources = tracks.map((t) => surgicalSource(t.mml!, lengths));
     const order = tracks.map((_, k) => k).filter((k) => sources[k]);
     order.sort((a, b) => Number(sources[b]!.tokens.length > 0) - Number(sources[a]!.tokens.length > 0));
     let done = false;
@@ -1957,3 +2190,458 @@ function fillScore(song: Song, ids: readonly string[], missing: readonly TempoEv
   return out;
 }
 
+
+/** 템포로 때운 구간을 음 길이로 바꾸기: 템포를 펼 단위 (구간 전체 하나 · 마디마다 · 박마다) */
+export type RespaceUnit = "span" | "bar" | "beat";
+
+/** 음을 옮길 격자 (성긴 것부터). 한 번에 하나만 쓴다 (1/48과 1/64의 차는 쓸 수 없는 길이가 된다) */
+export const RESPACE_GRIDS: readonly Rat[] = [rat(1, 16), rat(1, 24), rat(1, 32), rat(1, 48), rat(1, 64)];
+
+/** 격자 오차 허용 기본값 (초) */
+export const RESPACE_TOLERANCE = 0.015;
+
+export interface RespaceOptions {
+  /** 템포 단위 (기본 구간 전체 하나) */
+  readonly unit?: RespaceUnit;
+  /** 격자 (기본 1/64). "auto"면 허용 오차를 지키며 구간 길이를 나누는 가장 성긴 격자 */
+  readonly grid?: Rat | "auto";
+  /** 격자 오차 허용 (초, 기본 15ms). 배율과 자동 격자를 고를 때 쓴다 */
+  readonly tolerance?: number;
+  /** 배율: "auto"면 1·2·4에서 고르고, 1이면 묶어 둔다 (마디 길이를 바꾸지 않는다) */
+  readonly scale?: "auto" | 1;
+  /** 원곡 시작점으로 맞출 때: 바꾸기 전 곡 자리마다 맞출 곡 초 (찾은 음만). 그 사이 자리는 꺾은선으로 옮긴다 */
+  readonly anchors?: readonly { readonly at: Rat; readonly seconds: number }[];
+}
+
+/**
+ * 템포를 음 길이로 바꾸기에서 거절한 까닭 (at은 모두 바꾸기 전 곡 자리). 배율 변환의 까닭(TempoConvertFailure)에 더해
+ * - range: 편 템포가 게임 템포 범위 밖 (더 큰 단위나 배율을 쓴다)
+ * - crowded: 길이 0이 될 음의 끝을 밀다가 구간 끝에 닿았다 (배율을 올리거나 구간을 줄인다)
+ * - grid: 고른 격자가 구간 길이를 나누지 못해 구간 끝에 닿는 길이를 쓸 수 없다
+ */
+export type RespaceFailure =
+  | TempoConvertFailure
+  | { readonly kind: "range"; readonly at: Rat; readonly bpm: number }
+  | { readonly kind: "crowded"; readonly at: Rat }
+  | { readonly kind: "grid"; readonly at: Rat; readonly grid: Rat; readonly length: Rat };
+
+/** 구간마다 고른 값: 바꾸기 전 구간, 배율, 격자, 구간 평균 템포(배율 전) */
+export interface RespaceSpanInfo {
+  readonly from: Rat;
+  readonly to: Rat;
+  readonly scale: number;
+  readonly grid: Rat;
+  readonly bpm: number;
+}
+
+/** 템포를 음 길이로 바꾸기 결과. failed가 있으면 song은 바꾸기 전 곡 그대로다 */
+export interface RespaceResult {
+  readonly song: Song;
+  readonly failed: readonly RespaceFailure[];
+  readonly spans: readonly RespaceSpanInfo[];
+  /** 음 시작이 맞출 시각(지금 시각 또는 원곡 시작점)에서 가장 많이 어긋난 양 (초, 구간 안) */
+  readonly maxError: number;
+  /** 곡 모든 음 시작이 바꾸기 전보다 가장 많이 움직인 양 (초, 구간 밖 반올림 오차 포함) */
+  readonly maxShift: number;
+  /** 시작과 끝이 같은 격자점이 되어 끝을 한 칸 민 음 수 */
+  readonly collapsed: number;
+  /** 서로 다른 음 시작이 한 격자점으로 모인 곳 수 */
+  readonly merged: number;
+  /** 그 가운데 만든 기록(아르페지오·꾸밈음 등)이 붙은 음이 낀 곳 수 */
+  readonly mergedMade: number;
+  /** 새로 생기거나 바뀐 박자표 (고친 곡 자리) */
+  readonly meters: readonly TimeSigEvent[];
+}
+
+const ratKey = (r: Rat) => `${r.n}/${r.d}`;
+
+/** at 다음 마디선(unit "bar") 또는 박선(unit "beat"). 박자표가 바뀌는 자리도 마디선이다 */
+function nextLine(timeSig: readonly TimeSigEvent[], at: Rat, unit: "bar" | "beat"): Rat {
+  const start = measureStart(timeSig, at);
+  const grid = meterGrid(meterAt(timeSig, at));
+  let next = add(start, grid.measure);
+  const sig = [...timeSig].sort((a, b) => cmp(a.at, b.at)).find((s) => cmp(s.at, at) > 0);
+  if (sig && cmp(sig.at, next) < 0) next = sig.at;
+  if (unit === "beat") {
+    const q = div(sub(at, start), grid.beat);
+    const beat = add(start, mul(grid.beat, rat(Math.floor(q.n / q.d) + 1)));
+    if (cmp(beat, next) < 0) next = beat;
+  }
+  return next;
+}
+
+/** 박 하나 [from, to) (마디 끝·박자표 자리에서 끊는다) */
+function beatAround(timeSig: readonly TimeSigEvent[], at: Rat): readonly [Rat, Rat] {
+  const start = measureStart(timeSig, at);
+  const grid = meterGrid(meterAt(timeSig, at));
+  const q = div(sub(at, start), grid.beat);
+  const from = add(start, mul(grid.beat, rat(Math.floor(q.n / q.d))));
+  return [from, nextLine(timeSig, from, "beat")];
+}
+
+/** 템포가 튀는 박: 박 안에서 울리는 템포가 둘 이상이고 가장 큰 값 ÷ 가장 작은 값이 ratio 이상인 곳 (위치순) */
+export interface TempoJump {
+  readonly from: Rat;
+  readonly to: Rat;
+  readonly min: number;
+  readonly max: number;
+}
+
+export function tempoJumps(song: Pick<Song, "tempo" | "timeSig">, ratio = 1.4): TempoJump[] {
+  const map = normalizeTempo(song.tempo);
+  const out: TempoJump[] = [];
+  const seen = new Set<string>();
+  for (const e of map) {
+    const [from, to] = beatAround(song.timeSig, e.at);
+    // 박 처음에 놓인 템포 하나만으로는 박 안에 템포가 둘이 되지 않는다
+    if (eq(from, e.at) || seen.has(ratKey(from))) continue;
+    seen.add(ratKey(from));
+    const bpms = [tempoAtPosition(map, from) ?? DEFAULT_BPM, ...map.filter((x) => cmp(x.at, from) > 0 && cmp(x.at, to) < 0).map((x) => x.bpm)];
+    const min = Math.min(...bpms);
+    const max = Math.max(...bpms);
+    if (max / min >= ratio) out.push({ from, to, min, max });
+  }
+  return out.sort((a, b) => cmp(a.from, b.from));
+}
+
+interface RespaceSpanOut {
+  readonly song: Song;
+  readonly failed: readonly RespaceFailure[];
+  readonly info?: RespaceSpanInfo;
+  /** 음 id → 맞출 곡 초 (구간 안 음 시작) */
+  readonly targets: ReadonlyMap<string, number>;
+  readonly collapsed: number;
+  readonly merged: number;
+  readonly mergedMade: number;
+}
+
+/** 구간 하나 [from, to)를 바꾼다 (설계서 2번 계산 1-7). 구간 뒤는 배율만큼 밀리고, 구간 앞은 그대로다 */
+function respaceSpan(song: Song, from: Rat, to: Rat, options: RespaceOptions): RespaceSpanOut {
+  const none: RespaceSpanOut = { song, failed: [], targets: new Map(), collapsed: 0, merged: 0, mergedMade: 0 };
+  const fail = (failed: readonly RespaceFailure[]): RespaceSpanOut => ({ ...none, failed });
+  const profile = songProfile(song);
+  const range = profile.tempo;
+  const tolerance = options.tolerance ?? RESPACE_TOLERANCE;
+  const unit = options.unit ?? "span";
+  const clock = tempoClock(song.tempo);
+  const c0 = clock(from);
+  const c1 = clock(to);
+  const length = sub(to, from);
+  if (!(c1 > c0) || length.n <= 0) return none;
+
+  // 1. 맞출 시각: 지금 시각, 원곡 시작점을 주면 그 점들을 잇는 꺾은선 (지금 초 → 맞출 초. 구간 처음·끝은 제자리)
+  const knots: [number, number][] = [[c0, c0]];
+  for (const a of [...(options.anchors ?? [])].sort((x, y) => cmp(x.at, y.at))) {
+    if (cmp(a.at, from) <= 0 || cmp(a.at, to) >= 0) continue;
+    const x = clock(a.at);
+    const last = knots[knots.length - 1]!;
+    if (x > last[0] && a.seconds > last[1] && x < c1 && a.seconds < c1) knots.push([x, a.seconds]);
+  }
+  knots.push([c1, c1]);
+  const warp = (x: number): number => {
+    let lo = 0;
+    let hi = knots.length - 1;
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >> 1;
+      if (knots[mid]![0] <= x) lo = mid;
+      else hi = mid;
+    }
+    const [x0, y0] = knots[lo]!;
+    const [x1, y1] = knots[hi]!;
+    return x1 > x0 ? y0 + ((x - x0) * (y1 - y0)) / (x1 - x0) : y0;
+  };
+  const target = (p: Rat) => warp(clock(p));
+
+  // 2. 배율과 격자: 격자 오차 120 × G ÷ (b0 × s)초가 허용 오차 안인 가장 작은 s (b0 × s는 게임 범위 안).
+  // 격자는 구간 처음 기준이라 구간 길이(배율 뒤)를 나누어야 끝 자리에 닿는 길이를 쓸 수 있다
+  const b0 = Math.round((240 * toFloat(length)) / (c1 - c0));
+  const scales = (options.scale === 1 ? [1] : [1, 2, 4]).filter((s) => b0 * s >= range.min && b0 * s <= range.max);
+  if (scales.length === 0) return fail([{ kind: "range", at: from, bpm: b0 }]);
+  const divides = (g: Rat, s: number) => div(mul(length, rat(s)), g).d === 1;
+  const fits = (g: Rat, s: number) => (120 * toFloat(g)) / (b0 * s) <= tolerance + 1e-9;
+  const chosen = options.grid ?? rat(1, 64);
+  let pick: { scale: number; grid: Rat } | undefined;
+  if (chosen === "auto") {
+    for (const s of scales) {
+      const found = RESPACE_GRIDS.find((g) => divides(g, s) && fits(g, s));
+      if (found) {
+        pick = { scale: s, grid: found };
+        break;
+      }
+    }
+    if (!pick) {
+      // 허용 오차를 지킬 수 없으면 가장 큰 배율의, 구간 길이를 나누는 가장 촘촘한 격자 (오차는 미리보기에 보인다)
+      const s = scales[scales.length - 1]!;
+      const found = [...RESPACE_GRIDS].reverse().find((g) => divides(g, s));
+      if (!found) return fail([{ kind: "grid", at: from, grid: rat(1, 64), length: mul(length, rat(s)) }]);
+      pick = { scale: s, grid: found };
+    }
+  } else {
+    const s = scales.find((x) => fits(chosen, x)) ?? scales[scales.length - 1]!;
+    if (!divides(chosen, s)) return fail([{ kind: "grid", at: from, grid: chosen, length: mul(length, rat(s)) }]);
+    pick = { scale: s, grid: chosen };
+  }
+  const { scale, grid } = pick;
+  const g = toFloat(grid);
+
+  // 3. 배율이 1보다 크면 먼저 실제 시간 유지 템포 변환 (구간이 늘고 마디 길이도 함께 바뀐다). 시각은 그대로다
+  let cur = song;
+  if (scale > 1) {
+    const r = convertTempoResult(song, rat(scale), from, to);
+    if (r.failed.length > 0) return fail(r.failed);
+    cur = r.song;
+  }
+  const S = rat(scale);
+  const grow = mul(length, rat(scale - 1));
+  const end = add(from, mul(length, S));
+  /** 바꾼(배율 뒤) 곡 자리 → 바꾸기 전 곡 자리 */
+  const back = (x: Rat): Rat => (cmp(x, from) <= 0 ? x : cmp(x, end) <= 0 ? add(from, div(sub(x, from), S)) : sub(x, grow));
+
+  // 4. 템포 펴기: 단위 경계마다 템포 하나, 경계 사이 템포 = round(240 × 길이 ÷ 그 사이 시간). 반올림 오차는 다음 조각이 받는다
+  const bounds: Rat[] = [from];
+  if (unit !== "span") for (let at = nextLine(cur.timeSig, from, unit); cmp(at, end) < 0; at = nextLine(cur.timeSig, at, unit)) bounds.push(at);
+  bounds.push(end);
+  const failed: RespaceFailure[] = [];
+  const pieces: { at: Rat; bpm: number; t0: number }[] = [];
+  let reached = c0;
+  for (let i = 0; i + 1 < bounds.length; i++) {
+    const L = toFloat(sub(bounds[i + 1]!, bounds[i]!));
+    const seconds = target(back(bounds[i + 1]!)) - reached;
+    const raw = seconds > 0 ? Math.round((240 * L) / seconds) : range.max + 1;
+    if (raw < range.min || raw > range.max) failed.push({ kind: "range", at: back(bounds[i]!), bpm: raw });
+    const bpm = Math.min(range.max, Math.max(range.min, raw));
+    pieces.push({ at: bounds[i]!, bpm, t0: reached });
+    reached += (240 * L) / bpm;
+  }
+  if (failed.length > 0) return fail(failed);
+  const map = normalizeTempo(cur.tempo);
+  const before = map.filter((e) => cmp(e.at, from) < 0);
+  const after = map.filter((e) => cmp(e.at, end) >= 0);
+  // 구간 끝에는 원래 템포를 다시 적는다 (그 자리에 템포가 있으면 그대로, 곡 끝이면 적지 않는다). 구간 안 템포는 지운다
+  const backBpm = tempoAtPosition(map, end) ?? DEFAULT_BPM;
+  let current = before[before.length - 1]?.bpm ?? DEFAULT_BPM;
+  const inner: TempoEvent[] = [];
+  for (const p of pieces) {
+    if (p.bpm !== current) inner.push({ at: p.at, bpm: p.bpm });
+    current = p.bpm;
+  }
+  if (!after.some((e) => eq(e.at, end)) && cmp(end, scoreEnd(cur.tracks, undefined, profile.length)) < 0 && backBpm !== current) inner.push({ at: end, bpm: backBpm });
+  const tempo = normalizeTempo([...before, ...inner, ...after]);
+
+  // 5. 음 옮기기: 맞출 시각을 새 템포로 자리로 바꿔 격자로 반올림 (구간 처음 기준 칸 번호 k, 구간 끝은 K)
+  const K = Math.round(toFloat(sub(end, from)) / g);
+  const cellOf = (p: Rat): number => {
+    const sec = target(p);
+    let i = 0;
+    while (i + 1 < pieces.length && pieces[i + 1]!.t0 <= sec) i++;
+    const piece = pieces[i]!;
+    const offset = toFloat(sub(piece.at, from)) + ((sec - piece.t0) * piece.bpm) / 240;
+    return Math.min(K, Math.max(0, Math.round(offset / g)));
+  };
+  // 자리 하나에 "옛 자리 → 새 자리" 함수 하나 (모든 트랙이 같이 쓴다: 같은 자리에서 시작하던 음은 같은 자리로).
+  // 뒤로 가지 않게만 하고, 서로 가까운 음 시작은 한 점으로 모여도 된다. 미는 것은 어떤 음의 시작과 끝이 같은 점이 되어
+  // 길이가 0이 될 때뿐이다: 그 끝 자리(와 그 뒤 자리를 필요한 만큼만)를 한 칸 뒤로. 구간 끝에 닿으면 거절
+  const notes = cur.tracks.flatMap((t) => t.notes);
+  const points = new Map<string, Rat>();
+  const endsAt = new Map<string, Rat[]>();
+  for (const n of notes) {
+    const s0 = back(n.start);
+    const e0 = back(add(n.start, n.dur));
+    for (const p of [s0, e0]) if (cmp(p, from) > 0 && cmp(p, to) < 0) points.set(ratKey(p), p);
+    if (cmp(s0, from) >= 0 && cmp(s0, to) < 0 && cmp(e0, to) <= 0) {
+      const list = endsAt.get(ratKey(e0)) ?? [];
+      list.push(s0);
+      endsAt.set(ratKey(e0), list);
+    }
+  }
+  const sorted = [...points.values(), to].sort(cmp);
+  const cell = new Map<string, number>([[ratKey(from), 0]]);
+  let prev = 0;
+  let collapsed = 0;
+  for (const p of sorted) {
+    const fixed = eq(p, to);
+    const raw = fixed ? K : cellOf(p);
+    let need = prev;
+    for (const s0 of endsAt.get(ratKey(p)) ?? []) {
+      const k = cell.get(ratKey(s0))!;
+      if (raw <= k) collapsed++;
+      need = Math.max(need, k + 1);
+    }
+    const k = fixed ? K : Math.max(raw, need);
+    if (k < need || k > K) {
+      return fail([{ kind: "crowded", at: p }]);
+    }
+    cell.set(ratKey(p), k);
+    prev = k;
+  }
+  const newAt = (k: number) => add(from, mul(grid, rat(k)));
+  // 바꾼(배율 뒤) 곡 자리를 옮긴 자리로. 음 자리가 아닌 것(마커, 만든 기록의 음)도 같은 계산으로 (밀기는 없다)
+  const place = (x: Rat): Rat => {
+    if (cmp(x, from) <= 0 || cmp(x, end) >= 0) return x;
+    const p = back(x);
+    const k = cell.get(ratKey(p));
+    return newAt(k ?? cellOf(p));
+  };
+  // 한 자리로 모인 음 시작 (서로 다른 옛 자리가 같은 칸으로)
+  const groups = new Map<number, { starts: Set<string>; made: boolean }>();
+  const targets = new Map<string, number>();
+  for (const n of notes) {
+    const s0 = back(n.start);
+    if (cmp(s0, from) < 0 || cmp(s0, to) >= 0) continue;
+    targets.set(n.id, target(s0));
+    const k = cell.get(ratKey(s0))!;
+    const gr = groups.get(k) ?? { starts: new Set<string>(), made: false };
+    gr.starts.add(ratKey(s0));
+    if (n.made) gr.made = true;
+    groups.set(k, gr);
+  }
+  const mergedGroups = [...groups.values()].filter((gr) => gr.starts.size > 1);
+
+  // 6. 붙임줄·v·타브 줄·실험실 표시는 음에 그대로 붙어 간다. 구간에 걸친 음은 안쪽 끝만 옮긴다
+  const moveNote = (n: Note): Note => {
+    const start = place(n.start);
+    const stop = place(add(n.start, n.dur));
+    return eq(start, n.start) && eq(stop, add(n.start, n.dur)) ? n : { ...n, start, dur: sub(stop, start) };
+  };
+  const untouched = (t: Track) =>
+    cmp(notesEnd(t.notes), from) <= 0 && (!t.mml || (cmp(textEnd(t.mml, undefined, profile.length), from) <= 0 && tempoTokens(t.mml, undefined, profile.length).every((k) => cmp(k.at, from) < 0)));
+  const tracks = cur.tracks.map((t) => {
+    if (untouched(t)) return t;
+    const { mml: _mml, ...rest } = t;
+    return { ...rest, notes: t.notes.map(moveNote) };
+  });
+  const moveRecord = (r: MadeRecord): MadeRecord => {
+    const list = (l: MadeRecord["before"]) => l.map((m) => ({ ...m, notes: m.notes.map(moveNote) }));
+    return { ...r, before: list(r.before), after: list(r.after) };
+  };
+  const moved: Song = {
+    ...cur,
+    tempo,
+    // 범위 메모는 끝도 함께 옮긴다. 반올림으로 끝이 시작보다 앞이 되거나 같아지면 끝을 빼서 한 점 메모로 둔다
+    markers: cur.markers.map((m) => {
+      const { end: _end, ...rest } = m;
+      const at = place(m.at);
+      const end = m.end ? place(m.end) : undefined;
+      return end && cmp(end, at) > 0 ? { ...rest, at, end } : { ...rest, at };
+    }),
+    // 조표 바뀜도 음과 같은 자리 계산으로 옮긴다 (안 옮기면 옮긴 음이 앞 조표 아래로 간다). 두 조표가 한 자리로 모이면 뒤 것만 남긴다
+    ...(cur.keys ? { keys: movedKeys(cur.keys, place) } : {}),
+    tracks,
+    ...(cur.made ? { made: cur.made.map(moveRecord) } : {}),
+  };
+  const kept = keepMovedEnd(cur, moved, place, inner.map((e) => e.at));
+  const next = withFreshTempo(cur, kept);
+
+  // 7. 검사: 새로 쓸 수 없게 된 음·쉼표 길이, 끝 쉼표로 지키던 길이, 게임 출력이 제자리에 못 쓰는 템포
+  const lengths = profile.length;
+  next.tracks.forEach((t, k) => {
+    const old = cur.tracks[k]!;
+    if (t === old || t.notes === old.notes) return;
+    const gaps = (list: readonly Note[]) => {
+      let pos: Rat = ZERO;
+      return list.map((n) => {
+        const gap = cmp(n.start, pos) > 0 ? sub(n.start, pos) : ZERO;
+        if (cmp(add(n.start, n.dur), pos) > 0) pos = add(n.start, n.dur);
+        return gap;
+      });
+    };
+    const oldGaps = gaps(old.notes);
+    const newGaps = gaps(t.notes);
+    t.notes.forEach((n, i) => {
+      const o = old.notes[i]!;
+      if (cmp(add(o.start, o.dur), from) < 0 || cmp(o.start, end) > 0) return;
+      const at = back(o.start);
+      if (!canWriteExactly(newGaps[i]!, lengths) && canWriteExactly(oldGaps[i]!, lengths)) failed.push({ kind: "length", trackId: t.id, at, length: newGaps[i]!, rest: true });
+      if (!canWriteExactly(n.dur, lengths) && canWriteExactly(o.dur, lengths)) failed.push({ kind: "length", trackId: t.id, at, length: n.dur, rest: false });
+    });
+  });
+  for (const old of cur.tracks) {
+    if (!old.mml || cmp(textEnd(old.mml, undefined, lengths), notesEnd(old.notes)) <= 0) continue;
+    const now = next.tracks.find((t) => t.id === old.id);
+    if (now && now !== old && !(now.mml && eq(textEnd(now.mml, undefined, lengths), place(textEnd(old.mml, undefined, lengths))))) failed.push({ kind: "end", trackId: old.id, at: back(textEnd(old.mml, undefined, lengths)) });
+  }
+  // 알릴 자리: 옮긴 자리 → 바꾸기 전 자리 (음 자리면 그 옛 자리, 아니면 배율만 되돌린다)
+  const origin = new Map<string, Rat>();
+  for (const [key, k] of cell) if (!origin.has(ratKey(newAt(k)))) origin.set(ratKey(newAt(k)), points.get(key) ?? (key === ratKey(from) ? from : to));
+  const report = (x: Rat) => origin.get(ratKey(x)) ?? back(x);
+  failed.push(...outputTempoFailures(cur, next, place, report, from, end, failed.length > 0));
+  if (failed.length > 0) return fail(failed);
+  return {
+    song: next,
+    failed: [],
+    info: { from, to, scale, grid, bpm: b0 },
+    targets,
+    collapsed,
+    merged: mergedGroups.length,
+    mergedMade: mergedGroups.filter((gr) => gr.made).length,
+  };
+}
+
+/**
+ * 템포로 때운 구간을 음 길이로 바꾸기 (1.1 실험실). 고른 구간마다 템포를 단위(구간 하나 / 마디마다 / 박마다)로 고르게 펴고,
+ * 음이 지금 나는 시각(또는 anchors로 준 원곡 소리 시작점)을 지키도록 음 자리와 길이를 격자에 맞춰 다시 쓴다.
+ * 64분음표 간격이 거칠면 구간 템포를 2배(4배)로 올리고 음 길이도 같은 배로 늘린다 (convertTempoResult, 마디 길이도 바뀐다).
+ * 여러 구간은 뒤 구간부터 바꿔 앞 구간 자리는 바꾸기 전 그대로다. 한 구간이라도 거절하면 곡을 바꾸지 않는다
+ */
+export function tempoToLengthsResult(song: Song, spans: readonly TempoSpan[], options: RespaceOptions = {}): RespaceResult {
+  const empty = { spans: [], maxError: 0, maxShift: 0, collapsed: 0, merged: 0, mergedMade: 0, meters: [] };
+  const songEnd = scoreEnd(song.tracks, undefined, songProfile(song).length);
+  const closed = tidySpans(spans)
+    .map(([a, b]): [Rat, Rat] => [a, b === undefined || cmp(b, songEnd) > 0 ? songEnd : b])
+    .filter(([a, b]) => cmp(a, b) < 0);
+  let cur = song;
+  const failed: RespaceFailure[] = [];
+  const infos: RespaceSpanInfo[] = [];
+  const targets = new Map<string, number>();
+  let collapsed = 0;
+  let merged = 0;
+  let mergedMade = 0;
+  for (const [from, to] of closed.reverse()) {
+    const r = respaceSpan(cur, from, to, options);
+    if (r.failed.length > 0) {
+      failed.push(...r.failed);
+      continue;
+    }
+    cur = r.song;
+    if (r.info) infos.unshift(r.info);
+    for (const [id, sec] of r.targets) targets.set(id, sec);
+    collapsed += r.collapsed;
+    merged += r.merged;
+    mergedMade += r.mergedMade;
+  }
+  if (failed.length > 0) return { song, failed: failed.sort((a, b) => cmp(a.at, b.at)), ...empty };
+  const before = tempoClock(song.tempo);
+  const after = tempoClock(cur.tempo);
+  const was = new Map(song.tracks.flatMap((t) => t.notes.map((n) => [n.id, n.start] as const)));
+  let maxError = 0;
+  let maxShift = 0;
+  for (const t of cur.tracks)
+    for (const n of t.notes) {
+      const sec = after(n.start);
+      const want = targets.get(n.id);
+      if (want !== undefined) maxError = Math.max(maxError, Math.abs(sec - want));
+      const old = was.get(n.id);
+      if (old !== undefined) maxShift = Math.max(maxShift, Math.abs(sec - before(old)));
+    }
+  const same = (a: TimeSigEvent, b: TimeSigEvent) => eq(a.at, b.at) && a.beats === b.beats && a.unit === b.unit;
+  const meters = cur.timeSig.filter((e) => !song.timeSig.some((o) => same(o, e)));
+  return { song: cur, failed: [], spans: infos, maxError, maxShift, collapsed, merged, mergedMade, meters };
+}
+
+/** tempoToLengthsResult를 실행 취소 한 칸 명령으로 (거절할 까닭은 tempoToLengthsResult로 미리 알아본다) */
+export function tempoToLengths(spans: readonly TempoSpan[], options: RespaceOptions = {}, label = "템포를 음 길이로 바꾸기"): Command {
+  return songCommand(label, (song) => tempoToLengthsResult(song, spans, options).song);
+}
+
+/** 조표 바뀜 자리를 place로 옮긴다. 같은 자리로 모인 것은 뒤 것만 남긴다 */
+function movedKeys<K extends { readonly at: Rat }>(keys: readonly K[], place: (x: Rat) => Rat): K[] {
+  const out: K[] = [];
+  for (const k of keys) {
+    const at = place(k.at);
+    const moved = eq(at, k.at) ? k : { ...k, at };
+    const last = out.at(-1);
+    if (last && eq(last.at, at)) out[out.length - 1] = moved;
+    else out.push(moved);
+  }
+  return out;
+}

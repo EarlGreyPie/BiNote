@@ -5,6 +5,7 @@ import { planFastRunFix, type FastRunFixOptions, type FastRunFixResult } from ".
 import { gameCharCounts } from "./game-output.js";
 import { optimizeMml } from "./optimizer.js";
 import { splitSong } from "./split.js";
+import { limitOf, trackLimits, widestLimit } from "./track-limits.js";
 import { fastRunMoments, type FastRunMoment } from "./validate.js";
 
 /**
@@ -65,15 +66,18 @@ const printed = new WeakMap<readonly Note[], number>();
 function optimizedLength(notes: readonly Note[], profile: GameProfile): number {
   const hit = printed.get(notes);
   if (hit !== undefined) return hit;
-  const n = optimizeMml(notes, { lengths: profile.length }).text.length;
+  const n = optimizeMml(notes, { profile }).text.length;
   printed.set(notes, n);
   return n;
 }
 
 export function fitFastRunFix(song: Song, profile: GameProfile, options: FastRunFitOptions = {}): FastRunFitResult {
-  const limit = profile.charLimitPerScore;
+  // 트랙마다 그 자리 한도 (자리마다 한도가 다를 수 있다)
+  const limits = trackLimits(song, profile);
+  const limit = (id: string) => limitOf(limits, id, profile);
+  const widest = widestLimit(profile);
   const maxChords = options.maxChords ?? ((id: string) => maxChordsOf(profile, song.players.find((p) => p.id === id)?.instrument.canonical));
-  const counts = (s: Song) => gameCharCounts(s, maxChords, profile.maxChordsPerPlayer, limit);
+  const counts = (s: Song) => gameCharCounts(s, maxChords, profile.maxChordsPerPlayer, widest);
   const books = (s: Song) => splitSong(s, profile, { maxChords }).parts.length;
   const all = options.found ?? fastRunMoments(song, profile, options);
   const base: FastRunFixOptions = {
@@ -164,9 +168,9 @@ export function fitFastRunFix(song: Song, profile: GameProfile, options: FastRun
     return { chosen, plan, song: s, counts: c };
   };
 
-  if (longest0 <= limit) {
+  if (overIn(count0, limit).length === 0) {
     // 한 권 곡
-    const fullOver = overIn(fullCounts, () => limit).length;
+    const fullOver = overIn(fullCounts, limit).length;
     if (fullOver === 0) return result(full, fullPlan, all, fullCounts);
     let distributeKept: FastRunFitResult["distributeKept"];
     if (options.distribute !== false) {
@@ -179,11 +183,11 @@ export function fitFastRunFix(song: Song, profile: GameProfile, options: FastRun
           const locked = options.locked;
           const moved = locked ? { ...settled.song, tracks: settled.song.tracks.map((t) => (locked.has(t.id) ? (full.tracks.find((f) => f.id === t.id) ?? t) : t)) } : settled.song;
           const c = counts(moved);
-          if (overIn(c, () => limit).length === 0) return result(moved, fullPlan, all, c, { moved: spread.moved });
+          if (overIn(c, limit).length === 0) return result(moved, fullPlan, all, c, { moved: spread.moved });
         }
       }
     }
-    const part = within(() => limit);
+    const part = within(limit);
     return result(part.song, part.plan, part.chosen, part.counts, { fullOver, ...(distributeKept ? { distributeKept } : {}) });
   }
 
@@ -191,9 +195,16 @@ export function fitFastRunFix(song: Song, profile: GameProfile, options: FastRun
   const from = books(song);
   const fullBooks = books(full);
   if (fullBooks <= from) return result(full, fullPlan, all, fullCounts, { books: { from, to: fullBooks } });
-  const tiers = [...new Set([Math.max(longest0, Math.floor(from * limit * BOOK_SHARE)), longest0])];
+  // 트랙마다 자리 한도에 비례한 몫 (모든 자리 한도가 같으면 트랙 하나의 숫자와 같다)
+  const share = (id: string, n: number) => Math.floor((n * limit(id)) / widest);
+  const tiers: ((id: string) => number)[] = [
+    (id) => Math.max(share(id, longest0), Math.floor(from * limit(id) * BOOK_SHARE)),
+    (id) => share(id, longest0),
+  ];
+  // 두 몫이 모든 트랙에서 같으면 한 번만 해 본다
+  if (song.tracks.every((t) => tiers[0]!(t.id) === tiers[1]!(t.id))) tiers.pop();
   for (const tier of tiers) {
-    const part = within((id) => Math.max(tier, count0.get(id) ?? 0));
+    const part = within((id) => Math.max(tier(id), count0.get(id) ?? 0));
     if (part.chosen.length === 0) break;
     const to = books(part.song);
     if (to <= from) return result(part.song, part.plan, part.chosen, part.counts, { books: { from, to } });

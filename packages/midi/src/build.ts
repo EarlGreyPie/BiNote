@@ -1,8 +1,11 @@
 import {
   add,
+  charLimitAt,
   cmp,
   sub,
   emptySong,
+  meterGrid,
+  mul,
   normalizeTempo,
   shortestLength,
   rat,
@@ -134,6 +137,66 @@ export function velocityToVolume(velocity: number, profile: GameProfile): number
 }
 
 export function midiToSong(analysis: MidiAnalysis, plan: ImportPlan, profile: GameProfile, title = ""): ImportResult {
+  const sigs = [...analysis.timeSig].sort((a, b) => cmp(a.at, b.at));
+  const first = sigs[0];
+  const main = sigs.find((s) => cmp(s.at, ZERO) > 0);
+  if (!analysis.pickup || !first || cmp(first.at, ZERO) !== 0 || !main) return midiToSongPlain(analysis, plan, profile, title);
+  return withPickup(analysis, { first, main }, plan, profile, title);
+}
+
+/**
+ * 못갖춘마디 곡 가져오기. 칸 맞춤은 0이 아니라 본 마디 시작(main.at)에 맞춰야 박이 칸에 맞는다(첫 마디가 59/64처럼 칸 수가
+ * 딱 떨어지지 않아도). 그래서 못갖춘마디를 본 박자 한 마디로 채우도록 앞에 빈자리(pad)를 넣어 가져온 뒤 그만큼 다시 당긴다.
+ * 곡의 박자표는 [0: 못갖춘마디 박자표(pickup), main.at: 본 박자표, 그 뒤 바뀜]이다. exact·keepTiming은 칸에 맞추지 않으니 당기지 않는다
+ */
+function withPickup(
+  analysis: MidiAnalysis,
+  { first, main }: { first: TimeSigEvent; main: TimeSigEvent },
+  plan: ImportPlan,
+  profile: GameProfile,
+  title: string,
+): ImportResult {
+  const length = main.at;
+  const measure = meterGrid(main).measure;
+  const shiftable = !plan.quantize?.exact && !analysis.keepTiming;
+  const bars = Math.ceil(toFloat(length) / toFloat(measure) - 1e-9);
+  const pad = shiftable ? sub(mul(measure, rat(Math.max(1, bars))), length) : ZERO;
+  const later = (at: Rat) => add(at, pad);
+  const shifted: MidiAnalysis = {
+    ...analysis,
+    pickup: false,
+    parts: analysis.parts.map((p) => ({ ...p, notes: p.notes.map((n) => ({ ...n, start: later(n.start) })) })),
+    tempo: analysis.tempo.map((t) => (cmp(t.at, ZERO) === 0 ? t : { ...t, at: later(t.at) })),
+    timeSig: [{ at: ZERO, beats: main.beats, unit: main.unit }, ...analysis.timeSig.filter((s) => cmp(s.at, ZERO) > 0).map((s) => ({ ...s, at: later(s.at) }))],
+    ...(analysis.markers ? { markers: analysis.markers.map((m) => ({ ...m, at: later(m.at) })) } : {}),
+  };
+  const result = midiToSongPlain(pad.n === 0 ? { ...analysis, pickup: false } : shifted, plan, profile, title);
+  const song = result.song;
+  const back = (at: Rat) => (cmp(at, pad) <= 0 ? ZERO : sub(at, pad));
+  const tracks = song.tracks.map((t) => ({
+    ...t,
+    notes: t.notes.map((n) => {
+      const start = back(n.start);
+      const end = sub(add(n.start, n.dur), pad);
+      return { ...n, start, dur: cmp(end, start) > 0 ? sub(end, start) : n.dur };
+    }),
+  }));
+  const tempo: TempoEvent[] = [];
+  for (const t of song.tempo) {
+    const at = back(t.at);
+    if (tempo.length > 0 && cmp(tempo.at(-1)!.at, at) === 0) tempo[tempo.length - 1] = { ...t, at };
+    else tempo.push({ ...t, at });
+  }
+  const timeSig: TimeSigEvent[] = [
+    { at: ZERO, beats: first.beats, unit: first.unit, pickup: true },
+    { at: length, beats: main.beats, unit: main.unit },
+    ...song.timeSig.map((s) => ({ ...s, at: back(s.at) })).filter((s) => cmp(s.at, length) > 0),
+  ];
+  const markers = song.markers.map((m) => ({ ...m, at: back(m.at) }));
+  return { ...result, song: { ...song, tempo: normalizeTempo(tempo), timeSig, markers, tracks } };
+}
+
+function midiToSongPlain(analysis: MidiAnalysis, plan: ImportPlan, profile: GameProfile, title: string): ImportResult {
   const used = new Set(plan.players.flatMap((p) => p.parts));
   const parts = analysis.parts.filter((p) => used.has(p.id));
   const partOf = new Map(parts.map((p) => [p.id, p]));
@@ -185,7 +248,7 @@ function exactPlace(parts: readonly MidiPart[]): QuantizeResult {
     ),
   );
   const out = tidy(notes);
-  return { notes: out, grid: 16, tripletBeats: 0, quintupletBeats: 0, merged: notes.length - out.length, suspect: [] };
+  return { notes: out, grid: 16, tripletBeats: 0, quintupletBeats: 0, septupletBeats: 0, nonupletBeats: 0, eighthQuintuplets: 0, barQuintuplets: 0, merged: notes.length - out.length, suspect: [] };
 }
 
 /**
@@ -438,18 +501,20 @@ function assemble(
       });
       return { ...emptySong({ title: "", author: "", profileId: profile.id }), tempo: songTempo, players: ps, tracks: ts };
     };
+    /** 연주자 안 k번째 트랙 = 자리 k (악보당 트랙 수로 나눈 나머지). 자리마다 글자 수 한도가 다를 수 있다 */
+    const slotLimits = (count: number) => Array.from({ length: count }, (_, k) => charLimitAt(profile, k % Math.max(1, profile.maxChordsPerPlayer)));
     const fill = (list: Note[][]): { tracks: Note[][]; added: number } => {
       if (!(plan.fill ?? true) || drumKind || result.spare.length === 0) return { tracks: list, added: 0 };
       const minLength = later(rat(1, 16), rat(1, q.grid));
       const volumeAt = (n: GridNote, start: Rat, now: readonly (readonly Note[])[]) => fillVolume(volumeOf(n), n.pitch, start, now, profile);
-      return fillRests(list, result.spare, volumeAt, () => `n${++noteId}`, { minLength, charLimit: profile.charLimitPerScore });
+      return fillRests(list, result.spare, volumeAt, () => `n${++noteId}`, { minLength, charLimit: slotLimits(list.length), profile });
     };
     // 화음 병합은 빈 채널 채우기보다 먼저: 드문 트랙을 비운 뒤 남은 트랙의 쉼을 채운다
     let merged = 0;
     let filled = 0;
     let done: Note[][] | undefined;
     if ((plan.merge ?? true) && voices.length > 1) {
-      const m = mergeVoices(voices, { limit: profile.charLimitPerScore, tempo: songTempo.map((e) => e.at) });
+      const m = mergeVoices(voices, { limit: slotLimits(voices.length), tempo: songTempo.map((e) => e.at), profile });
       const next = m.tracks.filter((v) => v.length > 0);
       // 받아들이는 기준: 이 연주자만 든 곡을 게임 출력으로 다시 읽은 결과가 병합 전과 같아야 한다 (곡 메뉴 화음 병합과 같다)
       if (m.moved > 0) {

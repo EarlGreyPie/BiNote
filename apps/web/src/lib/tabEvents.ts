@@ -1,8 +1,8 @@
 import { cmp, type Rat } from "@mmlce/core";
 import { WAVE_SIZE } from "./waveDraw";
 
-/** 타브 변속 줄 글자 종류 (피아노롤 이벤트 줄과 같다) */
-export type TabEventKind = "tempo" | "meter" | "marker";
+/** 타브 변속 줄 글자 종류 (피아노롤 이벤트 줄과 같다). key = 조표 (아래 칸, 곡에 조표를 적은 자리만) */
+export type TabEventKind = "tempo" | "meter" | "marker" | "key";
 
 /** 변속 줄에 놓을 글자 하나. 마커는 id로 찾는다 (템포·박자는 위치로) */
 export interface TabEventItem {
@@ -12,9 +12,11 @@ export interface TabEventItem {
   readonly id?: string;
   /** 곡 처음에 적은 템포가 없어 기본값(t120)을 보이는 글자 (피아노롤 EventLabel.implicit과 같다) */
   readonly implicit?: boolean;
+  /** 작업 메모 글자 (피아노롤 EventLabel.memo와 같다): 다른 색, 끝낸 것은 흐리게 */
+  readonly memo?: "open" | "done";
 }
 
-/** 변속 줄의 칸: 0 = 위 칸(템포), 1 = 아래 칸(박자·마커). 피아노롤 이벤트 줄과 같은 순서 */
+/** 변속 줄의 칸: 0 = 위 칸(템포), 1 = 아래 칸(박자·마커·조표). 피아노롤 이벤트 줄과 같은 순서 */
 export type TabEventRow = 0 | 1;
 
 /** 글자 종류가 놓이는 칸 */

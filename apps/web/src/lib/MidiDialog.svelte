@@ -13,7 +13,7 @@
     type MusicXmlReport,
   } from "@mmlce/midi";
   import type { MessageKey } from "@mmlce/i18n";
-  import { optimizeMml } from "@mmlce/mml";
+  import { optimizeMml, limitOf, trackLimits, widestLimit } from "@mmlce/mml";
   import { instrumentName, t } from "./i18n.svelte";
   import { chordPrefs, setMidiMerge } from "./chordPrefs.svelte";
 
@@ -128,13 +128,21 @@
 
   // 미리보기: 설정이 바뀔 때마다 다시 만든다
   // 만들다 실패하면(아주 큰 곡에서 메모리 등) 창을 깨뜨리지 않고 알린다
-  const preview = $derived.by((): { result: ImportResult; maxChars: number } | undefined => {
+  const preview = $derived.by((): { result: ImportResult; maxChars: number; over: boolean } | undefined => {
     const p = plan();
     if (p.players.every((x) => x.parts.length === 0)) return undefined;
     try {
       const result = midiToSong(analysis, p, profile, musicXml?.title || name);
-      const maxChars = result.song.tracks.reduce((m, tr) => Math.max(m, optimizeMml(tr.notes).text.length), 0);
-      return { result, maxChars };
+      // 트랙마다 그 자리 한도로 넘침을 본다 (자리마다 한도가 다를 수 있다)
+      const limits = trackLimits(result.song, profile);
+      let maxChars = 0;
+      let over = false;
+      for (const tr of result.song.tracks) {
+        const n = optimizeMml(tr.notes, { profile }).text.length;
+        maxChars = Math.max(maxChars, n);
+        if (n > limitOf(limits, tr.id, profile)) over = true;
+      }
+      return { result, maxChars, over };
     } catch (e) {
       console.error(e);
       return undefined;
@@ -297,8 +305,8 @@
           {t("ui.midiSummary", { grid: preview.result.grid, triplets: preview.result.tripletBeats, tracks: preview.result.song.tracks.length })}
         {/if}
       </span>
-      <span class={preview.maxChars > profile.charLimitPerScore ? "warn" : "muted"}>
-        {t("ui.midiMaxChars", { count: preview.maxChars, limit: profile.charLimitPerScore })}
+      <span class={preview.over ? "warn" : "muted"}>
+        {t("ui.midiMaxChars", { count: preview.maxChars, limit: widestLimit(profile) })}
       </span>
       {#if preview.result.unmappedDrums > 0}<span class="warn">{t("ui.midiUnmappedDrums", { count: preview.result.unmappedDrums })}</span>{/if}
       {#if preview.result.merged > 0}<span class="warn">{t("ui.midiCollapsed", { count: preview.result.merged })}</span>{/if}

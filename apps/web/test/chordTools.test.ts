@@ -30,10 +30,10 @@ function song(): Song {
 describe("화음 분산·병합 창 처음 값", () => {
   it("보내는 트랙: 준 트랙, 아니면 한도를 넘는 트랙, 없으면 가장 긴 트랙 (잠근 트랙 빼고)", () => {
     const s = song();
-    expect(defaultSpreadSource(s, 2400, new Set(), "t3")).toBe("t3");
-    expect(defaultSpreadSource(s, 2400, new Set())).toBe("t1");
-    expect(defaultSpreadSource(s, 12, new Set(["t1"]))).toBe("t3");
-    expect(defaultSpreadSource(s, 2400, new Set(["t1", "t2", "t3"]))).toBeUndefined();
+    expect(defaultSpreadSource(s, () => 2400, new Set(), "t3")).toBe("t3");
+    expect(defaultSpreadSource(s, () => 2400, new Set())).toBe("t1");
+    expect(defaultSpreadSource(s, () => 12, new Set(["t1"]))).toBe("t3");
+    expect(defaultSpreadSource(s, () => 2400, new Set(["t1", "t2", "t3"]))).toBeUndefined();
   });
 
   it("분산·병합 칸은 원문이 아니라 게임 글자 수로 센다 (원문만 길고 게임에서는 한도 안인 트랙을 넘친다고 하지 않는다)", () => {
@@ -47,7 +47,7 @@ describe("화음 분산·병합 창 처음 값", () => {
     // 원문으로 보면 t2가 한도(한도를 t2 원문 바로 아래로)를 넘고, 게임 글자 수로 보면 넘지 않는다
     const limit = trackChars(s, "t2") - 1;
     const only = new Set(["t1", "t3"]);
-    expect(defaultSpreadSource(s, limit, only)).toBe("t2");
+    expect(defaultSpreadSource(s, () => limit, only)).toBe("t2");
     expect(chars("t2")).toBeLessThanOrEqual(limit);
   });
 

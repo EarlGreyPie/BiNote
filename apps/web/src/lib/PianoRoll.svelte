@@ -7,8 +7,6 @@
     stepInKey,
     scaleNotesIn,
     gridLines,
-    MOBILE_PROFILE,
-    PROFILES,
     clipNotes,
     cmp,
     glueNotes,
@@ -25,6 +23,7 @@
     sub,
     toFloat,
     toggleTie,
+    songProfile,
     type Note,
     type NoteClip,
     type PlaceLoss,
@@ -236,9 +235,11 @@
     onclearlane?: () => void;
     /** 음량 레인에 같이 그릴 트랙 넣고 빼기 (레인의 트랙 고르기 판) */
     onlanetoggle?: ((trackId: string) => void) | undefined;
+    /** 원곡 세기 안내선 (실험실, 원곡을 불러온 곡에서만 있다): 구간 [from, to)로 맞춘 사슬 첫 음 id → 목표 v. 없으면 안내선 단추도 숨는다 */
+    loudnessGuide?: ((range: readonly [number, number]) => ReadonlyMap<string, number>) | undefined;
   }
 
-  let { cursor, loop, loopDraw = false, books, oncursor, onloop, song: fullSong, ghost = [], activeTrackId, orientation, division, playhead, onnotes, onnotesmany, onmissingtracks, onselecttrack, onpicknote, ontrim, onpreview, onseek, showEvents = false, video = $bindable(), videoPlay = $bindable(false), speedStep = $bindable(0), onspeedpicked, fitOnLoad = false, onvideoready, pitchRange = [12, 119], wave, look, themeKey = "", seconds, rate = 1, colors, tool = "pen", onreverb, noteDur, volume, onvolume, lightKeys = false, keyLock = false, canonicalOf, memory, onmemory, work, visibleTrackIds, selectMove = false, locked, pickOthers = true, onevent, oneventmove, onalignbar, bardragtext, onwaveoffset, pickedEvent, onpickevent, ontempowheel, laneTrackIds, melodyIds, onvolumes, onclearlane, onlanetoggle }: Props =
+  let { cursor, loop, loopDraw = false, books, oncursor, onloop, song: fullSong, ghost = [], activeTrackId, orientation, division, playhead, onnotes, onnotesmany, onmissingtracks, onselecttrack, onpicknote, ontrim, onpreview, onseek, showEvents = false, video = $bindable(), videoPlay = $bindable(false), speedStep = $bindable(0), onspeedpicked, fitOnLoad = false, onvideoready, pitchRange = [12, 119], wave, look, themeKey = "", seconds, rate = 1, colors, tool = "pen", onreverb, noteDur, volume, onvolume, lightKeys = false, keyLock = false, canonicalOf, memory, onmemory, work, visibleTrackIds, selectMove = false, locked, pickOthers = true, onevent, oneventmove, onalignbar, bardragtext, onwaveoffset, pickedEvent, onpickevent, ontempowheel, laneTrackIds, melodyIds, onvolumes, onclearlane, onlanetoggle, loudnessGuide }: Props =
     $props();
 
   /** 레이어: 고른 트랙이 든 보기만 그리고 다루는 곡 (나머지 트랙은 롤에서 보이지도 눌리지도 않는다) */
@@ -754,9 +755,9 @@
 
   // 음량 레인: 레인 트랙의 이음 사슬마다 막대 하나. 붓은 손이 지나간 막대마다 그 높이 값, 직선은 누른 자리에서 뗀 자리까지.
   // 여러 트랙을 같이 고르면(트랙 목록 Ctrl+클릭) 멜로디 트랙은 그은 값, 나머지는 그 순간 높이 자리마다 차이를 더한다
-  const volumeRange = $derived((PROFILES[song.meta.profileId] ?? MOBILE_PROFILE).volume);
+  const volumeRange = $derived(songProfile(song).volume);
   /** 게임에서 쓸 수 있는 가장 짧은 음 길이 (온음표의 1/n). 끄는 중 Alt로 격자를 끌 때 이 칸으로 움직인다 */
-  const lengthMax = $derived((PROFILES[song.meta.profileId] ?? MOBILE_PROFILE).length.max);
+  const lengthMax = $derived(songProfile(song).length.max);
   /** 레인에 그리는 트랙: 고른 트랙이 먼저, 같이 고른 트랙(보이는 것만)이 뒤에 */
   const laneTracks = $derived.by((): LaneTrack[] => {
     if (!active) return [];
@@ -966,7 +967,8 @@
       volumeLabels: volumeLabels.mode,
       timbreZones: timbreZones.on,
       keyLock: keyLock ? (song.keys ?? []) : undefined,
-      lane: laneReserved > 0 ? { ...lane.draw(laneList), label: t("ui.laneName") } : undefined,
+      // 안내선은 반복 구간이 있으면 그 안에서, 없으면 보이는 범위에서 원곡 세기를 맞춘다
+      lane: laneReserved > 0 ? { ...lane.draw(laneList), label: t("ui.laneName"), guide: loudnessGuide && volumeLane.guide ? loudnessGuide(loop ?? visibleTime(view)) : undefined } : undefined,
       css: cssVar,
     });
   });
@@ -2216,6 +2218,11 @@
           <button class="mode" class:on={volumeLane.mode === "brush"} onclick={() => saveVolumeLane({ mode: "brush" })}>{t("ui.laneBrush")}</button>
           <button class="mode" class:on={volumeLane.mode === "line"} onclick={() => saveVolumeLane({ mode: "line" })}>{t("ui.laneLine")}</button>
         </div>
+        {#if loudnessGuide}
+          <div class="row">
+            <button class="mode guide" class:on={volumeLane.guide} aria-pressed={volumeLane.guide} title={t("ui.laneGuideHelp")} onclick={() => saveVolumeLane({ guide: !volumeLane.guide })}>{t("ui.laneGuide")}</button>
+          </div>
+        {/if}
       {/if}
     </div>
     <!-- 높이 손잡이: 얇은 띠에서도 끌면 크게 펼쳐진다. 펜·손가락으로 잡기 쉽게 12px -->
@@ -2434,6 +2441,13 @@
     flex: 1 1 0;
     padding: 0;
     letter-spacing: -0.5px;
+  }
+  /* 원곡 세기 안내선 단추: 건반 띠 폭이 좁아 두 줄로 접힐 수 있게 */
+  .lane-corner .mode.guide {
+    height: auto;
+    min-height: 20px;
+    font-size: 10px;
+    white-space: normal;
   }
   .lane-corner .mode.on {
     background: var(--accent);

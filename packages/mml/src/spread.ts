@@ -1,9 +1,11 @@
 import { add, cmp, meterGrid, sub, ZERO, type Command, type GameProfile, type Note, type Rat, type Song, type Track, type TimeSigEvent } from "@mmlce/core";
 import { chordsPerScore } from "./clipboard.js";
+import { limitOf, trackLimits } from "./track-limits.js";
 import { soundGroups } from "./distribute.js";
 import { compactResult, restoreSong } from "./edit.js";
 import { trackEnd } from "./score-end.js";
 import { gameTimeline } from "./game-timeline.js";
+import { fitSlots, type SlotSwap } from "./slot-fit.js";
 import { noteChains } from "./merge.js";
 import { optimizeMml } from "./optimizer.js";
 import { parseMml } from "./parser.js";
@@ -202,28 +204,32 @@ export interface SpreadResult {
   readonly moved: number;
   /** 곡을 그대로 둔 까닭: notes·tempo = 글자 수 정리를 못 함, sound = 게임 소리가 달라짐 */
   readonly kept?: "notes" | "tempo" | "sound";
+  /** 맞바꾼 뒤 자리 맞추기로 자리를 바꾼 악보 (fitSlots, 자리마다 한도가 다른 게임만) */
+  readonly swaps?: readonly SlotSwap[];
 }
 
 /**
  * 구간을 맞바꾸고 모든 트랙을 최적화 출력기로 다시 쓴 결과 (화음 분산과 같다. 잠근 트랙은 글도 그대로).
- * 게임 출력을 다시 읽은 결과가 맞바꾸기 전과 다르면 곡을 그대로 둔다
+ * 게임 출력을 다시 읽은 결과가 맞바꾸기 전과 다르면 곡을 그대로 둔다. slots면 그 뒤 자리를 맞춘다 (fitSlots)
  */
-export function spreadResult(song: Song, profile: GameProfile, sourceId: string, spans: readonly SpreadSpan[], locked?: ReadonlySet<string>): SpreadResult {
+export function spreadResult(song: Song, profile: GameProfile, sourceId: string, spans: readonly SpreadSpan[], locked?: ReadonlySet<string>, slots = true): SpreadResult {
   const swapped = swapSpans(song, sourceId, spans);
   if (swapped.moved === 0) return { song, moved: 0 };
   // 음을 옮긴 트랙은 원문이 지워지므로, 옮기기 전 트랙 길이(원문 끝 쉼표 포함)를 지킬 길이로 넘긴다
-  const compact = compactResult(swapped.song, profile, locked, new Map(song.tracks.map((t) => [t.id, trackEnd(t)])));
+  const compact = compactResult(swapped.song, profile, locked, new Map(song.tracks.map((t) => [t.id, trackEnd(t, profile.length)])));
   if (compact.kept) return { song, moved: 0, kept: compact.kept };
   const player = song.tracks.find((t) => t.id === sourceId)!.playerId;
   if (gameTimeline(compact.song, profile, player) !== gameTimeline(song, profile, player)) return { song, moved: 0, kept: "sound" };
-  return { song: compact.song, moved: swapped.moved };
+  if (!slots) return { song: compact.song, moved: swapped.moved };
+  const fitted = fitSlots(compact.song, profile, locked);
+  return { song: fitted.song, moved: swapped.moved, ...(fitted.swaps.length > 0 ? { swaps: fitted.swaps } : {}) };
 }
 
 /** 화음 분산 창의 명령 (spreadResult). 실행 취소하면 분산 전 곡으로 돌아간다 */
-export function spreadSong(profile: GameProfile, sourceId: string, spans: readonly SpreadSpan[], locked?: ReadonlySet<string>, label = "화음 분산"): Command {
+export function spreadSong(profile: GameProfile, sourceId: string, spans: readonly SpreadSpan[], locked?: ReadonlySet<string>, label = "화음 분산", slots = true): Command {
   return {
     label,
-    apply: (song) => spreadResult(song, profile, sourceId, spans, locked).song,
+    apply: (song) => spreadResult(song, profile, sourceId, spans, locked, slots).song,
     invert: (before) => restoreSong(before),
   };
 }
@@ -243,7 +249,9 @@ export function autoSpreadSpans(
   locked?: ReadonlySet<string>,
   keep: readonly SpreadSpan[] = [],
 ): SpreadSpan[] {
-  const limit = profile.charLimitPerScore;
+  // 보내는 트랙과 받는 트랙의 한도를 따로 읽는다 (자리마다 한도가 다를 수 있다)
+  const limits = trackLimits(song, profile);
+  const limit = (id: string) => limitOf(limits, id, profile);
   const picked = [...keep];
   const tried = new Set<string>();
   // 템포 자리는 처음 곡에서 한 번만 정해 어림한다 (템포가 많은 곡은 자리 정하기가 느리다). 정확한 수는 spreadResult가 센다
@@ -253,9 +261,9 @@ export function autoSpreadSpans(
     const out = new Map(known);
     for (const t of s.tracks) {
       if (!ids.includes(t.id)) continue;
-      const text = optimizeMml(t.notes, { tempo: placed.get(t.id) ?? [] }).text;
+      const text = optimizeMml(t.notes, { tempo: placed.get(t.id) ?? [], profile }).text;
       // 옮긴 뒤 출력기가 쓰지 못하는 길이(아주 짧은 쉼표 등)가 생기면 그 구간은 쓸 수 없다
-      out.set(t.id, sameSound(t.notes, parseMml(text).notes) ? text.length : Infinity);
+      out.set(t.id, sameSound(t.notes, parseMml(text, { lengths: profile.length }).notes) ? text.length : Infinity);
     }
     return out;
   };
@@ -264,20 +272,20 @@ export function autoSpreadSpans(
   let now = sizes(current, [sourceId, ...new Set(spans.map((s) => s.targetId))]);
   for (let step = 0; step < 24; step++) {
     const have = now.get(sourceId) ?? 0;
-    const need = have - limit;
+    const need = have - limit(sourceId);
     if (need <= 0) break;
     const perNote = have / Math.max(1, current.tracks.find((t) => t.id === sourceId)!.notes.length);
     const free = spans.filter((s) => !tried.has(s.id) && !picked.some((p) => spansOverlap(p, s)));
     if (free.length === 0) break;
     const gain = (s: SpreadSpan) => (s.give - s.take) * perNote;
-    const room = (s: SpreadSpan) => limit - (now.get(s.targetId) ?? 0);
+    const room = (s: SpreadSpan) => limit(s.targetId) - (now.get(s.targetId) ?? 0);
     const enough = free.filter((s) => gain(s) >= need).sort((a, b) => a.take - b.take || gain(a) - gain(b) || room(b) - room(a));
     const empty = enough.filter((s) => s.take === 0);
     const best = empty[0] ?? enough[0] ?? [...free].sort((a, b) => gain(b) - gain(a) || room(b) - room(a))[0]!;
     tried.add(best.id);
     const next = swapSpans(song, sourceId, [...picked, best]).song;
     const after = sizes(next, [sourceId, best.targetId], now);
-    if ((after.get(best.targetId) ?? 0) > limit || (after.get(sourceId) ?? 0) >= have) continue;
+    if ((after.get(best.targetId) ?? 0) > limit(best.targetId) || (after.get(sourceId) ?? 0) >= have) continue;
     picked.push(best);
     current = next;
     now = after;

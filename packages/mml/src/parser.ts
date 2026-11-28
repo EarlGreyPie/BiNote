@@ -1,4 +1,4 @@
-import { add, fromLength, ZERO, type Rat, type TempoEvent } from "@mmlce/core";
+import { add, noteLengthValue, ZERO, type LengthLimit, type Rat, type TempoEvent } from "@mmlce/core";
 
 /** 파서가 읽어 낸 음 하나. id·트랙 정보는 호출한 쪽이 붙인다. */
 export interface ParsedNote {
@@ -29,6 +29,11 @@ export interface ParseOptions {
   readonly octave?: number;
   readonly length?: number;
   readonly volume?: number;
+  /**
+   * 길이 숫자의 값을 정하는 한도 (곡 프로필의 length). 틱 모형(ticks)이 있으면 길이 숫자를 정수 틱으로 읽는다.
+   * 없으면 정확한 분수. 범위 검사는 하지 않는다 (검사기가 values로 한다)
+   */
+  readonly lengths?: LengthLimit | undefined;
 }
 
 /** 원문에 쓴 숫자 값. 검사기가 프로필 범위와 비교한다 (파서는 범위를 모른다) */
@@ -127,9 +132,9 @@ export function parseMml(text: string, options: ParseOptions = {}): ParseResult 
     if (dots > 0) written("dots", dots, from, i);
     if (length < 1) {
       diag("error", "length-zero", from, i);
-      return fromLength(defaultLength, defaultDots);
+      return noteLengthValue(defaultLength, defaultDots, options.lengths);
     }
-    return fromLength(length, useDots);
+    return noteLengthValue(length, useDots, options.lengths);
   };
 
   // 서로소 음길이(l7·l11·l13 …)가 쌓이면 분수가 안전한 정수 범위를 넘을 수 있다. 예외로 끝내지 않고 진단으로 알린 뒤 거기서 멈춘다
@@ -172,7 +177,7 @@ export function parseMml(text: string, options: ParseOptions = {}): ParseResult 
           }
           pitch = num + N_COMMAND_OFFSET;
           // n 음표는 숫자가 음 번호라서 길이는 l 값을 쓴다
-          const dur = fromLength(defaultLength, defaultDots);
+          const dur = noteLengthValue(defaultLength, defaultDots, options.lengths);
           notes.push({ start: pos, dur, pitch, vol: volume, tie: "none", span: [from, i] });
           pos = add(pos, dur);
           continue;

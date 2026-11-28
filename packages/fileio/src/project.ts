@@ -4,6 +4,7 @@ import {
   getProfile,
   rat,
   ZERO,
+  DEFAULT_PROFILE,
   type Extras,
   type InstrumentRef,
   MADE_TOOLS,
@@ -134,9 +135,9 @@ const FILE_KEYS = known<ProjectFile>({ format: true, version: true, minReader: t
 const SONG_KEYS = known<Song>({ meta: true, tempo: true, timeSig: true, markers: true, keys: true, players: true, tracks: true, sources: true, made: true, colorsKept: true });
 const META_KEYS = known<SongMeta>({ title: true, author: true, profileId: true, memo: true });
 const TEMPO_KEYS = known<TempoEvent>({ at: true, bpm: true });
-const TIME_SIG_KEYS = known<TimeSigEvent>({ at: true, beats: true, unit: true });
+const TIME_SIG_KEYS = known<TimeSigEvent>({ at: true, beats: true, unit: true, pickup: true });
 const MADE_KEYS = known<MadeRecord>({ id: true, tool: true, options: true, trackId: true, picked: true, before: true, after: true, addedTracks: true });
-const MARKER_KEYS = known<Marker>({ id: true, at: true, label: true });
+const MARKER_KEYS = known<Marker>({ id: true, at: true, label: true, kind: true, done: true, end: true });
 const KEY_KEYS = known<KeyEvent>({ at: true, fifths: true });
 const PLAYER_KEYS = known<Player>({ id: true, name: true, instrument: true, splitFrom: true, tab: true });
 const TRACK_KEYS = known<Track>({
@@ -402,14 +403,14 @@ const ROLES: readonly TrackRole[] = ["melody", "harmony", "bass", "free"];
 
 function readSong(raw: Obj, diagnostics: FileDiagnostic[]): Song {
   const metaRaw = isObject(raw.meta) ? raw.meta : {};
-  // 모르는 게임 프로필(더 새 판에서 더한 것 등)이면 모바일로 연다
-  let profileId = str(metaRaw.profileId, "mobile") || "mobile";
+  // 모르는 게임 프로필(더 새 판에서 더한 것 등)이면 기본 프로필(DEFAULT_PROFILE)로 연다
+  let profileId = str(metaRaw.profileId, DEFAULT_PROFILE.id) || DEFAULT_PROFILE.id;
   let profile;
   try {
     profile = getProfile(profileId);
   } catch {
     warn(diagnostics, "project-unknown-profile", "meta", { profile: profileId });
-    profileId = "mobile";
+    profileId = DEFAULT_PROFILE.id;
     profile = getProfile(profileId);
   }
   const meta = {
@@ -437,7 +438,7 @@ function readSong(raw: Obj, diagnostics: FileDiagnostic[]): Song {
     const beats = isObject(e) ? e.beats : undefined;
     const unit = isObject(e) ? e.unit : undefined;
     if (at && cmp(at, ZERO) >= 0 && Number.isInteger(beats) && Number.isInteger(unit) && (beats as number) >= 1 && (unit as number) >= 1)
-      timeSig.push({ at, beats: beats as number, unit: unit as number, ...withExtras(e as Obj, TIME_SIG_KEYS) });
+      timeSig.push({ at, beats: beats as number, unit: unit as number, ...((e as Obj).pickup === true ? { pickup: true } : {}), ...withExtras(e as Obj, TIME_SIG_KEYS) });
     else warn(diagnostics, "project-dropped", "timeSig");
   }
   timeSig.sort((a, b) => cmp(a.at, b.at));
@@ -445,7 +446,20 @@ function readSong(raw: Obj, diagnostics: FileDiagnostic[]): Song {
   const markers: Marker[] = [];
   for (const [i, e] of list(raw.markers).entries()) {
     const at = isObject(e) ? readRat(e.at) : undefined;
-    if (isObject(e) && at && cmp(at, ZERO) >= 0) markers.push({ id: str(e.id, `m${i + 1}`) || `m${i + 1}`, at, label: str(e.label), ...withExtras(e, MARKER_KEYS) });
+    if (isObject(e) && at && cmp(at, ZERO) >= 0) {
+      // 작업 메모: kind·done·end는 메모일 때만 읽는다 (끝은 시작보다 뒤일 때만). 모르는 kind는 구조 마커로 본다
+      const memo = e.kind === "memo";
+      const end = memo ? readRat(e.end) : undefined;
+      markers.push({
+        id: str(e.id, `m${i + 1}`) || `m${i + 1}`,
+        at,
+        label: str(e.label),
+        ...(memo ? { kind: "memo" as const } : {}),
+        ...(memo && e.done === true ? { done: true } : {}),
+        ...(end && cmp(end, at) > 0 ? { end } : {}),
+        ...withExtras(e, MARKER_KEYS),
+      });
+    }
     else warn(diagnostics, "project-dropped", "markers");
   }
 

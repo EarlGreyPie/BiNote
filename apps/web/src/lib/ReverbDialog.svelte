@@ -1,6 +1,6 @@
 <script lang="ts">
   import { untrack } from "svelte";
-  import { canWriteExactly, optimizeMml } from "@mmlce/mml";
+  import { canWriteExactly, optimizeMml, limitOf, trackLimits, widestLimit } from "@mmlce/mml";
   import { add, cmp, planReverbBatch, rat, REVERB_LEVELS_MAX, type GameProfile, type Note, type Rat, type ReverbResult, type Song } from "@mmlce/core";
   import { t } from "./i18n.svelte";
   import { parseLevels, REVERB_LENGTHS } from "./labOptions";
@@ -64,14 +64,20 @@
     if (result.changes.length === 0) return undefined;
     let delta = 0;
     let over = false;
+    /** 넘친 트랙 자리의 한도 (자리마다 한도가 다를 수 있다) */
+    let overLimit: number | undefined;
+    const limits = trackLimits(song, profile);
     for (const c of result.changes) {
       const tr = song.tracks.find((x) => x.id === c.trackId);
       if (!tr) continue;
       const after = optimizeMml(c.notes, { lengths: profile.length }).text.length;
       delta += after - optimizeMml(tr.notes, { lengths: profile.length }).text.length;
-      if (after > profile.charLimitPerScore) over = true;
+      if (after > limitOf(limits, c.trackId, profile)) {
+        over = true;
+        overLimit ??= limitOf(limits, c.trackId, profile);
+      }
     }
-    return { delta, over };
+    return { delta, over, limit: overLimit ?? widestLimit(profile) };
   });
 
   const lengths = $derived(REVERB_LENGTHS.filter((n) => n >= profile.length.min && n <= profile.length.max));
@@ -136,7 +142,7 @@
   <p class="muted">
     {t("ui.labReverbMade", { tails: result.tails, fills: result.fills, added: result.added })}{#if chars}{` · ${t("ui.slideChars", { n: chars.delta })}`}{/if}
   </p>
-  {#if chars?.over}<p class="warn">{t("ui.slideCharsOver", { limit: profile.charLimitPerScore })}</p>{/if}
+  {#if chars?.over}<p class="warn">{t("ui.slideCharsOver", { limit: chars.limit })}</p>{/if}
   {#if s.tied + s.locked + s.unwritable + s.silent > 0}
     <p class="muted">{t("ui.labReverbSkipped", { tied: s.tied, locked: s.locked, unwritable: s.unwritable, silent: s.silent })}</p>
   {/if}

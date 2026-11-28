@@ -1,20 +1,21 @@
 import { add, cmp, eq, type GameProfile, type Note, type Rat, type Song } from "@mmlce/core";
-import { distributeChords } from "./distribute.js";
+import { distributeChords, type BookFit } from "./distribute.js";
 import { settleDistributed } from "./edit.js";
 import { splitSong, type SplitOptions, type SplitResult } from "./split.js";
+import { trackLimits } from "./track-limits.js";
 
 /**
  * 악보책 권 수 줄이기. 권 수는 가장 긴 채널이 정하므로, 같은 악기 트랙끼리 음을 옮겨
  * 채널 길이를 고르게 하면 권이 줄 수 있다. 한 권 적게 나눌 수 있는 채널 길이를 몇 가지 시도해,
- * 실제로 나눠 봐서 줄어들면 그 길이를 알려 준다 (적용은 distributeSong(profile, label, limit)).
+ * 실제로 나눠 봐서 줄어들면 그 길이를 알려 준다 (적용은 distributeSong(profile, label, fit)). 채널 길이는 트랙마다 자리 한도 × 권 수 × share
  */
 export interface FewerBooks {
   /** 지금 권 수 */
   readonly from: number;
   /** 음을 옮긴 뒤 권 수 */
   readonly to: number;
-  /** distributeChords에 줄 채널 글자 수 */
-  readonly limit: number;
+  /** distributeChords에 줄 채널 길이 (자리 한도 × 권 수 × share) */
+  readonly fit: BookFit;
   /** 옮기는 음 수 */
   readonly moved: number;
 }
@@ -26,8 +27,8 @@ export function fewerBooks(song: Song, profile: GameProfile, books: number, lock
   if (books < 2) return undefined;
   const target = books - 1;
   for (const share of SHARES) {
-    const limit = Math.floor(profile.charLimitPerScore * target * share);
-    const spread = distributeChords(song, profile, { limit, ...(locked ? { locked } : {}) });
+    const fit: BookFit = { books: target, share };
+    const spread = distributeChords(song, profile, { fit, ...(locked ? { locked } : {}) });
     if (spread.moved === 0) continue;
     // 글자 수 줄이기가 곡을 그대로 두면(kept) 옮긴 곡은 원문이 지워져 끝 길이를 잃으므로 이 옮기기는 버린다.
     // 게임 소리가 달라져도 버린다 (적용하는 distributeSong과 같은 확인)
@@ -35,7 +36,7 @@ export function fewerBooks(song: Song, profile: GameProfile, books: number, lock
     if (compacted.kept) continue;
     const next = compacted.song;
     const parts = splitSong(next, profile, fixed?.length ? { fixed } : {}).parts.length;
-    if (parts <= target) return { from: books, to: parts, limit, moved: spread.moved };
+    if (parts <= target) return { from: books, to: parts, fit, moved: spread.moved };
   }
   return undefined;
 }
@@ -67,8 +68,8 @@ export interface PlanOptions {
 export interface BookSpread {
   readonly from?: number;
   readonly to: number;
-  /** distributeChords에 준 채널 글자 수 (곡에도 적용할 때 같은 값으로) */
-  readonly limit: number;
+  /** distributeChords에 준 채널 길이 (곡에도 적용할 때 같은 값으로). 없으면 자리 한도 그대로 (한 권) */
+  readonly fit?: BookFit;
   readonly moved: number;
 }
 
@@ -88,13 +89,12 @@ export interface BookPlan {
 export function planBooks(song: Song, profile: GameProfile, options: PlanOptions = {}): BookPlan {
   const spread = options.spread ?? true;
   const report = (stage: BookStage) => (fraction: number) => options.onProgress?.({ stage, fraction });
-  const limit = profile.charLimitPerScore;
   const locked = options.locked;
   // 고정 자리는 권 수를 셀 때도 지킨다 (화음을 옮겨 본 곡도 같은 자리에서 자른다)
   const base: SplitOptions = options.fixed?.length ? { fixed: options.fixed } : {};
   const choices = options.choices === true;
-  const room = spread ? roomFor(song, locked) : undefined;
-  const distribute = (channel?: number) => distributeChords(song, profile, { ...(channel === undefined ? {} : { limit: channel }), ...(locked ? { locked } : {}) });
+  const room = spread ? roomFor(song, profile, locked) : undefined;
+  const distribute = (fit?: BookFit) => distributeChords(song, profile, { ...(fit === undefined ? {} : { fit }), ...(locked ? { locked } : {}) });
   // 음을 옮긴 곡을 글자 수 줄이기로 다시 쓰고 게임 소리를 확인한다 (화음 분산 명령과 같게, settleDistributed).
   // 그대로 두면(kept) undefined: 옮긴 곡은 원문이 지워져 끝 길이를 잃거나 소리가 달라지므로 그 옮기기는 버린다
   const compact = {
@@ -106,13 +106,13 @@ export function planBooks(song: Song, profile: GameProfile, options: PlanOptions
 
   // 1) 음을 옮겨 한 권에 들어가면 나누지 않는다. 옮긴 뒤 모든 채널이 한도 안인지는 실제로 옮겨 본 글자 수로 판단한다
   //    (음을 옮기면 옥타브·볼륨 명령과 쉼표가 줄어 글자 수 합이 줄 수 있다)
-  if (room && room(1, limit)) {
+  if (room && room(1)) {
     report("spread")(0);
     const one = distribute();
     if (one.moved > 0 && one.over.length === 0) {
       const next = compact.apply(one.song);
       const result = next && splitSong(next, profile, base);
-      if (next && result && !result.needed) return { song: next, result, spread: { to: 1, limit, moved: one.moved } };
+      if (next && result && !result.needed) return { song: next, result, spread: { to: 1, moved: one.moved } };
     }
   }
 
@@ -128,14 +128,14 @@ export function planBooks(song: Song, profile: GameProfile, options: PlanOptions
     let step = 0;
     search: for (const target of targets) {
       // 글자 수 합으로 보아 이 권 수에는 못 넣으면 나눠 보지 않는다
-      if (!room!(target, limit)) {
+      if (!room!(target)) {
         step += SHARES.length;
         continue;
       }
       for (const share of SHARES) {
         progress(step++ / steps);
-        const channel = Math.floor(limit * target * share);
-        const moved = distribute(channel);
+        const fit: BookFit = { books: target, share };
+        const moved = distribute(fit);
         if (moved.moved === 0) continue;
         // 한 권 적게보다 더 줄이려는 시도는, 옮겨도 채널이 넘치면 나눠 보지 않는다 (오래 걸린다)
         if (target < books - 1 && moved.over.length > 0) continue;
@@ -143,7 +143,7 @@ export function planBooks(song: Song, profile: GameProfile, options: PlanOptions
         if (!next) continue;
         const result = splitSong(next, profile, base);
         if (result.parts.length < plan.result.parts.length) {
-          plan = { song: next, result, spread: { from: books, to: result.parts.length, limit: channel, moved: moved.moved } };
+          plan = { song: next, result, spread: { from: books, to: result.parts.length, fit, moved: moved.moved } };
         }
         if (result.parts.length <= target) break search;
       }
@@ -171,21 +171,22 @@ export function planBooks(song: Song, profile: GameProfile, options: PlanOptions
 /**
  * 화음을 아무리 고르게 나눠도 books권에 못 넣는 곡을 미리 거른다 (분산은 오래 걸린다).
  * &로 이어진 음(같은 높이면 출력기가 한 음으로 합친다)은 함께 옮기므로, 이어진 묶음 하나는 적어도 한 글자(음 이름)를 쓴다.
- * 음은 같은 연주자의 잠그지 않은 트랙끼리만 옮기므로, 그 트랙들의 묶음 수 합이 "트랙 수 × 권 수 × 한도"를 넘으면
+ * 음은 같은 연주자의 잠그지 않은 트랙끼리만 옮기므로, 그 트랙들의 묶음 수 합이 "트랙마다 자리 한도의 합 × 권 수"를 넘으면
  * 어떻게 옮겨도 못 넣는다.
  * 글자 수 합으로 거르면 안 된다: 옮기면 옥타브·볼륨 명령과 쉼표가 줄어 합이 줄 수 있다 (PR #86 점검 2번).
  * 음 수로 세어도 안 된다: c64&c64&… 처럼 이어진 음 여럿이 한 글자가 될 수 있다 (PR #88 점검 1번)
  */
-function roomFor(song: Song, locked: ReadonlySet<string> | undefined): (books: number, limit: number) => boolean {
-  const byPlayer = new Map<string, { notes: number; tracks: number }>();
+function roomFor(song: Song, profile: GameProfile, locked: ReadonlySet<string> | undefined): (books: number) => boolean {
+  const limits = trackLimits(song, profile);
+  const byPlayer = new Map<string, { notes: number; room: number }>();
   for (const track of song.tracks) {
     if (locked?.has(track.id)) continue;
-    const entry = byPlayer.get(track.playerId) ?? { notes: 0, tracks: 0 };
+    const entry = byPlayer.get(track.playerId) ?? { notes: 0, room: 0 };
     entry.notes += chains(track.notes);
-    entry.tracks += 1;
+    entry.room += limits.get(track.id) ?? 0;
     byPlayer.set(track.playerId, entry);
   }
-  return (books, limit) => [...byPlayer.values()].every((p) => p.notes <= p.tracks * books * limit);
+  return (books) => [...byPlayer.values()].every((p) => p.notes <= p.room * books);
 }
 
 /** &로 바로 이어진 음을 하나로 센 음 수 (freeRuns가 함께 옮기는 묶음과 같은 기준) */

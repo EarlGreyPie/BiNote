@@ -2,6 +2,7 @@
   import { INSTRUMENTS, type Song } from "@mmlce/core";
   import { readMmlAt } from "@mmlce/fileio";
   import { diag, instrumentName, t } from "./i18n.svelte";
+  import { importGameId } from "./labs.svelte";
   import { pasteInstrumentNames, replaceSources } from "./pasteOptions";
 
   interface Props {
@@ -9,7 +10,8 @@
     initial?: string;
     /** 지금 열린 곡이 있으면 "지금 곡에 더하기"를 보인다 */
     canAppend: boolean;
-    limit: number;
+    /** 붙여넣는 자리(채널 차례)마다 글자 수 한도 */
+    limit: (slot: number) => number;
     maxChords: number;
     /** 권으로 이을 때 권 사이 틈(ms, 프로필 값. 모르면 null) */
     gapMs: number | null;
@@ -54,7 +56,7 @@
   });
 
   const read = $derived(
-    readMmlAt(text, { instrument: refOf(instrumentId), playerName: t("ui.pastePlayer"), mode, gapMs, instrumentNames: NAMES }),
+    readMmlAt(text, { instrument: refOf(instrumentId), playerName: t("ui.pastePlayer"), mode, gapMs, instrumentNames: NAMES, profileId: importGameId() }),
   );
   const result = $derived({
     ...read,
@@ -132,7 +134,7 @@
           {#each books as b, v (b)}
             {#if v > 0}<span class="muted">/</span>{/if}
             {#each read.blocks[b]!.parts as part, i (i)}
-              <span class={part.length > limit ? "warn" : "muted"}>{t("ui.chars", { count: part.length })}</span>
+              <span class={part.length > limit(i) ? "warn" : "muted"}>{t("ui.chars", { count: part.length })}</span>
             {/each}
           {/each}
         </li>

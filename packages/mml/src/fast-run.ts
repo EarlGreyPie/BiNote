@@ -1,5 +1,6 @@
-import { add, cmp, eq, fromLength, sub, tempoClock, ZERO, type GameProfile, type Note, type Rat, type Song } from "@mmlce/core";
+import { add, cmp, eq, noteLengthValue, sub, tempoClock, ZERO, type GameProfile, type Note, type Rat, type Song } from "@mmlce/core";
 import { optimizeMml } from "./optimizer.js";
+import { limitOf, trackLimits } from "./track-limits.js";
 import { canWriteExactly } from "./printer.js";
 import { fastRunGapEnough, fastRunMoments, type FastRunMoment, type ValidateSongOptions } from "./validate.js";
 
@@ -75,9 +76,9 @@ export function delayLengths(profile: GameProfile): { readonly binary: readonly 
   for (let n = profile.length.min; n <= profile.length.max; n++) {
     let m = n;
     while (m % 2 === 0) m /= 2;
-    if (m === 1) for (let dots = 0; dots <= profile.length.dots; dots++) binary.push(fromLength(n, dots));
+    if (m === 1) for (let dots = 0; dots <= profile.length.dots; dots++) binary.push(noteLengthValue(n, dots, profile.length));
     // 점 붙은 셋잇단 길이는 2의 거듭제곱 칸 길이와 같다 (48. = 32)
-    else if (m === 3) triplet.push(fromLength(n));
+    else if (m === 3) triplet.push(noteLengthValue(n, 0, profile.length));
   }
   return { binary: binary.sort(cmp), triplet: triplet.sort(cmp) };
 }
@@ -106,7 +107,7 @@ const printedLength = new WeakMap<readonly Note[], { readonly lengths: GameProfi
 function optimizedLength(notes: readonly Note[], profile: GameProfile): number {
   const hit = printedLength.get(notes);
   if (hit && hit.lengths === profile.length) return hit.n;
-  const n = optimizeMml(notes, { lengths: profile.length }).text.length;
+  const n = optimizeMml(notes, { profile }).text.length;
   printedLength.set(notes, { lengths: profile.length, n });
   return n;
 }
@@ -174,11 +175,13 @@ export function planFastRunFix(song: Song, profile: GameProfile, options: FastRu
   if (options.quick) return { moments, changes, delays, skipped };
   let delta = 0;
   let over = false;
+  // 트랙마다 그 자리 한도 (자리마다 한도가 다를 수 있다)
+  const limits = trackLimits(song, profile);
   for (const c of changes) {
     const before = song.tracks.find((t) => t.id === c.trackId)!;
-    const after = optimizeMml(c.notes, { lengths: profile.length }).text.length;
+    const after = optimizeMml(c.notes, { profile }).text.length;
     delta += after - optimizedLength(before.notes, profile);
-    if (after > profile.charLimitPerScore) over = true;
+    if (after > limitOf(limits, c.trackId, profile)) over = true;
   }
   const fixed = changes.length === 0 ? song : { ...song, tracks: song.tracks.map((t) => (edits.has(t.id) ? { ...t, notes: edits.get(t.id)! } : t)) };
   const left = changes.length === 0 ? all.length : fastRunMoments(fixed, profile, options).length;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { audioLag, CLOCK_STOP_SLACK, clockMoves, clockStats, isTouchWebKit, LATENCY_JUMP, LOCK_HIDDEN_MS, needsRebuild, settlesWithin, staleAfterReturn } from "../src/lib/audioHealth";
+import { audioDeviceSignature, audioLag, CLOCK_STOP_SLACK, clockMoves, clockStats, isTouchWebKit, LATENCY_JUMP, LOCK_HIDDEN_MS, needsRebuild, settlesWithin, staleAfterReturn } from "../src/lib/audioHealth";
 
 describe("잠자기 뒤 오디오 확인", () => {
   it("끝나지 않는 resume()을 오래 기다리지 않는다", async () => {
@@ -86,5 +86,22 @@ describe("오디오 시계 멈춤 알아보기 (앱으로 띄운 아이패드는
     expect(rate).toBeCloseTo(1);
     expect(maxStepMs).toBeCloseTo(100);
     expect(clockStats([])).toEqual({ rate: 0, maxStepMs: 0 });
+  });
+});
+
+describe("소리 장치 지문", () => {
+  const out = (id: string) => ({ kind: "audiooutput", deviceId: id, groupId: "g" + id });
+  const mic = (id: string) => ({ kind: "audioinput", deviceId: id, groupId: "g" + id });
+  const cam = (id: string) => ({ kind: "videoinput", deviceId: id, groupId: "g" + id });
+
+  it("출력 장치가 늘거나 줄면 바뀌고, 순서·카메라는 상관없다", () => {
+    const base = audioDeviceSignature([out("a"), mic("m"), cam("c")]);
+    expect(audioDeviceSignature([cam("x"), mic("n"), out("a")])).toBe(base);
+    expect(audioDeviceSignature([out("a"), out("bt")])).not.toBe(base);
+  });
+
+  it("출력을 알려 주지 않는 브라우저는 소리 입력으로 본다", () => {
+    expect(audioDeviceSignature([mic("m")])).not.toBe(audioDeviceSignature([mic("m"), mic("bt")]));
+    expect(audioDeviceSignature([cam("c")])).toBe("");
   });
 });

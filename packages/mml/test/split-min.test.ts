@@ -197,7 +197,7 @@ describe("fewerBooks", { timeout: 60_000 }, () => {
     const f = fewerBooks(s, small, books);
     expect(f).toBeDefined();
     expect(f!.to).toBeLessThan(books);
-    const after = distributeSong(small, "x", f!.limit).apply(s);
+    const after = distributeSong(small, "x", f!.fit).apply(s);
     expect(splitSong(after, small).parts.length).toBe(f!.to);
   });
 

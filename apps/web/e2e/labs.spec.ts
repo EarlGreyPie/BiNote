@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { expect, openApp, pasteAsNewSong, test, trackTabs } from "./fixtures";
+import { expect, exportMml, focusRoll, openApp, pasteAsNewSong, test, trackTabs } from "./fixtures";
 
 // 실험실 연주 누락음 검사: 켰을 때만 곡 검사에 보이고, 고치기 창에서 고친 뒤 실행 취소 한 번으로 되돌아간다
 
@@ -54,4 +54,87 @@ test("실험실을 켜면 연주 누락음 검사이 보이고, 모두 고치면
   await page.getByRole("button", { name: "실행 취소" }).click();
   await openChecks(page);
   await expect(page.locator(".checks li", { hasText: "연주 누락음 위험(실측 전)" })).toHaveCount(1);
+});
+
+// 실험실 템포 정리 (1.1): 음은 그대로 두고 허용 오차 안에서 이웃 템포를 합친다. 마디 줄은 템포 한꺼번에 바꾸기 창과 같다
+test("실험실 템포 정리: 비슷한 템포를 합치고 실행 취소 한 번에 돌아간다", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("mmlce.labs", "1"));
+  await openApp(page);
+  await pasteAsNewSong(page, "MML@t120l8cdeft121gabt119>ct120c;");
+  await page.getByRole("button", { name: "곡", exact: true }).click();
+  await page.getByRole("menuitem", { name: /^템포/ }).click();
+  await page.getByRole("menuitem", { name: /^템포 정리/ }).click();
+  const dialog = page.locator("dialog[open]");
+  await expect(dialog.getByRole("heading", { name: "템포 정리" })).toBeVisible();
+  await expect(dialog.getByText(/템포 4개 → 1개/)).toBeVisible();
+  await dialog.getByRole("button", { name: "적용" }).click();
+  await expect(dialog).toHaveCount(0);
+  const out = await exportMml(page);
+  expect(out.match(/t\d+/g)?.length ?? 0).toBeLessThanOrEqual(1);
+  await page.getByRole("button", { name: "실행 취소" }).click();
+  expect(await exportMml(page)).toContain("t121");
+});
+
+test("실험실 음 시작을 원곡에 맞추기는 원곡이 없으면 막혀 있다", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("mmlce.labs", "1"));
+  await openApp(page);
+  await pasteAsNewSong(page, "MML@t120l8cdef;");
+  await page.getByRole("button", { name: "곡", exact: true }).click();
+  await page.getByRole("menuitem", { name: /^템포/ }).click();
+  await expect(page.getByRole("menuitem", { name: /^음 시작을 원곡에 맞추기/ })).toBeDisabled();
+});
+
+// 실험실 템포를 음 길이로 바꾸기 (1.1): 템포로 때운 빠른 연속음을 한 템포로 펴고 음 자리·길이를 다시 쓴다
+test("실험실 템포를 음 길이로 바꾸기: 튀는 템포를 하나로 펴고 실행 취소 한 번에 돌아간다", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("mmlce.labs", "1"));
+  await openApp(page);
+  await pasteAsNewSong(page, "MML@t120l16ct60dt200et90ft120gabt100>c4;");
+  await page.getByRole("button", { name: "곡", exact: true }).click();
+  await page.getByRole("menuitem", { name: /^템포/ }).click();
+  await page.getByRole("menuitem", { name: /^템포를 음 길이로 바꾸기/ }).click();
+  const dialog = page.locator("dialog[open]");
+  await expect(dialog.getByRole("heading", { name: "템포를 음 길이로 바꾸기" })).toBeVisible();
+  // 반복 구간이 없으면 곡 전체라 글자 수 경고를 먼저 보인다
+  await expect(dialog.getByText(/곡 전체를 바꾸면 글자 수가 크게 늘어요/)).toBeVisible();
+  await expect(dialog.getByText(/템포가 튀는 곳 \(\d+곳\)/)).toBeVisible();
+  await expect(dialog.getByText(/템포 6개 → 1개/)).toBeVisible();
+  await expect(dialog.getByText(/가장 큰 오차 \d+ms/)).toBeVisible();
+  await dialog.getByRole("button", { name: "적용" }).click();
+  await expect(dialog).toHaveCount(0);
+  const out = await exportMml(page);
+  expect(out.match(/t\d+/g)?.length ?? 0).toBeLessThanOrEqual(1);
+  await page.getByRole("button", { name: "실행 취소" }).click();
+  expect(await exportMml(page)).toContain("t200");
+});
+
+// 실험실 범위 밖 템포를 길이로 풀기 (1.1 설계 4번): 템포 창에 범위 밖 값을 넣으면 길이로 풀어 넣기를 권한다
+test("실험실 템포 창: t300을 길이로 풀어 넣으면 t150과 반 길이가 되고 실행 취소 한 번에 돌아간다", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("mmlce.labs", "1"));
+  await openApp(page);
+  await pasteAsNewSong(page, "MML@t120l4cdefcdef;");
+  await focusRoll(page);
+  await page.keyboard.press("Alt+B");
+  const dialog = page.locator("dialog[open]");
+  await dialog.locator("input[type=number]").first().fill("300");
+  await expect(dialog.getByText(/t150로 넣을 수 있어요/)).toBeVisible();
+  await dialog.getByRole("button", { name: "길이로 풀어 넣기" }).click();
+  await expect(dialog).toHaveCount(0);
+  const out = await exportMml(page);
+  expect(out).toContain("t150");
+  expect(out).not.toContain("t300");
+  expect(out).toMatch(/l8/);
+  await page.getByRole("button", { name: "실행 취소" }).click();
+  const back = await exportMml(page);
+  expect(back).not.toContain("t150");
+  expect(back).toMatch(/l4|c4|cdef/);
+});
+
+test("실험실을 끄면 템포 창에 길이로 풀기 단추가 없다", async ({ page }) => {
+  await openApp(page);
+  await pasteAsNewSong(page, "MML@t120l4cdef;");
+  await focusRoll(page);
+  await page.keyboard.press("Alt+B");
+  const dialog = page.locator("dialog[open]");
+  await dialog.locator("input[type=number]").first().fill("300");
+  await expect(dialog.getByRole("button", { name: "길이로 풀어 넣기" })).toHaveCount(0);
 });

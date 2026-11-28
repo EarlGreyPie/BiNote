@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { add, assignTab, clipLayers, cmp, gridLines, harmonicLabel, isGhost, mul, pasteClip, rat, splitNote, sub, toFloat, type LengthLimit, type Note, type NoteClip, type Rat, type Song, type TabPosition, type TabTuning } from "@mmlce/core";
+  import { add, assignTab, clipLayers, cmp, gridLines, harmonicLabel, isGhost, keyShort, mul, pasteClip, rat, shownMeters, splitNote, sub, toFloat, type LengthLimit, type Note, type NoteClip, type Rat, type Song, type TabPosition, type TabTuning } from "@mmlce/core";
   import { t } from "./i18n.svelte";
   import { Pinch, pinchRatio } from "./pinch";
   import { typeFretDigit, type DigitNote, pinShownStrings, placeTabNote, removeTabNote, setTabNoteLength, shownStrings, tieTabNote, type TabEdit } from "./tabInput";
@@ -35,7 +35,7 @@
   import { fretBoxLeft, fretCenter, layoutTabEvents, rulerRelease, TAB_RULER, TAB_RULER_BASELINE, TAB_RULER_FONT, tabEventAction, tabEventBottom, tabEventAt, tabEventRow, tabEventText, tabMarkerText, tabTop, tabWaveTop, tabZone, type TabEventRow, type TabEventSpot } from "./tabEvents";
   import { drawWaveStrip, noteStarts, WAVE_SIZE } from "./waveDraw";
   import { wholeToSecondsFn, type Peaks } from "./waveform";
-  import { shownTempo, snapNearest, type EventKind, type EventLabel } from "./roll";
+  import { memoLabelText, shownTempo, snapNearest, visibleTime, type EventKind, type EventLabel } from "./roll";
   import { firstVisibleCell, followPlayhead, followStart, PLAYHEAD_FOLLOW_HOLD_MS, revealRowScroll, revealStart } from "./tabFollow";
   import { arrowGoesToApp, editPicked, gluePicked, notesInRange, placeLayers, pruneSelection, scalePicked, selectionRange, tiePicked, type TrackChanges } from "./tabSelect";
   import { noteClipboard } from "./noteClipboard.svelte";
@@ -134,9 +134,11 @@
     onpastefull?: ((limit: number) => void) | undefined;
     /** 테마·강조색이 바뀌면 달라지는 값. 캔버스는 그릴 때만 CSS 색을 읽으니 이것으로 다시 그린다 (피아노롤과 같다) */
     themeKey?: string;
+    /** 원곡 세기 안내선 (실험실, 원곡을 불러온 곡에서만 있다): 구간 [from, to)로 맞춘 사슬 첫 음 id → 목표 v. 없으면 안내선 단추도 숨는다 */
+    loudnessGuide?: ((range: readonly [number, number]) => ReadonlyMap<string, number>) | undefined;
   }
 
-  let { song, ghost = [], themeKey = "", octaveKey, wave, onwaveoffset, activeTrackId, tuning, playhead, onunplayable, division, noteDur, noteLength, noteLengths = NOTE_LENGTHS, tupletLength, ontuplet, lengthLimit, onnotelength, onedit, onnewtrack, onfull, maxTracks = Infinity, onpreview, volume = $bindable(), volumeRange, colors, locked, laneTrackIds, onlanetoggle, onclearlane, melodyIds, padByMouse = false, onevent, oncursor, onlayers, onpastefull, ondot, onalign, memory, onmemory, work, followCursor = true, playCursor, loop, loopDraw = false, onseek, onplaycursor, onloop }: Props = $props();
+  let { song, ghost = [], themeKey = "", octaveKey, wave, onwaveoffset, activeTrackId, tuning, playhead, onunplayable, division, noteDur, noteLength, noteLengths = NOTE_LENGTHS, tupletLength, ontuplet, lengthLimit, onnotelength, onedit, onnewtrack, onfull, maxTracks = Infinity, onpreview, volume = $bindable(), volumeRange, colors, locked, laneTrackIds, onlanetoggle, onclearlane, melodyIds, padByMouse = false, onevent, oncursor, onlayers, onpastefull, ondot, onalign, memory, onmemory, work, followCursor = true, playCursor, loop, loopDraw = false, onseek, onplaycursor, onloop, loudnessGuide }: Props = $props();
 
   // 위쪽에 마디 번호 줄과 변속 줄 두 칸(위 칸 템포, 아래 칸 박자·마커), 원곡이 있으면 그 아래 파형 띠를 두고 그 아래에 첫 줄
   // 숫자판을 띄운 동안은 지판 자리를 위해 띠를 숨긴다 (도구 띠를 숨기는 것과 같은 규칙)
@@ -1193,7 +1195,7 @@
     if (!g) return;
     g.setTransform(ratio, 0, 0, ratio, 0, 0);
     // 그 연주자 트랙만 옅은 선으로 같이 보인다 (타브에 나오는 트랙과 같게)
-    drawVolumeLane(g, { view: laneView, song: { ...song, tracks: song.tracks.filter((t) => t.playerId === player || laneTracks.some((l) => l.id === t.id)) }, activeId: activeTrackId, selected: new Set(), colors, range: volumeRange, css }, { ...lane.draw(laneList), label: t("ui.laneName"), beatLines: true });
+    drawVolumeLane(g, { view: laneView, song: { ...song, tracks: song.tracks.filter((t) => t.playerId === player || laneTracks.some((l) => l.id === t.id)) }, activeId: activeTrackId, selected: new Set(), colors, range: volumeRange, css }, { ...lane.draw(laneList), label: t("ui.laneName"), beatLines: true, guide: loudnessGuide && volumeLane.guide ? loudnessGuide(loop ?? visibleTime(laneView)) : undefined });
     // 타브 커서 칸: 위 지판과 같은 세로 띠 (음량 막대와 커서 자리를 맞춰 보게)
     if (cursor) {
       g.fillStyle = css("--accent");
@@ -1350,12 +1352,17 @@
       ...shownTempo(song.tempo)
         .filter((e) => visible(e.at))
         .map((e) => ({ kind: "tempo" as const, at: e.at, text: `t${e.bpm}`, ...(e.implicit ? { implicit: true } : {}) })),
-      ...song.timeSig.filter((e) => visible(e.at)).map((e) => ({ kind: "meter" as const, at: e.at, text: `${e.beats}/${e.unit}` })),
-      ...song.markers.filter((e) => visible(e.at)).map((e) => ({ kind: "marker" as const, at: e.at, text: tabMarkerText(e.label), id: e.id })),
+      ...shownMeters(song.timeSig).filter((e) => visible(e.at)).map((e) => ({ kind: "meter" as const, at: e.at, text: `${e.beats}/${e.unit}` })),
+      ...song.markers
+        .filter((e) => visible(e.at))
+        .map((e) => ({ kind: "marker" as const, at: e.at, text: e.kind === "memo" ? memoLabelText(tabMarkerText(e.label), !!e.done) : tabMarkerText(e.label), id: e.id, ...(e.kind === "memo" ? { memo: e.done ? ("done" as const) : ("open" as const) } : {}) })),
+      // 조표: 피아노롤 이벤트 줄과 같은 짧은 글자 (G장조 / e단조 → "G/e")
+      ...(song.keys ?? []).filter((e) => visible(e.at)).map((e) => ({ kind: "key" as const, at: e.at, text: keyShort(e.fifths) })),
     ];
     g.font = `${eventFont}px "D2Coding", ui-monospace, Consolas, monospace`;
     eventSpots = layoutTabEvents(changes, (at) => x(toFloat(at)), (text) => g.measureText(text).width);
-    const eventColor = { tempo: css("--ev-tempo"), meter: css("--ev-meter"), marker: css("--ev-marker") };
+    const eventColor = { tempo: css("--ev-tempo"), meter: css("--ev-meter"), marker: css("--ev-marker"), key: css("--ev-key") };
+    const memoColor = css("--ev-memo");
     // 두 칸 경계 (피아노롤 이벤트 줄처럼). 타브 줄과 헷갈리지 않게 점선으로
     g.strokeStyle = css("--line");
     g.lineWidth = 1;
@@ -1368,7 +1375,7 @@
     for (const e of eventSpots) {
       const box = tabEventText(e.row, eventFont, RULER);
       const px = x(toFloat(e.at));
-      const color = eventColor[e.kind];
+      const color = e.memo ? memoColor : eventColor[e.kind];
       g.strokeStyle = color;
       g.lineWidth = 1;
       g.setLineDash([3, 3]);
@@ -1380,6 +1387,7 @@
       g.fillStyle = color;
       // 적지 않은 곡 처음 기본 템포는 옅게 (피아노롤과 같다)
       if (e.implicit) g.globalAlpha = 0.55;
+      else if (e.memo === "done") g.globalAlpha = 0.4;
       g.fillText(e.text, e.left, box.baseline);
       g.globalAlpha = 1;
     }
@@ -1564,7 +1572,7 @@
       bind:this={canvas}
       class:event-hover={!!eventHover || rulerHover}
       class:wave-hover={waveHover || !!waveDrag}
-      title={rulerHover ? t("ui.tabRulerHelp") : eventHover ? (eventHover.kind === "marker" ? t("ui.tabMarkerEdit", { name: markerName(eventHover) }) : t(eventHover.kind === "tempo" ? "ui.tabTempoEdit" : "ui.tabMeterEdit")) : bandHover !== undefined ? t(bandHover === 0 ? "ui.tabTempoAdd" : "ui.tabMarkerAdd") : undefined}
+      title={rulerHover ? t("ui.tabRulerHelp") : eventHover ? (eventHover.kind === "marker" ? t("ui.tabMarkerEdit", { name: markerName(eventHover) }) : t(eventHover.kind === "tempo" ? "ui.tabTempoEdit" : eventHover.kind === "key" ? "ui.tabKeyEdit" : "ui.tabMeterEdit")) : bandHover !== undefined ? t(bandHover === 0 ? "ui.tabTempoAdd" : "ui.tabMarkerAdd") : undefined}
       {ondblclick}
       onpointerleave={() => ((eventHover = undefined), (bandHover = undefined), (rulerHover = false), (waveHover = false), (hoverCell = undefined))} style:width="{width}px" style:height="{height}px" {onpointerdown} {onpointermove} {onpointerup} onpointercancel={onpointerup}></canvas>
   </div>
@@ -1689,6 +1697,9 @@
         {#if volumeLane.state === "expanded"}
           <button class="small" class:on={volumeLane.mode === "brush"} onclick={() => saveVolumeLane({ mode: "brush" })}>{t("ui.laneBrush")}</button>
           <button class="small" class:on={volumeLane.mode === "line"} onclick={() => saveVolumeLane({ mode: "line" })}>{t("ui.laneLine")}</button>
+          {#if loudnessGuide}
+            <button class="small" class:on={volumeLane.guide} aria-pressed={volumeLane.guide} title={t("ui.laneGuideHelp")} onclick={() => saveVolumeLane({ guide: !volumeLane.guide })}>{t("ui.laneGuide")}</button>
+          {/if}
           <button class="small" title={t("ui.laneShrink")} onclick={() => saveVolumeLane({ state: "compact" })}>{t("ui.laneName")} ▼</button>
         {:else}
           <button class="small" title={t("ui.laneExpand")} onclick={() => saveVolumeLane({ state: "expanded" })}>{t("ui.laneName")} ▲</button>
