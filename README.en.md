@@ -57,7 +57,7 @@ Some scores (tuplets) may not carry over correctly to Mabinogi (PC). We do not r
 - Planning, in-game measurement, QA: EarlGreyPie
 - Code: Claude
 - Code review: GPT
-- Game behavior follows values we recorded and measured in the game ourselves.
+- Game behavior follows values we recorded and measured in the game ourselves. Measurement notes: timbre boundary report ([한국어](docs/measure/timbre-boundaries.md), [日本語](docs/measure/timbre-boundaries.ja.md))
 
 **Relation to existing tools**
 

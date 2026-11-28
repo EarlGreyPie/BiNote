@@ -15,6 +15,9 @@ const files = [
   ...readdirSync(new URL("docs/guide/", root))
     .filter((f) => f.endsWith(".md"))
     .map((f) => `docs/guide/${f}`),
+  ...readdirSync(new URL("docs/measure/", root))
+    .filter((f) => f.endsWith(".md"))
+    .map((f) => `docs/measure/${f}`),
   ...readdirSync(new URL("docs/changelog/", root))
     .filter((f) => f.endsWith(".md"))
     .map((f) => `docs/changelog/${f}`),

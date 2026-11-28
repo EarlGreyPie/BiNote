@@ -89,7 +89,7 @@ MMLCE_SAMPLES=/경로/samples pnpm test
 - 기획, 게임 실측, QA: EarlGreyPie
 - 코드 작성: Claude
 - 코드 점검: GPT
-- 게임 동작은 직접 녹음하고 측정한 값을 기준으로 합니다.
+- 게임 동작은 직접 녹음하고 측정한 값을 기준으로 합니다. 측정 자료: [악기 음색 경계 실측 보고서](docs/measure/timbre-boundaries.md)
 
 **기존 도구와의 관계**
 
