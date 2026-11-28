@@ -1,3 +1,4 @@
+import type { Locale } from "@mmlce/i18n";
 import { estimateSpace, type StorageSpace } from "./storageSpace";
 
 /**
@@ -83,8 +84,8 @@ export function registerServiceWorker(): void {
   });
 }
 
-/** 서비스 워커에게 묻는다 (version: 자기 판 번호, notes: 자기 판의 CHANGELOG 절). 답이 없으면 "" */
-function ask(sw: ServiceWorker, what: "version" | "notes"): Promise<string> {
+/** 서비스 워커에게 묻는다 (version: 자기 판 번호, notes: 자기 판의 CHANGELOG 절, notes:언어: 그 언어 절). 답이 없으면 "" */
+function ask(sw: ServiceWorker, what: "version" | "notes" | `notes:${string}`): Promise<string> {
   return new Promise((resolve) => {
     const channel = new MessageChannel();
     const timer = setTimeout(() => resolve(""), 3000);
@@ -98,9 +99,13 @@ function ask(sw: ServiceWorker, what: "version" | "notes"): Promise<string> {
 
 const askVersion = (sw: ServiceWorker) => ask(sw, "version");
 
-/** 받아 두고 기다리는 새 판의 CHANGELOG 절. 새 판이 없거나 옛 서비스 워커라 답이 없으면 "" */
-export function waitingChangelog(): Promise<string> {
-  return waiting ? ask(waiting, "notes") : Promise.resolve("");
+/**
+ * 받아 두고 기다리는 새 판의 바뀐 내용 절. locale을 주면 그 언어 절(docs/changelog), 없으면 한국어 CHANGELOG 절.
+ * 새 판이 없거나, 그 언어 절이 없거나, 옛 서비스 워커라 답이 없으면 ""
+ */
+export function waitingChangelog(locale: Locale | null = null): Promise<string> {
+  if (!waiting) return Promise.resolve("");
+  return ask(waiting, locale && locale !== "ko" ? `notes:${locale}` : "notes");
 }
 
 /** 설치 중인 새 워커가 다 받을(installed) 때까지 기다린다. 실패하면(redundant) false */

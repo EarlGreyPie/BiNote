@@ -22,7 +22,7 @@
     pitchLabel,
     songEnd,
     spanX,
-    trackChars,
+    gameCharsOf,
     type MergeRole,
   } from "./chordTools";
 
@@ -64,6 +64,8 @@
     if (!embedded) (dialog as HTMLDialogElement).close();
   }
   const limit = $derived(profile.charLimitPerScore);
+  /** 트랙 글자 수는 게임 글자 수로 본다 (창 위 막대·화음 분산 칸과 같은 수). 원문 글자 수는 다시 쓰면 줄어드는 몫까지 들어 있다 */
+  const chars = $derived(gameCharsOf(song, profile));
   // 창은 열 때마다 새로 만들고, 열 때의 곡으로 묶음을 정한다 (적용하면 닫힌다)
   // svelte-ignore state_referenced_locally
   const groups = mergeGroups(song, profile, locked);
@@ -111,7 +113,7 @@
     return () => clearTimeout(timer);
   });
   const changed = $derived(!!result && !result.kept && (result.emptied.length > 0 || result.partial.length > 0));
-  const rows = $derived(changed && result ? previewRows(song, result.song, limit) : []);
+  const rows = $derived(changed && result ? previewRows(song, result.song, limit, (s) => (s === song ? chars : gameCharsOf(s, profile))) : []);
   /** 뺀 음 (시간 순) */
   const dropped = $derived(changed && result ? [...result.dropped].sort((a, b) => cmp(a.note.start, b.note.start)) : []);
   const droppedBy = $derived(
@@ -267,7 +269,7 @@
             <td>
               <span class="dot" style:background={color(id)}></span>
               {name(id)}
-              <span class="muted">· {t("ui.mergeNotes", { count: song.tracks.find((tr) => tr.id === id)?.notes.length ?? 0 })} · {t("ui.spreadChars", { count: trackChars(song, id) })}</span>
+              <span class="muted">· {t("ui.mergeNotes", { count: song.tracks.find((tr) => tr.id === id)?.notes.length ?? 0 })} · {t("ui.spreadChars", { count: chars(id) })}</span>
             </td>
             <td><input type="radio" name="role-{id}" value="keep" bind:group={roles[id]} aria-label={t("ui.mergeKeep")} /></td>
             <td><input type="radio" name="role-{id}" value="remove" bind:group={roles[id]} aria-label={t("ui.mergeRemove")} /></td>

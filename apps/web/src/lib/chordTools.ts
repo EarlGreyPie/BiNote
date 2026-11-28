@@ -1,5 +1,5 @@
 import { add, barAt, barBounds, cmp, positionToSeconds, toFloat, ZERO, type GameProfile, type Note, type Rat, type Song, type Track } from "@mmlce/core";
-import { soundGroups, trackSource, type MergeLevel, type MergeTracksPlan } from "@mmlce/mml";
+import { chordsPerScore, gameCharCounts, soundGroups, trackSource, type MergeLevel, type MergeTracksPlan } from "@mmlce/mml";
 
 /**
  * 화음 분산·병합 창(곡 메뉴)이 함께 쓰는 계산. 곡을 바꾸지 않는다 (바꾸는 명령은 @mmlce/mml spread·merge-tracks).
@@ -11,11 +11,33 @@ export function trackChars(song: Song, id: string): number {
   return track ? trackSource(song, track).text.length : 0;
 }
 
-/** 분산 창이 처음 고를 보내는 트랙: 주면 그 트랙, 아니면 한도를 가장 많이 넘는 잠그지 않은 트랙, 없으면 가장 긴 트랙 */
-export function defaultSpreadSource(song: Song, limit: number, locked: ReadonlySet<string>, wanted?: string): string | undefined {
+/**
+ * 트랙마다 게임 글자 수 (MML로 내보낼 때 악보 단위로 가장 짧게 다시 쓴 글, 글자 수 맞추기 창 위 막대와 같은 수).
+ * 원문은 주석·줄바꿈·겹친 v·l까지 세어 게임 글보다 길 수 있다. 화음 분산·병합 칸은 한도를 이 수로 본다.
+ * 셀 수 없는 곡이면 빈 Map (부르는 쪽이 원문 글자 수로 대신한다)
+ */
+export function gameChars(song: Song, profile: GameProfile): Map<string, number> {
+  try {
+    return gameCharCounts(song, chordsPerScore(song, profile), profile.maxChordsPerPlayer, profile.charLimitPerScore);
+  } catch {
+    return new Map();
+  }
+}
+
+/** 게임 글자 수로 세는 함수 (없는 트랙은 원문 글자 수) */
+export function gameCharsOf(song: Song, profile: GameProfile): (id: string) => number {
+  const counts = gameChars(song, profile);
+  return (id) => counts.get(id) ?? trackChars(song, id);
+}
+
+/**
+ * 분산 창이 처음 고를 보내는 트랙: 주면 그 트랙, 아니면 한도를 가장 많이 넘는 잠그지 않은 트랙, 없으면 가장 긴 트랙.
+ * chars는 트랙 글자 수 (분산 창은 게임 글자 수를 넘긴다)
+ */
+export function defaultSpreadSource(song: Song, limit: number, locked: ReadonlySet<string>, wanted?: string, chars: (id: string) => number = (id) => trackChars(song, id)): string | undefined {
   const open = song.tracks.filter((t) => !locked.has(t.id));
   if (wanted && open.some((t) => t.id === wanted)) return wanted;
-  const sized = open.map((t) => ({ id: t.id, chars: trackChars(song, t.id) })).sort((a, b) => b.chars - a.chars);
+  const sized = open.map((t) => ({ id: t.id, chars: chars(t.id) })).sort((a, b) => b.chars - a.chars);
   return sized.find((x) => x.chars > limit)?.id ?? sized[0]?.id;
 }
 

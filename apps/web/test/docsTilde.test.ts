@@ -8,11 +8,16 @@ import { describe, expect, it } from "vitest";
 const root = new URL("../../../", import.meta.url);
 const files = [
   "README.md",
+  "README.en.md",
+  "README.ja.md",
   "CHANGELOG.md",
   "docs/가이드북.md",
   ...readdirSync(new URL("docs/guide/", root))
     .filter((f) => f.endsWith(".md"))
     .map((f) => `docs/guide/${f}`),
+  ...readdirSync(new URL("docs/changelog/", root))
+    .filter((f) => f.endsWith(".md"))
+    .map((f) => `docs/changelog/${f}`),
 ];
 
 /** 코드 블록(```)과 `코드` 칸을 뺀 줄에서 ~가 있는 곳을 찾는다 */

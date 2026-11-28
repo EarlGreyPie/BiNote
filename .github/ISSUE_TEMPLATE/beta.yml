@@ -1,0 +1,53 @@
+name: 베타 문제 신고 / Beta bug report
+description: 베타 페이지(beta.binote.pages.dev)에서 이상하게 동작할 때 / Something doesn't work on the beta page
+title: "[beta] "
+labels: [bug, beta]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        베타 페이지(https://beta.binote.pages.dev)에서 생긴 문제를 알려 주세요. 정식 페이지(binote.pages.dev) 문제는 "문제 신고"로 올려 주세요.
+        사운드팩(.dls) 파일은 넥슨 자산이므로 올리지 마세요. 곡은 MML@ 글이나 작은 예시로 충분해요.
+        For problems on the beta page. For the main page, use "Bug report". Please don't attach soundpack (.dls) files; they are Nexon assets.
+  - type: input
+    id: feature
+    attributes:
+      label: 어떤 기능인가요 / Which feature
+      description: 메뉴·창·실험실 항목 이름 / Menu, dialog or Labs item name
+      placeholder: 실험실 → 오선보 보기, 템포 한꺼번에 바꾸기 …
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: 무슨 일이 있었나요 / What happened
+      description: 무엇을 했고, 무엇을 기대했고, 실제로 어떻게 됐는지 / Steps, expected, actual
+    validations:
+      required: true
+  - type: dropdown
+    id: main
+    attributes:
+      label: 정식 페이지에서도 같나요 / Same on the main page?
+      options:
+        - 베타에서만 생겨요 / Only on beta
+        - 정식에서도 생겨요 / Also on the main page
+        - 정식에는 없는 기능이에요 / Feature not on the main page
+        - 모르겠어요 / Not sure
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: 판 정보 / Version
+      description: 설정 맨 아래 "BiNote v… · 커밋 …" 줄 (예 1.1.0-beta.1) / The "BiNote v… · commit …" line at the bottom of Settings
+  - type: input
+    id: env
+    attributes:
+      label: 기기·브라우저 / Device & browser
+      placeholder: Windows 11 Chrome, iPad Safari, Galaxy Tab Chrome …
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: 진단 정보 / Diagnostics
+      description: 설정 맨 아래 "BiNote 정보…"를 열고 "진단 정보 복사"를 눌러 여기에 붙여 넣어 주세요. 곡 내용은 들어가지 않아요 / Press "Copy diagnostics" in the About BiNote window and paste it here. It does not include your song
+      render: text

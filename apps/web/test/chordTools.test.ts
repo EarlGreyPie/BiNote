@@ -6,6 +6,8 @@ import {
   defaultPriority,
   defaultSpreadSource,
   droppedBars,
+  gameCharsOf,
+  trackChars,
   droppedListenStart,
   listenBarOf,
   mergeGroups,
@@ -32,6 +34,21 @@ describe("화음 분산·병합 창 처음 값", () => {
     expect(defaultSpreadSource(s, 2400, new Set())).toBe("t1");
     expect(defaultSpreadSource(s, 12, new Set(["t1"]))).toBe("t3");
     expect(defaultSpreadSource(s, 2400, new Set(["t1", "t2", "t3"]))).toBeUndefined();
+  });
+
+  it("분산·병합 칸은 원문이 아니라 게임 글자 수로 센다 (원문만 길고 게임에서는 한도 안인 트랙을 넘친다고 하지 않는다)", () => {
+    const base = song();
+    // t2 원문은 줄바꿈·겹친 l·v로 길지만 다시 쓰면 짧다
+    const long = "o3 l1 v8 v8 c\n\n\n /* 메모 */ ";
+    const s: Song = { ...base, tracks: base.tracks.map((t) => (t.id === "t2" ? { ...t, mml: { text: long } } : t)) };
+    const chars = gameCharsOf(s, MOBILE_PROFILE);
+    expect(trackChars(s, "t2")).toBe(long.length);
+    expect(chars("t2")).toBeLessThan(trackChars(s, "t2"));
+    // 원문으로 보면 t2가 한도(한도를 t2 원문 바로 아래로)를 넘고, 게임 글자 수로 보면 넘지 않는다
+    const limit = trackChars(s, "t2") - 1;
+    const only = new Set(["t1", "t3"]);
+    expect(defaultSpreadSource(s, limit, only)).toBe("t2");
+    expect(chars("t2")).toBeLessThanOrEqual(limit);
   });
 
   it("병합 묶음은 같은 악보·같은 악기 잠그지 않은 트랙 둘 이상, 처음엔 음이 가장 적은 트랙을 비운다", () => {

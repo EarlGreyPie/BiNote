@@ -1,5 +1,5 @@
 import { execSync } from "node:child_process";
-import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
@@ -12,7 +12,7 @@ import { pxToRemPlugin } from "./src/lib/uiScale";
  * 빌드한 파일 목록을 서비스 워커(public/sw.js)에 적어 넣는다. 캐시 이름은 파일 이름(해시)으로 만들어,
  * 새로 배포하면 옛 캐시를 지우고 새 파일을 받는다
  */
-function precacheList(info: { version: string }, notes: string): Plugin {
+function precacheList(info: { version: string }, notes: string, notesI18n: Record<string, string>): Plugin {
   let files: string[] = [];
   let outDir = "dist";
   return {
@@ -43,7 +43,8 @@ function precacheList(info: { version: string }, notes: string): Plugin {
         .replace('const CACHE = "mmlce-dev";', () => `const CACHE = "mmlce-${hash.toString(36)}";`)
         .replace("const PRECACHE = [];", () => `const PRECACHE = ${JSON.stringify(list)};`)
         .replace('const VERSION = "dev";', () => `const VERSION = ${JSON.stringify(info.version)};`)
-        .replace('const NOTES = "";', () => `const NOTES = ${JSON.stringify(notes)};`);
+        .replace('const NOTES = "";', () => `const NOTES = ${JSON.stringify(notes)};`)
+        .replace("const NOTES_I18N = {};", () => `const NOTES_I18N = ${JSON.stringify(notesI18n)};`);
       writeFileSync(path, sw);
       // 앱 자체 라이선스(GPL-3.0) 본문을 라이선스 고지 옆에 둔다. 정보 화면에서 오프라인으로도 열린다
       copyFileSync(new URL("../../LICENSE", import.meta.url), join(outDir, "licenses", "GPL-3.0.txt"));
@@ -131,13 +132,20 @@ function buildInfo(): { version: string; commit: string; build: string; publishe
 const build = buildInfo();
 // 이 판의 CHANGELOG 절을 서비스 워커에 넣어, 옛 판이 새 판을 받았을 때 GitHub Releases를 못 읽으면 대신 보여 준다
 const notes = changelogSection(readFileSync(new URL("../../CHANGELOG.md", import.meta.url), "utf8"), build.version);
+// 언어별 바뀐 내용(docs/changelog/언어.md, 1.0.0부터)의 이 판 절. 그 언어 절이 없으면 빼 둔다 (앱이 한국어로 대신한다)
+const notesI18n: Record<string, string> = {};
+for (const locale of ["en", "ja", "zh-TW", "zh-Hans"]) {
+  const file = new URL(`../../docs/changelog/${locale}.md`, import.meta.url);
+  const section = existsSync(file) ? changelogSection(readFileSync(file, "utf8"), build.version) : "";
+  if (section) notesI18n[locale] = section;
+}
 
 export default defineConfig({
   // 지금 판의 CHANGELOG 절은 ? 메뉴 "이번 업데이트 내역"이 Releases를 못 읽을 때 쓴다
-  define: { __MMLCE_BUILD__: JSON.stringify(build), __MMLCE_NOTES__: JSON.stringify(notes) },
+  define: { __MMLCE_BUILD__: JSON.stringify(build), __MMLCE_NOTES__: JSON.stringify(notes), __MMLCE_NOTES_I18N__: JSON.stringify(notesI18n) },
   // GitHub Pages 등 하위 경로에 올려도 되도록 상대 경로로 만든다
   base: "./",
-  plugins: [svelte(), precacheList(build, notes), basicPitchModel()],
+  plugins: [svelte(), precacheList(build, notes, notesI18n), basicPitchModel()],
   // basic-pitch는 tfjs 전체를 부르지만 쓰는 것은 계산·모델 읽기뿐이다 (src/lib/tfjs.ts)
   // basic-pitch의 MIDI 파일 쓰기(@tonejs/midi)는 쓰지 않아 빈 자리로 둔다 (src/lib/tonejsStub.ts)
   resolve: {

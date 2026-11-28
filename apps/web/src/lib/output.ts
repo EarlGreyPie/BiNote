@@ -122,10 +122,13 @@ export interface PreviewRow {
 }
 
 /** 두 곡의 트랙별 MML 글자 수 (트랙 목록에 보이는 수와 같은 글). 바뀐 트랙과 한도를 넘는 트랙만 */
-export function previewRows(before: Song, after: Song, limit: number): PreviewRow[] {
+export function previewRows(before: Song, after: Song, limit: number, count?: (song: Song) => (id: string) => number): PreviewRow[] {
+  // count를 주면 그 수로 센다 (화음 분산·병합 칸은 게임 글자 수). 없으면 원문 글자 수 (MML 글 정리처럼 원문을 바꾸는 편집)
+  const counters = count ? new Map([before, after].map((s) => [s, count(s)] as const)) : undefined;
   const length = (song: Song, id: string) => {
     const track = song.tracks.find((t) => t.id === id);
-    return track ? trackSource(song, track).text.length : 0;
+    if (!track) return 0;
+    return counters ? counters.get(song)!(id) : trackSource(song, track).text.length;
   };
   // 화음 병합으로 지운 트랙은 0자로 보인다
   const gone = before.tracks.filter((t) => !after.tracks.some((x) => x.id === t.id));
@@ -218,5 +221,16 @@ export function pasteOrderShift(order: PasteOrder, id: string, step: -1 | 1, son
   const j = k + step;
   if (k < 0 || j < 0 || j >= list.length) return order;
   [list[k], list[j]] = [list[j]!, list[k]!];
+  return settle(list, true, songIds);
+}
+
+/** 끌어서 옮기기: id를 to번째 칸(0부터, 고른 트랙 사이 차례)으로. 곡 순서와 같아지면 곡 순서로 돌아간다 */
+export function pasteOrderMove(order: PasteOrder, id: string, to: number, songIds: readonly string[]): PasteOrder {
+  const k = order.ids.indexOf(id);
+  if (k < 0) return order;
+  const j = Math.max(0, Math.min(order.ids.length - 1, Math.round(to)));
+  if (j === k) return order;
+  const list = order.ids.filter((x) => x !== id);
+  list.splice(j, 0, id);
   return settle(list, true, songIds);
 }

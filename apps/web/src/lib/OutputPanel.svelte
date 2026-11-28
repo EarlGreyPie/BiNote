@@ -3,7 +3,7 @@
   import { gamePaste, pasteTempoChoices } from "@mmlce/mml";
   import { instrumentName, t } from "./i18n.svelte";
   import Icon from "./Icon.svelte";
-  import { isCopied, nextExportPick, pasteOrderAdd, pasteOrderOf, pasteOrderRemove, pasteOrderShift, trackStamp, type OutputRow, type PasteOrder, type TempoAdvice } from "./output";
+  import { isCopied, nextExportPick, pasteOrderAdd, pasteOrderMove, pasteOrderOf, pasteOrderRemove, pasteOrderShift, trackStamp, type OutputRow, type PasteOrder, type TempoAdvice } from "./output";
   import { tick } from "svelte";
   import { scaleText, tempoConvertNotice, tempoConvertPlan, type TempoConvertOutcome } from "./tempoConvert";
 
@@ -128,6 +128,44 @@
     const other = line?.querySelector<HTMLButtonElement>(step < 0 ? "button.down" : "button.up");
     (want && !want.disabled ? want : other)?.focus();
   }
+
+  /**
+   * 끌어 옮기기: 줄 앞 손잡이를 잡고 위아래로 끄는 동안 칸이 바로 바뀌고, 놓으면 끝난다.
+   * 끄는 줄이 자리를 바꾸면 목록이 그 줄을 다시 넣으면서 손잡이가 포인터 잡기를 잃으므로 (손가락이면 그 뒤 움직임이 다른 줄로 간다),
+   * 손잡이에 잡아 두지 않고 끄는 동안 창(window)에서 같은 손가락·마우스의 움직임만 받는다
+   */
+  let dragging = $state<string | undefined>(undefined);
+  let dragPointer: number | undefined;
+  function gripDown(e: PointerEvent, id: string) {
+    if (e.button !== 0 || dragging !== undefined) return;
+    e.preventDefault();
+    dragging = id;
+    dragPointer = e.pointerId;
+    justCopied = 0;
+    window.addEventListener("pointermove", gripMove);
+    window.addEventListener("pointerup", gripUp);
+    window.addEventListener("pointercancel", gripUp);
+  }
+  function gripMove(e: PointerEvent) {
+    if (dragging === undefined || e.pointerId !== dragPointer || !orderList) return;
+    // 끄는 줄을 뺀 줄 가운데, 가운데 높이가 손가락보다 위인 줄 수 = 들어갈 차례
+    const others = [...orderList.querySelectorAll<HTMLElement>("li[data-id]")].filter((li) => li.dataset.id !== dragging);
+    const to = others.filter((li) => {
+      const r = li.getBoundingClientRect();
+      return e.clientY > r.top + r.height / 2;
+    }).length;
+    picked = pasteOrderMove(order, dragging, to, songIds);
+  }
+  function gripUp(e?: PointerEvent) {
+    if (e && e.pointerId !== dragPointer) return;
+    dragging = undefined;
+    dragPointer = undefined;
+    window.removeEventListener("pointermove", gripMove);
+    window.removeEventListener("pointerup", gripUp);
+    window.removeEventListener("pointercancel", gripUp);
+  }
+  // 끄는 중에 창이 닫혀도 창(window)에 단 것을 떼어 낸다
+  $effect(() => () => gripUp());
 
   const paste = $derived(
     chosen.length > 0 ? gamePaste(song, chosen, chordsOf, pickLimit, { tempo: withTempo, tempoMap, charLimit: limit, order: pasteOrder }) : undefined,
@@ -324,7 +362,8 @@
         <ol bind:this={orderList} aria-label={t("ui.exportOrder")}>
           {#each pasteOrder as id, k (id)}
             {@const score = scoreNumberOf(id)}
-            <li data-id={id}>
+            <li data-id={id} class:dragging={dragging === id}>
+              <span class="grip" title={t("ui.exportOrderDrag")} aria-hidden="true" onpointerdown={(e) => gripDown(e, id)}>⠿</span>
               <span class="slot">{k + 1}</span>
               <span class="dot" style:background={colors?.get(id) ?? song.tracks.find((tr) => tr.id === id)?.color ?? "var(--line)"}></span>
               {#if score !== undefined}<span class="muted">{t("ui.scoreN", { n: score })}</span>{/if}
@@ -420,6 +459,25 @@
     flex-wrap: wrap;
     align-items: center;
     gap: 4px 8px;
+    /* "직접 정한 순서"·곡 순서로 단추가 나타나도 목록이 아래로 밀리지 않게 (끄는 중에 줄이 손가락 밑에서 움직이면 엉뚱한 칸에 놓인다) */
+    min-height: 36px;
+  }
+  .paste-order li.dragging {
+    background: var(--hover, rgba(127, 127, 127, 0.12));
+    border-radius: 4px;
+  }
+  /* 손가락으로 잡기 쉽게 (보이는 점은 그대로, 잡는 자리만 넓게) */
+  .grip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 28px;
+    min-height: 28px;
+    padding: 0 4px;
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+    color: var(--muted, #888);
   }
   .paste-order ol {
     list-style: none;

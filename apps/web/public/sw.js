@@ -1,11 +1,13 @@
 // 오프라인 실행용 서비스 워커. 앱 파일을 처음 받을 때 담아 두고,
 // 연결이 없으면 담아 둔 것을 쓴다. 사운드팩·악보 파일은 사용자가 직접 고르므로 담지 않는다.
-// 빌드할 때 vite 설정(precacheList)이 이 네 줄을 채운다: 빌드마다 바뀌는 캐시 이름, 앱 파일 목록, 판 번호, 이 판의 CHANGELOG 절.
+// 빌드할 때 vite 설정(precacheList)이 이 다섯 줄을 채운다: 빌드마다 바뀌는 캐시 이름, 앱 파일 목록, 판 번호,
+// 이 판의 CHANGELOG 절(한국어), 언어별 바뀐 내용 파일(docs/changelog)의 이 판 절.
 // 소리 엔진·글꼴처럼 나중에 불러오는 파일도 처음 설치할 때 받아 두어, 처음부터 오프라인에서 쓸 수 있게 한다
 const CACHE = "mmlce-dev";
 const PRECACHE = [];
 const VERSION = "dev";
 const NOTES = "";
+const NOTES_I18N = {};
 // 폰 공유 시트로 받은 것을 잠시 담는 캐시와 그 약속. 앱 쪽(src/lib/shareInbox.ts)과 이름이 같아야 한다
 const SHARE_CACHE = "mmlce-share";
 const SHARE_QUERY = "share-target";
@@ -26,6 +28,11 @@ self.addEventListener("message", (event) => {
   if (event.data === "version") event.ports[0]?.postMessage(VERSION);
   // 바뀐 내용을 물으면 이 판의 CHANGELOG 절로 답한다 (GitHub Releases를 못 읽을 때 앱이 대신 보여 준다)
   if (event.data === "notes") event.ports[0]?.postMessage(NOTES);
+  // "notes:en"처럼 언어를 붙여 물으면 그 언어 절로 답한다. 그 언어 절이 없으면 "" (앱이 한국어로 대신한다)
+  if (typeof event.data === "string" && event.data.startsWith("notes:")) {
+    const own = Object.prototype.hasOwnProperty.call(NOTES_I18N, event.data.slice(6)) ? NOTES_I18N[event.data.slice(6)] : "";
+    event.ports[0]?.postMessage(own);
+  }
 });
 self.addEventListener("activate", (event) => {
   event.waitUntil(

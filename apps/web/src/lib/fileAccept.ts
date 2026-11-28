@@ -6,13 +6,30 @@
  */
 const UA = typeof navigator === "undefined" ? "" : navigator.userAgent;
 const ANDROID = /Android/.test(UA);
-const UNFILTERED =
-  ANDROID ||
+const IOS =
   /iPad|iPhone|iPod/.test(UA) ||
   (typeof navigator !== "undefined" && navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const UNFILTERED = ANDROID || IOS;
 
-export function fileAccept(list: string): string | undefined {
-  return UNFILTERED ? undefined : list;
+/** 파일 고르기 창을 띄우는 기기 종류. 거르기 방법이 기기마다 다르다. */
+export type PickerDevice = "ios" | "android" | "other";
+const DEVICE: PickerDevice = IOS ? "ios" : ANDROID ? "android" : "other";
+
+/**
+ * iOS·iPadOS에서 쓰는 거르기 값. "모든 데이터 파일"(public.data)로 바뀌어 어떤 확장자도 막지 않으면서,
+ * 사진·영상 형식이 아니므로 "사진 보관함"·"사진 또는 비디오 찍기" 메뉴 없이 파일 앱이 바로 열린다.
+ * 거르기를 아예 비우면 iOS는 사진·카메라 항목을 함께 보여 준다.
+ */
+export const IOS_ANY_FILE = "application/octet-stream";
+
+/**
+ * 악보·사운드팩처럼 사진이 아닌 파일을 고르는 창의 거르기.
+ * 안드로이드는 거르지 않는다(거르면 고르기 창이 좁아진다). 고른 다음에 확장자로 확인한다.
+ */
+export function fileAccept(list: string, device: PickerDevice = DEVICE): string | undefined {
+  if (device === "ios") return IOS_ANY_FILE;
+  if (device === "android") return undefined;
+  return list;
 }
 
 /**

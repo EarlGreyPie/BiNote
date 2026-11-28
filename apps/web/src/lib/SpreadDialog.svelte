@@ -4,7 +4,7 @@
   import { untrack } from "svelte";
   import { t } from "./i18n.svelte";
   import { previewRows } from "./output";
-  import { defaultSpreadSource, songEnd, spanX, trackChars } from "./chordTools";
+  import { defaultSpreadSource, gameCharsOf, songEnd, spanX } from "./chordTools";
 
   /**
    * 화음 분산 창 (곡 메뉴, MML로 내보내기 창의 [화음 분산…]). 글자 수가 넘치는 트랙에서 다른 트랙으로 마디 구간째 음을 옮긴다.
@@ -41,8 +41,13 @@
     if (!embedded) (dialog as HTMLDialogElement).close();
   }
   const limit = $derived(profile.charLimitPerScore);
+  /**
+   * 트랙 글자 수는 게임 글자 수 (가장 짧게 다시 쓴 글, 창 위 막대와 같은 수)로 본다. 분산은 옮긴 트랙을 가장 짧게 다시 쓰므로
+   * 원문 글자 수로 넘침을 보면, 원문만 길고 게임에서는 한도 안인 트랙을 넘친다고 하고 자동 고르기는 아무것도 못 고른다
+   */
+  const chars = $derived(gameCharsOf(song, profile));
   // svelte-ignore state_referenced_locally
-  let source = $state(defaultSpreadSource(song, profile.charLimitPerScore, locked, initialSource) ?? "");
+  let source = $state(defaultSpreadSource(song, profile.charLimitPerScore, locked, initialSource, gameCharsOf(song, profile)) ?? "");
   const candidates = $derived(source ? spreadCandidates(song, profile, source, locked) : []);
   /** 받을 트랙 (처음엔 받을 수 있는 트랙 모두) */
   let targets = $state<string[]>([]);
@@ -92,23 +97,36 @@
     }, 120);
     return () => clearTimeout(timer);
   });
-  const rows = $derived(result && result.moved > 0 ? previewRows(song, result.song, limit) : []);
-  const sourceChars = $derived(source ? trackChars(song, source) : 0);
+  const rows = $derived(result && result.moved > 0 ? previewRows(song, result.song, limit, (s) => (s === song ? chars : gameCharsOf(s, profile))) : []);
+  const sourceChars = $derived(source ? chars(source) : 0);
   const stillOver = $derived(result && result.moved > 0 ? rows.filter((r) => r.after > limit).length : sourceChars > limit ? 1 : 0);
 
   let picking = $state(false);
+  /** 자동 고르기가 더 고르지 못했다 (받을 트랙에 여유가 없음). 고르기를 바꾸면 지운다 */
+  let autoNone = $state(false);
   function autoPick() {
     if (!source || picking) return;
     picking = true;
+    autoNone = false;
     // 계산이 길 수 있어 "고르는 중"을 먼저 그린 뒤 고른다
     setTimeout(() => {
+      const before = pickedSpans.length;
       const chosen = autoSpreadSpans(song, profile, source, spans, locked, pickedSpans);
       picked = chosen.map((s) => s.id);
+      autoNone = chosen.length === before;
       picking = false;
     }, 20);
   }
 
+
+  /** 고르기를 모두 지운다 (보내는 트랙·받을 트랙을 바꿀 때도) */
+  function unpick() {
+    picked = [];
+    autoNone = false;
+  }
+
   function toggle(span: SpreadSpan, on: boolean) {
+    autoNone = false;
     picked = on ? [...picked, span.id] : picked.filter((id) => id !== span.id);
   }
   /** 이미 고른 다른 구간과 시간이 겹치면 고를 수 없다 */
@@ -134,10 +152,10 @@
 
   <label class="row">
     {t("ui.spreadSource")}
-    <select bind:value={source} onchange={() => (picked = [])}>
+    <select bind:value={source} onchange={unpick}>
       {#each song.tracks.filter((tr) => !locked.has(tr.id)) as tr (tr.id)}
-        {@const chars = trackChars(song, tr.id)}
-        <option value={tr.id}>{where(tr.id)} {tr.name} · {t("ui.spreadChars", { count: chars })}{chars > limit ? " ⚠" : ""}</option>
+        {@const count = chars(tr.id)}
+        <option value={tr.id}>{where(tr.id)} {tr.name} · {t("ui.spreadChars", { count })}{count > limit ? " ⚠" : ""}</option>
       {/each}
     </select>
   </label>
@@ -149,9 +167,9 @@
     {/if}
     {#each candidates as c (c.trackId)}
       <label class:off={!!c.block} title={c.block ? t(blockText[c.block]) : ""}>
-        <input type="checkbox" value={c.trackId} bind:group={targets} disabled={!!c.block} onchange={() => (picked = [])} />
+        <input type="checkbox" value={c.trackId} bind:group={targets} disabled={!!c.block} onchange={unpick} />
         <span class="dot" style:background={color(c.trackId)}></span>
-        {name(c.trackId)} <span class="muted">· {t("ui.spreadChars", { count: trackChars(song, c.trackId) })}</span>
+        {name(c.trackId)} <span class="muted">· {t("ui.spreadChars", { count: chars(c.trackId) })}</span>
         {#if c.block}<span class="muted">({t(blockText[c.block])})</span>{/if}
       </label>
     {/each}
@@ -187,8 +205,13 @@
       </svg>
       <div class="row">
         <button class="small" disabled={picking || sourceChars <= limit} onclick={autoPick}>{picking ? t("ui.spreadPicking") : t("ui.spreadAuto")}</button>
-        <button class="small" disabled={picked.length === 0} onclick={() => (picked = [])}>{t("ui.spreadClear")}</button>
+        <button class="small" disabled={picked.length === 0} onclick={unpick}>{t("ui.spreadClear")}</button>
       </div>
+      {#if sourceChars <= limit}
+        <p class="muted small">{t("ui.spreadAutoFits", { limit })}</p>
+      {:else if autoNone}
+        <p class="warn small" role="status">{t("ui.spreadAutoNone")}</p>
+      {/if}
       <ul class="spans">
         {#each spans as s (s.id)}
           <li class:off={clash(s)}>

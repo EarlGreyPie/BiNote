@@ -2,4 +2,6 @@
 /** published: 공개 저장소(Cloudflare Pages)에서 빌드했으면 true. 그때만 커밋이 공개 저장소의 커밋이다 */
 /** 이 판의 CHANGELOG 절 (Markdown). 없으면 "" */
 declare const __MMLCE_NOTES__: string;
+/** 언어별 바뀐 내용 파일(docs/changelog/언어.md)의 이 판 절. 그 언어 절이 없으면 키가 없다 (한국어는 __MMLCE_NOTES__) */
+declare const __MMLCE_NOTES_I18N__: Readonly<Record<string, string>>;
 declare const __MMLCE_BUILD__: { readonly version: string; readonly commit: string; readonly build: string; readonly published: boolean };

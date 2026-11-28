@@ -5,15 +5,17 @@
 </script>
 
 <script lang="ts">
-  import { t } from "./i18n.svelte";
+  import { i18n, t } from "./i18n.svelte";
   import Icon from "./Icon.svelte";
-  import { CHANGELOG_URL, REPO } from "./links";
+  import { changelogUrl, REPO } from "./links";
   import { waitingChangelog } from "./pwa.svelte";
   import { fetchRelease, renderNotes, type ReleaseNotes } from "./releaseNotes";
+  import type { Locale } from "@mmlce/i18n";
 
   /**
    * 한 판의 바뀐 내용: 받아 둔 새 판(새 판 안내) 또는 지금 판(? 메뉴 → 이번 업데이트 내역).
-   * 공개 사이트는 GitHub Releases의 그 판 본문을 먼저 읽고, 못 읽으면 그 판의 CHANGELOG 절을 보여 준다.
+   * 한국어 화면: 공개 사이트는 GitHub Releases의 그 판 본문(한국어)을 먼저 읽고, 못 읽으면 그 판의 CHANGELOG 절을 보여 준다.
+   * 다른 언어 화면: 그 언어 바뀐 내용 파일(docs/changelog, 1.0.0부터)의 그 판 절을 보여 주고, 그 절이 없으면 한국어로 대신한다.
    * 전체 변경 내역은 아래 링크로
    */
   interface Props {
@@ -32,13 +34,18 @@
   $effect(() => {
     dialog.showModal();
     const abort = new AbortController();
-    void load(version, abort.signal).then((n) => {
+    void load(version, i18n.locale, abort.signal).then((n) => {
       if (!abort.signal.aborted) notes = n;
     });
     return () => abort.abort();
   });
 
-  async function load(v: string, signal: AbortSignal): Promise<ReleaseNotes | null> {
+  async function load(v: string, locale: Locale, signal: AbortSignal): Promise<ReleaseNotes | null> {
+    // 그 언어로 쓴 절이 있으면 그것을 쓴다 (Releases 본문은 한국어뿐)
+    if (locale !== "ko") {
+      const own = current ? (__MMLCE_NOTES_I18N__[locale] ?? "") : await waitingChangelog(locale);
+      if (own) return { text: own };
+    }
     const known = cache.get(v);
     if (known) return known;
     // 테스트 사이트·개발 서버는 공개 저장소의 판이 아니라 Releases를 읽지 않는다
@@ -69,7 +76,7 @@
   </div>
   <p class="links">
     {#if notes?.url}<a href={notes.url} target="_blank" rel="noopener">{t("ui.releaseNotesOnGitHub")}</a>{/if}
-    <a href={CHANGELOG_URL} target="_blank" rel="noopener">{t("ui.changelogAll")}</a>
+    <a href={changelogUrl(i18n.locale)} target="_blank" rel="noopener">{t("ui.changelogAll")}</a>
   </p>
 </dialog>
 

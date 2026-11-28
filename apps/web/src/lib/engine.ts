@@ -25,6 +25,7 @@ import { PreviewVoices } from "./previewVoices";
 import { preparePlay } from "./playPlan";
 import type { WavRequest } from "./jobs";
 import { nextSynthLag, SynthClock, synthLagOf, type ClockPing } from "./synthClock";
+import { effectiveOutputDelay, OutputDelay, outputDelayOf } from "./outputDelay";
 import { audioLag, CLOCK_STOP_SLACK, LATENCY_JUMP, clockMoves, clockStats, FROZEN_MS, isTouchWebKit, needsRebuild, settlesWithin, staleAfterReturn, type ClockPair } from "./audioHealth";
 
 /** CC 0 = 뱅크 선택(MSB) */
@@ -124,6 +125,10 @@ export class Engine {
   private rebuilds = 0;
   /** 신스 시계 맞추기 (synthClock.ts). 오디오를 새로 만들면 새로 둔다 */
   private synthClock = new SynthClock();
+  /** getOutputTimestamp로 잰 실제 출력 지연 (outputDelay.ts). 절전 뒤 브라우저가 알려 주는 지연이 그대로일 때 쓴다 */
+  private readonly measuredDelay = new OutputDelay();
+  /** 오디오 상태 칸에 마지막으로 남긴 잰 출력 지연(초) */
+  private measuredNoted: number | undefined;
   /** 신스 시계를 물어보고 기다리는 답: 물음 값 → 답 받기 */
   private pings = new Map<number, (synthTime: number) => void>();
   private pingId = 0;
@@ -233,6 +238,8 @@ export class Engine {
       if (this.context === context) this.note(`audio ${context.state}`);
       // 멈췄다 돌아온 오디오는 신스 시계를 다시 물어본다 (멈춘 동안 답이 없어 그만둔 재기를 다시 연다)
       if (this.context === context) this.pingMisses = 0;
+      // 멈췄다 돌아오면 출력 경로가 바뀌었을 수 있어 출력 지연을 새로 잰다
+      if (this.context === context) this.measuredDelay.clear();
       if (this.context !== context || context.state === "running" || !this.warmed) return;
       this.suspect = true;
       if (document.visibilityState === "hidden") this.interrupted = true;
@@ -350,10 +357,14 @@ export class Engine {
       this.hiddenMs = Math.max(this.hiddenMs, gap);
       this.note(`frozen ${(gap / 1000).toFixed(1)}s, audio ${c.state}`);
       this.pingMisses = 0;
+      // 깨어난 뒤 출력 지연은 새로 잰다
+      this.measuredDelay.clear();
     }
     if (!this.warmed) return;
     // 신스 시계가 뒤처졌는지도 본다 (재생 중에 벌어지면 그 뒤 음부터 바로잡는다)
     if (c.state === "running") void this.measureSynthLag();
+    // 실제 출력 지연도 잰다. 절전 뒤 늘어난 지연을 브라우저가 알려 주지 않아도 재생선을 소리에 맞춘다
+    if (c.state === "running") this.sampleOutputDelay(c);
     // 브라우저가 알려 주는 출력 지연이 크게 바뀌면 오디오 상태 칸에 남긴다 (블루투스 연결·출력 바뀜을 나중에 알아보려고)
     const latency = reportedLatency(c);
     if (Math.abs(latency - this.latencyNoted) > LATENCY_JUMP) {
@@ -366,6 +377,21 @@ export class Engine {
       this.suspect = true;
       if (!this.interrupted) this.note(`audio clock stopped ${lag.toFixed(1)}s`);
       this.interrupted = true;
+    }
+  }
+
+  /** 출력 시각(getOutputTimestamp)으로 실제 출력 지연을 한 번 재서 모은다. 크게 바뀌면 오디오 상태 칸에 남긴다 */
+  private sampleOutputDelay(c: AudioContext): void {
+    if (typeof c.getOutputTimestamp !== "function") return;
+    try {
+      this.measuredDelay.add(outputDelayOf(c.getOutputTimestamp(), c.currentTime, performance.now()));
+    } catch {
+      return;
+    }
+    const v = this.measuredDelay.value;
+    if (v !== undefined && (this.measuredNoted === undefined || Math.abs(v - this.measuredNoted) > LATENCY_JUMP)) {
+      this.note(`measured output delay ${(v * 1000).toFixed(0)}ms`);
+      this.measuredNoted = v;
     }
   }
 
@@ -469,7 +495,7 @@ export class Engine {
         // 지금 오디오 시계와 지금 스피커에서 나는 소리의 오디오 시각 차이 = 실제 출력 지연(근사)
         if (ts.contextTime !== undefined && ts.performanceTime !== undefined) {
           const heard = ts.contextTime + (now - ts.performanceTime) / 1000;
-          lines.push(`output delay (timestamp): ${ms(c.currentTime - heard)}`);
+          lines.push(`output delay (timestamp): ${ms(c.currentTime - heard)}, used for playhead: ${ms(effectiveOutputDelay(reportedLatency(c), this.measuredDelay.value))}`);
         }
       }
     }
@@ -496,6 +522,9 @@ export class Engine {
     if (this.reviving) return this.reviving;
     this.rebuilds++;
     this.note(`rebuild (${reason})`);
+    // 옛 오디오를 먼저 닫고(앱을 껐다 켠 것처럼 출력을 놓아 준 뒤) 새로 만든다. 누른 그 순간 안에서 둘 다 해야
+    // 아이패드가 새 오디오를 켜 준다
+    this.discard();
     let fresh: AudioContext | undefined;
     try {
       fresh = new AudioContext();
@@ -503,7 +532,6 @@ export class Engine {
     } catch {
       // 만들지 못하면 create가 다시 시도한다
     }
-    this.discard();
     const reviving = this.ready(fresh).finally(() => {
       if (this.reviving === reviving) this.reviving = undefined;
     });
@@ -548,6 +576,8 @@ export class Engine {
     this.hiddenMs = 0;
     this.latencyBefore = 0;
     this.synthClock = new SynthClock();
+    this.measuredDelay.clear();
+    this.measuredNoted = undefined;
     this.pings.clear();
     this.pingMisses = 0;
     this.lastPing = undefined;
@@ -636,7 +666,7 @@ export class Engine {
    */
   get outputLag(): number {
     const c = this.context;
-    return (c ? reportedLatency(c) : 0) + this.limiterLag + this.syncOffset;
+    return (c ? effectiveOutputDelay(reportedLatency(c), this.measuredDelay.value) : 0) + this.limiterLag + this.syncOffset;
   }
 
   /** 지금 들리는 곡 위치(초). 출력 지연만큼 늦춰 재생선이 소리와 맞게 한다 */

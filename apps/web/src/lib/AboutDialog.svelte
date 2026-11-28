@@ -2,7 +2,7 @@
   import { i18n, t } from "./i18n.svelte";
   import DiagCopy from "./DiagCopy.svelte";
   import Icon from "./Icon.svelte";
-  import { CHANGELOG_URL, guideUrl, REPO_URL } from "./links";
+  import { changelogUrl, guideUrl, REPO_URL } from "./links";
   import { applyUpdate, checkForUpdate, pwa } from "./pwa.svelte";
 
   /**
@@ -88,7 +88,7 @@
 
   <p class="links">
     <a href={guideUrl(i18n.locale)} target="_blank" rel="noopener">{t("ui.helpGuide")}</a>
-    <a href={CHANGELOG_URL} target="_blank" rel="noopener">{t("ui.changelogAll")}</a>
+    <a href={changelogUrl(i18n.locale)} target="_blank" rel="noopener">{t("ui.changelogAll")}</a>
     <a href={sourceUrl} target="_blank" rel="noopener">{t("ui.aboutSource")}</a>
     <a href="./licenses/GPL-3.0.txt" target="_blank" rel="noopener">GPL-3.0</a>
     <a href="./licenses/third-party.txt" target="_blank" rel="noopener">{t("ui.aboutLicenses")}</a>

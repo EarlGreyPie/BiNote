@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { emptySong, MOBILE_PROFILE, rat, type Song, type Track } from "@mmlce/core";
 import { parseTrackText } from "@mmlce/mml";
 import { analyzeSong } from "../src/lib/analysis";
-import { isCopied, nextExportPick, outputRows, pasteOrderAdd, pasteOrderOf, pasteOrderRemove, pasteOrderShift, previewRows, songOrdered, tempoAdvice, trackStamp, type PasteOrder } from "../src/lib/output";
+import { isCopied, nextExportPick, outputRows, pasteOrderAdd, pasteOrderOf, pasteOrderRemove, pasteOrderMove, pasteOrderShift, previewRows, songOrdered, tempoAdvice, trackStamp, type PasteOrder } from "../src/lib/output";
 
 function track(id: string, playerId: string, text: string): Track {
   return { id, playerId, name: id, color: "", role: "free", mute: false, solo: false, notes: parseTrackText(id, { text }).notes, spelling: {} };
@@ -84,6 +84,13 @@ describe("previewRows", () => {
       ["c", rows.find((r) => r.trackId === "c")!.before],
     ]);
     expect(rows[0]!.before).toBeGreaterThan(3);
+  });
+
+  it("세는 함수를 주면 그 수로 (화음 분산·병합 칸은 게임 글자 수)", () => {
+    const before = song([track("a", "p1", "c4 c4 c4"), track("b", "p1", "d1")]);
+    const after: Song = { ...before, tracks: before.tracks.map((t) => (t.id === "a" ? { ...t, notes: t.notes.slice(1) } : t)) };
+    const count = (s: Song) => (id: string) => (s === before ? 10 : id === "a" ? 6 : 10);
+    expect(previewRows(before, after, 100, count).map((r) => [r.trackId, r.before, r.after])).toEqual([["a", 10, 6]]);
   });
 });
 
@@ -189,5 +196,17 @@ describe("붙여넣는 순서", () => {
     expect(pasteOrderOf(plain(["p1", "p2"]), ["p2", "p1"])).toEqual(plain(["p2", "p1"]));
     expect(pasteOrderOf({ ids: ["p2", "p1"], custom: true }, songIds)).toEqual({ ids: ["p2", "p1"], custom: true });
     expect(songOrdered(["a", "b"], ["x", "b", "a"])).toEqual(["a", "b", "x"]);
+  });
+});
+
+describe("붙여넣는 순서 끌어 옮기기", () => {
+  const songIds = ["a", "b", "c", "d"];
+  it("끌어 놓은 칸으로 한 번에 옮기고, 곡 순서가 되면 직접 정한 순서를 푼다", () => {
+    const o: PasteOrder = { ids: ["a", "b", "c"], custom: false };
+    expect(pasteOrderMove(o, "c", 0, songIds)).toEqual({ ids: ["c", "a", "b"], custom: true });
+    expect(pasteOrderMove(o, "a", 9, songIds)).toEqual({ ids: ["b", "c", "a"], custom: true });
+    expect(pasteOrderMove(o, "b", 1, songIds)).toBe(o);
+    expect(pasteOrderMove({ ids: ["c", "a", "b"], custom: true }, "c", 2, songIds)).toEqual({ ids: ["a", "b", "c"], custom: false });
+    expect(pasteOrderMove(o, "x", 0, songIds)).toBe(o);
   });
 });
